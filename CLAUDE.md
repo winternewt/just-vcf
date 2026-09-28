@@ -202,8 +202,9 @@ are read from env vars with sensible defaults, documented in `.env.template`, an
   The sole exception is a guarded module-level `try/except ImportError` for an *optional*
   dependency, raising a clear message with install instructions. The core must import
   cleanly with only its hard dependencies present.
-- **Dependency tier.** The core may import polars / polars-bio, pydantic, platformdirs, typer and
-  python-dotenv, plus the stdlib. Everything else goes behind an extra with a guarded import:
+- **Dependency tier.** The core may import polars / polars-bio, gtars, refget, pydantic, platformdirs,
+  typer and python-dotenv, plus the stdlib. gtars (Rust, BSD-2) mints VRS ids and normalizes alleles;
+  refget computes and compares seqcol assembly digests. vrs-python is a test oracle only, never core. Everything else goes behind an extra with a guarded import:
   `[reference]` = pysam (not on Windows), `[liftover]` = pyliftover, `[ancestry]` = numpy. httpx is a
   dev dependency for `scripts/` only and is never imported from `src/`. Adding a hard core dependency
   is a questionnaire (§1), not an edit. duckdb, eliot, huggingface-hub, Dagster and Reflex from the
@@ -417,6 +418,10 @@ same applies when the user corrects a preference: it goes below, in their words,
 - 2026-09-28, scope: "never reads meant 'we don't implement it', if it is here for free, let it be".
   An out-of-scope capability means we don't build it. When the substrate (polars-bio) already has it,
   use it. Example: polars-bio `depth()` over BAM for coverage.
+
+- 2026-09-28, VRS: "this one is not a lightweight lib, so gtars it is". Core carries gtars + refget for
+  VRS ids and seqcol, over the earlier pick of just-dna-format (SNV-only, GRCh38-only). A heavy
+  dependency that covers GRCh37, T2T and indels beats a light one that doesn't.
 
 ## 11. Learned workspace facts
 

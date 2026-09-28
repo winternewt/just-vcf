@@ -10,10 +10,12 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "gtars>=0.10.0",
     "platformdirs>=4.11",
     "polars-bio>=0.36.0",
     "pydantic>=2.13,<3",
     "python-dotenv>=1.2",
+    "refget>=0.12.0",
     "typer>=0.27",
 ]
 

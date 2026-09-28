@@ -21,6 +21,8 @@ The Arvados API is read with the anonymous token the cluster itself publishes in
     uv run python scripts/pgp_participants.py --only huF1DC30 --only hu3F7E26
 """
 
+import bz2
+import gzip
 import json
 import logging
 import os
@@ -54,13 +56,13 @@ class Item:
     """One file we want for one participant."""
 
     participant: str
-    source: str  # "arvados" or "upload"
+    source: str  # "arvados", "upload" or "evidence"
     item_id: str  # Arvados collection uuid, or listing download id
     item_name: str
     kind: str  # "vcf", "cgi", or the upload's self-reported data type
     file_name: str | None  # unknown for an upload until it is fetched
-    size: int
-    url: str | None  # keep-web URL for Arvados files; uploads resolve through pgp_leech.fetch_row
+    size: int | None  # None: the source does not state it (GET-Evidence sends no Content-Length either)
+    url: str | None  # direct URL for Arvados and GET-Evidence files; uploads resolve through pgp_leech.fetch_row
 
     @property
     def rel_dir(self) -> Path:
@@ -193,6 +195,7 @@ def plan(items: list[Item]) -> tuple[list[Item], dict[Item, Item]]:
     # The listing's size column is sometimes wrong (seen: 1 byte for a 345 MB VCF), so an upload also
     # matches by the sample id its label starts with, e.g. "WGC069895D - VCF" ~ WGC069895D.vcf.gz.
     by_stem: dict[tuple[str, str], Item] = {}
+    by_base: dict[tuple[str, str], Item] = {}
     for i in sorted(items, key=order):
         if i.source == "arvados":
             key = (i.participant, i.file_name or "", i.size)
@@ -202,6 +205,13 @@ def plan(items: list[Item]) -> tuple[list[Item], dict[Item, Item]]:
             by_name[key] = i
             by_size.setdefault((i.participant, i.size), i)
             by_stem.setdefault((i.participant, _stem(i.file_name or "")), i)
+            by_base.setdefault((i.participant, i.file_name or ""), i)
+        elif i.source == "evidence":
+            # A GET-Evidence row names its file only when its locator carries a path; the rest are matched
+            # at download time, from the response header, before any body bytes are read.
+            if i.file_name and (i.participant, i.file_name) in by_base:
+                dup[i] = by_base[(i.participant, i.file_name)]
+                continue
         elif (i.participant, i.size) in by_size:
             dup[i] = by_size[(i.participant, i.size)]
             continue
@@ -216,7 +226,7 @@ def select_participants(items: list[Item], only: list[str], min_facets: int) -> 
     """Participants in priority order: with an Arvados VCF, then with CGI, then by number of items."""
     per: dict[str, Counter[str]] = {}
     for i in items:
-        per.setdefault(i.participant, Counter())[i.kind if i.source == "arvados" else "upload"] += 1
+        per.setdefault(i.participant, Counter())["upload" if i.source == "upload" else i.kind] += 1
     if only:
         return [p for p in only if p in per]
     chosen = [p for p, c in per.items() if c["vcf"] or c["cgi"] or c["upload"] >= min_facets]
@@ -254,6 +264,87 @@ def migrate_by_type_layout(out: Path, participants_root: Path) -> int:
     if legacy.exists():
         legacy.replace(out / "manifest.legacy-by-type.jsonl")
     return moved
+
+
+EVIDENCE_HOST = "https://evidence.pgp-hms.org"
+
+
+def evidence_items(html: str) -> list[Item]:
+    """PGP's own Complete Genomics rows of the listing, served by GET-Evidence rather than Tapestry.
+
+    Their download link points at `evidence.pgp-hms.org/genome_download.php` (plain http on the page; the
+    host redirects to https), and their size cell is empty.
+    """
+    items: list[Item] = []
+    for block in re.findall(r"<tr data-file-row(.*?)</tr>", html, re.S):
+        href = re.search(r'href="(https?://evidence\.pgp-hms\.org/genome_download\.php\?[^"]+)"', block)
+        types = re.findall(r'data-summarize-as="list-distinct">(.*?)</td>', block, re.S)
+        if href is None or len(types) < 2 or " ".join(re.sub("<[^>]+>", "", types[1]).split()) != "Complete Genomics":
+            continue
+        who = PARTICIPANT.search(block)
+        name = re.search(r'data-summarize-as="name">(.*?)</td>', block, re.S)
+        locator = re.search(r'data-locator="([^"]*)"', block)
+        url = href.group(1).replace("&amp;", "&").replace("http://", "https://", 1)
+        genome_id = re.search(r"download_genome_id=([0-9a-f]+)", url)
+        loc = locator.group(1) if locator else ""
+        items.append(Item(who.group(0) if who else "", "evidence", genome_id.group(1) if genome_id else url,
+                          " ".join(re.sub("<[^>]+>", "", name.group(1)).split()) if name else "", "cgi",
+                          loc.rsplit("/", 1)[-1] if "/" in loc else None, None, url))
+    return [i for i in items if i.participant]
+
+
+def _verify_compressed(path: Path) -> str | None:
+    """Decompress the whole file; a truncated or corrupt stream raises. Returns None when it is sound."""
+    opener = {b"BZh": bz2.open, b"\x1f\x8b": gzip.open}
+    with path.open("rb") as fh:
+        head = fh.read(3)
+    open_ = next((o for magic, o in opener.items() if head.startswith(magic)), None)
+    if open_ is None:
+        return "not bz2/gzip; integrity not checked"
+    try:
+        with open_(path, "rb") as fh:
+            while fh.read(1 << 22):
+                pass
+    except (OSError, EOFError, ValueError) as err:
+        return f"corrupt: {type(err).__name__}: {err}"
+    return None
+
+
+def fetch_evidence(fetcher: pl.Fetcher, item: Item, root: Path, known: set[tuple[str, str]], max_bytes: int) -> ItemResult:
+    """Stream one GET-Evidence file. Its name arrives in the header, so a file we already hold for this
+    person is recognised and the connection closed before the body is read."""
+    now = datetime.now(UTC).isoformat()
+    try:
+        with fetcher.open(item.url or "", follow=True) as resp:
+            if resp.status_code != 200:
+                return ItemResult(item, "http_error", reason=f"HTTP {resp.status_code}")
+            name = pl._attachment_name(resp) or item.file_name or f"{item.item_id}.bin"
+            named = Item(**{**asdict(item), "file_name": name})
+            if (item.participant, name) in known:
+                return ItemResult(named, "duplicate", reason="same person already has this file (matched by header)")
+            dest = root / item.rel_dir / pl._safe(name)
+            if dest.exists():
+                return ItemResult(named, "already_present", str(dest), dest.stat().st_size)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            part = dest.with_name(dest.name + ".part")
+            written = 0
+            with part.open("wb") as fh:
+                for chunk in resp.iter_bytes(pl.CHUNK):
+                    fh.write(chunk)
+                    written += len(chunk)
+                    if written > max_bytes:
+                        break
+    except httpx.HTTPError as err:
+        return ItemResult(item, "http_error", reason=f"{type(err).__name__}: {err}")
+    if written > max_bytes:
+        part.unlink()
+        return ItemResult(named, "skipped_too_large", reason=f"passed the {max_bytes}-byte cap while streaming")
+    problem = _verify_compressed(part)
+    if problem and problem.startswith("corrupt"):
+        return ItemResult(named, "corrupt", str(part), written, reason=problem)
+    part.replace(dest)
+    return ItemResult(named, "downloaded", str(dest), written, reason=problem or "size not stated by the source; decompressed cleanly",
+                      fetched_at=now)
 
 
 def fetch_arvados(fetcher: pl.Fetcher, item: Item, root: Path) -> ItemResult:
@@ -313,7 +404,8 @@ def main(
     limit: int | None = typer.Option(None, help="At most this many participants, in priority order."),
     min_facets: int = typer.Option(2, help="Also take participants without PGP sequencing who uploaded this many variant files."),
     max_bytes: int = typer.Option(DEFAULT_MAX_BYTES, help="Skip single files larger than this."),
-    no_uploads: bool = typer.Option(False, "--no-uploads", help="Arvados datasets only."),
+    no_uploads: bool = typer.Option(False, "--no-uploads", help="Leave out participant uploads."),
+    no_evidence: bool = typer.Option(False, "--no-evidence", help="Leave out PGP's Complete Genomics files on GET-Evidence."),
     delay: float = typer.Option(pl.DEFAULT_DELAY_S, help="Seconds between requests to one host."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Plan and report; download and move nothing."),
 ) -> None:
@@ -329,24 +421,22 @@ def main(
     arv_items, skipped = arvados_items(Arvados(fetcher))
     for reason, n in sorted(skipped.items()):
         log.info("arvados: skipped %d: %s", n, reason)
-    rows: dict[str, pl.ListingRow] = {}
-    if not no_uploads:
-        resp = fetcher.get(f"{pl.PGP_BASE}{pl.LISTING_PATH}")
-        resp.raise_for_status()
-        listed, _ = pl.parse_listing(resp.text)
-        rows = {str(r.download_id): r for r in listed}
-    items = arv_items + upload_items(list(rows.values()))
+    resp = fetcher.get(f"{pl.PGP_BASE}{pl.LISTING_PATH}")
+    resp.raise_for_status()
+    listed, _ = pl.parse_listing(resp.text)
+    rows: dict[str, pl.ListingRow] = {} if no_uploads else {str(r.download_id): r for r in listed}
+    items = arv_items + upload_items(list(rows.values())) + ([] if no_evidence else evidence_items(resp.text))
 
     people = select_participants(items, only, min_facets)
     if limit is not None:
         people = people[:limit]
     chosen = set(people)
     kept, dup = plan([i for i in items if i.participant in chosen])
-    too_big = [i for i in kept if i.size > max_bytes]
-    todo = [i for i in kept if i.size <= max_bytes]
-    by_kind = Counter(i.kind if i.source == "arvados" else "upload" for i in todo)
-    log.info("plan: %d participant(s); %d file(s), %.1f GB (%s); %d duplicate(s) folded; %d over the size cap",
-             len(people), len(todo), sum(i.size for i in todo) / 1e9,
+    too_big = [i for i in kept if i.size is not None and i.size > max_bytes]
+    todo = [i for i in kept if i.size is None or i.size <= max_bytes]
+    by_kind = Counter(f"{i.source}:{i.kind}" if i.source != "upload" else "upload" for i in todo)
+    log.info("plan: %d participant(s); %d file(s), %.1f GB stated + %d of unstated size (%s); %d duplicate(s) folded; %d over the size cap",
+             len(people), len(todo), sum(i.size or 0 for i in todo) / 1e9, sum(i.size is None for i in todo),
              ", ".join(f"{k} {v}" for k, v in sorted(by_kind.items())), len(dup), len(too_big))
     if dry_run:
         for p in people[:15]:
@@ -361,8 +451,16 @@ def main(
                                  for d, k in dup.items()]
     results += [ItemResult(i, "skipped_too_large", reason=f"{i.size} bytes > cap {max_bytes}") for i in too_big]
     order = {p: n for n, p in enumerate(people)}
+    # Files each person already has on disk, by name: GET-Evidence rows are matched against this.
+    known = {(f.parent.parent.name, f.name) for f in root.glob("hu*/*/*") if f.is_file() and not f.name.endswith(".part")}
     for n, item in enumerate(sorted(todo, key=lambda i: (order[i.participant], i.source, i.item_id, i.file_name or "")), 1):
-        got = [fetch_arvados(fetcher, item, root)] if item.source == "arvados" else fetch_upload(fetcher, item, rows[item.item_id], root, max_bytes)
+        if item.source == "arvados":
+            got = [fetch_arvados(fetcher, item, root)]
+        elif item.source == "evidence":
+            got = [fetch_evidence(fetcher, item, root, known, max_bytes)]
+        else:
+            got = fetch_upload(fetcher, item, rows[item.item_id], root, max_bytes)
+        known.update((r.item.participant, r.item.file_name) for r in got if r and r.item.file_name)
         for r in got:
             if not r:
                 log.warning("%s %s-%s: %s %s", item.participant, item.source, item.item_id, r.outcome, r.reason or "")

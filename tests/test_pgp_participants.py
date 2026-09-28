@@ -83,3 +83,12 @@ def test_migration_moves_by_type_files_into_participant_dirs(tmp_path: Path) -> 
     row = pl.ListingRow(2, "hu23502F", None, 1215, "2011-01-06", "23andMe", "Participant", "SNP Data from 23andMe",
                         "e9e7b1d959510ac01dd0107df2e5cc54+69", 2)
     assert pl._already_present(row, root / "hu23502F" / "upload-2") is not None
+
+
+def test_plan_folds_an_upload_whose_listed_size_is_wrong_by_its_sample_id() -> None:
+    # Real case, hu6942AE: upload 2021 "WGC069895D - VCF" is listed at 1 byte; the bytes equal the dataset file.
+    arv = pp.Item("hu6942AE", "arvados", "ac2it-4zz18-hphf6foa8ax1aru", "WGC069895D vcf", "vcf", "WGC069895D.vcf.gz",
+                  344669369, "https://x")
+    upload = pp.Item("hu6942AE", "upload", "2021", "WGC069895D - VCF", "Veritas Genetics", None, 1, None)
+    kept, dup = pp.plan([upload, arv])
+    assert kept == [arv] and dup == {upload: arv}

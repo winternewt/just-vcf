@@ -171,6 +171,11 @@ def upload_items(rows: list[pl.ListingRow]) -> list[Item]:
             for r in rows if not pl.NON_VARIANT_TYPES.search(r.data_type) and not READS_BY_NAME.search(r.name)]
 
 
+def _stem(name: str) -> str:
+    """`WGC069895D.vcf.gz` and `WGC069895D` both give `wgc069895d`."""
+    return re.sub(r"(\.(vcf|gz|bz2|tsv))+$", "", name.strip(), flags=re.IGNORECASE).lower()
+
+
 def plan(items: list[Item]) -> tuple[list[Item], dict[Item, Item]]:
     """Deduplicate within each participant. Returns the items to fetch and {duplicate: kept}.
 
@@ -185,6 +190,9 @@ def plan(items: list[Item]) -> tuple[list[Item], dict[Item, Item]]:
     dup: dict[Item, Item] = {}
     by_name: dict[tuple[str, str, int], Item] = {}
     by_size: dict[tuple[str, int], Item] = {}
+    # The listing's size column is sometimes wrong (seen: 1 byte for a 345 MB VCF), so an upload also
+    # matches by the sample id its label starts with, e.g. "WGC069895D - VCF" ~ WGC069895D.vcf.gz.
+    by_stem: dict[tuple[str, str], Item] = {}
     for i in sorted(items, key=order):
         if i.source == "arvados":
             key = (i.participant, i.file_name or "", i.size)
@@ -193,8 +201,12 @@ def plan(items: list[Item]) -> tuple[list[Item], dict[Item, Item]]:
                 continue
             by_name[key] = i
             by_size.setdefault((i.participant, i.size), i)
+            by_stem.setdefault((i.participant, _stem(i.file_name or "")), i)
         elif (i.participant, i.size) in by_size:
             dup[i] = by_size[(i.participant, i.size)]
+            continue
+        elif (i.participant, _stem(i.item_name.split(" - ")[0])) in by_stem and " - VCF" in i.item_name:
+            dup[i] = by_stem[(i.participant, _stem(i.item_name.split(" - ")[0]))]
             continue
         kept.append(i)
     return kept, dup

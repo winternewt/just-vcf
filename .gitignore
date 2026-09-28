@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[codz]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets and editor junk
+.env
+.*.swp
+*~
+.DS_Store
+.idea/
+.vscode/
+
+# Genomic data never travels in git: no VCF/parquet/gz/BAM/FASTA/.db
+*.vcf
+*.vcf.gz
+*.g.vcf.gz
+*.tbi
+*.csi
+*.bam
+*.bai
+*.cram
+*.fa
+*.fa.gz
+*.fasta
+*.fai
+*.2bit
+*.parquet
+*.db
+*.sqlite

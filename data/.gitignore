@@ -1,0 +1,4 @@
+# Ignore-all + allowlist. data/ never travels; committed fixtures live in assets/.
+# To commit a subtree here, add explicit `!<dir>/` and `!<dir>/**` lines.
+*
+!.gitignore

@@ -303,7 +303,9 @@ def _already_present(row: ListingRow, target_dir: Path) -> list[FileResult] | No
     return [FileResult(row, Outcome.ALREADY_PRESENT, f.name, str(f), f.stat().st_size) for f in files]
 
 
-def fetch_row(fetcher: Fetcher, row: ListingRow, out: Path, *, max_bytes: int, dry_run: bool) -> list[FileResult]:
+def fetch_row(
+    fetcher: Fetcher, row: ListingRow, out: Path, *, max_bytes: int, dry_run: bool, target_dir: Path | None = None
+) -> list[FileResult]:
     """Download every file behind one listing row.
 
     The download link answers in one of three ways, all seen live: older uploads are served directly
@@ -312,7 +314,8 @@ def fetch_row(fetcher: Fetcher, row: ListingRow, out: Path, *, max_bytes: int, d
     """
     if row.listed_size > max_bytes:
         return [FileResult(row, Outcome.SKIPPED_TOO_LARGE, reason=f"listed {row.listed_size} bytes > cap {max_bytes}")]
-    target_dir = out / _safe(row.data_type) / _safe(row.participant) / str(row.download_id)
+    if target_dir is None:
+        target_dir = out / _safe(row.data_type) / _safe(row.participant) / str(row.download_id)
     present = _already_present(row, target_dir)
     if present is not None:
         return present

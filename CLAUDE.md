@@ -432,6 +432,10 @@ same applies when the user corrects a preference: it goes below, in their words,
   - `olga/BorysovaGenome.liftover38to37.zip` — a zipped VCF; `ksuhaster/deepvariant/*.zip` likewise.
   - `sergey/` — a DRAGEN `hard-filtered.vcf.gz` and a GATK HaplotypeCaller VCF.
   - `gennet/` — HapMap CEU lifted VCFs. `prive/`, `aadr/`, `dataverse_66p1/` are ancestry reference data.
+- `/data/genomes/pgp-hms/participants/<hu>/` holds PGP-HMS data per person (`scripts/pgp_participants.py`):
+  `arvados-<collection>/` for PGP's own sequencing (freeBayes+VarScan2 hg19 VCFs with **two sample columns**,
+  one per caller; Complete Genomics `var`/`masterVarBeta`/`vcfBeta`) and `upload-<download id>/` for the
+  person's own uploads. `manifest.jsonl` there records every file and every folded duplicate.
 - `/data/genomes/pgp-hms/` holds PGP-HMS downloads from `scripts/pgp_leech.py`. Those are consented-public,
   unlike the rest of `/data/genomes`, and CC0 per the PGP Researcher FAQ, so a small one may become an
   `assets/` fixture. Data types are self-reported, so a file labelled 23andMe may be something else. Check the file first:

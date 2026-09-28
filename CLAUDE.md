@@ -408,8 +408,8 @@ same applies when the user corrects a preference: it goes below, in their words,
 - 2026-09-28, dependencies: lean core plus extras, "but drop leech, just dev" — the PGP-HMS leecher's
   httpx is a dev dependency, not an extra.
 - 2026-09-28, git: "Autocommit-autopush as per current global memory." The global rule on record says
-  commit as you go and never push, so §2 says never push. Whether pushing is meant to be automatic here
-  is an open question to the user.
+  commit as you go and never push. Checked 2026-09-28: no sibling repo overrides that (just-dna-format's
+  triage permit keeps push out too). The user said "ok keep never push", so §2 stands.
 - 2026-09-28, charter: yes, "but no heavy stance on no-calls. … a bayesian based fuzzy 0(unknown) ..
   PHRED-like(confident genotype). … each position is probably an n-vector of probabilities or log or
   something, tbd; No binary call-no call definitely."

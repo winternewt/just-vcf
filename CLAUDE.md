@@ -414,6 +414,10 @@ same applies when the user corrects a preference: it goes below, in their words,
   PHRED-like(confident genotype). … each position is probably an n-vector of probabilities or log or
   something, tbd; No binary call-no call definitely."
 
+- 2026-09-28, scope: "never reads meant 'we don't implement it', if it is here for free, let it be".
+  An out-of-scope capability means we don't build it. When the substrate (polars-bio) already has it,
+  use it. Example: polars-bio `depth()` over BAM for coverage.
+
 ## 11. Learned workspace facts
 
 - Real genomes live under `/data/genomes/<person>/`, all private. What is there by kind:

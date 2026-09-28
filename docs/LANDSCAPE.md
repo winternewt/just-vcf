@@ -12,7 +12,7 @@ genome across facets, keyed by VRS and seqcol.
 
 | Piece | Tool | How | Why |
 |---|---|---|---|
-| Readers, interval ops, VCF export | **polars-bio** 0.36 (Apache-2.0) + datafusion-bio-formats | core dependency | VCF/BCF/VCF-Zarr/BGEN/PGEN scans, `sink_vcf`, overlap/merge/subtract. Lacks normalization, gVCF block semantics, liftover, VRS and array readers |
+| Readers, interval ops, VCF export, depth | **polars-bio** 0.36 (Apache-2.0) + datafusion-bio-formats/-functions | core dependency | VCF/BCF/VCF-Zarr/BGEN/PGEN scans, `sink_vcf`, overlap/merge/subtract, and mosdepth-compatible `depth()` from BAM for the coverage facet. Lacks normalization, gVCF block semantics, liftover, VRS and array readers |
 | VRS ids, allele normalization, seqcol | **gtars** 0.10 (BSD-2, Rust + Python) and **refget** 0.12 (BSD-2) | dependency; bulk path as a Rust UDF beside polars-bio | `gtars-vrs` does digests, normalization and parallel VCF→VRS, tested against the VRS spec and vrs-python vectors. `gtars-refget` builds a refget store from FASTA and computes seqcol digests and comparisons |
 | VRS conformance, Cat-VRS and CisPhasedBlock models | **vrs-python** 2.3.3, **ga4gh.cat_vrs** 0.7.2 (Apache-2.0) | dev/test only | Reference implementation as test oracle. About 6k variants/s, too slow for the hot path (vrs-python issue #534) |
 | Allele-aware liftover with provenance | **bcftools +liftover** (MIT, freeseek/score) | subprocess, then read back | Only tool that handles indel REF/ALT swaps. `--write-src` and SWAP/FLIP tags give what a `liftover_to` edge needs. T2T works through UCSC hs1 chains |
@@ -50,7 +50,5 @@ Design references, not dependencies:
 - **GPL, subprocess at most:** CrossMap, vcfdist, transanno.
 - **Wrong scope:** leviosam2 lifts alignments, not VCF. For us it is provenance metadata on a facet.
   anyvar is a multi-person registry service.
-- **Excluded by the charter draft:** datafusion-bio-functions `depth()` reads BAM directly. Coverage
-  comes in as mosdepth/samtools output instead.
 - **Converters that drop I/D rows or leave REF provisional:** bcftools `--tsv2vcf`, PLINK 1.9
   `--23file`. PLINK2 `--23file` is not implemented.

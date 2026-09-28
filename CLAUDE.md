@@ -170,7 +170,7 @@ Sibling repos, read-only unless a task explicitly targets them:
 | Path | What we take from it |
 |---|---|
 | `../just-prs` (MIT) | array loading, VCF build detection, REF lookup (`reference_allele.py`), liftover, ancestry |
-| `../just-dna-lite` (AGPL) | callset-scope (WGS vs targeted) detection, hom-ref restoration, chromosome helpers, quality filters. The user wrote these parts and relicenses them to MIT here; nothing else from that repo is copied |
+| `../just-dna-lite` (AGPL) | `annotation/restoration.py` only: callset-scope (WGS vs targeted) detection, gVCF detection, hom-ref restoration. The user wrote all of it (git blame, 2026-09-28) and relicenses it to MIT here. Everything else there is AGPL and mostly antonkulaga's (`chromosomes.py`, `io.py`, most of `QualityFilters`): **never copy it**. Reimplement from the behaviour, or ask the user to get permission first |
 | `../just-dna-format` | producer runs the same triage loop; a model for inbox and charter shape |
 
 ---

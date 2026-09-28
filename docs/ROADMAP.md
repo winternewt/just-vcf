@@ -42,7 +42,8 @@ Port the just-prs `ancestry/` package (PCA projection, KNN, proportions, consens
 ## RM6 — Normalization and VCF writing
 Severity: high · Status: open · Owner: unassigned
 
-Port chromosome naming and quality filters from just-dna-lite and coordinate liftover from just-prs.
+Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
+so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
 New work: left-align, split multi-allelic sites, strand resolution (A/T and C/G), dedup, sort, and a
 writer that keeps FORMAT/GT (just-dna-lite's writer drops them).
 

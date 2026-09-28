@@ -395,12 +395,54 @@ def write_manifest(path: Path, results: list[FileResult]) -> None:
     tmp.replace(path)
 
 
+# Data types that are not genotype or variant data: documents, images, reports, health records,
+# microbiome, raw reads and alignments. Matched case-insensitively against the self-reported type, so
+# it is a filter on what the participant *said*, not on the file; a mislabelled file slips either way.
+NON_VARIANT_TYPES = re.compile(
+    r"image|png|photo|video|dicom|mri|nifti|\.nii|x-ray|\bxr\b|\.udf|pdf|health record|biometric|"
+    r"excel|xlsx|\.docx|word doc|pasted in word|powerpoint|report|screenshot|3d model|aptitude|"
+    r"olfactory|lab results|\bcode\b|dropbox|chrome html|phenotype|family tree in|genbank|"
+    r"microbiome|\bbam\b|\.bam|fastq|crai|\bbai\b|hifi reads|archival",
+    re.IGNORECASE,
+)
+
+
+def type_key(data_type: str) -> str:
+    """Group self-reported types that differ only in case or spacing ("Genes For Good" vs "genes for good")."""
+    return " ".join(data_type.lower().split())
+
+
+def sample_rows(rows: list[ListingRow], per_type: int) -> list[ListingRow]:
+    """Up to `per_type` rows per data type, spread evenly over upload dates (oldest and newest included).
+
+    Spreading over time is what catches format versions: the same vendor's export changed shape across
+    chip generations, and the oldest and newest uploads of a type are the likeliest to differ.
+    """
+    groups: dict[str, list[ListingRow]] = {}
+    for r in rows:
+        groups.setdefault(type_key(r.data_type), []).append(r)
+    picked: list[ListingRow] = []
+    for key in sorted(groups):
+        g = sorted(groups[key], key=lambda r: (r.published, r.download_id))
+        if len(g) <= per_type:
+            picked.extend(g)
+        elif per_type == 1:
+            picked.append(g[-1])
+        else:
+            idx = sorted({round(k * (len(g) - 1) / (per_type - 1)) for k in range(per_type)})
+            picked.extend(g[i] for i in idx)
+    picked.sort(key=lambda r: r.download_id)
+    return picked
+
+
 app = typer.Typer(add_completion=False, help=__doc__.split("\n\n")[0])
 
 
 @app.command()
 def main(
-    data_type: str = typer.Option("23andMe", help="PGP data type, as the listing's filter spells it."),
+    data_type: str | None = typer.Option(None, help="One PGP data type, as the listing's filter spells it. Default: all types."),
+    per_type: int | None = typer.Option(None, help="Sample at most this many rows per data type, spread over upload dates."),
+    all_types: bool = typer.Option(False, "--all-types", help="Keep documents, images, reads and other non-variant types."),
     out: Path | None = typer.Option(None, help="Download root. Default: $JUST_VCF_SAMPLES_DIR/pgp-hms, else data/input/pgp-hms."),
     limit: int | None = typer.Option(None, help="Process at most this many listing rows (lowest download ids first)."),
     download_id: list[int] = typer.Option([], "--id", help="Only these download ids. Repeatable."),
@@ -414,21 +456,33 @@ def main(
         out = Path(samples) / "pgp-hms" if samples else FALLBACK_OUT
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     fetcher = Fetcher(delay)
-    listing_url = f"{PGP_BASE}{LISTING_PATH}?data_type={quote(data_type)}"
+    listing_url = f"{PGP_BASE}{LISTING_PATH}" + (f"?data_type={quote(data_type)}" if data_type else "")
     resp = fetcher.get(listing_url)
     resp.raise_for_status()
     rows, dropped = parse_listing(resp.text)
     for reason, n in sorted(dropped.items()):
         log.warning("listing: dropped %d row(s): %s", n, reason)
-    off_type = Counter(r.data_type for r in rows if r.data_type != data_type)
-    for other, n in sorted(off_type.items()):
-        log.warning("listing: %d row(s) carry data type %r, not %r; kept", n, other, data_type)
+    if data_type:
+        off_type = Counter(r.data_type for r in rows if r.data_type != data_type)
+        for other, n in sorted(off_type.items()):
+            log.warning("listing: %d row(s) carry data type %r, not %r; kept", n, other, data_type)
+    if not all_types and not download_id:
+        kept = [r for r in rows if not NON_VARIANT_TYPES.search(r.data_type)]
+        log.info("listing: %d row(s) set aside as non-variant data types (--all-types keeps them)", len(rows) - len(kept))
+        rows = kept
     if download_id:
         wanted = set(download_id)
         missing = sorted(wanted - {r.download_id for r in rows})
         if missing:
-            raise typer.BadParameter(f"not in the {data_type} listing: {missing}", param_hint="--id")
+            raise typer.BadParameter(f"not in the {data_type or 'full'} listing: {missing}", param_hint="--id")
         rows = [r for r in rows if r.download_id in wanted]
+    if per_type is not None:
+        # Cap before sampling, so a type whose median file is large still yields its smaller files.
+        under = [r for r in rows if r.listed_size <= max_bytes]
+        lost = sorted({type_key(r.data_type) for r in rows} - {type_key(r.data_type) for r in under})
+        if lost:
+            log.warning("listing: %d data type(s) have no file under %d bytes: %s", len(lost), max_bytes, "; ".join(lost))
+        rows = sample_rows(under, per_type)
     selected = rows[:limit] if limit is not None else rows
     log.info("listing: %d row(s), %d selected, %.2f GB listed in selection",
              len(rows), len(selected), sum(r.listed_size for r in selected) / 1e9)

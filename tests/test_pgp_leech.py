@@ -123,3 +123,27 @@ def test_safe_path_component_cannot_escape(tmp_path: Path, name: str) -> None:
     cleaned = leech._safe(name)
     assert "/" not in cleaned and "\\" not in cleaned and not cleaned.startswith(".")
     assert (tmp_path / cleaned).resolve().parent == tmp_path.resolve()
+
+
+def _row(download_id: int, published: str, data_type: str) -> "leech.ListingRow":
+    return leech.ListingRow(**{**ROW_4208.__dict__, "download_id": download_id, "published": published, "data_type": data_type})
+
+
+def test_sample_spreads_over_dates_and_merges_type_spellings() -> None:
+    rows = [_row(i, f"20{10 + i:02d}-01-01", "Genes For Good" if i % 2 else "genes for  good") for i in range(9)]
+    rows.append(_row(100, "2020-01-01", "AncestryDNA"))
+    picked = leech.sample_rows(rows, per_type=3)
+    gfg = [r for r in picked if leech.type_key(r.data_type) == "genes for good"]
+    assert [r.published for r in gfg] == ["2010-01-01", "2014-01-01", "2018-01-01"]  # oldest, middle, newest
+    assert [r.download_id for r in picked if r.data_type == "AncestryDNA"] == [100]
+    assert leech.sample_rows(list(reversed(rows)), per_type=3) == picked
+
+
+@pytest.mark.parametrize(
+    ("data_type", "set_aside"),
+    [("health records - PDF or text", True), ("Genos mapped sorted .BAM", True), ("Microbiome", True),
+     ("Promethease Report", True), ("23andMe", False), ("Veritas Genetics", False),
+     ("Gencove imputed genotype probabilities", False), ("GeneDX converted to gVCF 4.1", False)],
+)
+def test_non_variant_filter_on_real_listing_types(data_type: str, set_aside: bool) -> None:
+    assert bool(leech.NON_VARIANT_TYPES.search(data_type)) is set_aside

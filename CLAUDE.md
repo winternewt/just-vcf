@@ -433,7 +433,8 @@ same applies when the user corrects a preference: it goes below, in their words,
   - `sergey/` — a DRAGEN `hard-filtered.vcf.gz` and a GATK HaplotypeCaller VCF.
   - `gennet/` — HapMap CEU lifted VCFs. `prive/`, `aadr/`, `dataverse_66p1/` are ancestry reference data.
 - `/data/genomes/pgp-hms/` holds PGP-HMS downloads from `scripts/pgp_leech.py`. Those are consented-public,
-  unlike the rest of `/data/genomes`, so a small one may become an `assets/` fixture. Check the file first:
+  unlike the rest of `/data/genomes`, and CC0 per the PGP Researcher FAQ, so a small one may become an
+  `assets/` fixture. Data types are self-reported, so a file labelled 23andMe may be something else. Check the file first:
   participant uploads can carry real names in file names.
 - `../just-prs/data/input/vcf/newton_winter.vcf` is BGZF despite the `.vcf` name.
 - Public WGS samples used by the sibling suites are on Zenodo, records 18370498 and 19487816.

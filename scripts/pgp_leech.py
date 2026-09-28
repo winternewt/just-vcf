@@ -6,6 +6,9 @@ walks that chain politely (robots.txt asks for a 5 s crawl delay), writes each f
 `<out>/<data type>/<participant>/<download id>/<file name>`, and keeps `<out>/manifest.jsonl` sorted by
 download id so reruns resume instead of starting over.
 
+Licence: the PGP Researcher FAQ puts all public genomic and health data under CC0
+(https://github.com/PGPHarvard/FAQ/wiki/Researcher-FAQ). Data types are self-reported by participants.
+
 It is a dev tool, not library code: httpx is a dev dependency and nothing in `src/` imports this.
 
     uv run python scripts/pgp_leech.py --dry-run --limit 5
@@ -78,6 +81,8 @@ class Outcome(enum.StrEnum):
     DRY_RUN = "dry_run"
     SIZE_MISMATCH = "size_mismatch"
     HTTP_ERROR = "http_error"
+    # 401/403 from the file host: the listing shows the row but its collection is not shared publicly.
+    NOT_PUBLIC = "not_public"
     UNEXPECTED_RESPONSE = "unexpected_response"
     EMPTY_COLLECTION = "empty_collection"
 
@@ -301,9 +306,9 @@ def _already_present(row: ListingRow, target_dir: Path) -> list[FileResult] | No
 def fetch_row(fetcher: Fetcher, row: ListingRow, out: Path, *, max_bytes: int, dry_run: bool) -> list[FileResult]:
     """Download every file behind one listing row.
 
-    The download link answers in one of two ways, both seen live: older uploads are served directly
-    (200 with a Content-Disposition attachment), newer ones redirect to an Arvados collection page that
-    lists the files.
+    The download link answers in one of three ways, all seen live: older uploads are served directly
+    (200 with a Content-Disposition attachment); newer ones redirect to an Arvados collection, landing
+    either on its directory page (`…/_/`, which lists the files) or on the file itself.
     """
     if row.listed_size > max_bytes:
         return [FileResult(row, Outcome.SKIPPED_TOO_LARGE, reason=f"listed {row.listed_size} bytes > cap {max_bytes}")]
@@ -330,10 +335,24 @@ def fetch_row(fetcher: Fetcher, row: ListingRow, out: Path, *, max_bytes: int, d
     except httpx.HTTPError as err:
         return [FileResult(row, Outcome.HTTP_ERROR, reason=f"{type(err).__name__}: {err}")]
 
-    page = fetcher.get(location)
-    if page.status_code != 200:
-        return [FileResult(row, Outcome.HTTP_ERROR, reason=f"collection page HTTP {page.status_code}")]
-    files = parse_collection(page.text, str(page.url))
+    # The redirect lands either on a collection's directory page (`…/_/`) or straight on a file in it.
+    try:
+        with fetcher.open(location, follow=True) as page:
+            if page.status_code in (401, 403):
+                return [FileResult(row, Outcome.NOT_PUBLIC, reason=f"redirect target HTTP {page.status_code}")]
+            if page.status_code != 200:
+                return [FileResult(row, Outcome.HTTP_ERROR, reason=f"redirect target HTTP {page.status_code}")]
+            is_listing = page.url.path.endswith("/") and page.headers.get("content-type", "").startswith("text/html")
+            if not is_listing:
+                name = _attachment_name(page) or unquote(page.url.path.rsplit("/", 1)[-1]) or f"{row.download_id}.bin"
+                dest = target_dir / _safe(name)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                return [_finish(row, name, dest, _write_body(page, dest), row.listed_size)]
+            page.read()
+            listing_html, listing_url = page.text, str(page.url)
+    except httpx.HTTPError as err:
+        return [FileResult(row, Outcome.HTTP_ERROR, reason=f"{type(err).__name__}: {err}")]
+    files = parse_collection(listing_html, listing_url)
     if not files:
         return [FileResult(row, Outcome.EMPTY_COLLECTION, reason="collection lists no files")]
 

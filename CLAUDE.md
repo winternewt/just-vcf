@@ -432,6 +432,9 @@ same applies when the user corrects a preference: it goes below, in their words,
   - `olga/BorysovaGenome.liftover38to37.zip` — a zipped VCF; `ksuhaster/deepvariant/*.zip` likewise.
   - `sergey/` — a DRAGEN `hard-filtered.vcf.gz` and a GATK HaplotypeCaller VCF.
   - `gennet/` — HapMap CEU lifted VCFs. `prive/`, `aadr/`, `dataverse_66p1/` are ancestry reference data.
+- `/data/genomes/pgp-hms/` holds PGP-HMS downloads from `scripts/pgp_leech.py`. Those are consented-public,
+  unlike the rest of `/data/genomes`, so a small one may become an `assets/` fixture. Check the file first:
+  participant uploads can carry real names in file names.
 - `../just-prs/data/input/vcf/newton_winter.vcf` is BGZF despite the `.vcf` name.
 - Public WGS samples used by the sibling suites are on Zenodo, records 18370498 and 19487816.
 - PGP-HMS publishes consented 23andMe exports at

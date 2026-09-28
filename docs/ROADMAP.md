@@ -46,10 +46,3 @@ Reimplement chromosome naming and quality filters (just-dna-lite's versions are 
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
 New work: left-align, split multi-allelic sites, strand resolution (A/T and C/G), dedup, sort, and a
 writer that keeps FORMAT/GT (just-dna-lite's writer drops them).
-
-## RM7 — PGP-HMS sample leecher
-Severity: medium · Status: open · Owner: unassigned
-
-A script in `scripts/` that downloads consented-public 23andMe exports from
-<https://my.pgp-hms.org/public_genetic_data?data_type=23andMe> into `data/input/`, so tests and
-dogfooding have real array files that are allowed to be used. httpx is the dev dependency for it.

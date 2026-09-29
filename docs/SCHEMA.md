@@ -130,13 +130,16 @@ its own phase set. So:
 
 - `phased: list[bool]`, parallel to `gt_alleles`. An element is null where the source did not say
   (an array export).
-- `phase_sets: list[str]`, parallel to `gt_alleles`. It comes from `PSL` directly, since PSL names are
-  global to the file. A `PS` is scoped to its chromosome ("on the same chromosome and have the same PS
-  value"), so it is stored as `PS:<chrom>:<n>` on every phased haplotype. A phased haplotype with no PS
-  or PSL belongs to the chromosome's one implicit set (VCF 4.5: "All phased genotypes that do not
-  contain a PS subfield are assumed to belong to the same phased set") and gets `PS:<chrom>:implicit`.
-  Unphased haplotypes are null. PS and PSL names never share a set (VCF 4.5: "PS and PSL are not
-  interoperable"), and the prefix keeps them apart.
+- `phase_sets: list[str]`, parallel to `gt_alleles`: the raw value the file wrote, with no prefix. A
+  `PS` integer is written as its decimal string on each phased haplotype; a `PSL` entry is taken as is.
+  Unphased haplotypes are null.
+- **A phase set is identified by the key `(chrom, phase_set)`**, because `PS` is scoped to its
+  chromosome ("on the same chromosome and have the same PS value"). `PS=100` on chr1 and on chr2 are two
+  sets.
+- A phased haplotype with no PS or PSL has `phased = true` and `phase_set` null. It belongs to its
+  chromosome's one implicit set (VCF 4.5: "All phased genotypes that do not contain a PS subfield are
+  assumed to belong to the same phased set"), which is the key `(chrom, null)`.
+- PSL does not fit that key cleanly. See Q6.
 
 The VRS CisPhasedBlock is built from `phase_sets` at export. It is not stored per row.
 
@@ -162,8 +165,10 @@ and so is the reverse without the prior. So:
 
 Sources for `gp`: `GP`, and `PP` converted as `10^(-PP/10)`. Both are posteriors, so this is a change
 of scale, not a change of quantity. One trap: before VCF 4.3, `GP` was phred-scaled. The loader reads
-the `##fileformat` version and checks the values against it (a probability vector sums to about 1). If
-the two disagree, `gp` stays null and the facet says why. The loader never guesses the scale.
+the `##fileformat` version and checks the values against it (a probability vector sums to about 1).
+When the header says pre-4.3 and the values are phred-scaled, `gp = 10^(-GP/10)`. When the header says
+4.3 or later and the values are probabilities, `GP` is taken as is. When the two disagree, `gp` stays
+null and the facet says why. The loader never guesses the scale.
 
 `dp` and `ad` come from FORMAT (this sample), never from INFO (all samples combined). INFO/DP and
 FORMAT/DP are different quantities with the same name. The loader resolves each key by the header's
@@ -239,7 +244,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `source_sha256`, `source_path`, `member` | what was read. The path is a label, not identity |
 | `format_id`, `family` | from `sniff` |
 | `vendor`, `caller`, `caller_version` | the RM2 `source` detector. Null = not identifiable, never guessed |
-| `sample` | the sample column name as written in the file. It can be a real name; see Q4 |
+| `sample` | the sample column name, verbatim. **Identifying**: PGP uploads carry real names here. Logs, warnings and error messages name the `facet_id`, never the sample |
 | `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` (contig lengths) or null |
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4) |
@@ -279,7 +284,7 @@ With Decisions 1–5 as recommended:
 | `gt` | `list[u8]` | there is no allele list to index yet. Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
 | `source_gt` | `str` | the source wrote no genotype text. The file's raw text, not polars-bio's rewrite of it |
 | `phased` | `list[bool]` | parallel to `gt_alleles`. An element is null where the source did not say |
-| `phase_sets` | `list[str]` | parallel to `gt_alleles`. An element is null for an unphased haplotype. `PS:<chrom>:<n>`, `PS:<chrom>:implicit` or a PSL name (Decision 2) |
+| `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS or PSL value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. A set is keyed by `(chrom, phase_set)` (Decision 2) |
 | `gl` | `list[f32]` | no likelihoods given |
 | `gp` | `list[f32]` | no posteriors given |
 | `dosage` | `f32` | no dosage given |
@@ -320,8 +325,9 @@ same rule as the package: a new nullable column is minor, and a rename or retype
 | **B. One canonical spelling in `chrom`, the mapping recorded per facet in `contig_map`** | A mapping table to maintain. Canonical: `1`–`22`, `X`, `Y`, `MT`. `chrM`/`M`/`MT` are mapped explicitly, never with a `^chr` strip. Array codes `23`→`X`, `24`→`Y`, `26`→`MT`. Other contigs (alts, decoys, `chrUn_*`) keep their source name |
 | C. The seqcol's own names | Needs the seqcol at load time, and it is not always known then |
 
-**Recommendation: B.** One catch: array code `25` is the X pseudo-autosomal region. Mapping it to `X`
-drops the PAR fact. Q2 asks what to do with it.
+**Recommendation: B.** Array code `25` (the X pseudo-autosomal region) is kept as its own contig, `XY`
+(PLINK's name for it), and not mapped to `X`, because that would drop the PAR fact. `contig_map`
+records `25 → XY`. It ranks after `MT` (Decision 11).
 
 ## Decision 8: PGP freeBayes + VarScan2 merges
 
@@ -371,7 +377,7 @@ caller.
 ## Decision 11: canonical order (charter 12)
 
 Frames are emitted sorted by `facet_id`, then contig rank, then `pos`, `end_pos`, `source_ref`, `alts`. Contig rank
-follows the seqcol order when it is known. Otherwise it is `1`–`22`, `X`, `Y`, `MT`, then the remaining
+follows the seqcol order when it is known. Otherwise it is `1`–`22`, `X`, `Y`, `MT`, `XY`, then the remaining
 names sorted as strings. Nulls sort last. Every loader gets a test that loads a shuffled input and
 compares it with the sorted one.
 
@@ -395,13 +401,16 @@ None of these changes a column. Each is a rule a loader follows, and each gets a
 
 ## Open questions
 
-Q1 (CGI `GC?`), Q3 (withheld VRS ids) and Q5 (`end_pos`) were settled on 2026-09-30 and are folded in
-above.
+Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names) and Q5 (`end_pos`) were
+settled on 2026-09-30 and are folded in above.
 
-- **Q2. Array code `25` (X PAR).** Map to `X` and record it in `contig_map` (the position then says
-  whether it is PAR), or keep `XY` as its own contig label.
-- **Q4. Sample names.** PGP uploads can carry real names in the sample column. Keep them verbatim in
-  `facets.sample` (it is what the file says), or store a digest and let the caller opt in to the name.
+- **Q6. PSL and the `(chrom, phase_set)` key.** PSL names are global to the file: "records with
+  different CHROM but the same phase-set name are considered part of the same phase set" (VCF 4.5,
+  with an example that links a chr20 allele to `chr19*5*1`). Keying PSL by chromosome splits those
+  sets. And a PS `5` and a PSL `5` are different sets (the spec says so) but get the same key. Options:
+  key PSL values by `(null, phase_set)` and mark the kind in a `phase_set_kinds: list[Enum{ps, psl}]`
+  column; or keep one key and give up cross-chromosome PSL sets. Leaning towards the first. Whether
+  any file in the PGP-HMS corpus uses PSL has not been checked.
 
 ## At a glance (all recommendations taken)
 

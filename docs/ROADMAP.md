@@ -88,7 +88,7 @@ New work: left-align, split multi-allelic sites, strand resolution (A/T and C/G)
 writer that keeps FORMAT/GT (just-dna-lite's writer drops them).
 
 ## RM8 — Output frame schema
-Severity: high · Status: drafted 2026-09-29 in docs/SCHEMA.md, awaiting sign-off; blocks the RM2 loaders · Owner: user decides, agent drafts
+Severity: high · Status: drafted 2026-09-29 in docs/SCHEMA.md; checked against VCF 4.5 and the user's audit applied 2026-09-30 (Q1–Q5 closed, Q6 open); awaiting sign-off; blocks the RM2 loaders · Owner: user decides, agent drafts
 
 Before any per-format loader is written, draft a proposal for the one frame every loader emits, and get
 the user's sign-off. The charter (docs/CHARTER.md) is still an uncommitted draft, so the schema cannot

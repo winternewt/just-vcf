@@ -7,10 +7,14 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM1 — Final shape and plan
-Severity: blocker · Status: waiting on the user · Owner: user
+Severity: blocker · Status: charter drafted, not signed · Owner: user
 
-The user writes down the shape the library should have. The plan and the order of the items below
-follow from it. The survey of just-prs and just-dna-lite (2026-09-28) is summarised under RM2–RM6.
+The shape as the user described it on 2026-09-28 is written into the uncommitted draft
+`docs/CHARTER.md`. The frame is the product (Arrow/Polars, CompoSeq-style). There is a minimal
+many-in/one-out shape and an extended shape of per-person facets (assemblies, callers, phasings,
+coverage) with graded evidence, provenance, concordance and a graph. It is GA4GH first: VRS through
+gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM6 follows from it.
+Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
 Severity: high · Status: open · Owner: unassigned
@@ -19,6 +23,10 @@ Port from just-prs `arrays.py`, `io_utils.py` and `vcf.py`: 23andMe, AncestryDNA
 parsing; zip/gzip by magic bytes; VCF build detection. New work: a Living DNA parser (check whether Genotek exports differ from 23andMe; the local one carries a 23andMe header),
 build detection for arrays, I/D indel codes, hemizygous calls. Leave out the observed-allele-as-REF
 encoding (charter invariant 3).
+
+Detect the format from content, never from the label. PGP-HMS shows labels are wrong in both
+directions (docs/PGP_HMS.md). The 21 free-text uploads its classification could not settle, and the
+multi-facet participants, are the first test inputs.
 
 ## RM3 — REF lookup and padding
 Severity: high · Status: open · Owner: unassigned

@@ -29,6 +29,10 @@ decision turned on. Delegation is for finding things, never for deciding them.
    `docs/FEEDBACK_HISTORY.md` holds the answered items; `docs/CONSUMER_TRIAGE_LOOP.md` is the runbook.
 6. **docs/PROVENANCE.md** — where each borrowed piece of code came from in `just-prs` / `just-dna-lite`,
    and what was cut or changed on the way in. Read it before porting anything else.
+7. **docs/SIBLING_SURVEY.md** and **docs/LANDSCAPE.md** — what just-prs/just-dna-lite already implement,
+   and which external tools to take rather than build. Read both before designing a feature.
+8. **docs/PGP_HMS.md** — the public test-data source: where the files are, their quirks, what is on
+   disk, and which participants make good multi-facet test setups.
 
 Everything below is self-contained: no rule here requires following a link to know what you
 must not do. Links carry positive detail only.

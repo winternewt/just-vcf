@@ -9,6 +9,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   (`just_vcf.formats`). The answer says which negative it is when nothing matched: unknown, unreadable
   or not variant data. The build is reported only when the header states it. First formats: 23andMe,
   VCF and BCF. See docs/FORMATS.md.
+- Complete Genomics native files are recognised by `#TYPE` and their `>` header line: `cgi_var`,
+  `cgi_master_var` and `cgi_summary`, format versions 1.6 to 2.5. `FormatSpec.header_prefix` names a
+  marker on the column-name line.
 - `scripts/sniff_corpus.py` sniffs every file under a directory and writes a TSV report with an
   aggregate by outcome and format; it is how the PGP-HMS corpus is checked against the registry.
 - `scripts/pgp_participants.py` gathers PGP-HMS data per participant: PGP's own VCFs and Complete

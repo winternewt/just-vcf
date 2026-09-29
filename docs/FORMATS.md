@@ -47,3 +47,17 @@ headerless rsid table). The registry is every module's `SPECS` in module order, 
 The ordering test (`tests/formats/test_registry.py`) sniffs every spec's `example` and requires it to
 come back as that spec, so no earlier entry may capture a later one's example. A new spec that breaks
 it is registered too late or detects too loosely.
+
+## Contract gaps the loader step starts from
+
+Found while declaring formats; none changes what `sniff` reports.
+
+- **Columns differ by format version.** A spec declares one layout (CGI declares 2.5). Earlier
+  versions drop, add or rename columns; CGI 1.x has `totalScore` where 2.x has three score columns.
+  The loader should read names from the file's header and look dtypes up by name.
+- **An alias can hide a vocabulary change.** CGI `varQuality` (VQHIGH/VQLOW, ≤2.2) is aliased to
+  `varFilter` (PASS/VQLOW/AMBIGUOUS, 2.5); the values need mapping, not just the name.
+- **0-based conversion is more than `+1`.** CGI insertions have `begin == end` and need an anchor base
+  from the reference; `reference` is `=` on ref and no-call blocks, so REF comes from the FASTA.
+- **`no_call` is a flat tuple of spellings.** It cannot express a partial no-call inside an allele
+  (CGI `GC?`), `half` zygosity, or 1.x `no-call-rc`. These live in `genotype_encoding` and `notes`.

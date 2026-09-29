@@ -108,6 +108,8 @@ class FormatSpec:
     delimiter: str | None = "\t"
     """None for formats that are not delimited text (JSON) or that polars-bio reads (VCF)."""
     header: HeaderMode = HeaderMode.LINE
+    header_prefix: str | None = None
+    """A marker the column-name line starts with, stripped from the first name (CGI's `>locus`)."""
     columns: tuple[ColumnSpec, ...] = ()
     coordinates: Coordinates | None = Coordinates.ONE_BASED
     genotype_encoding: str | None = None

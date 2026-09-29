@@ -71,3 +71,12 @@ Found while declaring formats; none changes what `sniff` reports.
   inside the zip, which the archive result does not carry over to the genotype member.
 - **Optional columns.** `ColumnSpec` cannot say a column appears only in some versions (Promethease
   `Repute`).
+- **A section line before the columns.** Illumina Final Reports put `[Data]` on its own line, and the
+  Geno 2.0 export has no column line after it. `header_prefix` does not fit; a `HeaderMode.SECTION`
+  with the section name would.
+- **Tab or comma.** Final Reports use either, by export; the spec says `delimiter=None` and the loader
+  reads it off the line after `[Data]`.
+- **Chromosome outside the row.** Oxford `.gen` imputed rows carry it only in the zip member name; Big Y
+  is always chrY.
+- **Text kinds look at one line.** A headerless BED cannot be named `not_variant_data` without a
+  multi-line shape check, so it stays `unknown`.

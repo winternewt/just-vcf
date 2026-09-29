@@ -73,6 +73,14 @@ _TEXT_KINDS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^<!doctype html|^<html", re.IGNORECASE), "html"),
     (re.compile(r"^<\?xml"), "xml"),
     (re.compile(r"^0 HEAD\s*$"), "gedcom"),
+    (re.compile(r"^Seq-submit ::= \{"), "genbank_asn1"),
+    # Genetic-genealogy results that hold no positioned calls: Y-STR repeat counts, Y-SNP panels
+    # by marker name, the rCRS/RSRS reference table, prose haplogroup reports, ancestry segments.
+    (re.compile(r"^DYS393,DYS390,DYS19,"), "ftdna_ystr"),
+    (re.compile(r'^"?SnpName"?,"?Positive"?,"?Test"?\s*$'), "ftdna_ysnp_panel"),
+    (re.compile(r"^Position,rCRS,RSRS\s*$"), "mtdna_reference_table"),
+    (re.compile(r"^\s*Type : mtDNA"), "genographic_report"),
+    (re.compile(r"^Ancestry,Copy,Chromosome,Start Point,End Point"), "ancestry_segments"),
 )
 
 # Zip methods the standard library cannot read, by APPNOTE number. Deflate64 is what Windows

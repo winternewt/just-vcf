@@ -139,6 +139,10 @@ def test_binary_and_text_kinds(tmp_path: Path) -> None:
         "jpeg": b"\xff\xd8\xff\xe0\x00\x10JFIF",
         "fasta": b">chrM\nGATCACAGGTCTATCACCCTATTAACCACTCACGGGAGCTCTCCATGCATTTGG\n",
         "gedcom": b"0 HEAD\n1 SOUR FTW\n",
+        "ftdna_ystr": b"DYS393,DYS390,DYS19,DYS391\n13,24,14,11\n",
+        "ftdna_ysnp_panel": b'"SnpName","Positive","Test"\r\n"M269","True","Y-SNP"\r\n',
+        "mtdna_reference_table": b"Position,rCRS,RSRS\n73,A,G\n",
+        "ancestry_segments": b"Ancestry,Copy,Chromosome,Start Point,End Point\nEuropean,1,chr1,752566,2000000\n",
     }
     for kind, data in cases.items():
         result = sniff(_write(tmp_path / f"f.{kind}", data))

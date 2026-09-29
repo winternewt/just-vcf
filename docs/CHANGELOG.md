@@ -9,6 +9,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   (`just_vcf.formats`). The answer says which negative it is when nothing matched: unknown, unreadable
   or not variant data. The build is reported only when the header states it. First formats: 23andMe,
   VCF and BCF. See docs/FORMATS.md.
+- Other genotype-bearing tables: Illumina GenomeStudio Final Reports (with and without a column
+  line), Oxford `.gen` imputation output, Color variant sets, Illumina Nirvana JSON, GET-Evidence GFF
+  (build 36 and b37), FTDNA Big Y, CASAVA SNP and indel tables and SOAPsnp consensus. `sniff` also
+  names genetic-genealogy files that hold no positioned calls (Y-STR, Y-SNP panels, the rCRS/RSRS
+  table, Genographic reports, ancestry segments) and GenBank ASN.1 submissions.
 - Vendor genotype tables: AncestryDNA, Genos, Color genotypes, deCODEme (and its build-stating info
   file), National Geographic Genographic Geno 2.0, FamilyTreeDNA in comma and 2010-era space-separated
   layouts, and a neutral `RSID,CHROMOSOME,POSITION,RESULT` fallback for unbranded exports.

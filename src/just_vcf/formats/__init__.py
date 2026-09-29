@@ -6,10 +6,12 @@ recognised by data shape alone, such as a headerless rsid table). The registry i
 beats a shape. Within a module, the more specific format comes first. `sniff` takes the first match.
 """
 
-from just_vcf.formats import rsid_tables, vcf
+from just_vcf.formats import cgi, other_tables, rsid_tables, vendor_csv, vcf
 from just_vcf.formats.spec import FormatSpec
 
-_MODULES = (vcf, rsid_tables)
+# Signatures are specific enough that module order rarely matters; where two could match, the
+# stricter module comes first. Fallbacks follow the same order after every signature.
+_MODULES = (vcf, cgi, other_tables, vendor_csv, rsid_tables)
 
 REGISTRY: tuple[FormatSpec, ...] = (
     *(spec for module in _MODULES for spec in module.SPECS),

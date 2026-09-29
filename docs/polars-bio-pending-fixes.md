@@ -21,3 +21,26 @@ need to reorder or synthesise the meta block before handing the file over.
 
 Mitigation: none yet. Not filed; the VCF spec allows `##fileformat` to come later, but it may not be
 upstream's bug to fix.
+
+## P3 — `end` for a symbolic SV is one short
+
+Seen with polars-bio 0.36 (2026-09-30). `<DEL>` with `SVLEN=30` at POS 200 gives `end=229`. VCF 4.5
+computes END for a symbolic SV as `POS + SVLEN` (230), because POS is the base before the event.
+
+Mitigation: the loader computes `end` itself (docs/SCHEMA.md, Decision 6). Not filed.
+
+## P4 — The leading phase indicator of a GT is dropped
+
+Seen with polars-bio 0.36 (2026-09-30). `|0/1/2` comes back as `0/1/2`. Since VCF 4.4 the first phase
+indicator is optional and meaningful: `|0/1/2` says the first allele is phased. Dropping it loses that.
+
+Mitigation: none yet. The loader has to read GT text where a leading indicator can occur. Not filed.
+
+## P5 — Whether a column is INFO or FORMAT depends on what else the header declares
+
+Seen with polars-bio 0.36 (2026-09-30), with one sample. When INFO and FORMAT both declare `DP`, the
+columns are `DP` (INFO) and `fmt_DP` (FORMAT). When only FORMAT declares it, FORMAT/DP is `DP`. The
+same column name means different quantities in different files.
+
+Mitigation: the loader maps keys by the header's namespace (docs/SCHEMA.md, Decision 3). Not filed;
+this may be intended upstream, but it is not documented.

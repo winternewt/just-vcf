@@ -27,6 +27,19 @@ gVCF block):
   `end=200`.
 - INFO/FORMAT keys that the header does not declare are dropped silently (polars-bio P1).
 
+More probes on 2026-09-30, after reading VCF 4.5 (hts-specs `VCFv4.5.tex` as of 2026-02-24):
+
+- A 4.5 reference block with FORMAT `LEN=14` at 100 gives `end=113`, which is correct.
+- `<DEL>` with `SVLEN=30` at 200 gives `end=229`. The spec's computed END is `POS + SVLEN = 230`,
+  because a symbolic SV's POS is the base *before* the event (polars-bio P3).
+- A partially phased GT `|0/1/2` comes back as `0/1/2`. The leading phase indicator is dropped, so the
+  first allele's phasing is lost (polars-bio P4).
+- ALT `.` (a monomorphic reference record) decodes as `""`, the same as FILTER `.`. The `*` allele is
+  kept (`C|*`).
+- **A column's name does not say its namespace.** When INFO and FORMAT both declare `DP`, INFO/DP is
+  `DP` and FORMAT/DP is `fmt_DP`. When only FORMAT declares it, FORMAT/DP is `DP`. So a bare `DP`
+  column means the cohort's combined depth in one file and this sample's depth in another.
+
 ## Decision 1: row grain
 
 What one row of the calls frame is.
@@ -76,12 +89,30 @@ How the awkward cases land under C:
 - **23andMe `I`/`D`**: kept verbatim as symbolic alleles. Resolving them needs chip manifests
   (LANDSCAPE). No VRS id is minted for them.
 - **CGI partial no-call inside an allele** (`GC?`): see open question Q1.
+- **The `*` allele** (VCF: "allele missing due to overlapping deletion") is kept as `"*"` in `alts` and
+  `gt_alleles`. It says the haplotype is covered by a deletion called at another record. It is not
+  a reference call, and it gets no VRS id. `0/2` over `ALT=C,*` must never be read as a het with a
+  reference haplotype and nothing else.
+- **A monomorphic record** (ALT `.`) has `alts = []`, which is a stated "no alternate allele". A null
+  `alts` means the source did not say. polars-bio decodes both `.` and a missing ALT as `""`, so the
+  loader reads the difference from the file's own record, not from the decoded column.
+- **`<NON_REF>`** is written as `<*>` in `alts`. VCF 4.5 makes them aliases.
 - **`source_gt`**: the source's genotype text, verbatim, on every row that had one. It costs one string
   column. In exchange, every derived column can be checked against what the file said, and no
   representation choice here ever loses information.
 
-Phasing: `phased: bool | null` (null = the source did not say) and `phase_set: str | null` (VCF `PS`).
-The VRS CisPhasedBlock is built from `phase_set` at export. It is not stored per row.
+Phasing is per haplotype, not per row. Since VCF 4.4 each allele in GT carries its own phase
+indicator (`|0/1/2`: the first allele is phased and the other two are not), and `PSL` gives each allele
+its own phase set. So:
+
+- `phased: list[bool]`, parallel to `gt_alleles`. An element is null where the source did not say
+  (an array export).
+- `phase_sets: list[str]`, parallel to `gt_alleles`. It comes from `PSL` directly. A `PS` integer is
+  written as its decimal string on every phased haplotype. Unphased haplotypes are null. A PS and a
+  PSL name are never the same set even when they are spelled alike (VCF 4.5: "PS and PSL are not
+  interoperable"), so a PS value is stored as `PS:<n>`.
+
+The VRS CisPhasedBlock is built from `phase_sets` at export. It is not stored per row.
 
 ## Decision 3: graded evidence (charter 7)
 
@@ -102,6 +133,18 @@ and so is the reverse without the prior. So:
 
 **Recommendation: B.** Scalars that callers commonly give sit beside it: `gq: u8`, `dp: u32`,
 `ad: list[u32]` (parallel to `source_alleles`), all nullable.
+
+Sources for `gp`: `GP`, and `PP` converted as `10^(-PP/10)`. Both are posteriors, so this is a change
+of scale, not a change of quantity. One trap: before VCF 4.3, `GP` was phred-scaled. The loader reads
+the `##fileformat` version and checks the values against it (a probability vector sums to about 1). If
+the two disagree, `gp` stays null and the facet says why. The loader never guesses the scale.
+
+Local alleles (VCF 4.5 `LAA` with `LPL`, `LAD`, `LGP`) fit without a new column. `source_alleles` is
+then `[ref] + alts[LAA]`, which is exactly the set the local vectors are indexed over.
+
+`dp` and `ad` come from FORMAT (this sample), never from INFO (all samples combined). INFO/DP and
+FORMAT/DP are different quantities with the same name. The loader resolves each key by the header's
+namespace and never by the column name polars-bio gives it.
 
 A dosage (VCF `DS`, the expected count of the second allele) is one number. It cannot be turned into a
 posterior triple, because two unknowns do not follow from one number, so it gets its own column:
@@ -132,6 +175,10 @@ millions of them.
 | A. Blocks as rows in the calls frame, with a `kind` column | Satisfies "one frame out" literally. Every variant query then scans the blocks too, and a block has no alts, no VRS id and no genotype in the usual sense |
 | **B. Two frames per facet: `calls` and `blocks`** (the Hail VDS layout) | A second frame to know about. `blocks` is small in columns: `facet_id, chrom, pos, end, kind (ref / no_call), gq_min, dp_min` |
 | C. Expand blocks to one row per base | Billions of rows. Rejected |
+
+A 4.5 block states its length per sample in FORMAT `LEN`. INFO `END` is deprecated and only a fallback
+when `LEN` is missing. Blocks keep the source's `MIN_DP` as `dp_min`, and not the block's average `DP`.
+A block with an average depth of 25 can still hold an uncovered base.
 
 **Recommendation: B.** "One frame out" is then read as "one schema out": every format lands in the same
 `calls` schema, and a format that has blocks also fills `blocks`.
@@ -164,6 +211,9 @@ below).
 | `phasing_method` | null unless stated |
 | `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`) |
 | `contig_map` | `list[struct{source, chrom}]`: how this file's contig names were mapped (Decision 7) |
+| `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
+| `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
+| `sample_meta` | the file's `##SAMPLE` and `##PEDIGREE` lines for this sample, verbatim. Pedigree becomes GA4GH Pedigree later (charter) |
 | `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9) |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
@@ -180,7 +230,7 @@ With Decisions 1–5 as recommended:
 | `facet_id` | `str` | never null |
 | `chrom` | `str` | never null (Decision 7) |
 | `pos` | `u32` | never null. 1-based, VCF `POS` |
-| `end` | `u32` | the length of the REF span is unknown (a 23andMe `I`/`D` row, a Living DNA run-together indel before RM3). 1-based, inclusive: `pos + len(ref) - 1` when `ref` is known, `pos` for a single-position array call, `INFO/END` for a block |
+| `end` | `u32` | the length of the REF span is unknown (a 23andMe `I`/`D` row, a Living DNA run-together indel before RM3). 1-based, inclusive. It is VCF 4.5's computed END: the largest of `pos + len(ref) - 1`, `pos + SVLEN` for a symbolic SV allele, and `pos + LEN - 1` for `<*>`. It is `pos` for a single-position array call. The loader computes it and does not take polars-bio's `end` for SVs (P3) |
 | `ids` | `list[str]` | the source had no id. rsids, 23andMe `i` ids and VCF `ID` split on `;` |
 | `ref` | `str` | unresolved (charter 10) |
 | `ref_basis` | `Enum` | never null |
@@ -190,8 +240,8 @@ With Decisions 1–5 as recommended:
 | `gt_alleles` | `list[str]` | never null on a genotyped row; entries null per uncalled haplotype |
 | `gt` | `list[u8]` | REF unresolved. Indices into `[ref] + alts` |
 | `source_gt` | `str` | the source wrote no genotype text |
-| `phased` | `bool` | the source did not say |
-| `phase_set` | `str` | no phase set |
+| `phased` | `list[bool]` | parallel to `gt_alleles`. An element is null where the source did not say |
+| `phase_sets` | `list[str]` | parallel to `gt_alleles`. An element is null for an unphased haplotype (Decision 2) |
 | `gl` | `list[f32]` | no likelihoods given |
 | `gp` | `list[f32]` | no posteriors given |
 | `dosage` | `f32` | no dosage given |
@@ -199,8 +249,9 @@ With Decisions 1–5 as recommended:
 | `gq` | `u8` | not given |
 | `dp` | `u32` | not given |
 | `ad` | `list[u32]` | not given |
-| `qual` | `f32` | not given |
-| `filters` | `list[str]` | the source said `.` or has no filter column. `["PASS"]` is literal |
+| `qual` | `f32` | not given. It is the confidence in what ALT asserts: that the variant is there on a variant record, and that no variant is there on a monomorphic record (`alts = []`, where VCF defines it as `-10·log10 P(variant)`). The same threshold therefore works on both |
+| `filters` | `list[str]` | the source said `.` or has no filter column. `["PASS"]` is literal. Site-level |
+| `sample_filters` | `list[str]` | FORMAT `FT`: whether *this sample's* genotype passed, separate from the site. Null = not given |
 
 `end` is not named for its convention, although charter 13 asks that. The reason: a 1-based
 inclusive end and a 0-based half-open end are the same number, so only the start differs between the
@@ -246,6 +297,13 @@ the same collection still has both.
 | **B. Drop by default and list them in `facets.dropped_fields`; opt in with `keep_fields=[…]` into an `extra: struct` column** | `extra`'s struct shape differs per facet, so it is not part of the one shared schema. That is fine while it stays opt-in and the name says so |
 | C. Always keep everything as `list[struct{key, value: str}]` | One schema, but millions of rows times dozens of stringly keys on WGS |
 
+Kept keys are named with their namespace (`info.DP`, `format.DP`), because the bare token is ambiguous
+(see the probe above). Some fields VCF 4.5 reserves are not genotype calls, and they land here too:
+base modifications (`M5mC` and the rest of `M[0-9]+[ACGTUN]`), copy number (`CN`, which is a float
+since 4.4), and tandem repeat counts (`RUC`, a float with an interval that can be open above). A
+methylation or copy-number facet is plausible later. Nothing here rules it out, and nothing here
+designs it.
+
 **Recommendation: B.** Under P1, a key missing from the header never reaches the loader at all. The
 loader builds complete headers for the formats it synthesises (`vcf_no_meta`, the key=value table).
 
@@ -268,6 +326,24 @@ Frames are emitted sorted by `facet_id`, then contig rank, then `pos`, `end`, `r
 follows the seqcol order when it is known. Otherwise it is `1`–`22`, `X`, `Y`, `MT`, then the remaining
 names sorted as strings. Nulls sort last. Every loader gets a test that loads a shuffled input and
 compares it with the sorted one.
+
+## Other VCF 4.5 points the loaders have to respect
+
+None of these changes a column. Each is a rule a loader follows, and each gets a test.
+
+- **REF may be a reduced IUPAC code.** The spec requires an ambiguous reference base to be written as
+  the alphabetically first concrete base (`R` becomes `A`). When RM3 checks a source REF against a FASTA
+  that holds `R`, a mismatch there is expected and is not a coordinate error.
+- **POS 0 and N+1 mark telomeres.** `pos` allows 0. No VRS id is minted for either.
+- **For a symbolic SV, POS is the base before the event.** For `<*>` the block includes POS. The `end`
+  rule above follows both.
+- **GQ is conditional** on the site being variant. It is not the confidence of a reference call.
+- **Percent encoding.** `%3B`, `%3D`, `%2C` and the rest can appear in INFO values and must be decoded.
+  Whether polars-bio decodes them has not been checked yet.
+- **Ploidy is whatever GT says.** GT can have one allele (haploid Y, male X, MT) or three and more, and
+  the genotype order for `gl`/`gp` follows the spec's general formula for any ploidy. Without GT, the
+  spec says to assume diploid.
+- **`ID` is a `;` list**, split into `ids`.
 
 ## Open questions
 

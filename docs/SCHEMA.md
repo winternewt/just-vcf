@@ -56,26 +56,46 @@ facet (charter 5), not something the loader does silently.
 
 ## Decision 2: how the genotype is written
 
-Array exports have no REF when they are loaded (charter 10: REF never comes from the genotype), so a
-VCF-style index genotype (`0/1`) cannot be assigned until RM3 has resolved REF.
+**REF.** Charter 10 allows only a REF read from the facet's assembly sequence. So `ref` stays null
+until RM3 has read that sequence, for every input, VCFs included. What the file wrote goes in
+`source_ref`, which is null for sources that write none (arrays). RM3 fills `ref` from the sequence and
+records the comparison in `ref_check`:
+
+- `not_run`: `source_ref` is there and has not been compared yet;
+- `match` and `mismatch`: the outcome. A mismatch keeps both values side by side, and neither is
+  overwritten;
+- null: there is no `source_ref` to compare (arrays).
+
+RM3 never fills `ref` from `source_ref` or the reverse. That would be filling a value from the source
+that checks it.
+
+Array exports write no REF at all (charter 10: REF never comes from the genotype), so a VCF-style index
+genotype (`0/1`) cannot be assigned to them until RM3 has read REF and derived the alts.
 
 | Option | Cost |
 |---|---|
-| A. VCF indices only (`gt: list[u8]` into `[ref] + alts`) | Impossible for arrays until RM3. The loader would have to either block on a FASTA or invent a REF |
+| A. VCF indices only (`gt: list[u8]`) | Impossible for arrays until RM3. The loader would have to either block on a FASTA or invent a REF |
 | B. Literal alleles only (`gt_alleles: list[str]`, one entry per haplotype) | Works for every input at load time. But likelihood vectors are indexed by VCF genotype order, so they cannot be read without `[ref] + alts` next to them |
-| **C. Both: `gt_alleles` always, `gt` when REF is known** | Two columns that must agree: `gt_alleles == ([ref] + alts)[gt]`, enforced by a test. `gt` is null while `ref` is unresolved. Filling it is RM3's job, and it never writes REF from `gt_alleles` |
+| **C. Both: `gt_alleles` always, `gt` when there is an allele list to index** | Two columns that must agree, enforced by a test. `gt` indexes the file's own allele list, `[source_ref] + alts`, whenever the source wrote a REF. So a VCF has `gt` at load time. Otherwise it indexes `[ref] + alts` once RM3 has read `ref` and derived `alts`, and until then it is null. RM3 never writes REF from `gt_alleles` |
 
 **Recommendation: C.**
 
 **`source_alleles`: what the vectors are indexed over.** A likelihood or posterior vector needs an
 allele order, and REF is not always known when the row is loaded. An Oxford `.gen` row names `alleleA`
 and `alleleB` and gives three posteriors, but does not say which allele is the reference. So each row
-carries `source_alleles: list[str]`, the allele list in the order the source indexed its vectors. For a
-VCF that is `[ref] + alts`. For `.gen` it is `[alleleA, alleleB]`. For an array hard call with no
-vector it is null. `gl`, `gp` and `ad` (Decision 3) are indexed over `source_alleles` and are never
-reordered in place. When RM3 resolves REF and it turns out to be `alleleB`, `ref` and `alts` are filled
-and the vectors stay as the source wrote them. A consumer that wants `[ref] + alts` order derives it,
-and that derivation gets a test.
+carries `source_alleles: list[str]`, the allele list in the order the source indexed its vectors:
+
+- a VCF with full vectors (PL, GL, GP, AD): `[source_ref] + alts`;
+- a VCF with only local-allele vectors (`LAA` with `LPL`, `LAD`, `LGP`, and no full vector):
+  `[source_ref] + alts[LAA]`. Where both a full and a local vector exist, the full one is used, because
+  the spec requires them to carry the same information;
+- Oxford `.gen`: `[alleleA, alleleB]`;
+- an array hard call with no vector: null.
+
+`gl`, `gp` and `ad` (Decision 3) are indexed over `source_alleles` and are never reordered in place.
+When RM3 reads REF and it turns out to be `alleleB`, `ref` and `alts` are filled and the vectors stay as
+the source wrote them. A consumer that wants `[ref] + alts` order derives it, and that derivation gets
+a test.
 
 How the awkward cases land under C:
 
@@ -88,7 +108,8 @@ How the awkward cases land under C:
   something the loader corrects.
 - **23andMe `I`/`D`**: kept verbatim as symbolic alleles. Resolving them needs chip manifests
   (LANDSCAPE). No VRS id is minted for them.
-- **CGI partial no-call inside an allele** (`GC?`): see open question Q1.
+- **CGI partial no-call inside an allele** (`GC?`): kept verbatim in `gt_alleles` (`"GC?"`), with no VRS
+  id. The `?` marks the bases CGI could not call.
 - **The `*` allele** (VCF: "allele missing due to overlapping deletion") is kept as `"*"` in `alts` and
   `gt_alleles`. It says the haplotype is covered by a deletion called at another record. It is not
   a reference call, and it gets no VRS id. `0/2` over `ALT=C,*` must never be read as a het with a
@@ -97,9 +118,11 @@ How the awkward cases land under C:
   `alts` means the source did not say, which only happens for non-VCF sources (an array row before
   RM3). ALT is a required VCF column, so polars-bio's `""` always means `.` and becomes `[]`.
 - **`<NON_REF>`** is written as `<*>` in `alts`. VCF 4.5 makes them aliases.
-- **`source_gt`**: the source's genotype text, verbatim, on every row that had one. It costs one string
-  column. In exchange, every derived column can be checked against what the file said, and no
-  representation choice here ever loses information.
+- **`source_gt`**: the file's genotype text, byte for byte, on every row that had one. It costs one
+  string column. In exchange, every derived column can be checked against what the file said, and no
+  representation choice here ever loses information. It cannot be polars-bio's `GT` column, because
+  polars-bio rewrites `|0/1/2` as `0/1/2` (P4). The loader has to get the raw text itself. `phased[0]`
+  is read from that text, never from polars-bio's GT.
 
 Phasing is per haplotype, not per row. Since VCF 4.4 each allele in GT carries its own phase
 indicator (`|0/1/2`: the first allele is phased and the other two are not), and `PSL` gives each allele
@@ -131,7 +154,7 @@ and so is the reverse without the prior. So:
 | Option | Cost |
 |---|---|
 | A. One vector column, everything converted into it | Mixes likelihoods with posteriors under one name. That is exactly the kind of approximation the charter forbids |
-| **B. Two vector columns plus a basis** | `gl: list[f32]`: log10 likelihoods (from PL as `-PL/10`, or GL directly). `gp: list[f32]`: posterior probabilities (GP, Oxford `.gen` triples). Both are in VCF genotype order over `source_alleles` (Decision 2). `evidence_basis` says which source field each came from. A consumer has to handle two columns, and the schema is honest about what each one is |
+| **B. Separate columns per quantity** | `gl: list[f32]`: log10 likelihoods (from PL as `-PL/10`, or GL directly). `gp: list[f32]`: posterior probabilities (GP, Oxford `.gen` triples). Both are in VCF genotype order over `source_alleles` (Decision 2). Which of them is non-null says which quantities the source gave, and a row can have more than one. A consumer has to handle two columns, and the schema is honest about what each one is |
 | C. Keep native columns (`PL`, `GL`, `GP`, `DS`) as-is | No normalisation at all. Every consumer then re-learns every caller's dialect |
 
 **Recommendation: B.** Scalars that callers commonly give sit beside it: `gq: u8`, `dp: u32`,
@@ -142,9 +165,6 @@ of scale, not a change of quantity. One trap: before VCF 4.3, `GP` was phred-sca
 the `##fileformat` version and checks the values against it (a probability vector sums to about 1). If
 the two disagree, `gp` stays null and the facet says why. The loader never guesses the scale.
 
-Local alleles (VCF 4.5 `LAA` with `LPL`, `LAD`, `LGP`) fit without a new column. `source_alleles` is
-then `[ref] + alts[LAA]`, which is exactly the set the local vectors are indexed over.
-
 `dp` and `ad` come from FORMAT (this sample), never from INFO (all samples combined). INFO/DP and
 FORMAT/DP are different quantities with the same name. The loader resolves each key by the header's
 namespace and never by the column name polars-bio gives it.
@@ -153,15 +173,23 @@ A dosage (VCF `DS`, the expected count of the second allele) is one number. It c
 posterior triple, because two unknowns do not follow from one number, so it gets its own column:
 `dosage: f32`, with `gp` left null unless the source also gave GP.
 
-`evidence_basis` is an enum: `likelihood` (PL/GL), `posterior` (GP, `.gen`), `dosage`, `hard_call` (a
-genotype with no vector, which is every consumer array), `ref_block` (restored from a gVCF or CGI
-reference block), `absence` (restored from a whole-genome callset's silence, charter 11).
+`evidence_basis` says only where the row's evidence came from, not which quantities it has. `gl`, `gp`
+and `dosage` already say that. It is an enum:
+
+- `assay`: the source wrote a record at this position (a variant call, a monomorphic record, an array
+  genotype, an imputed row);
+- `ref_block`: materialised from a reference block. A gVCF block that carries PL is `ref_block` and still
+  has `gl`;
+- `absence`: materialised from a whole-genome callset's silence (charter 11).
+
+A hard call is a row whose `gl`, `gp` and `dosage` are all null. It has no value of its own in the
+enum.
 
 **What an array hard call gets** is the user's open "tbd". Options:
 
 | Option | Cost |
 |---|---|
-| **A. No vector. `evidence_basis = hard_call`, `gl`/`gp` null** | Honest now. Consumers that need a number have none until C lands |
+| **A. No vector: `gl`, `gp` and `dosage` null** | Honest now. Consumers that need a number have none until C lands |
 | B. A fixed pseudo-PHRED per chip (e.g. "Q20") | A made-up number that then looks measured. Rejected by the no-fabricated-values rule |
 | C. A per-facet, per-region error rate measured by concordance with other facets of the same person (charter 8), turned into a vector later | The right end state, but it needs a second facet and the concordance machinery, so it cannot be ready at load time |
 
@@ -176,15 +204,20 @@ millions of them.
 | Option | Cost |
 |---|---|
 | A. Blocks as rows in the calls frame, with a `kind` column | Satisfies "one frame out" literally. Every variant query then scans the blocks too, and a block has no alts, no VRS id and no genotype in the usual sense |
-| **B. Two frames per facet: `calls` and `blocks`** (the Hail VDS layout) | A second frame to know about. `blocks` is small in columns: `facet_id, chrom, pos, end, kind (ref / no_call), gq, dp_min, gl`. `gl` is the block's own likelihoods over `[REF, <*>]` (a gVCF block carries PL, e.g. `0,60,900`), because that *is* the graded reference evidence (charter 7). It is null only where the source gave none (CGI blocks) |
+| **B. Two frames per facet: `calls` and `blocks`** (the Hail VDS layout) | A second frame to know about. `blocks` is small in columns: `facet_id, chrom, pos, end_pos, kind (ref / no_call), gq, dp_min, gl`. `gl` is the block's own likelihoods over `[REF, <*>]` (a gVCF block carries PL, e.g. `0,60,900`), because that *is* the graded reference evidence (charter 7). It is null only where the source gave none (CGI blocks) |
 | C. Expand blocks to one row per base | Billions of rows. Rejected |
+
+**Which VCF records are blocks:** a record goes to `blocks` only when every ALT is `<*>` (`<NON_REF>`
+included). A record with `ALT=TC,<*>` is a variant call that also carries the `<*>` allele, and it
+stays in `calls` with `<*>` in `alts`. A monomorphic record (ALT `.`) stays in `calls` too.
 
 A 4.5 block states its length per sample in FORMAT `LEN`. INFO `END` is deprecated and only a fallback
 when `LEN` is missing. Blocks keep the source's `MIN_DP` as `dp_min`, and not the block's average `DP`.
 A block with an average depth of 25 can still hold an uncovered base.
 
-**Recommendation: B.** "One frame out" is then read as "one schema out": every format lands in the same
-`calls` schema, and a format that has blocks also fills `blocks`.
+**Recommendation: B.** The charter's "one frame out" is amended to name the three frames (facets,
+calls, blocks): a gVCF cannot fit in one calls frame. Every format lands in the same `calls` schema, and
+a format that has blocks also fills `blocks`.
 
 **Absence is a facet property, not rows.** The facet carries `absence_means`: `unknown` (arrays,
 imputed content, VCFs of array data), `weak_reference` (whole-genome callsets without blocks), or
@@ -195,8 +228,8 @@ until a consumer asks for a position. When it does, the answer comes out as a `c
 ## Decision 5: the facet table and provenance (charter 5, 6)
 
 Provenance that is constant across a file lives once in a `facets` frame. Each row of `calls` and
-`blocks` carries only `facet_id`, plus the provenance that actually varies per row (`ref_basis`,
-below).
+`blocks` carries only `facet_id`, plus the provenance that actually varies per row (`source_ref` and
+`ref_check`, Decision 2).
 
 `facets` columns, all nullable unless marked:
 
@@ -221,8 +254,8 @@ below).
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
-Row-level: `ref_basis` is an enum: `source` (the file stated REF), `fasta`, `panel`, `unresolved`. A
-source-stated REF is later *checked* against the FASTA by RM3, and never filled from it.
+There is no `ref_basis` column. A non-null `ref` always came from the facet's assembly sequence
+(charter 10), so the basis would have one value.
 
 ## Decision 6: the `calls` columns
 
@@ -233,22 +266,24 @@ With Decisions 1–5 as recommended:
 | `facet_id` | `str` | never null |
 | `chrom` | `str` | never null (Decision 7) |
 | `pos` | `u32` | never null. 1-based, VCF `POS` |
-| `end` | `u32` | the length of the REF span is unknown (a 23andMe `I`/`D` row, a Living DNA run-together indel before RM3). 1-based, inclusive. It is VCF 4.5's computed END: the largest of `pos + len(ref) - 1`, `pos + SVLEN` for a symbolic SV allele, and `pos + LEN - 1` for `<*>`. It is `pos` for a single-position array call. The loader computes it and does not take polars-bio's `end` for SVs (P3) |
+| `end_pos` | `u32` | the length of the REF span is unknown (a 23andMe `I`/`D` row, a Living DNA run-together indel before RM3). 1-based, inclusive. Rule below |
 | `ids` | `list[str]` | the source had no id. rsids, 23andMe `i` ids and VCF `ID` split on `;` |
-| `ref` | `str` | unresolved (charter 10) |
-| `ref_basis` | `Enum` | never null |
+| `ref` | `str` | the assembly sequence has not been read yet (charter 10). Only ever filled from the sequence |
+| `source_ref` | `str` | the source wrote no REF (arrays). What the file wrote, as written |
+| `ref_check` | `Enum` | there is no `source_ref` to compare. `not_run`, `match` or `mismatch` (Decision 2) |
 | `alts` | `list[str]` | the source did not say (a non-VCF row before RM3). `[]` = a stated monomorphic record (ALT `.`). Symbolic alleles and `*` kept verbatim, except `<NON_REF>`, which is written `<*>` |
 | `source_alleles` | `list[str]` | the source gave no vector to index (Decision 2) |
-| `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention. An element is null when it was withheld (charter 4); the whole list is null when nothing could be minted |
+| `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention. An element is null when it was withheld (charter 4); the whole list is null when nothing could be minted. Nothing is minted until `ref_check = match`, or, for a source with no `source_ref`, until `ref` has been read |
+| `vrs_withheld` | `list[Enum]` | parallel to `vrs_allele_ids`: why each null element is null. `symbolic` (`<*>`, `<DEL>`, `*`, `I`/`D`, CGI `GC?`), `ref_unresolved` (no REF anywhere yet), `ref_unchecked` (`source_ref` present, `ref_check` still `not_run`), `no_seqcol`, `not_justifiable`. Null where an id was minted. It is a list because one row can hold both a mintable allele and a symbolic one (`TC,<*>`) |
 | `gt_alleles` | `list[str]` | never null on a genotyped row; entries null per uncalled haplotype |
-| `gt` | `list[u8]` | REF unresolved. Indices into `[ref] + alts` |
-| `source_gt` | `str` | the source wrote no genotype text |
+| `gt` | `list[u8]` | there is no allele list to index yet. Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
+| `source_gt` | `str` | the source wrote no genotype text. The file's raw text, not polars-bio's rewrite of it |
 | `phased` | `list[bool]` | parallel to `gt_alleles`. An element is null where the source did not say |
 | `phase_sets` | `list[str]` | parallel to `gt_alleles`. An element is null for an unphased haplotype. `PS:<chrom>:<n>`, `PS:<chrom>:implicit` or a PSL name (Decision 2) |
 | `gl` | `list[f32]` | no likelihoods given |
 | `gp` | `list[f32]` | no posteriors given |
 | `dosage` | `f32` | no dosage given |
-| `evidence_basis` | `Enum` | never null |
+| `evidence_basis` | `Enum` | never null. Origin only: `assay`, `ref_block`, `absence` (Decision 3) |
 | `gq` | `u8` | not given |
 | `dp` | `u32` | not given |
 | `ad` | `list[u32]` | not given |
@@ -256,10 +291,20 @@ With Decisions 1–5 as recommended:
 | `filters` | `list[str]` | the source said `.` or has no filter column. `["PASS"]` is literal. Site-level |
 | `sample_filters` | `list[str]` | FORMAT `FT`: whether *this sample's* genotype passed, separate from the site. Null = not given |
 
-`end` is not named for its convention, although charter 13 asks that. The reason: a 1-based
-inclusive end and a 0-based half-open end are the same number, so only the start differs between the
-two systems, and `pos` already names its convention. It is still a naming decision, so Q5 puts it to
-the user.
+**`end_pos`.** It is named apart from polars-bio's `end` because that value is wrong for symbolic SV
+alleles (P3), so the two must not share a name. The rule follows VCF 4.5's computed END:
+
+1. Take `abs(SVLEN)` for each allele (the spec says to read a negative SVLEN as positive).
+2. For each allele compute an end:
+   - `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes: `pos + abs(SVLEN)`. POS is the base before
+     the event, so `<DEL>` at 200 with `SVLEN=30` ends at 230;
+   - `<INS>` and breakend alleles: the anchor, `pos`;
+   - `<*>`: `pos + LEN - 1`, because a block includes POS;
+   - a sequence allele: `pos + len(source_ref) - 1`.
+3. `end_pos` is the largest of these over the site.
+
+Where REF is not known yet (an array `I`/`D` row) `end_pos` is null. A single-position array call has
+`end_pos = pos`.
 
 `u32` holds every human contig, T2T chr1 included (248,387,328). Closed vocabularies are `pl.Enum`.
 `format_id` stays `str`, because `FORMATS` grows additively.
@@ -325,7 +370,7 @@ caller.
 
 ## Decision 11: canonical order (charter 12)
 
-Frames are emitted sorted by `facet_id`, then contig rank, then `pos`, `end`, `ref`, `alts`. Contig rank
+Frames are emitted sorted by `facet_id`, then contig rank, then `pos`, `end_pos`, `source_ref`, `alts`. Contig rank
 follows the seqcol order when it is known. Otherwise it is `1`–`22`, `X`, `Y`, `MT`, then the remaining
 names sorted as strings. Nulls sort last. Every loader gets a test that loads a shuffled input and
 compares it with the sorted one.
@@ -338,8 +383,8 @@ None of these changes a column. Each is a rule a loader follows, and each gets a
   the alphabetically first concrete base (`R` becomes `A`). When RM3 checks a source REF against a FASTA
   that holds `R`, a mismatch there is expected and is not a coordinate error.
 - **POS 0 and N+1 mark telomeres.** `pos` allows 0. No VRS id is minted for either.
-- **For a symbolic SV, POS is the base before the event.** For `<*>` the block includes POS. The `end`
-  rule above follows both.
+- **For a symbolic SV, POS is the base before the event.** For `<*>` the block includes POS. The
+  `end_pos` rule above follows both.
 - **GQ is conditional** on the site being variant. It is not the confidence of a reference call.
 - **Percent encoding.** `%3B`, `%3D`, `%2C` and the rest can appear in INFO values and must be decoded.
   Whether polars-bio decodes them has not been checked yet.
@@ -350,30 +395,28 @@ None of these changes a column. Each is a rule a loader follows, and each gets a
 
 ## Open questions
 
-- **Q1. CGI partial no-calls** (`GC?`: some bases of an allele called, the rest not). Options: the
-  haplotype becomes null and `source_gt` keeps the text (simple, loses the partial); or the allele is
-  kept verbatim with `?` and no VRS id (keeps it, but `?` is not a base any consumer knows). Leaning
-  towards the first.
+Q1 (CGI `GC?`), Q3 (withheld VRS ids) and Q5 (`end_pos`) were settled on 2026-09-30 and are folded in
+above.
+
 - **Q2. Array code `25` (X PAR).** Map to `X` and record it in `contig_map` (the position then says
   whether it is PAR), or keep `XY` as its own contig label.
-- **Q3. Withheld VRS ids.** Should a reason travel per row (`vrs_withheld: Enum`: symbolic, ref
-  unresolved, no seqcol, not justifiable), or only as aggregate counts on the facet? Per row costs a
-  column. Aggregates follow the house rule on repeated warnings.
 - **Q4. Sample names.** PGP uploads can carry real names in the sample column. Keep them verbatim in
   `facets.sample` (it is what the file says), or store a digest and let the caller opt in to the name.
-- **Q5. `end` or `end_pos`.** Keep polars-bio's `end` (the value is the same under both coordinate
-  systems), or rename it `end_pos` so that every coordinate column says its convention (charter 13).
-  Leaning towards `end`: one fewer rename at the polars-bio edge.
 
 ## At a glance (all recommendations taken)
 
 - Three frames: `facets` (one row per facet), `calls` (one row per site per facet), `blocks` (reference
   and no-call intervals, for formats that have them).
-- Coordinates: `pos` and `end` are 1-based and inclusive. VRS objects keep 0-based interbase coordinates
+- Coordinates: `pos` and `end_pos` are 1-based and inclusive. VRS objects keep 0-based interbase coordinates
   internally, and nothing else does.
-- Genotype: literal `gt_alleles` always; `gt` indices once REF is known; `source_gt` verbatim.
+- REF: `ref` only from the assembly sequence; `source_ref` is what the file wrote; `ref_check` compares
+  them. VRS ids wait for a match.
+- Genotype: literal `gt_alleles` always; `gt` indices into the file's own allele list; `source_gt` is
+  the raw text.
   Vectors are indexed over `source_alleles` and never reordered.
-- Evidence: `gl` (likelihoods), `gp` (posteriors) and `dosage` never mixed; `evidence_basis` says which. Array
-  calls are `hard_call` with no vector until concordance can measure one.
-- Identity: `vrs_allele_ids` parallel to `[ref] + alts`, null where withheld; `seqcol_digest` per facet.
+- Evidence: `gl` (likelihoods), `gp` (posteriors) and `dosage` never mixed, and a row can have more
+  than one. `evidence_basis` is the origin only (`assay`, `ref_block`, `absence`). Array calls have no
+  vector until concordance can measure one.
+- Identity: `vrs_allele_ids` parallel to `[ref] + alts`, with `vrs_withheld` saying why an id is
+  missing; `seqcol_digest` per facet.
 - Absence: a facet property (`absence_means`), turned into a row only on request.

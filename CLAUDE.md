@@ -31,7 +31,9 @@ decision turned on. Delegation is for finding things, never for deciding them.
    and what was cut or changed on the way in. Read it before porting anything else.
 7. **docs/SIBLING_SURVEY.md** and **docs/LANDSCAPE.md** — what just-prs/just-dna-lite already implement,
    and which external tools to take rather than build. Read both before designing a feature.
-8. **docs/PGP_HMS.md** — the public test-data source: where the files are, their quirks, what is on
+8. **docs/FORMATS.md** — how `sniff` recognises a file, how a format is declared, and why the
+   registry order is what it is. Read it before adding or reordering a format.
+9. **docs/PGP_HMS.md** — the public test-data source: where the files are, their quirks, what is on
    disk, and which participants make good multi-facet test setups.
 
 Everything below is self-contained: no rule here requires following a link to know what you

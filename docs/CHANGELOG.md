@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `just_vcf.sniff(path)` recognises an input file from its content: it peels gzip/BGZF, bz2, xz, zip
+  and tar layers by magic bytes, reads a bounded head and matches a declarative format registry
+  (`just_vcf.formats`). The answer says which negative it is when nothing matched: unknown, unreadable
+  or not variant data. The build is reported only when the header states it. First formats: 23andMe,
+  VCF and BCF. See docs/FORMATS.md.
 - `scripts/pgp_participants.py` gathers PGP-HMS data per participant: PGP's own VCFs and Complete
   Genomics deliveries from the public Arvados cluster, plus the person's variant uploads, under
   `participants/<hu>/<source>-<id>/`. Same-person duplicates are fetched once, and the older by-type

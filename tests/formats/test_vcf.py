@@ -2,14 +2,12 @@
 
 import bz2
 import gzip
-import os
 import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import IO
 
 import pytest
-from dotenv import dotenv_values, find_dotenv
 
 from just_vcf.formats import REGISTRY, vcf
 from just_vcf.formats.spec import FormatSpec
@@ -212,19 +210,6 @@ def test_b37_is_not_matched_inside_an_identifier(tmp_path: Path) -> None:
 
 # Opt-in: real PGP-HMS files under JUST_VCF_SAMPLES_DIR (the repo .env sets it). Heads only are read.
 
-def _samples_dir() -> Path:
-    """The environment wins, an empty value included; otherwise the repo `.env`, read without exporting it."""
-    if "JUST_VCF_SAMPLES_DIR" in os.environ:
-        value = os.environ["JUST_VCF_SAMPLES_DIR"]
-    else:
-        value = dotenv_values(find_dotenv()).get("JUST_VCF_SAMPLES_DIR")
-    if not value:
-        pytest.skip("JUST_VCF_SAMPLES_DIR is not set")
-    participants = Path(value) / "pgp-hms" / "participants"
-    if not participants.is_dir():
-        pytest.skip(f"{participants} is absent")
-    return participants
-
 
 def _meta_lines(path: Path, opener: Callable[..., IO[str]]) -> list[str]:
     """The `##` lines above `#CHROM`, read independently of the sniffer."""
@@ -237,8 +222,8 @@ def _meta_lines(path: Path, opener: Callable[..., IO[str]]) -> list[str]:
     return lines
 
 
-def test_real_pgp_arvados_vcfs_detect_in_the_vcf_family() -> None:
-    files = sorted(_samples_dir().glob("*/arvados-*/*.vcf.gz"))
+def test_real_pgp_arvados_vcfs_detect_in_the_vcf_family(pgp_participants: Path) -> None:
+    files = sorted(pgp_participants.glob("*/arvados-*/*.vcf.gz"))
     if not files:
         pytest.skip("no arvados VCFs downloaded")
     results = {path: sniff(path) for path in files}
@@ -258,8 +243,8 @@ def test_real_pgp_arvados_vcfs_detect_in_the_vcf_family() -> None:
         assert results[path].build == "GRCh37", path.name
 
 
-def test_real_cgi_vcfbeta_files_detect_as_vcf_cgi() -> None:
-    files = sorted(_samples_dir().glob("*/arvados-*/vcfBeta-*.vcf.bz2"))
+def test_real_cgi_vcfbeta_files_detect_as_vcf_cgi(pgp_participants: Path) -> None:
+    files = sorted(pgp_participants.glob("*/arvados-*/vcfBeta-*.vcf.bz2"))
     if not files:
         pytest.skip("no CGI vcfBeta files downloaded")
     results = {path.name: sniff(path) for path in files}

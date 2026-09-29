@@ -6,13 +6,11 @@ downloads under `JUST_VCF_SAMPLES_DIR` and skip when it is unset.
 """
 
 import gzip
-import os
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from dotenv import dotenv_values, find_dotenv
 
 from just_vcf.formats import other_tables
 from just_vcf.formats.spec import FormatSpec
@@ -209,17 +207,6 @@ def test_color_rows_naming_two_builds_give_unknown(tmp_path: Path) -> None:
 # --- Opt-in: real PGP-HMS files ------------------------------------------------------------------
 
 
-def _participants_dir() -> Path:
-    samples = os.environ.get("JUST_VCF_SAMPLES_DIR") or dotenv_values(find_dotenv(usecwd=True)).get(
-        "JUST_VCF_SAMPLES_DIR"
-    )
-    if not samples:
-        pytest.skip("JUST_VCF_SAMPLES_DIR is unset")
-    root = Path(samples) / "pgp-hms" / "participants"
-    if not root.is_dir():
-        pytest.skip(f"{root} is absent")
-    return root
-
 
 def _glob(root: Path, pattern: str) -> list[Path]:
     """Finished downloads matching `pattern` at `<participant>/<collection>/`, sorted."""
@@ -244,8 +231,8 @@ def _nonempty(paths: list[Path], what: str) -> Iterator[Path]:
     yield from paths
 
 
-def test_real_final_reports_split_on_the_line_after_data() -> None:
-    root = _participants_dir()
+def test_real_final_reports_split_on_the_line_after_data(pgp_participants: Path) -> None:
+    root = pgp_participants
     candidates = [*_glob(root, "*.txt"), *_glob(root, "*.csv"), *_glob(root, "*.csv.gz")]
     reports = [p for p in candidates if _head_lines(p, 1)[:1] and _head_lines(p, 1)[0].startswith("[Header]")]
     for path in _nonempty(reports, "[Header] files"):
@@ -261,8 +248,8 @@ def test_real_final_reports_split_on_the_line_after_data() -> None:
         assert result.build is None, _who(root, path)
 
 
-def test_real_gen_zips_are_oxford_gen_in_every_member() -> None:
-    root = _participants_dir()
+def test_real_gen_zips_are_oxford_gen_in_every_member(pgp_participants: Path) -> None:
+    root = pgp_participants
     for path in _nonempty(_glob(root, "*.gen.zip"), ".gen.zip files"):
         result = sniff(path)
         assert result.format == other_tables.OXFORD_GEN.id, _who(root, path)
@@ -272,8 +259,8 @@ def test_real_gen_zips_are_oxford_gen_in_every_member() -> None:
         assert {member.format for member in result.members} == {other_tables.OXFORD_GEN.id}
 
 
-def test_real_color_variant_sets_state_their_build() -> None:
-    root = _participants_dir()
+def test_real_color_variant_sets_state_their_build(pgp_participants: Path) -> None:
+    root = pgp_participants
     for path in _nonempty(_glob(root, "*_variant_set.csv"), "Color variant_set files"):
         lines = _head_lines(path)
         header = lines[0].split(",")
@@ -285,8 +272,8 @@ def test_real_color_variant_sets_state_their_build() -> None:
         assert result.build == (stated.pop() if len(stated) == 1 else None)
 
 
-def test_real_color_zip_leads_with_the_variant_set() -> None:
-    root = _participants_dir()
+def test_real_color_zip_leads_with_the_variant_set(pgp_participants: Path) -> None:
+    root = pgp_participants
     for path in _nonempty(_glob(root, "Color_Health.zip"), "Color_Health.zip files"):
         result = sniff(path)
         assert result.format == other_tables.COLOR_VARIANT_SET.id
@@ -295,8 +282,8 @@ def test_real_color_zip_leads_with_the_variant_set() -> None:
         assert not any(member.format == other_tables.COLOR_VARIANT_SET.id for member in others)
 
 
-def test_real_gffs_carry_the_build_line_they_state() -> None:
-    root = _participants_dir()
+def test_real_gffs_carry_the_build_line_they_state(pgp_participants: Path) -> None:
+    root = pgp_participants
     gffs = [p for p in _glob(root, "*.gz") if _head_lines(p, 1)[:1] and _head_lines(p, 1)[0].startswith("##genome-build")]
     for path in _nonempty(gffs, "GFF files with a ##genome-build line"):
         stated = _head_lines(path, 1)[0].split()[1].removeprefix("b")
@@ -305,8 +292,8 @@ def test_real_gffs_carry_the_build_line_they_state() -> None:
         assert result.build == f"GRCh{stated}"
 
 
-def test_real_nirvana_json_detects_and_states_no_build_it_lacks() -> None:
-    root = _participants_dir()
+def test_real_nirvana_json_detects_and_states_no_build_it_lacks(pgp_participants: Path) -> None:
+    root = pgp_participants
     for path in _nonempty(_glob(root, "*.json.gz"), "JSON downloads"):
         first = _head_lines(path, 1)[0]
         if '"annotator":"Illumina Annotation Engine' not in first and '"annotator":"Nirvana' not in first:
@@ -316,16 +303,16 @@ def test_real_nirvana_json_detects_and_states_no_build_it_lacks() -> None:
         assert (result.build is None) == ('"genomeAssembly"' not in first)
 
 
-def test_real_casava_tables_are_one_format_per_kind() -> None:
-    root = _participants_dir()
+def test_real_casava_tables_are_one_format_per_kind(pgp_participants: Path) -> None:
+    root = pgp_participants
     snp_formats = {sniff(p).format for p in _nonempty(_glob(root, "*_Chr*_All.txt"), "CASAVA SNP tables")}
     assert snp_formats == {other_tables.CASAVA_SNP_TABLE.id}
     indel_formats = {sniff(p).format for p in _nonempty(_glob(root, "*_All_InDels.txt"), "CASAVA indel tables")}
     assert indel_formats == {other_tables.CASAVA_INDEL_TABLE.id}
 
 
-def test_real_bed_files_are_not_claimed() -> None:
-    root = _participants_dir()
+def test_real_bed_files_are_not_claimed(pgp_participants: Path) -> None:
+    root = pgp_participants
     for path in _nonempty(_glob(root, "*.bed.gz"), "BED files"):
         result = sniff(path)
         assert result.format not in OWN_IDS, _who(root, path)

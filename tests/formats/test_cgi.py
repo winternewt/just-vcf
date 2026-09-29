@@ -1,12 +1,10 @@
 """Complete Genomics native files: detection by `#TYPE` and the `>` header, build hints, real files."""
 
 import bz2
-import os
 import re
 from pathlib import Path
 
 import pytest
-from dotenv import load_dotenv
 
 from just_vcf.formats import cgi
 from just_vcf.formats.spec import Coordinates, FormatSpec
@@ -196,16 +194,6 @@ _REAL_GLOBS = {
 }
 
 
-def _participants() -> Path:
-    load_dotenv()
-    samples = os.environ.get("JUST_VCF_SAMPLES_DIR", "")
-    if not samples:
-        pytest.skip("JUST_VCF_SAMPLES_DIR is not set")
-    root = Path(samples) / "pgp-hms" / "participants"
-    if not root.is_dir():
-        pytest.skip(f"{root} is absent")
-    return root
-
 
 def _stated_header(path: Path) -> tuple[str | None, str | None]:
     """`#TYPE` and `#GENOME_REFERENCE` values, read independently of sniff (bz2 by magic)."""
@@ -223,8 +211,8 @@ def _stated_header(path: Path) -> tuple[str | None, str | None]:
 
 
 @pytest.mark.parametrize("spec_id", sorted(_REAL_GLOBS))
-def test_real_cgi_files_detect_as_their_type(spec_id: str) -> None:
-    root = _participants()
+def test_real_cgi_files_detect_as_their_type(pgp_participants: Path, spec_id: str) -> None:
+    root = pgp_participants
     paths = sorted(p for p in root.glob(f"*/*/{_REAL_GLOBS[spec_id]}") if not p.name.endswith(".part"))
     if not paths:
         pytest.skip(f"no {_REAL_GLOBS[spec_id]} files under {root}")

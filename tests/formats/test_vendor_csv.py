@@ -7,12 +7,10 @@ PGP-HMS exports under `JUST_VCF_SAMPLES_DIR` and skips when they are absent.
 import bz2
 import gzip
 import io
-import os
 import zipfile
 from pathlib import Path
 
 import pytest
-from dotenv import find_dotenv, load_dotenv
 
 from just_vcf.formats import REGISTRY, get_spec, vendor_csv
 from just_vcf.sniff import Sniffed, SniffOutcome, sniff
@@ -278,16 +276,6 @@ _FIRST_LINE_FORMATS: dict[str, frozenset[str]] = {
 }
 
 
-def _participants_dir() -> Path:
-    load_dotenv(find_dotenv(usecwd=True))
-    root = os.environ.get("JUST_VCF_SAMPLES_DIR", "")
-    if not root:
-        pytest.skip("JUST_VCF_SAMPLES_DIR is not set")
-    participants = Path(root) / "pgp-hms" / "participants"
-    if not participants.is_dir():
-        pytest.skip(f"{participants} is absent")
-    return participants
-
 
 def _first_lines(path: Path) -> list[str]:
     """First line of a plain, gzip or bz2 file, or of each zip member: read independently of `sniff`."""
@@ -317,8 +305,8 @@ def _flatten(result: Sniffed) -> list[Sniffed]:
     return [result, *(m for member in result.members for m in _flatten(member))]
 
 
-def test_real_pgp_exports() -> None:
-    participants = _participants_dir()
+def test_real_pgp_exports(pgp_participants: Path) -> None:
+    participants = pgp_participants
     paths = sorted(
         p
         for p in participants.glob("*/upload-*/*")

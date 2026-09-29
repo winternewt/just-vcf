@@ -6,13 +6,11 @@ chosen freely. The opt-in test at the end sniffs the real PGP-HMS files under `J
 
 import bz2
 import gzip
-import os
 import re
 import zipfile
 from pathlib import Path
 
 import pytest
-from dotenv import load_dotenv
 
 from just_vcf.formats import REGISTRY, rsid_tables
 from just_vcf.formats.spec import Family, FormatSpec
@@ -309,7 +307,6 @@ def test_near_misses_are_not_headerless_rsid_tables(head: str, tmp_path: Path) -
 
 # --- real files (opt-in) --------------------------------------------------------------------------
 
-load_dotenv()
 
 CENSUS_EXPECTATIONS: tuple[tuple[str, frozenset[str]], ...] = (
     (r"Genes for Good v[\d.]+: filtered, imputed", frozenset({"genes_for_good_imputed"})),
@@ -327,17 +324,10 @@ CENSUS_EXPECTATIONS: tuple[tuple[str, frozenset[str]], ...] = (
 """Census first-line signature (as the census escapes it) -> the ids such a file may detect as."""
 
 
-def _pgp_root() -> Path:
-    samples = os.environ.get("JUST_VCF_SAMPLES_DIR", "")
-    if not samples:
-        pytest.skip("JUST_VCF_SAMPLES_DIR is not set")
-    root = Path(samples) / "pgp-hms"
-    if not (root / "catalog" / "content_census.tsv").is_file():
-        pytest.skip(f"no PGP-HMS content census under {root}")
-    return root
-
 
 def _census_rows(root: Path) -> list[tuple[Path, str, str]]:
+    if not (root / "catalog" / "content_census.tsv").is_file():
+        pytest.skip(f"no PGP-HMS content census under {root}")
     rows = []
     for line in (root / "catalog" / "content_census.tsv").read_text().splitlines():
         rel, layer, signature = line.split("\t", 2)
@@ -360,8 +350,8 @@ def _head(path: Path, layer: str, size: int = 4096) -> bytes:
         return handle.read(size)
 
 
-def test_real_census_files_detect_as_the_family_their_first_line_names() -> None:
-    root = _pgp_root()
+def test_real_census_files_detect_as_the_family_their_first_line_names(pgp_root: Path) -> None:
+    root = pgp_root
     checked = 0
     wrong: list[str] = []
     for path, _, signature in _census_rows(root):
@@ -377,8 +367,8 @@ def test_real_census_files_detect_as_the_family_their_first_line_names() -> None
     assert not wrong, "\n".join(wrong)
 
 
-def test_real_gfg_build_is_grch37_exactly_when_the_header_names_it() -> None:
-    root = _pgp_root()
+def test_real_gfg_build_is_grch37_exactly_when_the_header_names_it(pgp_root: Path) -> None:
+    root = pgp_root
     checked = 0
     for path, layer, signature in _census_rows(root):
         if "Genes for Good v" not in signature:
@@ -390,9 +380,9 @@ def test_real_gfg_build_is_grch37_exactly_when_the_header_names_it() -> None:
         pytest.skip("no Genes for Good file is on disk")
 
 
-def test_real_files_named_like_gfg_or_living_dna_detect_as_those_vendors() -> None:
+def test_real_files_named_like_gfg_or_living_dna_detect_as_those_vendors(pgp_root: Path) -> None:
     """A name-based view of the same files, from a glob rather than the census."""
-    root = _pgp_root()
+    root = pgp_root
     families = {
         re.compile(r"gfg.*23andme", re.IGNORECASE): {"genes_for_good", "genes_for_good_imputed"},
         re.compile(r"^living-dna", re.IGNORECASE): {"living_dna"},
@@ -411,13 +401,13 @@ def test_real_files_named_like_gfg_or_living_dna_detect_as_those_vendors() -> No
         pytest.skip("no file named like these vendors is on disk")
 
 
-def test_real_family_detections_come_only_from_family_files() -> None:
+def test_real_family_detections_come_only_from_family_files(pgp_root: Path) -> None:
     """Precision: nothing outside the family's census signatures detects as one of its ids.
 
     A multi-member archive is judged by its detected member, which the census signature (taken from
     the largest member) may not describe; those are left out.
     """
-    root = _pgp_root()
+    root = pgp_root
     family_signature = re.compile("|".join(regex for regex, _ in CENSUS_EXPECTATIONS))
     captured: list[str] = []
     for path, _, signature in _census_rows(root):

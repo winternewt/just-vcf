@@ -13,7 +13,6 @@ import polars as pl
 from just_vcf.formats.spec import (
     BuildHint,
     ColumnSpec,
-    Coordinates,
     Detection,
     Family,
     FormatSpec,

@@ -40,9 +40,13 @@ Projects are named `huXXXXXX datasets` and `huXXXXXX reports` (339 participants)
 
 - **VCF collections (109, 108 participants).** All four naming styles (Veritas-like `…-EXT`, 14-digit ids,
   7-character ids, `WGC…D`) come from one PGP pipeline, run 2016–2018 on hg19: freeBayes
-  (v0.9.15/0.9.21) and VarScan2 per chromosome, merged with `vcf-merge`. **Every merged VCF keeps two
-  sample columns, one per caller**, often named `unknown` and `Sample1`. One file is already a
-  two-caller comparison.
+  (v0.9.15/0.9.21) and VarScan2 per chromosome, merged with `vcf-merge`. **Which caller made a row is in
+  INFO/SF (0 = freeBayes, 1 = VarScan2), not in the sample columns.** Checked 2026-09-29 over the
+  arvados merges: 13 of 110 carry two populated sample columns; 48 declare one sample; 50 declare two
+  (`unknown`, `Sample1`) but fill only one per row, so where both callers found a site VarScan2's
+  genotype is gone. An earlier note here said every file kept one column per caller; that was wrong.
+  Each collection also has a `…-orig` key=value table of both callers' fields (spec
+  `freebayes_varscan2_keyvalue`), which still holds both.
 - **Complete Genomics deliveries (68 `GS…-DID`, 55 "Raw sequencing data" folders, some "copy of").**
   Native CGI format: `var`, `masterVarBeta`, CGI's own `vcfBeta`, `summary`, `dbSNPAnnotated`, gene and
   CNV files, and in the raw folders per-chromosome `coverageRefScore`/`evidence*` files (about 35 GB per

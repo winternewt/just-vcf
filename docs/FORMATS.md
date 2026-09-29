@@ -80,3 +80,8 @@ Found while declaring formats; none changes what `sniff` reports.
   is always chrY.
 - **Text kinds look at one line.** A headerless BED cannot be named `not_variant_data` without a
   multi-line shape check, so it stays `unknown`.
+- **Array or imputed content inside a VCF.** Illumina GenotypingToVCF, 23andMe conversions, Genes for
+  Good and Gencove VCFs parse as `vcf`, but an absent site means unknown. `Family` has no axis for it;
+  a header-based `source` detector (the VCF agent's table is in the RM2 entry) would supply it.
+- **Half-calls** (`1|.`, `0/.`) are not expressible in `no_call`.
+- **Variable-width rows.** The key=value table has 12 fixed fields and an annotation tail of any length.

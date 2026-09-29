@@ -9,6 +9,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   (`just_vcf.formats`). The answer says which negative it is when nothing matched: unknown, unreadable
   or not variant data. The build is reported only when the header states it. First formats: 23andMe,
   VCF and BCF. See docs/FORMATS.md.
+- VCF dialects that parse differently get their own ids: Complete Genomics `vcf_cgi`, PGP's merged
+  `vcf_freebayes_varscan2`, `vcf_no_meta` (a `#CHROM` line without meta lines) and the
+  `freebayes_varscan2_keyvalue` table. `##fileformat` may now come after other meta lines, and build
+  hints read CGI and common reference file names. gVCF stays `vcf`: whether a file is a gVCF is decided
+  from its rows later, since headers mislead both ways.
 - Other genotype-bearing tables: Illumina GenomeStudio Final Reports (with and without a column
   line), Oxford `.gen` imputation output, Color variant sets, Illumina Nirvana JSON, GET-Evidence GFF
   (build 36 and b37), FTDNA Big Y, CASAVA SNP and indel tables and SOAPsnp consensus. `sniff` also

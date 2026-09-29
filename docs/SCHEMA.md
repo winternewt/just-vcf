@@ -282,7 +282,7 @@ With Decisions 1–5 as recommended:
 | `alts` | `list[str]` | the source did not say (a non-VCF row before RM3). `[]` = a stated monomorphic record (ALT `.`). Symbolic alleles and `*` kept verbatim, except `<NON_REF>`, which is written `<*>` |
 | `source_alleles` | `list[str]` | the source gave no vector to index (Decision 2) |
 | `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention. An element is null when it was withheld (charter 4); the whole list is null when nothing could be minted. Nothing is minted until `ref_check = match`, or, for a source with no `source_ref`, until `ref` has been read |
-| `vrs_withheld` | `list[Enum]` | parallel to `vrs_allele_ids`: why each null element is null. `symbolic` (`<*>`, `<DEL>`, `*`, `I`/`D`, CGI `GC?`), `ref_unresolved` (no REF anywhere yet), `ref_unchecked` (`source_ref` present, `ref_check` still `not_run`), `no_seqcol`, `not_justifiable`. Null where an id was minted. It is a list because one row can hold both a mintable allele and a symbolic one (`TC,<*>`) |
+| `vrs_errors` | `list[str]` | parallel to `vrs_allele_ids`: what minting itself reported for an allele it tried and could not mint (`not_justifiable`, `no_contig`, …). Null where minting succeeded or never ran. Only facts that minting alone learns go here; see "Why an id is missing" below |
 | `gt_alleles` | `list[str]` | never null on a genotyped row; entries null per uncalled haplotype |
 | `gt` | `list[u8]` | there is no allele list to index yet. Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
 | `source_gt` | `str` | the source wrote no genotype text. The file's raw text, not polars-bio's rewrite of it |
@@ -314,6 +314,26 @@ alleles (P3), so the two must not share a name. The rule follows VCF 4.5's compu
 
 Where REF is not known yet (an array `I`/`D` row) `end_pos` is null. A single-position array call has
 `end_pos = pos`.
+
+**Why an id is missing** is not a stored column. Most of the reasons are already facts in the frame,
+and a stored copy of them drifts: RM3 fills `ref`, and a stored reason still says "unchecked". So the
+reason is computed by one function, `vrs_withheld()`, a lazy Polars expression over the frame. It
+returns one reason per allele, parallel to `vrs_allele_ids`, and null where an id exists. It checks in
+this fixed order and the first hit wins:
+
+1. **What the allele is**, read from the allele string: `symbolic` (`<DEL>`, `<CNV:TR>`, breakends),
+   `unspecified` (`<*>`), `spanning_deletion` (`*`), `array_code` (23andMe `I`/`D`), `partial_call`
+   (CGI `?`).
+2. **Pipeline state**, read from other columns: `ref_unresolved` (`ref` and `source_ref` both null),
+   `ref_unchecked` (`ref_check = not_run`), `ref_mismatch` (`ref_check = mismatch`), `no_seqcol`
+   (`facets.seqcol_digest` null), `telomere` (`pos` 0, or past the contig's length).
+3. **What minting reported**: the `vrs_errors` element.
+4. Otherwise `not_run`: nothing forbids minting and it has not happened yet.
+
+The reasons form an open vocabulary (a `frozenset[str]` with a validator, stored as `str`), not a
+`pl.Enum`: every new kind of facet brings reasons, and an Enum would change the frame's dtype each
+time. A new reason is an edit to one function, with no schema change. When a frame is exported for
+readers without the library, the function's result is written out as a column at that point.
 
 `u32` holds every human contig, T2T chr1 included (248,387,328). Closed vocabularies are `pl.Enum`.
 `format_id` stays `str`, because `FORMATS` grows additively.
@@ -403,6 +423,36 @@ None of these changes a column. Each is a rule a loader follows, and each gets a
   spec says to assume diploid.
 - **`ID` is a `;` list**, split into `ids`.
 
+## Stress case: XYY with a Y deletion the reference does not have
+
+A person with 47,XYY (Jacobs syndrome) carries a deletion on Y. Their Y is shorter than the
+reference's, and the deleted region lies where GRCh38 Y has no sequence at all (an unassembled gap,
+all `N`), while T2T-CHM13 has it. Facets: a GRCh38 short-read VCF, a T2T HiFi VCF, and the T2T facet
+lifted to GRCh38. How the draft holds up:
+
+- **Ploidy.** A caller run with a "male means haploid Y" model writes one allele per Y site, although
+  this person has two Ys. `gt_alleles` keeps what the file wrote, because list length is never an
+  asserted ploidy (Decision 2), so nothing is silently "corrected". **Open:** nothing in the draft can
+  *say* the karyotype. It is a fact about the person, measured from evidence (Y depth near 2x, X depth
+  near 1x). It is not a fact about any one facet. A person-level finding with its own provenance does
+  not exist yet.
+- **The deleted region, absent from the GRCh38 VCF.** The GRCh38 facet is WGS without blocks, so
+  `absence_means = weak_reference`, and a question about a site in the deletion gets "weak evidence of
+  reference". For a deletion on both Y copies, that is wrong. **Open:** absence has to be conditioned
+  on a coverage facet (charter: coverage is a facet). Zero depth there turns "weak reference" into "no
+  evidence". The draft names the coverage facet but does not yet say how absence reads it.
+- **The same deletion on T2T.** Called against T2T, it has a REF from real sequence and can get a VRS
+  id (or, if it is written as `<DEL>`, `symbolic`). Lifting it to GRCh38 fails, because the target is
+  a gap. The derived facet has no row for it. **Open:** a lift that drops a row has to be counted on
+  the derived facet (the Glow-style liftover status in LANDSCAPE). Otherwise "absent in the lifted
+  facet" reads as "absent in the person".
+- **A GRCh38 REF that is `N`.** A site inside the gap has no base to compare, and `ref_check` would
+  compare against `N`. Whether gtars mints on an `N` reference has not been checked. If it refuses,
+  the refusal lands in `vrs_errors`.
+
+None of this changes a column today. It marks where the person-level layer and the coverage facet have
+to connect.
+
 ## Open questions
 
 Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5 (`end_pos`) and Q6
@@ -423,6 +473,6 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 - Evidence: `gl` (likelihoods), `gp` (posteriors) and `dosage` never mixed, and a row can have more
   than one. `evidence_basis` is the origin only (`assay`, `ref_block`, `absence`). Array calls have no
   vector until concordance can measure one.
-- Identity: `vrs_allele_ids` parallel to `[ref] + alts`, with `vrs_withheld` saying why an id is
-  missing; `seqcol_digest` per facet.
+- Identity: `vrs_allele_ids` parallel to `[ref] + alts`. `vrs_errors` stores only what minting
+  reported; why an id is missing is computed by `vrs_withheld()`. `seqcol_digest` per facet.
 - Absence: a facet property (`absence_means`), turned into a row only on request.

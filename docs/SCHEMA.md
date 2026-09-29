@@ -94,8 +94,8 @@ How the awkward cases land under C:
   a reference call, and it gets no VRS id. `0/2` over `ALT=C,*` must never be read as a het with a
   reference haplotype and nothing else.
 - **A monomorphic record** (ALT `.`) has `alts = []`, which is a stated "no alternate allele". A null
-  `alts` means the source did not say. polars-bio decodes both `.` and a missing ALT as `""`, so the
-  loader reads the difference from the file's own record, not from the decoded column.
+  `alts` means the source did not say, which only happens for non-VCF sources (an array row before
+  RM3). ALT is a required VCF column, so polars-bio's `""` always means `.` and becomes `[]`.
 - **`<NON_REF>`** is written as `<*>` in `alts`. VCF 4.5 makes them aliases.
 - **`source_gt`**: the source's genotype text, verbatim, on every row that had one. It costs one string
   column. In exchange, every derived column can be checked against what the file said, and no
@@ -107,10 +107,13 @@ its own phase set. So:
 
 - `phased: list[bool]`, parallel to `gt_alleles`. An element is null where the source did not say
   (an array export).
-- `phase_sets: list[str]`, parallel to `gt_alleles`. It comes from `PSL` directly. A `PS` integer is
-  written as its decimal string on every phased haplotype. Unphased haplotypes are null. A PS and a
-  PSL name are never the same set even when they are spelled alike (VCF 4.5: "PS and PSL are not
-  interoperable"), so a PS value is stored as `PS:<n>`.
+- `phase_sets: list[str]`, parallel to `gt_alleles`. It comes from `PSL` directly, since PSL names are
+  global to the file. A `PS` is scoped to its chromosome ("on the same chromosome and have the same PS
+  value"), so it is stored as `PS:<chrom>:<n>` on every phased haplotype. A phased haplotype with no PS
+  or PSL belongs to the chromosome's one implicit set (VCF 4.5: "All phased genotypes that do not
+  contain a PS subfield are assumed to belong to the same phased set") and gets `PS:<chrom>:implicit`.
+  Unphased haplotypes are null. PS and PSL names never share a set (VCF 4.5: "PS and PSL are not
+  interoperable"), and the prefix keeps them apart.
 
 The VRS CisPhasedBlock is built from `phase_sets` at export. It is not stored per row.
 
@@ -173,7 +176,7 @@ millions of them.
 | Option | Cost |
 |---|---|
 | A. Blocks as rows in the calls frame, with a `kind` column | Satisfies "one frame out" literally. Every variant query then scans the blocks too, and a block has no alts, no VRS id and no genotype in the usual sense |
-| **B. Two frames per facet: `calls` and `blocks`** (the Hail VDS layout) | A second frame to know about. `blocks` is small in columns: `facet_id, chrom, pos, end, kind (ref / no_call), gq_min, dp_min` |
+| **B. Two frames per facet: `calls` and `blocks`** (the Hail VDS layout) | A second frame to know about. `blocks` is small in columns: `facet_id, chrom, pos, end, kind (ref / no_call), gq, dp_min, gl`. `gl` is the block's own likelihoods over `[REF, <*>]` (a gVCF block carries PL, e.g. `0,60,900`), because that *is* the graded reference evidence (charter 7). It is null only where the source gave none (CGI blocks) |
 | C. Expand blocks to one row per base | Billions of rows. Rejected |
 
 A 4.5 block states its length per sample in FORMAT `LEN`. INFO `END` is deprecated and only a fallback
@@ -234,14 +237,14 @@ With Decisions 1–5 as recommended:
 | `ids` | `list[str]` | the source had no id. rsids, 23andMe `i` ids and VCF `ID` split on `;` |
 | `ref` | `str` | unresolved (charter 10) |
 | `ref_basis` | `Enum` | never null |
-| `alts` | `list[str]` | the source stated none (an array row before RM3). Symbolic alleles kept verbatim |
+| `alts` | `list[str]` | the source did not say (a non-VCF row before RM3). `[]` = a stated monomorphic record (ALT `.`). Symbolic alleles and `*` kept verbatim, except `<NON_REF>`, which is written `<*>` |
 | `source_alleles` | `list[str]` | the source gave no vector to index (Decision 2) |
 | `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention. An element is null when it was withheld (charter 4); the whole list is null when nothing could be minted |
 | `gt_alleles` | `list[str]` | never null on a genotyped row; entries null per uncalled haplotype |
 | `gt` | `list[u8]` | REF unresolved. Indices into `[ref] + alts` |
 | `source_gt` | `str` | the source wrote no genotype text |
 | `phased` | `list[bool]` | parallel to `gt_alleles`. An element is null where the source did not say |
-| `phase_sets` | `list[str]` | parallel to `gt_alleles`. An element is null for an unphased haplotype (Decision 2) |
+| `phase_sets` | `list[str]` | parallel to `gt_alleles`. An element is null for an unphased haplotype. `PS:<chrom>:<n>`, `PS:<chrom>:implicit` or a PSL name (Decision 2) |
 | `gl` | `list[f32]` | no likelihoods given |
 | `gp` | `list[f32]` | no posteriors given |
 | `dosage` | `f32` | no dosage given |

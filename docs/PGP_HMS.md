@@ -76,8 +76,8 @@ note column) is in `catalog/freetext_classified.tsv`:
 **Sniffing the 21 unsettled rows (2026-09-29).** Nine are on disk. Seven of those are variant data:
 four VCFs (one of them a Genos gVCF with sorted meta lines), Gencove's Oxford `.gen` imputation zip,
 and a SelfDecode GRCh38 table. The other two are not variant data: an iWork document and a gzipped
-FASTQ in a zip. The twelve not on disk: five were over the 2.5 GB cap, one is not public, and six were
-not planned because their names looked like reads or documents. Reading their heads over HTTP would
+FASTQ in a zip. The twelve not on disk: five were over the 2.5 GB cap, one is not public, and six have no
+manifest entry yet (not planned, or not reached by the fetch still running; not checked which). Reading their heads over HTTP would
 settle them without downloading them.
 
 **The label is unreliable both ways.** A `23andMe`-typed upload can be a VCF, and real genotype files sit

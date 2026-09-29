@@ -33,7 +33,9 @@ decision turned on. Delegation is for finding things, never for deciding them.
    and which external tools to take rather than build. Read both before designing a feature.
 8. **docs/FORMATS.md** — how `sniff` recognises a file, how a format is declared, and why the
    registry order is what it is. Read it before adding or reordering a format.
-9. **docs/PGP_HMS.md** — the public test-data source: where the files are, their quirks, what is on
+9. **docs/SCHEMA.md** — the frames every loader emits (RM8). Read it before writing a loader or
+   changing a column.
+10. **docs/PGP_HMS.md** — the public test-data source: where the files are, their quirks, what is on
    disk, and which participants make good multi-facet test setups.
 
 Everything below is self-contained: no rule here requires following a link to know what you
@@ -257,7 +259,8 @@ are read from env vars with sensible defaults, documented in `.env.template`, an
 These were learned the expensive way in the sibling repos. Each is a prohibition, so each is here.
 
 - **Coordinates are 1-based VCF `POS` at every public boundary.** polars-bio returns 0-based `start`
-  from `register_vcf`-named tables, and just-prs adds 1 to compensate. Never mix the two in one frame;
+  from `register_vcf`-named tables, and just-prs adds 1 to compensate. `scan_vcf` in 0.36 defaults to
+  1-based closed instead (checked 2026-09-29), so always pass `use_zero_based` explicitly. Never mix the two in one frame;
   convert at the edge and name the column for the convention it holds.
 - **Never run concurrent `pb.scan_vcf` on the same table name.** It panics with "table already exists".
   just-prs registers under a content-hash name behind a lock (`vcf.scan_vcf`).

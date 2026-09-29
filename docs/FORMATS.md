@@ -61,3 +61,13 @@ Found while declaring formats; none changes what `sniff` reports.
   from the reference; `reference` is `=` on ref and no-call blocks, so REF comes from the FASTA.
 - **`no_call` is a flat tuple of spellings.** It cannot express a partial no-call inside an allele
   (CGI `GC?`), `half` zygosity, or 1.x `no-call-rc`. These live in `genotype_encoding` and `notes`.
+- **Column names outside the table.** Genos names its columns in a `##Columns=` meta line; the spec
+  uses `HeaderMode.NONE` with the columns in order.
+- **One delimiter per spec.** 2010-era FTDNA Affymetrix exports have a comma header, space-separated
+  rows, and quoted comma rows at the end. Quoting has no field either.
+- **0-based single positions.** Color positions sit one below GRCh37; `Coordinates` has only 1-based
+  and 0-based half-open, so the spec says half-open and a note explains.
+- **Build stated elsewhere.** Color states it in a data column; deCODEme states it in a sibling file
+  inside the zip, which the archive result does not carry over to the genotype member.
+- **Optional columns.** `ColumnSpec` cannot say a column appears only in some versions (Promethease
+  `Repute`).

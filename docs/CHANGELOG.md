@@ -9,6 +9,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   (`just_vcf.formats`). The answer says which negative it is when nothing matched: unknown, unreadable
   or not variant data. The build is reported only when the header states it. First formats: 23andMe,
   VCF and BCF. See docs/FORMATS.md.
+- Vendor genotype tables: AncestryDNA, Genos, Color genotypes, deCODEme (and its build-stating info
+  file), National Geographic Genographic Geno 2.0, FamilyTreeDNA in comma and 2010-era space-separated
+  layouts, and a neutral `RSID,CHROMOSOME,POSITION,RESULT` fallback for unbranded exports.
 - 23andMe-shaped genotype tables: Genes for Good (unphased and imputed), 23andMe (including 2026
   wording and a spreadsheet re-save), Living DNA, SelfDecode, PLINK's 23andMe-style output and the
   Promethease tab-genotype report, plus two shape-only fallbacks for header-stripped and headerless

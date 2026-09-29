@@ -9,6 +9,8 @@ Detection leans on the vendor's own header line. Where the files do not name the
 seen to have, and everything else with that header falls to the vendor-neutral `rsid_result_csv`.
 """
 
+from dataclasses import replace
+
 import polars as pl
 
 from just_vcf.formats.spec import (
@@ -429,4 +431,22 @@ SPECS: tuple[FormatSpec, ...] = (
     FTDNA,
     FTDNA_SPACE,
 )
-FALLBACKS: tuple[FormatSpec, ...] = (RSID_RESULT_CSV,)
+GENOGRAPHIC_GENO2_HEADERLESS = replace(
+    GENOGRAPHIC_GENO2,
+    id="genographic_geno2_headerless",
+    description="Genographic Geno 2.0 results with the `SNP,Chr,Allele1,Allele2` line cut off.",
+    detection=Detection(
+        patterns=(r"\A\n*[^,\n]+,([1-9]|1\d|2[0-2]|X|Y|Mt),[ACGTDI-],[ACGTDI-]$",),
+        data_shape=GENOGRAPHIC_GENO2.detection.data_shape,
+    ),
+    header=HeaderMode.NONE,
+    notes=(
+        *GENOGRAPHIC_GENO2.notes,
+        "Recognised by shape: the first non-blank line must already be a marker row (one export opens "
+        "with an empty line), and the `Mt` spelling helps keep it "
+        "apart from other headerless CSVs.",
+    ),
+    example=GENOGRAPHIC_GENO2.example.split("\n", 1)[1],
+)
+
+FALLBACKS: tuple[FormatSpec, ...] = (RSID_RESULT_CSV, GENOGRAPHIC_GENO2_HEADERLESS)

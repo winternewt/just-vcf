@@ -20,7 +20,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   names genetic-genealogy files that hold no positioned calls (Y-STR, Y-SNP panels, the rCRS/RSRS
   table, Genographic reports, ancestry segments) and GenBank ASN.1 submissions.
 - Vendor genotype tables: AncestryDNA, Genos, Color genotypes, deCODEme (and its build-stating info
-  file), National Geographic Genographic Geno 2.0, FamilyTreeDNA in comma and 2010-era space-separated
+  file), National Geographic Genographic Geno 2.0 (with or without its column line), FamilyTreeDNA in comma and 2010-era space-separated
   layouts, and a neutral `RSID,CHROMOSOME,POSITION,RESULT` fallback for unbranded exports.
 - 23andMe-shaped genotype tables: Genes for Good (unphased and imputed), 23andMe (including 2026
   wording and a spreadsheet re-save), Living DNA, SelfDecode, PLINK's 23andMe-style output and the

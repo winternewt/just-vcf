@@ -364,3 +364,14 @@ def test_real_pgp_exports() -> None:
         pytest.skip("no vendor exports of this family under the samples dir")
     if not checked_23andme:
         pytest.skip("no 23andMe export available as a negative control")
+
+
+def test_geno2_without_its_column_line_detects_by_shape(tmp_path) -> None:
+    from_spec = get_spec("genographic_geno2").example.split("\n", 1)[1]
+    path = tmp_path / "geno2.csv"
+    path.write_text(from_spec)
+    assert sniff(path).format == "genographic_geno2_headerless"
+    path.write_text("\n" + from_spec)
+    assert sniff(path).format == "genographic_geno2_headerless"
+    path.write_text("marker,note,A,B\nfoo,1,A,G\n")
+    assert sniff(path).format != "genographic_geno2_headerless"

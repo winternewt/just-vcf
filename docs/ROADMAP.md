@@ -67,6 +67,26 @@ Port just-prs `reference_allele.py` (reference-panel tier, FASTA tier, FASTA bui
 ALT derivation from genotype against REF, indel anchor bases, chr-prefixed FASTA support, emitting
 reference-supported positions.
 
+**Measured 2026-09-30: gtars RefgetStore as the sequence source** (gtars 0.10, Ensembl GRCh38
+primary-assembly FASTA, 3.15 GB, 194 sequences):
+
+- Build: `RefgetStore.on_disk` + `add_sequence_collection_from_fasta`, 25 s. Encoded store 1.1 GB; the
+  25 primary contigs are 1.16 GB of it (2-bit, or 3-bit where a contig holds `N`). chr1 is 93 MB and
+  gzips only to 67.5 MB, so compressing a hosted store buys little.
+- Local lookups: about 8 µs each, for 1 base or a 100-bp window. The OS cache was warm (the store had
+  just been written). 200 lookups checked against the FASTA: 0 mismatches.
+- Remote (`open_remote` against a local HTTP range server, so no real network latency): opening
+  fetches 57 KB of metadata. A single `get_substring` is one HTTP range request of about 20 bytes,
+  1.2 ms on localhost; over the internet each one costs a round trip. `get_substrings` with many ranges
+  downloads the whole contig once (chr1: one 93 MB GET) and serves every later lookup locally (3 ms
+  for 500). Both modes wrote the contig into the cache directory, even after `disable_persistence()`.
+- No public hosted store was found (gtars docs use placeholder URLs; searched 2026-09-30). A remote
+  tier means hosting the store's static files ourselves.
+- just-dna-format has no sequence access except seqrepo REST, and mints SNV ids offline from a committed
+  GRCh38 accession table: a substitution's VRS id does not encode REF. Their RM267 shows a variant
+  table used as the REF/position source producing wrong events that a REF check passes, which rules out
+  a reference panel as the REF value here.
+
 ## RM4 — Input type inference
 Severity: medium · Status: open · Owner: unassigned
 

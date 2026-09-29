@@ -281,7 +281,7 @@ With Decisions 1–5 as recommended:
 | `ref_check` | `Enum` | there is no `source_ref` to compare. `not_run`, `match` or `mismatch` (Decision 2) |
 | `alts` | `list[str]` | the source did not say (a non-VCF row before RM3). `[]` = a stated monomorphic record (ALT `.`). Symbolic alleles and `*` kept verbatim, except `<NON_REF>`, which is written `<*>` |
 | `source_alleles` | `list[str]` | the source gave no vector to index (Decision 2) |
-| `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention. An element is null when it was withheld (charter 4); the whole list is null when nothing could be minted. Nothing is minted until `ref_check = match`, or, for a source with no `source_ref`, until `ref` has been read |
+| `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention. An element is null when it was withheld (charter 4); the whole list is null when nothing could be minted. Minting rule below ("When an id is minted") |
 | `vrs_errors` | `list[str]` | parallel to `vrs_allele_ids`: what minting itself reported for an allele it tried and could not mint (`not_justifiable`, `no_contig`, …). Null where minting succeeded or never ran. Only facts that minting alone learns go here; see "Why an id is missing" below |
 | `gt_alleles` | `list[str]` | never null on a genotyped row; entries null per uncalled haplotype |
 | `gt` | `list[u8]` | there is no allele list to index yet. Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
@@ -315,6 +315,24 @@ alleles (P3), so the two must not share a name. The rule follows VCF 4.5's compu
 Where REF is not known yet (an array `I`/`D` row) `end_pos` is null. A single-position array call has
 `end_pos = pos`.
 
+**When an id is minted.** A VRS Allele id for a substitution does not encode REF. It needs only the
+contig's refget accession, the position and the allele, so it is minted without reading any bases.
+An indel id needs the sequence around it (VRS normalises it against that sequence), so it waits for
+bases. Per allele:
+
+- **Substitution** (REF and allele the same length): minted as soon as the facet's assembly is
+  identified and the contig has an accession, from a small table of contig accessions per assembly.
+  No sequence is read. `ref_check = not_run` does not block it. `ref_check = mismatch` withholds it,
+  because a mismatch is evidence that the position or the build is wrong.
+- **Indel or MNV with a length change**: minted only after bases have been read and
+  `ref_check = match`.
+- **Array rows**: minted once RM3 has derived `alts`, under the same two rules.
+
+So loading a VCF needs no reference download. The table of contig accessions is derived by gtars from
+each assembly's sequence collection and checked by a test, never typed in by hand. Where the bases come
+from when they are needed (a local store, or a hosted one read lazily) is RM3's decision; the
+measurements are in docs/ROADMAP.md, RM3.
+
 **Why an id is missing** is not a stored column. Most of the reasons are already facts in the frame,
 and a stored copy of them drifts: RM3 fills `ref`, and a stored reason still says "unchecked". So the
 reason is computed by one function, `vrs_withheld()`, a lazy Polars expression over the frame. It
@@ -325,7 +343,8 @@ this fixed order and the first hit wins:
    `unspecified` (`<*>`), `spanning_deletion` (`*`), `array_code` (23andMe `I`/`D`), `partial_call`
    (CGI `?`).
 2. **Pipeline state**, read from other columns: `ref_unresolved` (`ref` and `source_ref` both null),
-   `ref_unchecked` (`ref_check = not_run`), `ref_mismatch` (`ref_check = mismatch`), `no_seqcol`
+   `ref_unchecked` (`ref_check = not_run`, indels only; substitutions mint without the check),
+   `ref_mismatch` (`ref_check = mismatch`), `no_seqcol`
    (`facets.seqcol_digest` null), `telomere` (`pos` 0, or past the contig's length).
 3. **What minting reported**: the `vrs_errors` element.
 4. Otherwise `not_run`: nothing forbids minting and it has not happened yet.
@@ -466,7 +485,7 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 - Coordinates: `pos` and `end_pos` are 1-based and inclusive. VRS objects keep 0-based interbase coordinates
   internally, and nothing else does.
 - REF: `ref` only from the assembly sequence; `source_ref` is what the file wrote; `ref_check` compares
-  them. VRS ids wait for a match.
+  them. Substitution ids mint without bases and are withheld on a mismatch; indel ids wait for a match.
 - Genotype: literal `gt_alleles` always; `gt` indices into the file's own allele list; `source_gt` is
   the raw text.
   Vectors are indexed over `source_alleles` and never reordered.

@@ -17,16 +17,48 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: open · Owner: unassigned
+Severity: high · Status: in progress (detection shipped 2026-09-29, loaders next) · Owner: unassigned
 
-Port from just-prs `arrays.py`, `io_utils.py` and `vcf.py`: 23andMe, AncestryDNA, MyHeritage and FTDNA
-parsing; zip/gzip by magic bytes; VCF build detection. New work: a Living DNA parser (check whether Genotek exports differ from 23andMe; the local one carries a 23andMe header),
-build detection for arrays, I/D indel codes, hemizygous calls. Leave out the observed-allele-as-REF
-encoding (charter invariant 3).
+**Shipped:** content-based detection. `just_vcf.sniff` and the declarative registry in
+`just_vcf.formats` (docs/FORMATS.md). Over the PGP-HMS participants, 8 of about 1,740 files stay unknown,
+all prose or empty.
 
-Detect the format from content, never from the label. PGP-HMS shows labels are wrong in both
-directions (docs/PGP_HMS.md). The 21 free-text uploads its classification could not settle, and the
-multi-facet participants, are the first test inputs.
+**Next: per-format loaders on polars-bio**, one frame out, driven by each `FormatSpec`. Start from the
+contract gaps listed at the end of docs/FORMATS.md (versioned columns, section headers, 0-based CGI
+conversion, half-calls, chromosome outside the row) and from polars-bio pending fixes P1/P2. Port from
+just-prs `arrays.py`, `io_utils.py` and `vcf.py`; leave out the observed-allele-as-REF encoding (charter
+invariant 3). Living DNA writes indels as run-together alleles (`CCA`); Color positions are 0-based.
+
+The multi-facet participants in docs/PGP_HMS.md are the convergence tests: one person's facets, loaded
+independently, must agree where they overlap.
+
+**Also wanted: a `source` detector** naming the caller or vendor from VCF headers, because `Family`
+cannot say "array or imputed content inside a VCF" and that decides whether absent means unknown.
+Header evidence found while declaring the VCF formats:
+
+| Header line | Caller / vendor |
+|---|---|
+| `##source=freeBayes…` + `##source=VarScan2` + `vcf-merge` | PGP freeBayes+VarScan2 merge |
+| `##center=Complete Genomics`, `##source=CGAPipeline_*` | Complete Genomics |
+| `##source=IsaacVariantCaller`, `##source=starling` | Illumina Isaac/starling (Veritas) |
+| `##source=…CASAVA…makeConsensusVcf.pl` | Illumina CASAVA |
+| `##workflow_type=Illumina_GenotypingToVCF` | Illumina array as VCF |
+| `##DRAGENCommandLine`, `##source=DRAGEN_SNV` | DRAGEN |
+| `##GATKCommandLine*`, `##source=HaplotypeCaller…`, `##UnifiedGenotyper=` | GATK |
+| `##DeepVariant_version=` | DeepVariant |
+| `##source=Platypus_Version_*` | Platypus |
+| `##source=GenerateSVCandidates` | Manta |
+| `##source=aengine` | FamilyTreeDNA Big Y |
+| `##source=loimpute`, `##generatedby=Gencove` | Gencove low-pass imputation |
+| `##source=Minimac3`, `##eagleVersion=` | Minimac3 + Eagle imputation |
+| `##Genes_for_Good_version=` | Genes for Good |
+| `##source=open_humans_data_processing.twenty_three_and_me` | Open Humans 23andMe conversion |
+| `##source=intersection_dbSNP_23andme` | DNA.Land 23andMe conversion |
+| `##pipeline=helix-*` | Helix |
+| `##dataAnalysisProvider=Sequencing.com` | Sequencing.com |
+| `##AnnotationEngineVersion=` + FORMAT `CGIANN_*` | Genos exome |
+
+Not identifiable from the header: 23andMe's exome VCF, the Dante- and Nebula-named uploads (generic GATK).
 
 ## RM3 — REF lookup and padding
 Severity: high · Status: open · Owner: unassigned

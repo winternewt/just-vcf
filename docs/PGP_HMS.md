@@ -73,6 +73,13 @@ note column) is in `catalog/freetext_classified.tsv`:
 | image or media | 17 |
 | health or phenotype | 15 |
 
+**Sniffing the 21 unsettled rows (2026-09-29).** Nine are on disk. Seven of those are variant data:
+four VCFs (one of them a Genos gVCF with sorted meta lines), Gencove's Oxford `.gen` imputation zip,
+and a SelfDecode GRCh38 table. The other two are not variant data: an iWork document and a gzipped
+FASTQ in a zip. The twelve not on disk: five were over the 2.5 GB cap, one is not public, and six were
+not planned because their names looked like reads or documents. Reading their heads over HTTP would
+settle them without downloading them.
+
 **The label is unreliable both ways.** A `23andMe`-typed upload can be a VCF, and real genotype files sit
 under free text. Standard types hide reads as well: a "Veritas Genetics" person is one `<id> - VCF` row
 plus one `<id>.chrN.bam - BAM` row per chromosome. The fetchers filter by label and by name for now.

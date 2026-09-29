@@ -216,3 +216,9 @@ def test_unsupported_zip_method_is_unreadable_and_named(tmp_path: Path) -> None:
     result = sniff(_write(path, bytes(data)))
     assert (result.outcome, result.member) == (SniffOutcome.UNREADABLE, "calls.vcf")
     assert result.reason == "zip compression Deflate64 (method 9) is not supported"
+
+
+def test_cr_only_line_endings_split_into_lines(tmp_path: Path) -> None:
+    """Classic Mac exports end lines with a bare CR; the data shape must still see separate lines."""
+    result = sniff(_write(tmp_path / "mac.txt", TWENTYTHREE.replace("\n", "\r").encode()))
+    assert (result.format, result.build) == ("23andme", "GRCh37")

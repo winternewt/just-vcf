@@ -9,6 +9,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   (`just_vcf.formats`). The answer says which negative it is when nothing matched: unknown, unreadable
   or not variant data. The build is reported only when the header states it. First formats: 23andMe,
   VCF and BCF. See docs/FORMATS.md.
+- 23andMe-shaped genotype tables: Genes for Good (unphased and imputed), 23andMe (including 2026
+  wording and a spreadsheet re-save), Living DNA, SelfDecode, PLINK's 23andMe-style output and the
+  Promethease tab-genotype report, plus two shape-only fallbacks for header-stripped and headerless
+  rsid tables. `sniff` now normalises CRLF and bare-CR line endings before matching.
 - Complete Genomics native files are recognised by `#TYPE` and their `>` header line: `cgi_var`,
   `cgi_master_var` and `cgi_summary`, format versions 1.6 to 2.5. `FormatSpec.header_prefix` names a
   marker on the column-name line.

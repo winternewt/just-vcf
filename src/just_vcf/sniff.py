@@ -191,7 +191,8 @@ def _sniff_layer(path: Path, opener: Opener, layers: tuple[str, ...], member: st
     text = _decode(raw)
     if text is None:
         return Sniffed(**base, outcome=SniffOutcome.UNKNOWN, reason="binary content")
-    return _match(base, text)
+    # CRLF and CR-only exports exist; patterns see `\n` only, so `$` needs no `\r?`.
+    return _match(base, text.replace("\r\n", "\n").replace("\r", "\n"))
 
 
 def _match(base: dict, text: str) -> Sniffed:

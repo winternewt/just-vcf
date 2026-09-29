@@ -202,3 +202,17 @@ def test_sniff_is_deterministic(tmp_path: Path) -> None:
     first, second = sniff(path), sniff(path)
     assert first == second
     assert isinstance(first, Sniffed)
+
+
+def test_unsupported_zip_method_is_unreadable_and_named(tmp_path: Path) -> None:
+    """Windows writes Deflate64 (method 9) for members over 2 GiB; the stdlib cannot read it."""
+    path = tmp_path / "big.zip"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as zf:
+        zf.writestr("calls.vcf", VCF)
+    data = bytearray(path.read_bytes())
+    local, central = data.index(b"PK\x03\x04"), data.index(b"PK\x01\x02")
+    data[local + 8 : local + 10] = struct.pack("<H", 9)
+    data[central + 10 : central + 12] = struct.pack("<H", 9)
+    result = sniff(_write(path, bytes(data)))
+    assert (result.outcome, result.member) == (SniffOutcome.UNREADABLE, "calls.vcf")
+    assert result.reason == "zip compression Deflate64 (method 9) is not supported"

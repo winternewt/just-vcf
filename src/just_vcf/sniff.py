@@ -75,6 +75,10 @@ _TEXT_KINDS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^0 HEAD\s*$"), "gedcom"),
 )
 
+# Zip methods the standard library cannot read, by APPNOTE number. Deflate64 is what Windows
+# Explorer writes for members over 2 GiB.
+_ZIP_METHODS = {9: "Deflate64 (method 9)", 98: "PPMd (method 98)", 99: "AES encryption (method 99)"}
+
 _ZIP_JUNK = re.compile(r"(^|/)(__MACOSX/|\._|\.DS_Store$|Thumbs\.db$)")
 
 
@@ -281,8 +285,10 @@ def _sniff_zip(path: Path, opener: Opener, layers: tuple[str, ...], member: str 
             name = info.filename if member is None else f"{member}!{info.filename}"
             try:
                 results.append(_sniff_layer(path, member_opener(info), base["layers"], name, depth + 1))
-            except NotImplementedError as err:
-                results.append(Sniffed(**{**base, "member": name}, outcome=SniffOutcome.UNREADABLE, reason=str(err)))
+            except NotImplementedError:
+                method = _ZIP_METHODS.get(info.compress_type, f"method {info.compress_type}")
+                reason = f"zip compression {method} is not supported"
+                results.append(Sniffed(**{**base, "member": name}, outcome=SniffOutcome.UNREADABLE, reason=reason))
         return _aggregate(base, results, len(infos))
 
 

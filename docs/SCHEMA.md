@@ -133,13 +133,16 @@ its own phase set. So:
 - `phase_sets: list[str]`, parallel to `gt_alleles`: the raw value the file wrote, with no prefix. A
   `PS` integer is written as its decimal string on each phased haplotype; a `PSL` entry is taken as is.
   Unphased haplotypes are null.
-- **A phase set is identified by the key `(chrom, phase_set)`**, because `PS` is scoped to its
-  chromosome ("on the same chromosome and have the same PS value"). `PS=100` on chr1 and on chr2 are two
-  sets.
-- A phased haplotype with no PS or PSL has `phased = true` and `phase_set` null. It belongs to its
-  chromosome's one implicit set (VCF 4.5: "All phased genotypes that do not contain a PS subfield are
-  assumed to belong to the same phased set"), which is the key `(chrom, null)`.
-- PSL does not fit that key cleanly. See Q6.
+- `phase_set_kinds: list[Enum{ps, psl}]`, parallel to `phase_sets`: which field the value came from.
+  VCF 4.5 says PS and PSL "are not interoperable", so a PS `5` and a PSL `5` are different sets.
+- **The key of a phase set depends on its kind.** A PS is scoped to its chromosome ("on the same
+  chromosome and have the same PS value"), so its key is `(facet_id, chrom, ps, value)`. `PS=100` on
+  chr1 and on chr2 are two sets. A PSL name is global to the file ("records with different CHROM but
+  the same phase-set name are considered part of the same phase set"), so its key is
+  `(facet_id, psl, value)`, and one set can span chromosomes.
+- A phased haplotype with no PS or PSL has `phased = true` and `phase_set` null (kind `ps`). It belongs
+  to its chromosome's one implicit set (VCF 4.5: "All phased genotypes that do not contain a PS
+  subfield are assumed to belong to the same phased set"), key `(facet_id, chrom, ps, null)`.
 
 The VRS CisPhasedBlock is built from `phase_sets` at export. It is not stored per row.
 
@@ -284,7 +287,8 @@ With Decisions 1–5 as recommended:
 | `gt` | `list[u8]` | there is no allele list to index yet. Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
 | `source_gt` | `str` | the source wrote no genotype text. The file's raw text, not polars-bio's rewrite of it |
 | `phased` | `list[bool]` | parallel to `gt_alleles`. An element is null where the source did not say |
-| `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS or PSL value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. A set is keyed by `(chrom, phase_set)` (Decision 2) |
+| `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS or PSL value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. Keyed by kind: PS per chromosome, PSL per file (Decision 2) |
+| `phase_set_kinds` | `list[Enum]` | parallel to `phase_sets`: `ps` or `psl`. Null where the haplotype is unphased |
 | `gl` | `list[f32]` | no likelihoods given |
 | `gp` | `list[f32]` | no posteriors given |
 | `dosage` | `f32` | no dosage given |
@@ -401,16 +405,9 @@ None of these changes a column. Each is a rule a loader follows, and each gets a
 
 ## Open questions
 
-Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names) and Q5 (`end_pos`) were
-settled on 2026-09-30 and are folded in above.
+Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5 (`end_pos`) and Q6
+(PSL keys) were settled on 2026-09-30 and are folded in above.
 
-- **Q6. PSL and the `(chrom, phase_set)` key.** PSL names are global to the file: "records with
-  different CHROM but the same phase-set name are considered part of the same phase set" (VCF 4.5,
-  with an example that links a chr20 allele to `chr19*5*1`). Keying PSL by chromosome splits those
-  sets. And a PS `5` and a PSL `5` are different sets (the spec says so) but get the same key. Options:
-  key PSL values by `(null, phase_set)` and mark the kind in a `phase_set_kinds: list[Enum{ps, psl}]`
-  column; or keep one key and give up cross-chromosome PSL sets. Leaning towards the first. Whether
-  any file in the PGP-HMS corpus uses PSL has not been checked.
 
 ## At a glance (all recommendations taken)
 

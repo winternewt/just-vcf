@@ -9,6 +9,14 @@ from dotenv import dotenv_values, find_dotenv
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 
+@pytest.fixture(autouse=True)
+def isolated_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Loader cache under a temporary directory, never the user's real cache."""
+    path = tmp_path_factory.mktemp("cache")
+    monkeypatch.setenv("JUST_VCF_CACHE_DIR", str(path))
+    return path
+
+
 @pytest.fixture(scope="session")
 def samples_dir() -> Path:
     """`JUST_VCF_SAMPLES_DIR`: the environment wins, an empty value included; else the repo `.env`.

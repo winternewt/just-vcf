@@ -198,6 +198,7 @@ are read from env vars with sensible defaults, documented in `.env.template`, an
 | Variable | Default | Meaning |
 |---|---|---|
 | `JUST_VCF_SAMPLES_DIR` | unset | directory of real genomes for opt-in tests and dogfooding; tests skip without it |
+| `JUST_VCF_CACHE_DIR` | platform user cache (`platformdirs`) | rewritten copies of VCFs polars-bio cannot read as they are; tests point it at `tmp_path` |
 
 **Timestamps: store ISO-8601 UTC, display local.** Never write a naive `YYYY-MM-DD HH:MM:SS`.
 

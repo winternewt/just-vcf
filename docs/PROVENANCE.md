@@ -12,5 +12,4 @@ before porting anything else from that repo.
 
 | just-vcf module | Source | Commit | Cut | Changed |
 |---|---|---|---|---|
-
-Nothing ported yet.
+| `just_vcf.loaders.vcf.scan` | just-prs `src/just_prs/vcf.py` `scan_vcf` / `_vcf_registration_key` | c424bec | eliot, `chunk_size`/`concurrent_fetches` overrides, `format_fields` | table name prefixed `just_vcf_`; the 0-based `start` it converts is checked against the file's first record on every load |

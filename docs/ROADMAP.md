@@ -17,7 +17,7 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout loader shipped 2026-09-30; VCF loader next) · Owner: unassigned
+Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; VCF dialects, CGI and vendor CSVs next) · Owner: unassigned
 
 **Shipped:** content-based detection. `just_vcf.sniff` and the declarative registry in
 `just_vcf.formats` (docs/FORMATS.md). Over the PGP-HMS participants, 8 of about 1,740 files stay unknown,

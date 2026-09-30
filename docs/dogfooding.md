@@ -38,3 +38,13 @@ Severity: medium · Found 2026-09-30, same sweep.
 Living DNA writes an indel's two allele sequences back to back (`CCA`, and up to 52 letters in one
 file). 83 rows in the one real file keep the text in `source_gt` with `gt_alleles` null. Splitting needs
 the site's alleles, from a chip manifest or from REF once RM3 reads the sequence.
+
+## F5 — The canonical sort costs most of a VCF load's memory
+
+Severity: high · Found 2026-09-30 loading a DeepVariant VCF of 6.4 million calls.
+
+Writing `calls` to parquet peaks at 11.2 GB RSS with `canonical_order` (SCHEMA.md Decision 11) and at
+3.5 GB without it (36 s). The sort has to materialise every column. A gVCF has about ten times the rows,
+so the sorted path does not scale. Options, not decided: sort per contig from an unsorted parquet
+spill; keep file order within a contig, which VCF already sorts by POS, and sort only contig blocks and
+POS ties; or drop the canonical order for VCF output. Each changes Decision 11, so it is the user's call.

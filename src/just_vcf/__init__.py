@@ -2,7 +2,7 @@
 
 from importlib.metadata import version
 
-from just_vcf.load import LOADABLE_FORMATS, Loaded, UnsupportedFormatError, load
+from just_vcf.loading import LOADABLE_FORMATS, Loaded, MultiSampleError, UnsupportedFormatError, load, vcf_samples
 from just_vcf.schema import (
     BLOCKS,
     CALLS,
@@ -31,6 +31,7 @@ __all__ = [
     "BlockKind",
     "CallsetType",
     "Loaded",
+    "MultiSampleError",
     "EvidenceBasis",
     "PhaseSetKind",
     "RefCheck",
@@ -41,4 +42,5 @@ __all__ = [
     "load",
     "open_payload",
     "sniff",
+    "vcf_samples",
 ]

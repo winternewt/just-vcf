@@ -7,7 +7,8 @@ import polars as pl
 import pytest
 
 from just_vcf.formats import get_spec
-from just_vcf.load import LOADABLE_FORMATS, Loaded, UnsupportedFormatError, load
+from just_vcf.loaders.rsid_table import FORMATS as RSID_FORMATS
+from just_vcf.loading import Loaded, UnsupportedFormatError, load
 from just_vcf.schema import CALLS, FACETS, canonical_chrom
 from just_vcf.sniff import sniff
 
@@ -37,7 +38,7 @@ def _load_text(tmp_path: Path, text: str | bytes, name: str = "genome.txt") -> L
     return load(path)
 
 
-@pytest.mark.parametrize("format_id", sorted(LOADABLE_FORMATS))
+@pytest.mark.parametrize("format_id", sorted(RSID_FORMATS))
 def test_every_loadable_example_round_trips(tmp_path: Path, format_id: str) -> None:
     spec = get_spec(format_id)
     rows = _data_rows(spec.example, spec.delimiter or "\t")
@@ -159,7 +160,7 @@ def test_archive_member_is_loaded_and_recorded(tmp_path: Path) -> None:
 
 
 def test_formats_without_a_loader_are_refused(tmp_path: Path) -> None:
-    for name, text in {"calls.vcf": get_spec("vcf").example, "notes.txt": "just some notes\n"}.items():
+    for name, text in {"var.tsv": get_spec("cgi_var").example, "notes.txt": "just some notes\n"}.items():
         path = tmp_path / name
         path.write_text(text)
         with pytest.raises(UnsupportedFormatError):

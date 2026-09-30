@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `just_vcf.load(path)` loads the 23andMe-layout genotype tables (23andMe tab and comma, Living DNA,
+  SelfDecode, PLINK `--recode 23`, Genes for Good measured and imputed, and the preamble-less rsid
+  tables) into the `facets`, `calls` and `blocks` frames. The genotype text is kept verbatim, no REF is
+  written, and rows that do not fit are dropped and counted in `Loaded.warnings`, one line per reason.
+  Other formats raise `UnsupportedFormatError`. Over the 503 PGP-HMS files of these formats: no
+  errors, 432 million rows. Schema 0.0.2 loosens two "never null" rules the real files broke.
 - `just_vcf.open_payload(sniffed)` reopens the payload `sniff` matched, replaying its compression and
   archive layers (nested zips and tar members included), so a loader reads exactly the bytes that were
   recognised.

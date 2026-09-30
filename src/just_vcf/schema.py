@@ -1,4 +1,4 @@
-"""The frames every loader emits: `facets`, `calls` and `blocks` (docs/SCHEMA.md, schema v0.0.1).
+"""The frames every loader emits: `facets`, `calls` and `blocks` (docs/SCHEMA.md).
 
 This module is the contract in code: column names, dtypes, the closed vocabularies, contig naming
 (SCHEMA.md Decision 7) and the canonical row order (Decision 11). It does no I/O. A test compares the
@@ -15,7 +15,7 @@ import polars as pl
 
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.1"
+SCHEMA_VERSION = "0.0.2"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"

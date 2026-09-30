@@ -2,6 +2,7 @@
 
 from importlib.metadata import version
 
+from just_vcf.load import LOADABLE_FORMATS, Loaded, UnsupportedFormatError, load
 from just_vcf.schema import (
     BLOCKS,
     CALLS,
@@ -23,17 +24,21 @@ __all__ = [
     "BLOCKS",
     "CALLS",
     "FACETS",
+    "LOADABLE_FORMATS",
     "SCHEMA_VERSION",
     "AbsenceMeans",
     "AssemblyLabelBasis",
     "BlockKind",
     "CallsetType",
+    "Loaded",
     "EvidenceBasis",
     "PhaseSetKind",
     "RefCheck",
     "Sniffed",
     "SniffOutcome",
+    "UnsupportedFormatError",
     "__version__",
+    "load",
     "open_payload",
     "sniff",
 ]

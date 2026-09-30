@@ -41,7 +41,8 @@ decision turned on. Delegation is for finding things, never for deciding them.
 Everything below is self-contained: no rule here requires following a link to know what you
 must not do. Links carry positive detail only.
 
-There are no `.claude/` skills, agents or workflows in this repo yet.
+There are no `.claude/` skills, agents or workflows in this repo yet. `docs/seats/` describes standing
+roles a session can take; `docs/seats/upstream-liaison.md` owns polars-bio and the layers under it.
 
 ---
 

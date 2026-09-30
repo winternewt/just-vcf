@@ -8,6 +8,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   seats work here. The triage loop is synced to gist revision `96b69533`: `wake-on-inbox.sh` and
   `arm-on-prompt.py` join `scripts/`, and a `UserPromptSubmit` hook in `.claude/settings.json` arms the
   watcher when a prompt cites the seat file.
+- The seats pattern and the UPPER_SNAKE doc-name rule went out to the onboarding gist
+  (`9b04fb4c`, revision `12382b8e`, 2026-09-30): §3.5, a new §3.8, a triage-seat note in §4, and the
+  template.
 - Every markdown file under `docs/` is named in UPPER_SNAKE: `dogfooding.md`, `previous_issues.md`,
   `polars-bio-pending-fixes.md` and `seats/upstream-liaison.md` were renamed, and links followed.
 - VCF `calls` and `blocks` are spilled to parquet in the cache (`JUST_VCF_CACHE_DIR/frames/`) and read

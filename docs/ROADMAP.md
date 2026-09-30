@@ -17,13 +17,13 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (detection shipped 2026-09-29, loaders next) · Owner: unassigned
+Severity: high · Status: in progress (detection shipped 2026-09-29; loaders under way against schema v0.0.1) · Owner: unassigned
 
 **Shipped:** content-based detection. `just_vcf.sniff` and the declarative registry in
 `just_vcf.formats` (docs/FORMATS.md). Over the PGP-HMS participants, 8 of about 1,740 files stay unknown,
 all prose or empty.
 
-**Next: per-format loaders on polars-bio**, blocked on RM8 (the frame schema), one frame out, driven by each `FormatSpec`. Start from the
+**Next: per-format loaders on polars-bio**, emitting the frames in docs/SCHEMA.md (schema v0.0.1), driven by each `FormatSpec`. Start from the
 contract gaps listed at the end of docs/FORMATS.md (versioned columns, section headers, 0-based CGI
 conversion, half-calls, chromosome outside the row) and from polars-bio pending fixes P1/P2. Port from
 just-prs `arrays.py`, `io_utils.py` and `vcf.py`; leave out the observed-allele-as-REF encoding (charter
@@ -107,30 +107,3 @@ so they are a behaviour reference, not a source) and port coordinate liftover fr
 New work: left-align, split multi-allelic sites, strand resolution (A/T and C/G), dedup, sort, and a
 writer that keeps FORMAT/GT (just-dna-lite's writer drops them).
 
-## RM8 — Output frame schema
-Severity: high · Status: drafted 2026-09-29 in docs/SCHEMA.md; checked against VCF 4.5 and the user's audit applied 2026-09-30 (Q1–Q5 closed, Q6 open); awaiting sign-off; blocks the RM2 loaders · Owner: user decides, agent drafts
-
-Before any per-format loader is written, draft a proposal for the one frame every loader emits, and get
-the user's sign-off. The charter (docs/CHARTER.md) is still an uncommitted draft, so the schema cannot
-be derived from it alone.
-
-The proposal must settle:
-- **Columns and dtypes** of the minimal shape (many formats in, one frame out), and which of them the
-  extended shape (facets per assembly, caller, phasing) adds.
-- **Coordinate naming.** 1-based `POS` at every public boundary; name each column for the convention it
-  holds so 0-based sources (CGI, Color) cannot leak through unconverted.
-- **Graded genotype evidence.** The user's words: a fuzzy scale from 0 (unknown) to PHRED-like
-  (confident), probably an n-vector of probabilities or log-likelihoods per position; never a binary
-  called/not-called. Say how array calls, imputed dosages (Oxford `.gen`, Genes for Good imputed),
-  half-calls (`1|.`) and CGI partial no-calls (`GC?`) map onto it.
-- **Absence semantics.** Where an absent site means unknown (arrays, imputed content, VCFs of array
-  data) versus weak evidence of reference (whole-genome callsets); likely a per-facet property.
-- **Provenance per row:** source file, format id, caller or vendor (the `source` detector in RM2),
-  build as stated versus inferred.
-- **GA4GH fit:** VRS allele ids as the join key (withheld when non-conformant), seqcol for assembly
-  identity.
-- **Multi-caller files:** PGP merges carry the caller in INFO/SF, not per sample column
-  (docs/PGP_HMS.md).
-
-Inputs: the "Contract gaps" list at the end of docs/FORMATS.md, RM2, docs/polars-bio-pending-fixes.md
-(P1: undeclared INFO/FORMAT keys are dropped), and the charter draft's invariants.

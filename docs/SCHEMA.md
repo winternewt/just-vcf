@@ -1,7 +1,8 @@
 # Frame schema: proposal (RM8)
 
-Status: **draft, awaiting the user's sign-off.** Nothing here is implemented. Every per-format loader
-(RM2) emits the frames described below, so the loaders wait for this document to be settled.
+Status: **signed off 2026-09-30 as schema v0.0.1.** Every per-format loader (RM2) emits the frames
+described below. Pieces found missing while building are added here as they come up, and each change
+bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
 The charter (docs/CHARTER.md) is itself still a draft, so each decision below cites the charter
 invariant it leans on. If the charter changes, those decisions are the ones to reopen.
@@ -478,7 +479,7 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 (PSL keys) were settled on 2026-09-30 and are folded in above.
 
 
-## At a glance (all recommendations taken)
+## At a glance
 
 - Three frames: `facets` (one row per facet), `calls` (one row per site per facet), `blocks` (reference
   and no-call intervals, for formats that have them).

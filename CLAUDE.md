@@ -432,6 +432,10 @@ same applies when the user corrects a preference: it goes below, in their words,
   VRS ids and seqcol, over the earlier pick of just-dna-format (SNV-only, GRCh38-only). A heavy
   dependency that covers GRCh37, T2T and indels beats a light one that doesn't.
 
+- 2026-09-30, schema: "lets keep schema as it is now and switch to building - we'll find out if some
+  pieces are missing in progress. So, like v0.0.1 signoff". docs/SCHEMA.md is signed off as v0.0.1.
+  Build against it; fix gaps in it as the loaders expose them, rather than redesigning up front.
+
 ## 11. Learned workspace facts
 
 - Real genomes live under `/data/genomes/<person>/`, all private. What is there by kind:

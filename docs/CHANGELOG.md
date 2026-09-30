@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `just_vcf.schema` holds the frame contract of docs/SCHEMA.md v0.0.1: the `FACETS`, `CALLS` and
+  `BLOCKS` schemas, the closed vocabularies as enums, canonical contig names (`chrM`/`M` → `MT`, array
+  codes 23–26, `25` kept as `XY`) and the canonical row order. A test fails when the schema tables in
+  the doc and the code disagree.
 - `just_vcf.sniff(path)` recognises an input file from its content: it peels gzip/BGZF, bz2, xz, zip
   and tar layers by magic bytes, reads a bounded head and matches a declarative format registry
   (`just_vcf.formats`). The answer says which negative it is when nothing matched: unknown, unreadable

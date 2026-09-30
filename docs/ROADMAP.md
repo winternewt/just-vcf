@@ -9,8 +9,8 @@ Active items only, newest decisions first. Shipped items move to
 ## RM1 — Final shape and plan
 Severity: blocker · Status: charter drafted, not signed · Owner: user
 
-The shape as the user described it on 2026-09-28 is written into the uncommitted draft
-`docs/CHARTER.md`. The frame is the product (Arrow/Polars, CompoSeq-style). There is a minimal
+The shape as the user described it on 2026-09-28 is written into the draft
+`docs/CHARTER_DRAFT.md`, committed so work can build against it and edited directly until signed off. The frame is the product (Arrow/Polars, CompoSeq-style). There is a minimal
 many-in/one-out shape and an extended shape of per-person facets (assemblies, callers, phasings,
 coverage) with graded evidence, provenance, concordance and a graph. It is GA4GH first: VRS through
 gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM6 follows from it.

@@ -4,7 +4,7 @@ Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.3.** Every per-format
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
-The charter (docs/CHARTER.md) is itself still a draft, so each decision below cites the charter
+The charter (docs/CHARTER_DRAFT.md) is itself still a draft, so each decision below cites the charter
 invariant it leans on. If the charter changes, those decisions are the ones to reopen.
 
 Each decision lists its options with what each one costs, and a recommendation. The recommended

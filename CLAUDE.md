@@ -17,9 +17,13 @@ Obligatory. Read them yourself. **Do not delegate a document you are about to ju
 against** — a subagent returns a summary, and a summary of a rule drops the qualifier the
 decision turned on. Delegation is for finding things, never for deciding them.
 
-1. **docs/CHARTER.md** — the durable charter. What this project is, what it will never do, the
-   invariants every release upholds. When a plan conflicts with it, the charter wins. An audit that has
-   not read it is incomplete. It is self-contained and names no other document; navigation lives here.
+1. **docs/CHARTER_DRAFT.md** — the charter, still a draft. What this project is, what it will never do,
+   the invariants every release upholds. When a plan conflicts with it, the charter wins. An audit that
+   has not read it is incomplete. It is self-contained and names no other document; navigation lives
+   here. **While it is a draft it is edited directly, with no amendment procedure**: the repo is at an
+   embryo stage and the charter is not crystallized yet. It becomes `docs/CHARTER.md`, and from then on
+   amendments go through a procedure, only when the user signs it off. Edits to it are still the user's
+   call, never an agent's own initiative.
 2. **docs/ROADMAP.md** — active-only, forward-only. One `## RMn — name` section per *open* item with a
    severity/status/owner line. Claim new ids with `scripts/item-next.py`, never by grepping (§8).
 3. **docs/CHANGELOG.md** — what actually shipped, newest first.
@@ -451,6 +455,11 @@ same applies when the user corrects a preference: it goes below, in their words,
 - 2026-09-30, schema: "lets keep schema as it is now and switch to building - we'll find out if some
   pieces are missing in progress. So, like v0.0.1 signoff". docs/SCHEMA.md is signed off as v0.0.1.
   Build against it; fix gaps in it as the loaders expose them, rather than redesigning up front.
+
+- 2026-09-30, charter: "charter is uncommited draft intrentionally at this step. Maybe correct thing is
+  to actually rename commit CHAPTER_DRAFT.md, with the notion that it doesn't require whole amendment
+  procedure. Repo is at embryo stage, crystallizing chapter at this point is a bit premature." It is
+  committed as `docs/CHARTER_DRAFT.md` and edited directly until the user signs it off.
 
 - 2026-09-30, doc names: "upper_snake to all, and convention to onboarding gist". Every `docs/`
   markdown file is UPPER_SNAKE, seat files included; the onboarding gist's template carries the same rule.

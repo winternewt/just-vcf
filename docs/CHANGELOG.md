@@ -4,6 +4,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The charter is committed as `docs/CHARTER_DRAFT.md`. While it is a draft it is edited directly, with
+  no amendment procedure; it becomes `docs/CHARTER.md` when the user signs it off.
 - A triage seat (`docs/seats/TRIAGE.md`) owns the consumer inbox, and `docs/seats/README.md` sets out how
   seats work here. The triage loop is synced to gist revision `96b69533`: `wake-on-inbox.sh` and
   `arm-on-prompt.py` join `scripts/`, and a `UserPromptSubmit` hook in `.claude/settings.json` arms the

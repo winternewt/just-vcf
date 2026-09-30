@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A triage seat (`docs/seats/TRIAGE.md`) owns the consumer inbox, and `docs/seats/README.md` sets out how
+  seats work here. The triage loop is synced to gist revision `96b69533`: `wake-on-inbox.sh` and
+  `arm-on-prompt.py` join `scripts/`, and a `UserPromptSubmit` hook in `.claude/settings.json` arms the
+  watcher when a prompt cites the seat file.
 - Every markdown file under `docs/` is named in UPPER_SNAKE: `dogfooding.md`, `previous_issues.md`,
   `polars-bio-pending-fixes.md` and `seats/upstream-liaison.md` were renamed, and links followed.
 - VCF `calls` and `blocks` are spilled to parquet in the cache (`JUST_VCF_CACHE_DIR/frames/`) and read

@@ -5,17 +5,39 @@ This repo runs the document-as-inbox triage loop published at
 the full pattern: the algorithm (Step 0 through Step 5), the five-verdict routing, and every gotcha
 found by running it. This file holds only what is local to just-vcf.
 
-**Adopted through gist revision `b063b65ef777cf06002e6fa14953d6503692d1f1`, 2026-09-28.** That line is
-the baseline. Update it whenever an adoption lands.
+The session that runs this loop is the **triage seat**, primed from
+[seats/TRIAGE.md](seats/TRIAGE.md). That file says what the seat owns, how it starts and what it never
+does; this one holds the local rules the pass reads.
+
+**Adopted through gist revision `96b6953362bb4854e05db04334086c43c9eeb170`, 2026-09-30.** That line is
+the baseline. Update it whenever an adoption lands. This revision brought the Claude Code arming,
+`wake-on-inbox.sh` and `arm-on-prompt.py`; the four existing scripts were identical to it apart from our
+path defaults. Before it, `b063b65ef777cf06002e6fa14953d6503692d1f1`, adopted 2026-09-28.
 
 ## Local parameterization
 
 - Inbox `docs/FEEDBACK.md`, history `docs/FEEDBACK_HISTORY.md`, item prefix `S`.
 - Tracked items are roadmap entries, `RM<n>` in `docs/ROADMAP.md`, claimed with `scripts/item-next.py`.
-- All four scripts live in `scripts/`. Their defaults are derived from the script's own location, not
-  from the working directory. That is the only change from the gist copies and must not be overwritten
-  when syncing.
+- All six scripts live in `scripts/`. The defaults of `triage-state.py`, `triage-archive.py`,
+  `item-next.py` and `watch-inbox.sh` are derived from the script's own location, not from the working
+  directory, and the watcher's `RUNBOOK` default is `docs/seats/TRIAGE.md`. Those are the only changes
+  from the gist copies and must not be overwritten when syncing. `wake-on-inbox.sh` and
+  `arm-on-prompt.py` are byte-identical to the gist.
 - The watcher guards branch `main`.
+
+## Arming the watcher
+
+`.claude/settings.json` registers `arm-on-prompt.py` as a `UserPromptSubmit` hook with
+`RUNBOOK=docs/seats/TRIAGE.md`. A prompt that contains that path, in any wording, starts
+`wake-on-inbox.sh` detached; it runs the watcher with no harness deadline and posts each settle into the
+session through its inbox socket. `RUNBOOK` passes through to the watcher, so its line reads
+`… triage per docs/seats/TRIAGE.md`, and the hook ignores anything starting `[watcher ` so a watcher
+post never re-arms it. Citing this file instead of the seat file arms nothing: the seat file is the one
+entry point.
+
+The arming is checked by its canary, not by a test: an `[watcher …] armed` message must arrive in the
+turn that armed it. If it does not, the socket message format changed, and the fallback is the one-shot
+arming in the gist's `TRIAGE_LOOP.md` §2. Never start the wrapper from the agent; a hook arms it.
 
 ## Syncing with the gist
 

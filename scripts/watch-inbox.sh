@@ -55,7 +55,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 FILE=${FILE:-${INBOX:-$HERE/../docs/FEEDBACK.md}}
 PYTHON=${PYTHON:-python3}
 LEDGER=${LEDGER:-$HERE/triage-state.py}
-RUNBOOK=${RUNBOOK:-docs/CONSUMER_TRIAGE_LOOP.md}
+RUNBOOK=${RUNBOOK:-docs/seats/TRIAGE.md}
 COOLDOWN=${COOLDOWN:-150}
 POLL=${POLL:-10}
 BRANCH=${BRANCH-main}          # `-`, not `:-`: BRANCH= is an explicit "never pause", not an unset

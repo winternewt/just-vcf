@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "RUNBOOK=docs/seats/TRIAGE.md python3 \"$CLAUDE_PROJECT_DIR/scripts/arm-on-prompt.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

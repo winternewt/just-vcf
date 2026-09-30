@@ -164,8 +164,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             "FORMAT keys and the FILTER, ALT and contig lines"
         )
         path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache, structural_only=True)
-        records = vcf.read_records(path, header, chosen, data[0] if data else None)
+        first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
+        records = vcf.read_records(path, header, chosen, first)
         stats = vcf.scan_stats(records)
+        if left_out := vcf.pos_zero_left_out(cache):
+            warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
     calls, blocks, row_warnings = vcf.to_rows(records, header, stats)
     warnings += row_warnings
     if (header.version_tuple or (0, 0)) >= (4, 4):

@@ -262,3 +262,14 @@ def test_duplicate_declarations_are_dropped_in_the_retry_copy(tmp_path: Path) ->
     loaded = load(write(tmp_path, vcf_text(records, extra_meta=extra)))
     assert loaded.calls.collect()["filters"].to_list() == [["LowQual"]]
     assert any("refused the file" in w for w in loaded.warnings)
+
+
+def test_records_at_pos_zero_are_left_out_and_counted(tmp_path: Path) -> None:
+    records = [
+        "NA\t0\trs2828663\tN\tA,C\t.\t.\t.\tGT\t1/1",
+        "NA\t0\tkgp9608035\tN\tA,G\t.\t.\t.\tGT\t1/2",
+        "1\t100\trs1\tA\tG\t.\t.\t.\tGT\t0/1",
+    ]
+    loaded = load(write(tmp_path, vcf_text(records)))
+    assert loaded.calls.collect()["ids"].to_list() == [["rs1"]]
+    assert "2 record(s) at POS 0 left out: polars-bio cannot read them" in loaded.warnings

@@ -80,3 +80,12 @@ them.
 Mitigation: when registration is refused, the loader retries once on a cached copy whose header keeps
 only `##fileformat`, INFO, FORMAT, FILTER, ALT and contig lines, and warns. The full header is still read
 by the loader's own parser for the facet. Not filed.
+
+## P9 — A record at POS 0 fails the scan
+
+Seen with polars-bio 0.36 (2026-09-30) on Illumina `GenotypingToVCF` exports, which put unmapped probes
+at `CHROM NA`, `POS 0`, `REF N`: collecting fails with `Execution error: Missing variant start`. VCF 4.5
+allows POS 0 (a telomere).
+
+Mitigation: on that error the loader reads a copy without the POS 0 records and says how many were left
+out. Not filed.

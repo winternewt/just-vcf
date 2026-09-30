@@ -208,13 +208,33 @@ def readable_path(
                 f'Description="Declared by just-vcf: used by the rows, missing from the header">\n'.encode()
             )
         out.write(("#" + "\t".join(header.columns) + "\n").encode())
-        for raw in source:
-            if not raw.startswith(b"#"):
+        if structural_only:
+            # polars-bio refuses POS 0 ("Missing variant start"); Illumina array exports put unmapped
+            # probes there (CHROM NA). They are left out of the copy and counted.
+            left_out = 0
+            for raw in source:
+                if raw.startswith(b"#"):
+                    continue
+                fields = raw.split(b"\t", 2)
+                if len(fields) > 1 and fields[1] == b"0":
+                    left_out += 1
+                    continue
                 out.write(raw)
-                break
-        shutil.copyfileobj(source, out, 16 << 20)
+            (cache / "pos_zero_left_out").write_text(str(left_out))
+        else:
+            for raw in source:
+                if not raw.startswith(b"#"):
+                    out.write(raw)
+                    break
+            shutil.copyfileobj(source, out, 16 << 20)
     done.touch()
     return target
+
+
+def pos_zero_left_out(cache: Path) -> int:
+    """Records at POS 0 left out of the structural copy under `cache`."""
+    marker = cache / "structural" / "pos_zero_left_out"
+    return int(marker.read_text()) if marker.exists() else 0
 
 
 def scan(path: Path, info_fields: list[str], format_fields: list[str], sample: str | None) -> pl.LazyFrame:
@@ -260,7 +280,7 @@ def _collect(plan: pl.LazyFrame) -> pl.DataFrame:
     try:
         return plan.collect(engine="streaming")
     except pl.exceptions.ComputeError as err:
-        if "Error reading" in str(err) and "field" in str(err):
+        if ("Error reading" in str(err) and "field" in str(err)) or "Missing variant start" in str(err):
             raise HeaderRefused(str(err).splitlines()[-1][-160:]) from err
         raise
 

@@ -30,6 +30,21 @@ number,title,state,body,labels,closedAt,createdAt,url > issues.json` (likewise `
 other two repos). The dumps hold bodies only; a maintainer's "by design" usually lives in the comments,
 so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before relying on it.
 
+## Verdicts at a glance (2026-09-30)
+
+| Item | Verdict | File at |
+|---|---|---|
+| P1 undeclared keys dropped | real bug, `physical_exec.rs:1849` `continue` | datafusion-bio-formats |
+| P2 `##fileformat` not first | **our doc was wrong** — spec says "must be the first line" (`VCFv4.5.tex:142`); refusal is correct | don't file |
+| P3 SV `end` one short | real bug in noodles `variant_end` (`record.rs:104`); spec example confirms END = POS+\|SVLEN\|; negative SVLEN also errors | zaeleus/noodles |
+| P4 leading `\|` dropped | noodles parses it; dbf discards it (`if !first`, `:1861`/`:2497`) | datafusion-bio-formats |
+| P5 `fmt_DP` vs `DP` | intended (dbf #160, pb #354), undocumented for users; related open: pb #394, dbf #258 | polars-bio (docs) |
+| P6a "table already exists" | reproduced; pb has a uuid lease fix but only for Cool/MSA (`io.py:5010`) | polars-bio |
+| P6b (new) | `register_vcf` returns 0-based despite 1-based docstring + global; reproduced 99 vs 100 | polars-bio |
+| P7 no `format_fields`/`samples` | never existed; `register_bcf` got them in #435 — ask parity | polars-bio |
+| P8 backslash in header | spec-correct strictness | low priority, don't file |
+| P9 POS 0 | noodles `None` by design (noodles #343); dbf turns it into the failure | datafusion-bio-formats |
+
 ## P1 — INFO and FORMAT keys missing from the header are dropped silently
 
 Seen with polars-bio 0.36, while declaring the VCF formats (2026-09-29). A key that a row uses but the

@@ -23,6 +23,9 @@ never trusted: PGP-HMS shows them wrong in both directions (PGP_HMS.md).
    `build=None`; hints naming different builds also mean `None`, with a warning. Contig-length voting
    belongs to the loader, not the sniffer.
 
+`open_payload(result)` reopens a detected result's payload for a loader, replaying the same layers
+and members.
+
 `Sniffed` is truthy only for `detected`. The other outcomes are different negatives: `unknown`
 (readable, nothing matched, or empty, or binary), `unreadable` (the container could not be opened,
 with `reason`) and `not_variant_data` (recognised, holds no calls, with `kind`).

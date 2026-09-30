@@ -15,7 +15,7 @@ from just_vcf.schema import (
     PhaseSetKind,
     RefCheck,
 )
-from just_vcf.sniff import Sniffed, SniffOutcome, sniff
+from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
 
 __version__ = version("just-vcf")
 
@@ -34,5 +34,6 @@ __all__ = [
     "Sniffed",
     "SniffOutcome",
     "__version__",
+    "open_payload",
     "sniff",
 ]

@@ -11,7 +11,9 @@ import zlib
 from pathlib import Path
 
 from just_vcf.formats import get_spec
-from just_vcf.sniff import HEAD_BYTE_CAP, Sniffed, SniffOutcome, sniff
+import pytest
+
+from just_vcf.sniff import HEAD_BYTE_CAP, Sniffed, SniffOutcome, open_payload, sniff
 
 TWENTYTHREE = get_spec("23andme").example
 VCF = get_spec("vcf").example
@@ -226,3 +228,57 @@ def test_cr_only_line_endings_split_into_lines(tmp_path: Path) -> None:
     """Classic Mac exports end lines with a bare CR; the data shape must still see separate lines."""
     result = sniff(_write(tmp_path / "mac.txt", TWENTYTHREE.replace("\n", "\r").encode()))
     assert (result.format, result.build) == ("23andme", "GRCh37")
+
+
+def _payload(result: Sniffed) -> bytes:
+    with open_payload(result) as handle:
+        return handle.read()
+
+
+def test_open_payload_replays_every_layer(tmp_path: Path) -> None:
+    payload = VCF.encode() + b"".join(b"1\t%d\t.\tG\tA\t50\tPASS\t.\tGT\t0/1\n" % (900000 + i) for i in range(2000))
+    single = {
+        "plain": payload,
+        "gzip": gzip.compress(payload),
+        "bgzf": _bgzf_block(payload) + _bgzf_block(b""),
+        "bz2": bz2.compress(payload),
+        "xz": lzma.compress(payload),
+    }
+    for layer, data in single.items():
+        assert _payload(sniff(_write(tmp_path / f"{layer}.vcf", data))) == payload, layer
+
+    zipped = tmp_path / "calls.zip"
+    with zipfile.ZipFile(zipped, "w") as zf:
+        zf.writestr("notes.txt", b"not variant data\n")
+        zf.writestr("inner/calls.vcf.gz", gzip.compress(payload))
+    result = sniff(zipped)
+    assert (result.layers, result.member) == (("zip", "gzip"), "inner/calls.vcf.gz")
+    assert _payload(result) == payload
+
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as zf:
+        zf.writestr("genome.txt", TWENTYTHREE)
+    outer = tmp_path / "outer.zip"
+    with zipfile.ZipFile(outer, "w") as zf:
+        zf.writestr("export.zip", inner.getvalue())
+    result = sniff(outer)
+    assert (result.layers, result.member) == (("zip", "zip"), "export.zip!genome.txt")
+    assert _payload(result) == TWENTYTHREE.encode()
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for name, data in (("small.vcf", VCF.encode()), ("large.vcf", payload)):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    result = sniff(_write(tmp_path / "bundle.tar.gz", gzip.compress(buf.getvalue())))
+    assert result.member == "large.vcf"
+    assert _payload(result) == payload
+    assert _payload(result.members[1]) == VCF.encode()
+
+
+def test_open_payload_refuses_a_result_that_was_not_detected(tmp_path: Path) -> None:
+    result = sniff(_write(tmp_path / "notes.txt", b"just some notes\n"))
+    assert result.outcome is SniffOutcome.UNKNOWN
+    with pytest.raises(ValueError, match="nothing to open"):
+        _payload(result)

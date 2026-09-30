@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `just_vcf.open_payload(sniffed)` reopens the payload `sniff` matched, replaying its compression and
+  archive layers (nested zips and tar members included), so a loader reads exactly the bytes that were
+  recognised.
 - `just_vcf.schema` holds the frame contract of docs/SCHEMA.md v0.0.1: the `FACETS`, `CALLS` and
   `BLOCKS` schemas, the closed vocabularies as enums, canonical contig names (`chrM`/`M` → `MT`, array
   codes 23–26, `25` kept as `XY`) and the canonical row order. A test fails when the schema tables in

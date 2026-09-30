@@ -14,8 +14,8 @@ import lzma
 import re
 import tarfile
 import zipfile
-from collections.abc import Callable
-from contextlib import ExitStack
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from enum import Enum
 from pathlib import Path
 from typing import BinaryIO
@@ -152,6 +152,58 @@ def sniff(path: Path | str) -> Sniffed:
         result = Sniffed(path=path, outcome=SniffOutcome.UNREADABLE, reason=f"{type(err).__name__}: {err}")
     logger.debug("sniffed %s: %s %s", path, result.outcome.value, result.format or result.kind or result.reason)
     return result
+
+
+@contextmanager
+def open_payload(result: Sniffed) -> Iterator[BinaryIO]:
+    """The decompressed payload `result` describes, as a stream, for a loader to read in full.
+
+    Replays `result.layers` from the outside in and opens `result.member` inside each archive, so
+    the bytes are exactly the ones `sniff` matched. Only a detected result has a payload to open.
+    """
+    if not result:
+        raise ValueError(f"{result.path}: nothing to open, sniff outcome is {result.outcome.value}")
+    members = result.member.split("!") if result.member else []
+    with ExitStack() as stack:
+        handle: BinaryIO = stack.enter_context(result.path.open("rb"))
+        for depth, layer in enumerate(result.layers):
+            if layer in ("gzip", "bgzf"):
+                handle = stack.enter_context(gzip.GzipFile(fileobj=handle))
+            elif layer == "bz2":
+                handle = stack.enter_context(bz2.BZ2File(handle))
+            elif layer == "xz":
+                handle = stack.enter_context(lzma.LZMAFile(handle))
+            elif layer == "zip":
+                handle = _open_zip_member(stack, handle, members.pop(0), nested=depth > 0)
+            elif layer == "tar":
+                handle = _open_tar_member(stack, handle, members.pop(0))
+            else:
+                raise ValueError(f"unknown layer {layer!r}")
+        yield handle
+
+
+def _open_zip_member(stack: ExitStack, handle: BinaryIO, name: str, nested: bool) -> BinaryIO:
+    if nested:
+        buffered = handle.read(NESTED_ZIP_CAP + 1)
+        if len(buffered) > NESTED_ZIP_CAP:
+            raise OSError("nested zip too large to buffer")
+        handle = io.BytesIO(buffered)
+    zf = stack.enter_context(zipfile.ZipFile(handle))
+    info = zf.getinfo(name)
+    if info.compress_type in _ZIP_METHODS:
+        raise OSError(f"zip compression {_ZIP_METHODS[info.compress_type]} is not supported")
+    return stack.enter_context(zf.open(info))
+
+
+def _open_tar_member(stack: ExitStack, handle: BinaryIO, name: str) -> BinaryIO:
+    tf = stack.enter_context(tarfile.open(fileobj=handle, mode="r|"))
+    for info in tf:
+        if info.name == name and info.isfile():
+            extracted = tf.extractfile(info)
+            if extracted is None:
+                break
+            return extracted
+    raise OSError(f"tar member {name!r} not found")
 
 
 def _sniff_layer(path: Path, opener: Opener, layers: tuple[str, ...], member: str | None, depth: int) -> Sniffed:

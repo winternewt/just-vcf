@@ -29,6 +29,7 @@ import polars as pl
 import polars_bio as pb
 from polars_bio.sql import SQL
 
+from just_vcf.bgzf import BgzfWriter
 from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ _SV_LENGTH_TYPES = ("DEL", "DUP", "INV", "CNV")
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 3
+REWRITE_VERSION = 4
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused."""
 
 _HEADER_READ_CAP = 64 << 20
@@ -178,7 +179,8 @@ def readable_path(
     """A path polars-bio can read: the file itself when possible, else a rewritten copy under `cache`.
 
     The copy is kept, because the frames `load` returns are lazy and read it when collected. It is
-    named after the source's digest and reused when complete. `structural_only` keeps only the meta
+    named after the source's digest and reused when complete, and written as BGZF: about a quarter of
+    the plain size, and polars-bio reads it as fast as plain text. `structural_only` keeps only the meta
     lines polars-bio needs and the INFO and FORMAT keys the frames carry, for a file it refused (P7, P8):
     polars-bio skips a key its header does not declare (P1), so a malformed value in a key the frames
     do not carry is never parsed.
@@ -187,13 +189,13 @@ def readable_path(
         return path
     if structural_only:
         cache = cache / "structural"
-    target = cache / "input.vcf"
-    done = cache / "input.vcf.complete"
+    target = cache / "input.vcf.gz"
+    done = cache / "input.vcf.gz.complete"
     if done.exists():
         return target
     cache.mkdir(parents=True, exist_ok=True)
     declared: set[tuple[str, str]] = set()
-    with opener() as source, target.open("wb") as out:
+    with opener() as source, target.open("wb") as raw, BgzfWriter(raw) as out:
         out.write(f"##fileformat={header.version or 'VCFv4.2'}\n".encode())
         for line in header.meta:
             if line.startswith("##fileformat=") or (structural_only and not _keep_in_structural_copy(line)):

@@ -4,6 +4,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The loader's cached copy of a VCF polars-bio cannot read in place (bz2, zip, tar, a repaired header) is
+  written as BGZF instead of plain text: about a quarter of the size and as fast to read.
 - Schema 0.0.3: `gq` is `u16`; Illumina gVCF blocks (`ALT .` with `INFO/END`) go to `blocks`; GP's
   scale is read from values that settle it, whatever the header version says. Found by loading the 124
   PGP-HMS VCFs: 1.5 billion rows, no `end_pos` before `pos`, no genotype index out of range. A cached

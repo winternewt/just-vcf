@@ -49,15 +49,6 @@ so the sorted path does not scale. Options, not decided: sort per contig from an
 spill; keep file order within a contig, which VCF already sorts by POS, and sort only contig blocks and
 POS ties; or drop the canonical order for VCF output. Each changes Decision 11, so it is the user's call.
 
-## F6 — A bz2 or zip VCF is copied out as plain text first
-
-Severity: medium · Found 2026-09-30 by loading the 124 PGP-HMS VCFs.
-
-polars-bio reads plain, gzip and BGZF VCF only, so any other container is decompressed into the loader
-cache before reading. A 1.27 GB bz2 Veritas gVCF became a 14 GB plain copy, and the load took 19 minutes.
-Writing the copy as BGZF would shrink the cache by about ten times. Not fixed yet: it needs a BGZF writer
-(pysam is an extra, not core).
-
 ## F7 — Two VCF shapes `sniff` accepts but the loader cannot read
 
 Severity: low · Found 2026-09-30, same sweep.

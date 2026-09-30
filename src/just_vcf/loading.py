@@ -24,7 +24,9 @@ from just_vcf.schema import (
     AbsenceMeans,
     AssemblyLabelBasis,
     CallsetType,
+    canonical_chrom,
     canonical_order,
+    canonical_order_per_contig,
     contig_map,
     empty,
 )
@@ -34,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 LOADABLE_FORMATS: frozenset[str] = rsid_table.FORMATS | vcf.FORMATS
 """Format ids `load` can read. Grows as loaders land."""
+
+_SPILL_ROW_GROUP = 200_000
+"""Rows per parquet row group in a spill. Small enough that a contig filter skips most of the file."""
 
 _IMPUTED_FORMATS = frozenset({"genes_for_good_imputed"})
 _UNKNOWN_CALLSET_FORMATS = frozenset({"plink_23"})
@@ -198,10 +203,21 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     for warning in warnings:
         logger.warning("%s: %s", facet_id, warning)
     calls_frame, blocks_frame = vcf.to_frames(calls, blocks, facet_id)
+    # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
+    # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
+    spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
+    spill.mkdir(parents=True, exist_ok=True)
+    pl.collect_all(
+        [
+            calls_frame.sink_parquet(spill / "calls.parquet", row_group_size=_SPILL_ROW_GROUP, lazy=True),
+            blocks_frame.sink_parquet(spill / "blocks.parquet", row_group_size=_SPILL_ROW_GROUP, lazy=True),
+        ]
+    )
+    contigs = [canonical_chrom(name) for name in stats["chroms"]]
     return Loaded(
         facets=facets,
-        calls=canonical_order(calls_frame),
-        blocks=canonical_order(blocks_frame),
+        calls=canonical_order_per_contig(pl.scan_parquet(spill / "calls.parquet"), contigs),
+        blocks=canonical_order_per_contig(pl.scan_parquet(spill / "blocks.parquet"), contigs),
         warnings=tuple(warnings),
     )
 

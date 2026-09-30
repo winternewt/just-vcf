@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- VCF `calls` and `blocks` are spilled to parquet in the cache (`JUST_VCF_CACHE_DIR/frames/`) and read
+  back one contig at a time in canonical order, so a sorted load needs the memory of one contig, not of
+  the file: 3.6 GB instead of 11.2 GB for a 6.4M-call VCF. `load` now makes that pass itself.
 - The loader's cached copy of a VCF polars-bio cannot read in place (bz2, zip, tar, a repaired header) is
   written as BGZF instead of plain text: about a quarter of the size and as fast to read.
 - Schema 0.0.3: `gq` is `u16`; Illumina gVCF blocks (`ALT .` with `INFO/END`) go to `blocks`; GP's

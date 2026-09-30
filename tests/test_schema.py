@@ -148,3 +148,21 @@ def test_conform_refuses_a_position_past_u32() -> None:
 def test_conform_refuses_unknown_columns() -> None:
     with pytest.raises(ValueError, match="not in the schema"):
         conform(pl.LazyFrame({"facet_id": ["f"], "stray": [1]}), CALLS)
+
+
+def test_per_contig_order_equals_the_global_order(tmp_path: Path) -> None:
+    from just_vcf.schema import canonical_order_per_contig
+
+    rng = random.Random(11)
+    contigs = ["1", "2", "10", "X", "MT", "XY", "chrUn_KI270302v1", "GL000192.1"]
+    rows = [
+        ("f", rng.choice(contigs), rng.randrange(1, 50), rng.choice([None, 60, 61]), rng.choice([None, "A", "C"]),
+         rng.choice([None, ["G"], ["T"], ["G", "T"]]))
+        for _ in range(3000)
+    ]
+    frame = _calls([(f, c, p, None if e is None else max(e, p), r, a) for f, c, p, e, r, a in rows])
+    spill = tmp_path / "calls.parquet"
+    frame.sink_parquet(spill, row_group_size=100)
+    expected = canonical_order(frame).collect()
+    got = canonical_order_per_contig(pl.scan_parquet(spill), sorted({r[1] for r in rows})).collect()
+    assert got.equals(expected)

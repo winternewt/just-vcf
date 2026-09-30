@@ -456,5 +456,8 @@ same applies when the user corrects a preference: it goes below, in their words,
   participant uploads can carry real names in file names.
 - `../just-prs/data/input/vcf/newton_winter.vcf` is BGZF despite the `.vcf` name.
 - Public WGS samples used by the sibling suites are on Zenodo, records 18370498 and 19487816.
+- `data/interim/` holds a greppable mirror of the VCF stack under polars-bio: clones of polars-bio,
+  datafusion-bio-formats and the pinned noodles fork, the VCF 4.2/4.3/4.5 spec sources, and JSON dumps
+  of all three issue trackers. Pins and the refresh command are in `docs/polars-bio-pending-fixes.md`.
 - PGP-HMS publishes consented 23andMe exports at
   `https://my.pgp-hms.org/public_genetic_data?data_type=23andMe`; the leecher (roadmap) fetches them.

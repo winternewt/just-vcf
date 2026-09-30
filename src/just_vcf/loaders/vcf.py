@@ -189,11 +189,17 @@ def readable_path(
     if done.exists():
         return target
     cache.mkdir(parents=True, exist_ok=True)
+    declared: set[tuple[str, str]] = set()
     with opener() as source, target.open("wb") as out:
         out.write(f"##fileformat={header.version or 'VCFv4.2'}\n".encode())
         for line in header.meta:
             if line.startswith("##fileformat=") or (structural_only and not _keep_in_structural_copy(line)):
                 continue
+            key = re.match(r"^##(\w+)=<ID=([^,>]+)", line)
+            if structural_only and key:
+                if key.groups() in declared:
+                    continue
+                declared.add(key.groups())
             out.write(f"{line}\n".encode())
         for key in missing:
             number, kind = FORMAT_KEYS[key]
@@ -300,7 +306,21 @@ def read_records(path: Path, header: Header, sample: str | None, first_record: b
         for key in fmt:
             renames[f"fmt_{key}" if key in info else key] = f"fmt_{key}"
     frame = frame.rename({old: new for old, new in renames.items() if old in names})
-    present = set(frame.collect_schema().names())
+    schema = frame.collect_schema()
+    present = set(schema.names())
+    reshaped = []
+    for key, (number, _) in FORMAT_KEYS.items():
+        name = f"fmt_{key}"
+        if name not in present:
+            continue
+        is_list = isinstance(schema[name], pl.List)
+        if number == "1" and is_list:
+            # Declared with another Number (Platypus writes GQ as Number=.): keep the value, and count
+            # the rows where there was more than one (`scan_stats`).
+            reshaped += [pl.col(name).list.first().alias(name), (pl.col(name).list.len() > 1).alias(f"_multi_{key}")]
+        elif number != "1" and not is_list:
+            reshaped.append(pl.concat_list(pl.col(name)).alias(name))
+    frame = frame.with_columns(reshaped)
     return frame.with_columns(
         [pl.lit(None, dtype=_dtype(number, kind)).alias(f"fmt_{key}") for key, (number, kind) in FORMAT_KEYS.items() if f"fmt_{key}" not in present]
         + [pl.lit(None, dtype=pl.List(pl.Int32) if key == "SVLEN" else pl.Int32).alias(f"info_{key}") for key in INFO_KEYS if f"info_{key}" not in present]
@@ -329,6 +349,7 @@ def scan_stats(records: pl.LazyFrame) -> dict:
         # Reading GT makes polars-bio parse every sample field here, where a value it cannot parse
         # can still be retried (P7), rather than when the caller collects the frames.
         pl.col("fmt_GT").null_count().alias("gt_missing"),
+        *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith("_multi_")],
     )
     row = _collect(plan).row(0, named=True)
     row["chroms"] = sorted(row["chroms"] or [])
@@ -350,6 +371,10 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
         f"{stats[f'out_{key}']} {key} value(s) outside 0..{top} set to null"
         for key, top in _BOUNDED.items()
         if stats[f"out_{key}"]
+    ] + [
+        f"{count} {name.removeprefix('_multi_')} value(s) held more than one number; the first was kept"
+        for name, count in stats.items()
+        if name.startswith("_multi_") and count
     ]
     v44 = (header.version_tuple or (0, 0)) >= (4, 4)
     # The file's REF goes to `source_ref` only. `ref` is read from the assembly sequence or stays null

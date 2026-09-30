@@ -246,3 +246,19 @@ def test_header_polars_bio_refuses_is_retried_with_structural_lines(tmp_path: Pa
     loaded = load(write(tmp_path, vcf_text(records, extra_meta=extra)))
     assert loaded.calls.collect()["gt"].to_list() == [[0, 1]]
     assert any("refused the file" in w for w in loaded.warnings)
+
+
+def test_a_scalar_key_declared_as_a_list_keeps_its_value(tmp_path: Path) -> None:
+    extra = ('##FORMAT=<ID=GQ,Number=.,Type=Integer,Description="Platypus-style GQ">',)
+    records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT:GQ\t0/1:45", "1\t200\t.\tC\tT\t.\t.\t.\tGT:GQ\t0/1:12,30"]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=extra)))
+    assert loaded.calls.collect()["gq"].to_list() == [45, 12]
+    assert loaded.warnings == ("1 GQ value(s) held more than one number; the first was kept",)
+
+
+def test_duplicate_declarations_are_dropped_in_the_retry_copy(tmp_path: Path) -> None:
+    extra = ('##FILTER=<ID=LowQual,Description="one">', '##FILTER=<ID=LowQual,Description="two">')
+    records = ["1\t100\t.\tA\tG\t.\tLowQual\t.\tGT\t0/1"]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=extra)))
+    assert loaded.calls.collect()["filters"].to_list() == [["LowQual"]]
+    assert any("refused the file" in w for w in loaded.warnings)

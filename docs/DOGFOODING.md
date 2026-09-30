@@ -1,8 +1,8 @@
 # Dogfooding findings — open
 
 Quirks, bugs and gaps found by using just-vcf on real genomes. Each carries a stable `F#` id and
-moves to [previous_issues.md](previous_issues.md) when resolved here, or to
-`<upstream>-pending-fixes.md` when it needs an upstream change first.
+moves to [PREVIOUS_ISSUES.md](PREVIOUS_ISSUES.md) when resolved here, or to
+`<UPSTREAM>_PENDING_FIXES.md` when it needs an upstream change first.
 
 ## F1 — Deflate64 zips cannot be opened
 

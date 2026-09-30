@@ -23,7 +23,7 @@ decision turned on. Delegation is for finding things, never for deciding them.
 2. **docs/ROADMAP.md** — active-only, forward-only. One `## RMn — name` section per *open* item with a
    severity/status/owner line. Claim new ids with `scripts/item-next.py`, never by grepping (§8).
 3. **docs/CHANGELOG.md** — what actually shipped, newest first.
-4. **docs/dogfooding.md** — open findings from using the shipped surface for real work. Read it before
+4. **docs/DOGFOODING.md** — open findings from using the shipped surface for real work. Read it before
    touching the tool or API surface.
 5. **docs/FEEDBACK.md** — the consumer inbox. Empty means nothing is owed.
    `docs/FEEDBACK_HISTORY.md` holds the answered items; `docs/CONSUMER_TRIAGE_LOOP.md` is the runbook.
@@ -42,7 +42,7 @@ Everything below is self-contained: no rule here requires following a link to kn
 must not do. Links carry positive detail only.
 
 There are no `.claude/` skills, agents or workflows in this repo yet. `docs/seats/` describes standing
-roles a session can take; `docs/seats/upstream-liaison.md` owns polars-bio and the layers under it.
+roles a session can take; `docs/seats/UPSTREAM_LIAISON.md` owns polars-bio and the layers under it.
 
 ---
 
@@ -337,15 +337,18 @@ is mitigated here but still owed upstream, which legitimately appears in two.
 
 | File | Holds |
 |---|---|
-| `docs/dogfooding.md` | open quirks, bugs and UX gaps found by using the shipped surface |
-| `docs/previous_issues.md` | findings resolved **here**, each with its resolution and a code pointer |
-| `docs/<upstream>-pending-fixes.md` | findings needing an **upstream** change first (polars-bio is the likely one), each noting the mitigation already in place |
+| `docs/DOGFOODING.md` | open quirks, bugs and UX gaps found by using the shipped surface |
+| `docs/PREVIOUS_ISSUES.md` | findings resolved **here**, each with its resolution and a code pointer |
+| `docs/<UPSTREAM>_PENDING_FIXES.md` | findings needing an **upstream** change first (polars-bio is the likely one), each noting the mitigation already in place |
 
 ---
 
 ## 8. Docs and their lifecycle
 
 - **All new markdown goes in `docs/`** — the only exceptions are this file and `README.md`.
+- **Every markdown file under `docs/` is named in UPPER_SNAKE** (`DOGFOODING.md`,
+  `POLARS_BIO_PENDING_FIXES.md`, `seats/TRIAGE_NOTES.md`). Directories stay lowercase (`docs/seats/`).
+  A mixed tree makes every new name a guess, and a link typed from memory misses by case.
 - **`docs/` is the single ground truth.** This file duplicates from it only where a fact is needed to
   *orient* — and every prohibition lives here in full.
 - **`docs/ROADMAP.md` is active-only.** Shipped items move to `docs/ROADMAP_HISTORY.md` with their
@@ -365,7 +368,7 @@ is mitigated here but still owed upstream, which legitimately appears in two.
     relaying, and name the motivating case.
   - **Ids are per file.** Take the number from *their* ledger.
   - **Our own record still has to stand alone.** Name the id we filed and what we asked for.
-  - `docs/<upstream>-pending-fixes.md` is where such an item waits before it is filed and after.
+  - `docs/<UPSTREAM>_PENDING_FIXES.md` is where such an item waits before it is filed and after.
 
 ### The consumer inbox
 
@@ -438,6 +441,9 @@ same applies when the user corrects a preference: it goes below, in their words,
   pieces are missing in progress. So, like v0.0.1 signoff". docs/SCHEMA.md is signed off as v0.0.1.
   Build against it; fix gaps in it as the loaders expose them, rather than redesigning up front.
 
+- 2026-09-30, doc names: "upper_snake to all, and convention to onboarding gist". Every `docs/`
+  markdown file is UPPER_SNAKE, seat files included; the onboarding gist's template carries the same rule.
+
 ## 11. Learned workspace facts
 
 - Real genomes live under `/data/genomes/<person>/`, all private. What is there by kind:
@@ -459,6 +465,6 @@ same applies when the user corrects a preference: it goes below, in their words,
 - Public WGS samples used by the sibling suites are on Zenodo, records 18370498 and 19487816.
 - `data/interim/` holds a greppable mirror of the VCF stack under polars-bio: clones of polars-bio,
   datafusion-bio-formats and the pinned noodles fork, the VCF 4.2/4.3/4.5 spec sources, and JSON dumps
-  of all three issue trackers. Pins and the refresh command are in `docs/polars-bio-pending-fixes.md`.
+  of all three issue trackers. Pins and the refresh command are in `docs/POLARS_BIO_PENDING_FIXES.md`.
 - PGP-HMS publishes consented 23andMe exports at
   `https://my.pgp-hms.org/public_genetic_data?data_type=23andMe`; the leecher (roadmap) fetches them.

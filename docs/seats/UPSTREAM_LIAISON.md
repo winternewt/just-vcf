@@ -5,7 +5,7 @@ the two layers under it, datafusion-bio-formats and noodles. Any session that fi
 or needs to know whether one is known, sits here for the duration.
 
 This file describes the shape of the work. The work itself lives in the per-upstream ledger,
-`docs/polars-bio-pending-fixes.md` today; a second upstream gets its own `docs/<upstream>-pending-fixes.md`.
+`docs/POLARS_BIO_PENDING_FIXES.md` today; a second upstream gets its own `docs/<UPSTREAM>_PENDING_FIXES.md`.
 
 ## What the seat answers
 
@@ -18,7 +18,7 @@ This file describes the shape of the work. The work itself lives in the per-upst
 
 ## Inputs
 
-- Our own findings, from tests and dogfooding (`docs/dogfooding.md`).
+- Our own findings, from tests and dogfooding (`docs/DOGFOODING.md`).
 - The consumer siblings that use polars-bio (`../just-prs`, `../just-dna-lite`, `../just-dna-format`).
   Their workarounds are unfiled bug reports. Harvest them read-only; never edit a sibling.
 - An upstream release. Every entry is re-checked when the pinned polars-bio version moves.
@@ -76,7 +76,7 @@ Each filed entry carries `Filed: <url> (<date>)` and `Last checked: <date>, <sta
 - read new comments; a maintainer stance goes into the entry verbatim with its date;
 - a merged fix gets the release it lands in; when our pin reaches that release, re-run the repro,
   remove our mitigation in the same commit as the pin bump, and move the entry to
-  `docs/previous_issues.md` with the resolution;
+  `docs/PREVIOUS_ISSUES.md` with the resolution;
 - a *won't fix* keeps the mitigation and turns the entry into a permanent note.
 
 ## The entry template

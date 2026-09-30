@@ -28,7 +28,7 @@ The proposal must settle:
 - **Multi-caller files:** PGP merges carry the caller in INFO/SF, not per sample column
   (docs/PGP_HMS.md).
 
-Inputs: the "Contract gaps" list at the end of docs/FORMATS.md, RM2, docs/polars-bio-pending-fixes.md
+Inputs: the "Contract gaps" list at the end of docs/FORMATS.md, RM2, docs/POLARS_BIO_PENDING_FIXES.md
 (P1: undeclared INFO/FORMAT keys are dropped), and the charter draft's invariants.
 
 Signed off 2026-09-30 as docs/SCHEMA.md, schema v0.0.1. The user's words: "lets keep schema as it is

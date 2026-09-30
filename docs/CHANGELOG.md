@@ -4,6 +4,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Every markdown file under `docs/` is named in UPPER_SNAKE: `dogfooding.md`, `previous_issues.md`,
+  `polars-bio-pending-fixes.md` and `seats/upstream-liaison.md` were renamed, and links followed.
 - VCF `calls` and `blocks` are spilled to parquet in the cache (`JUST_VCF_CACHE_DIR/frames/`) and read
   back one contig at a time in canonical order, so a sorted load needs the memory of one contig, not of
   the file: 3.6 GB instead of 11.2 GB for a 6.4M-call VCF. `load` now makes that pass itself.

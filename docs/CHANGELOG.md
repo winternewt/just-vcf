@@ -11,6 +11,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   Headers polars-bio would misread are repaired in a cached copy (`JUST_VCF_CACHE_DIR`). The module is
   `just_vcf.loading` (was `just_vcf.load`, which the function of that name shadowed). `vcf_samples(path)`
   lists a VCF's samples; several samples and no choice raise `MultiSampleError`.
+- The VCF loader parses only the FORMAT keys and the sample it carries, and when polars-bio refuses a
+  file (a raw backslash in a quoted header value, a malformed value in a field the frames do not carry)
+  it reads it again with a header of only the carried keys, and says so in the warnings.
 - `just_vcf.load(path)` loads the 23andMe-layout genotype tables (23andMe tab and comma, Living DNA,
   SelfDecode, PLINK `--recode 23`, Genes for Good measured and imputed, and the preamble-less rsid
   tables) into the `facets`, `calls` and `blocks` frames. The genotype text is kept verbatim, no REF is

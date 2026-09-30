@@ -230,3 +230,19 @@ def test_real_vcf_upload(pgp_participants: Path) -> None:
     assert calls.height + blocks.height == data_lines
     assert_gt_consistent(calls)
     assert calls.filter(pl.col("end_pos") < pl.col("pos")).height == 0
+
+
+def test_malformed_field_the_frames_do_not_carry_does_not_fail_the_load(tmp_path: Path) -> None:
+    extra = ('##FORMAT=<ID=XAF,Number=1,Type=Float,Description="A vendor annotation">',)
+    records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT:XAF\t0/1:not_a_float"]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=extra)))
+    assert loaded.calls.collect()["gt"].to_list() == [[0, 1]]
+    assert loaded.facets.collect()["dropped_fields"][0].to_list() == ["FORMAT/XAF"]
+
+
+def test_header_polars_bio_refuses_is_retried_with_structural_lines(tmp_path: Path) -> None:
+    extra = ('##GATKCommandLine.X=<ID=X,Version=1,CommandLineOptions="reference=C:\\Users\\x\\ref.fa">',)
+    records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/1"]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=extra)))
+    assert loaded.calls.collect()["gt"].to_list() == [[0, 1]]
+    assert any("refused the file" in w for w in loaded.warnings)

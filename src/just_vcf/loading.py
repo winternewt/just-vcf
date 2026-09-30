@@ -155,8 +155,17 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     source_sha256 = _sha256(sniffed.path)
     cache = cache_dir() / "vcf" / hashlib.sha256(f"{source_sha256}!{sniffed.member}".encode()).hexdigest()[:32]
     path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache)
-    records = vcf.read_records(path, header, chosen, data[0] if data else None)
-    stats = vcf.scan_stats(records)
+    try:
+        records = vcf.read_records(path, header, chosen, data[0] if data else None)
+        stats = vcf.scan_stats(records)
+    except vcf.HeaderRefused as err:
+        warnings.append(
+            f"polars-bio refused the file ({err}); read again with a header of only the carried INFO and "
+            "FORMAT keys and the FILTER, ALT and contig lines"
+        )
+        path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache, structural_only=True)
+        records = vcf.read_records(path, header, chosen, data[0] if data else None)
+        stats = vcf.scan_stats(records)
     calls, blocks, row_warnings = vcf.to_rows(records, header, stats)
     warnings += row_warnings
     if (header.version_tuple or (0, 0)) >= (4, 4):

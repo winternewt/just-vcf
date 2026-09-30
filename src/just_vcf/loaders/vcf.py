@@ -27,6 +27,7 @@ from typing import BinaryIO
 
 import polars as pl
 import polars_bio as pb
+from polars_bio.sql import SQL
 
 from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, canonical_chrom_expr, conform
 
@@ -67,6 +68,25 @@ _DATA_LINES_CHECKED = 1000
 
 class MultiSampleError(ValueError):
     """The file holds more than one sample and none was chosen."""
+
+
+class HeaderRefused(ValueError):
+    """polars-bio refused the file: its header (P8), or a field value it could not parse (P7)."""
+
+
+_STRUCTURAL_META = ("##fileformat=", "##FILTER=", "##ALT=", "##contig=")
+"""Meta lines kept in a structural-only copy, besides the INFO and FORMAT keys the frames carry.
+Everything else is read by `read_header`, not by polars-bio."""
+
+
+def _keep_in_structural_copy(line: str) -> bool:
+    if line.startswith(_STRUCTURAL_META):
+        return True
+    declared = re.match(r"^##(INFO|FORMAT)=<ID=([^,>]+)", line)
+    if not declared:
+        return False
+    kind, key = declared.groups()
+    return key in (INFO_KEYS if kind == "INFO" else FORMAT_KEYS)
 
 
 @dataclass
@@ -149,14 +169,21 @@ def undeclared_format_keys(header: Header, data: list[bytes]) -> list[str]:
     return sorted(key for key in used if key in FORMAT_KEYS and key not in header.format)
 
 
-def readable_path(path: Path, layers: tuple[str, ...], opener, header: Header, missing: list[str], cache: Path) -> Path:
+def readable_path(
+    path: Path, layers: tuple[str, ...], opener, header: Header, missing: list[str], cache: Path, structural_only: bool = False
+) -> Path:
     """A path polars-bio can read: the file itself when possible, else a rewritten copy under `cache`.
 
     The copy is kept, because the frames `load` returns are lazy and read it when collected. It is
-    named after the source's digest and reused when complete.
+    named after the source's digest and reused when complete. `structural_only` keeps only the meta
+    lines polars-bio needs and the INFO and FORMAT keys the frames carry, for a file it refused (P7, P8):
+    polars-bio skips a key its header does not declare (P1), so a malformed value in a key the frames
+    do not carry is never parsed.
     """
-    if layers in ((), ("gzip",), ("bgzf",)) and header.format_first and not missing:
+    if layers in ((), ("gzip",), ("bgzf",)) and header.format_first and not missing and not structural_only:
         return path
+    if structural_only:
+        cache = cache / "structural"
     target = cache / "input.vcf"
     done = cache / "input.vcf.complete"
     if done.exists():
@@ -165,8 +192,9 @@ def readable_path(path: Path, layers: tuple[str, ...], opener, header: Header, m
     with opener() as source, target.open("wb") as out:
         out.write(f"##fileformat={header.version or 'VCFv4.2'}\n".encode())
         for line in header.meta:
-            if not line.startswith("##fileformat="):
-                out.write(f"{line}\n".encode())
+            if line.startswith("##fileformat=") or (structural_only and not _keep_in_structural_copy(line)):
+                continue
+            out.write(f"{line}\n".encode())
         for key in missing:
             number, kind = FORMAT_KEYS[key]
             out.write(
@@ -183,26 +211,62 @@ def readable_path(path: Path, layers: tuple[str, ...], opener, header: Header, m
     return target
 
 
-def scan(path: Path, info_fields: list[str]) -> pl.LazyFrame:
+def scan(path: Path, info_fields: list[str], format_fields: list[str], sample: str | None) -> pl.LazyFrame:
     """A polars-bio scan of `path` that is safe to collect more than once, and concurrently.
 
     `pb.scan_vcf` registers a table named after the file stem each time a plan runs, so two scans of
     one file in one plan (or `pl.collect_all` over frames from the same file) panic with "table
-    already exists". Each source is registered once, under a name derived from its path, size,
-    modification time and INFO fields, and queried by that name. Ported from just-prs
+    already exists" (P6). Each source is registered once, under a name derived from its path, size,
+    modification time and the fields and sample read, and queried by that name. Ported from just-prs
     `vcf.scan_vcf` (docs/PROVENANCE.md).
 
-    A named registration returns 0-based `start`; it is converted to the 1-based `POS` here, and
-    `read_records` checks the result against the file's first record.
+    Only the carried FORMAT keys and the chosen sample are parsed, so a malformed field the frames do
+    not carry cannot fail the load. The public `register_vcf` takes neither, so polars-bio's own
+    `SQL._register_variant` is called (P7). A named registration returns 0-based `start`; it is
+    converted to the 1-based `POS` here, and `read_records` checks it against the first record.
     """
     stat = path.stat()
-    key = f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{','.join(sorted(info_fields))}"
+    key = f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{sorted(info_fields)}:{sorted(format_fields)}:{sample}"
     name = f"just_vcf_{hashlib.sha256(key.encode()).hexdigest()[:24]}"
     with _REGISTRATION_LOCK:
         if name not in _REGISTERED:
-            pb.register_vcf(str(path), name=name, info_fields=info_fields)
+            _register(
+                path=str(path),
+                name=name,
+                info_fields=info_fields,
+                format_fields=format_fields,
+                samples=[sample] if sample is not None else None,
+                genotype_output="string",
+                chunk_size=8,
+                concurrent_fetches=1,
+                allow_anonymous=True,
+                max_retries=5,
+                timeout=300,
+                enable_request_payer=False,
+                compression_type="auto",
+            )
             _REGISTERED.add(name)
     return pb.sql(f'SELECT * FROM "{name}"').with_columns((pl.col("start") + 1).alias("start"))
+
+
+def _collect(plan: pl.LazyFrame) -> pl.DataFrame:
+    """`plan` collected, with a field value polars-bio cannot parse raised as `HeaderRefused` (P7)."""
+    try:
+        return plan.collect(engine="streaming")
+    except pl.exceptions.ComputeError as err:
+        if "Error reading" in str(err) and "field" in str(err):
+            raise HeaderRefused(str(err).splitlines()[-1][-160:]) from err
+        raise
+
+
+def _register(**kwargs) -> None:
+    """`SQL._register_variant`, with a refused header raised as `HeaderRefused`."""
+    try:
+        SQL._register_variant(**kwargs)
+    except ValueError as err:
+        if "Failed to register table" in str(err):
+            raise HeaderRefused(str(err)) from err
+        raise
 
 
 def read_records(path: Path, header: Header, sample: str | None, first_record: bytes | None) -> pl.LazyFrame:
@@ -212,23 +276,23 @@ def read_records(path: Path, header: Header, sample: str | None, first_record: b
     carried key is present, as a typed null when the file does not declare it.
     """
     info = [key for key in INFO_KEYS if key in header.info]
-    frame = scan(path, info)
+    fmt = [key for key in FORMAT_KEYS if key in header.format] if sample is not None else []
+    multi = sample is not None and len(header.samples) > 1
+    frame = scan(path, info, fmt, sample if multi else None)
     if first_record is not None:
         fields = first_record.decode("utf-8", errors="replace").split("\t")
-        got = frame.select("chrom", "start").head(1).collect().row(0)
+        got = _collect(frame.select("chrom", "start").head(1)).row(0)
         if (got[0], got[1]) != (fields[0], int(fields[1])):
             raise RuntimeError(
                 f"polars-bio returned {got[0]}:{got[1]} for the first record, which the file writes as "
                 f"{fields[0]}:{fields[1]}; the coordinate convention changed upstream"
             )
     names = frame.collect_schema().names()
-    fmt = [key for key in FORMAT_KEYS if key in header.format] if sample is not None else []
     renames = {key: f"info_{key}" for key in info}
     if "genotypes" in names:
-        index = header.samples.index(sample) if sample is not None else 0
         present = [f.name for f in frame.collect_schema()["genotypes"].fields]
         frame = frame.with_columns(
-            pl.col("genotypes").struct.field(key).list.get(index, null_on_oob=True).alias(f"fmt_{key}")
+            pl.col("genotypes").struct.field(key).list.get(0, null_on_oob=True).alias(f"fmt_{key}")
             for key in fmt
             if key in present
         ).drop("genotypes")
@@ -248,7 +312,8 @@ _BOUNDED = {"GQ": 255, "DP": 2**32 - 1, "MIN_DP": 2**32 - 1}
 
 def scan_stats(records: pl.LazyFrame) -> dict:
     """One streaming pass for what the warnings and the facet need: out-of-range counts, GP's
-    largest value, the source contig names, and whether any record is a reference block."""
+    largest value, the source contig names, and whether any record is a reference block. It reads
+    GT, which makes polars-bio parse the sample column, so a field value it cannot parse fails here."""
     out_of_range = [
         ((pl.col(f"fmt_{key}").cast(pl.Int64, strict=False) < 0) | (pl.col(f"fmt_{key}").cast(pl.Int64, strict=False) > top))
         .sum()
@@ -256,12 +321,16 @@ def scan_stats(records: pl.LazyFrame) -> dict:
         for key, top in _BOUNDED.items()
     ]
     alts = _alts_expr()
-    row = records.select(
+    plan = records.select(
         *out_of_range,
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.max().max().alias("gp_max"),
         (alts.list.len().gt(0) & alts.list.eval(pl.element() == "<*>").list.all()).any().alias("any_block"),
         pl.col("chrom").unique().implode().alias("chroms"),
-    ).collect(engine="streaming").row(0, named=True)
+        # Reading GT makes polars-bio parse every sample field here, where a value it cannot parse
+        # can still be retried (P7), rather than when the caller collects the frames.
+        pl.col("fmt_GT").null_count().alias("gt_missing"),
+    )
+    row = _collect(plan).row(0, named=True)
     row["chroms"] = sorted(row["chroms"] or [])
     return row
 

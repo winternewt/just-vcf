@@ -56,3 +56,27 @@ returns 0-based half-open `start` where `scan_vcf(use_zero_based=False)` returns
 
 Mitigation: `loaders/vcf.py` `scan` registers once per source under a unique name (ported from
 just-prs) and converts `start`, checking the first record against the file. Not filed.
+
+## P7 — `register_vcf` cannot restrict FORMAT fields or samples
+
+Seen with polars-bio 0.36 (2026-09-30). `register_vcf` passes `format_fields=None` and `samples=None` to
+its internal `SQL._register_variant`, so every FORMAT field of every sample is parsed. One malformed
+field the loader does not even carry then fails the load: a Genos exome VCF's `CGIANN_1000GAF` holds a
+value that is not a float.
+
+Mitigation: `loaders/vcf.py` `scan` calls `polars_bio.sql.SQL._register_variant` directly with the
+carried FORMAT keys and the chosen sample. That is a private API; a polars-bio upgrade can break it, and
+the tests will show it. Filing upstream: ask for `format_fields` and `samples` on `register_vcf`. Not filed.
+
+## P8 — A backslash inside a quoted header value refuses the whole file
+
+Seen with polars-bio 0.36 (2026-09-30) on a GATK 3.4 UnifiedGenotyper VCF: its
+`##GATKCommandLine.UnifiedGenotyper=<…,CommandLineOptions="…">` line holds a Windows path with raw
+backslashes, and registration fails with `IO error: invalid record`. A minimal repro is one such line,
+`CommandLineOptions="a=C:\Users\x\ref.fa"`; the same line with `/` reads fine. VCF 4.5 does say a
+backslash in a quoted value must be escaped, so the file is strictly invalid, but it is how GATK wrote
+them.
+
+Mitigation: when registration is refused, the loader retries once on a cached copy whose header keeps
+only `##fileformat`, INFO, FORMAT, FILTER, ALT and contig lines, and warns. The full header is still read
+by the loader's own parser for the facet. Not filed.

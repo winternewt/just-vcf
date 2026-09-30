@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Schema 0.0.3: `gq` is `u16`; Illumina gVCF blocks (`ALT .` with `INFO/END`) go to `blocks`; GP's
+  scale is read from values that settle it, whatever the header version says. Found by loading the 124
+  PGP-HMS VCFs: 1.5 billion rows, no `end_pos` before `pos`, no genotype index out of range. A cached
+  rewrite from older loader code is no longer reused.
 - `just_vcf.load` reads single-sample and multi-sample (one sample chosen) VCF and gVCF into `calls` and
   `blocks`: `<NON_REF>` written as `<*>`, records whose ALTs are all `<*>` and whose GT asserts reference
   or nothing go to `blocks`, `end_pos` follows VCF 4.5's END rule, `dp`/`ad` come from FORMAT by

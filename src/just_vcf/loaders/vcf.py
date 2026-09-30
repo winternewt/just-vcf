@@ -62,6 +62,9 @@ _SV_LENGTH_TYPES = ("DEL", "DUP", "INV", "CNV")
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
+REWRITE_VERSION = 3
+"""Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused."""
+
 _HEADER_READ_CAP = 64 << 20
 _DATA_LINES_CHECKED = 1000
 
@@ -347,7 +350,7 @@ def read_records(path: Path, header: Header, sample: str | None, first_record: b
     ).with_columns(pl.col("fmt_GT").cast(pl.String), pl.col("fmt_FT").cast(pl.String))
 
 
-_BOUNDED = {"GQ": 255, "DP": 2**32 - 1, "MIN_DP": 2**32 - 1}
+_BOUNDED = {"GQ": 2**16 - 1, "DP": 2**32 - 1, "MIN_DP": 2**32 - 1}
 
 
 def scan_stats(records: pl.LazyFrame) -> dict:
@@ -364,7 +367,9 @@ def scan_stats(records: pl.LazyFrame) -> dict:
     plan = records.select(
         *out_of_range,
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.max().max().alias("gp_max"),
-        (alts.list.len().gt(0) & alts.list.eval(pl.element() == "<*>").list.all()).any().alias("any_block"),
+        _is_block_record(alts).any().alias("any_block"),
+        pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).is_not_null().sum().alias("gp_rows"),
+        (pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.sum() - 1.0).abs().gt(0.02).sum().alias("gp_off_one"),
         pl.col("chrom").unique().implode().alias("chroms"),
         # Reading GT makes polars-bio parse every sample field here, where a value it cannot parse
         # can still be retried (P7), rather than when the caller collects the frames.
@@ -402,7 +407,7 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
     rows = records.with_columns(_alts_expr().alias("alts"), pl.col("ref").alias("source_ref")).drop("ref")
     rows = rows.with_columns(
         _end_pos(sv_declared="SVLEN" in header.info).alias("end_pos"),
-        (pl.col("alts").list.len().gt(0) & pl.col("alts").list.eval(pl.element() == "<*>").list.all()).alias("_block"),
+        _is_block_record(pl.col("alts")).alias("_block"),
     )
 
     gt_text = pl.col("fmt_GT")
@@ -440,7 +445,7 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
         .then(pl.col("fmt_DS").cast(pl.List(pl.Float32), strict=False).list.first())
         .otherwise(None)
         .alias("dosage"),
-        _bounded("GQ", pl.UInt8).alias("gq"),
+        _bounded("GQ", pl.UInt16).alias("gq"),
         _bounded("DP", pl.UInt32).alias("dp"),
         _bounded("MIN_DP", pl.UInt32).alias("dp_min"),
         pl.col("fmt_AD").cast(pl.List(pl.UInt32), strict=False).alias("ad"),
@@ -475,6 +480,14 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
     return calls, blocks, warnings
 
 
+def _is_block_record(alts: pl.Expr) -> pl.Expr:
+    """A reference-block record, before its GT is looked at: every ALT is `<*>` (GATK, VCF 4.5), or
+    there is no ALT and INFO/END gives an extent (Illumina's gVCF: `ALT .` with `END`)."""
+    all_star = alts.list.len().gt(0) & alts.list.eval(pl.element() == "<*>").list.all()
+    illumina = alts.list.len().eq(0) & pl.col("info_END").is_not_null()
+    return all_star | illumina
+
+
 def _dtype(number: str, kind: str) -> pl.DataType:
     scalar = {"Integer": pl.Int32, "Float": pl.Float32, "String": pl.String}[kind]
     return scalar if number == "1" else pl.List(scalar)
@@ -500,6 +513,7 @@ def _end_pos(sv_declared: bool) -> pl.Expr:
     return pl.max_horizontal(
         ref_end,
         pl.when(pl.col("alts").list.contains("<*>")).then(block_end).otherwise(None),
+        pl.when(pl.col("alts").list.len() == 0).then(pl.col("info_END").cast(pl.UInt32)).otherwise(None),
         pl.when(has_sv).then(sv_end).otherwise(None),
     ).cast(pl.UInt32)
 
@@ -535,20 +549,31 @@ def _phase_sets(rows: pl.LazyFrame) -> pl.LazyFrame:
 
 
 def _gp(header: Header, stats: dict) -> tuple[pl.Expr, str | None]:
-    """`gp` from GP (its scale checked against the file version) or PP."""
+    """`gp` from GP or PP. GP's scale is read from the values when they settle it, else withheld.
+
+    VCF before 4.3 wrote GP phred-scaled, and 4.3 made it a probability. Real files do not follow the
+    version: imputation tools wrote probabilities under 4.1 and 4.2 headers. So values above 1 mean
+    phred, and values that are all within [0, 1] and sum to 1 per row mean probabilities, whatever
+    the header says; the warnings name a header that disagreed. Anything else is ambiguous, and GP
+    is not used.
+    """
     from_pp = pl.col("fmt_PP").cast(pl.List(pl.Float32), strict=False).list.eval(pl.lit(10.0) ** (pl.element() / -10.0))
     largest = stats["gp_max"]
     if largest is None:
         return from_pp, None
-    phred_values = largest > 1.0 + 1e-6
-    pre_43 = (header.version_tuple or (4, 3)) < (4, 3)
     raw = pl.col("fmt_GP").cast(pl.List(pl.Float32), strict=False)
-    if pre_43 and phred_values:
-        return pl.coalesce(raw.list.eval(pl.lit(10.0) ** (pl.element() / -10.0)), from_pp), None
-    if not pre_43 and not phred_values:
-        return pl.coalesce(raw, from_pp), None
-    expected, found = ("phred" if pre_43 else "probabilities"), ("phred" if phred_values else "probabilities")
-    return from_pp, f"GP scale does not match the header ({header.version}: {expected} expected, {found} found); GP not used"
+    header_says = "phred" if (header.version_tuple or (4, 3)) < (4, 3) else "probabilities"
+    if largest > 1.0 + 1e-6:
+        found, gp = "phred", raw.list.eval(pl.lit(10.0) ** (pl.element() / -10.0))
+    elif stats["gp_off_one"] == 0:
+        found, gp = "probabilities", raw
+    else:
+        return from_pp, (
+            f"GP is ambiguous: every value is within [0, 1] but {stats['gp_off_one']} of {stats['gp_rows']} "
+            "rows do not sum to 1; GP not used"
+        )
+    note = None if found == header_says else f"GP written as {found} under a {header.version} header; read as {found}"
+    return pl.coalesce(gp, from_pp), note
 
 
 def _bounded(key: str, dtype: pl.DataType) -> pl.Expr:

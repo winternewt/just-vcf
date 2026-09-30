@@ -153,7 +153,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     if not header.format_first:
         warnings.append("##fileformat was not the first line; the header was reordered for reading")
     source_sha256 = _sha256(sniffed.path)
-    cache = cache_dir() / "vcf" / hashlib.sha256(f"{source_sha256}!{sniffed.member}".encode()).hexdigest()[:32]
+    cache = cache_dir() / "vcf" / hashlib.sha256(f"{source_sha256}!{sniffed.member}!{vcf.REWRITE_VERSION}".encode()).hexdigest()[:32]
     path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache)
     try:
         records = vcf.read_records(path, header, chosen, data[0] if data else None)

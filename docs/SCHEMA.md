@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.2.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.3.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -164,15 +164,16 @@ and so is the reverse without the prior. So:
 | **B. Separate columns per quantity** | `gl: list[f32]`: log10 likelihoods (from PL as `-PL/10`, or GL directly). `gp: list[f32]`: posterior probabilities (GP, Oxford `.gen` triples). Both are in VCF genotype order over `source_alleles` (Decision 2). Which of them is non-null says which quantities the source gave, and a row can have more than one. A consumer has to handle two columns, and the schema is honest about what each one is |
 | C. Keep native columns (`PL`, `GL`, `GP`, `DS`) as-is | No normalisation at all. Every consumer then re-learns every caller's dialect |
 
-**Recommendation: B.** Scalars that callers commonly give sit beside it: `gq: u8`, `dp: u32`,
+**Recommendation: B.** Scalars that callers commonly give sit beside it: `gq: u16`, `dp: u32`,
 `ad: list[u32]` (parallel to `source_alleles`), all nullable.
 
 Sources for `gp`: `GP`, and `PP` converted as `10^(-PP/10)`. Both are posteriors, so this is a change
-of scale, not a change of quantity. One trap: before VCF 4.3, `GP` was phred-scaled. The loader reads
-the `##fileformat` version and checks the values against it (a probability vector sums to about 1).
-When the header says pre-4.3 and the values are phred-scaled, `gp = 10^(-GP/10)`. When the header says
-4.3 or later and the values are probabilities, `GP` is taken as is. When the two disagree, `gp` stays
-null and the facet says why. The loader never guesses the scale.
+of scale, not a change of quantity. One trap: before VCF 4.3, `GP` was phred-scaled, and 4.3 made it a
+probability. Real files do not follow the version: imputation tools write probabilities under 4.1 and
+4.2 headers (9 of the 124 PGP-HMS VCFs). So the values decide when they can: any value above 1 means
+phred (`gp = 10^(-GP/10)`), and values all within [0, 1] that sum to 1 on every row mean probabilities.
+The warnings name a header that disagreed. Values that settle neither (within [0, 1] but not summing to
+1) leave `gp` null, with a warning. The loader never guesses the scale.
 
 `dp` and `ad` come from FORMAT (this sample), never from INFO (all samples combined). INFO/DP and
 FORMAT/DP are different quantities with the same name. The loader resolves each key by the header's
@@ -217,7 +218,8 @@ millions of them.
 | C. Expand blocks to one row per base | Billions of rows. Rejected |
 
 **Which VCF records are blocks:** a record goes to `blocks` only when every ALT is `<*>` (`<NON_REF>`
-included). A record with `ALT=TC,<*>` is a variant call that also carries the `<*>` allele, and it
+included), or when it has no ALT (`.`) and an `INFO/END` extent, which is how Illumina's gVCF writes a
+reference block. Either way its GT must assert reference or nothing; a GT calling `<*>` stays a call. A record with `ALT=TC,<*>` is a variant call that also carries the `<*>` allele, and it
 stays in `calls` with `<*>` in `alts`. A monomorphic record (ALT `.`) stays in `calls` too.
 
 A 4.5 block states its length per sample in FORMAT `LEN`. INFO `END` is deprecated and only a fallback
@@ -294,7 +296,7 @@ With Decisions 1–5 as recommended:
 | `gp` | `list[f32]` | no posteriors given |
 | `dosage` | `f32` | no dosage given |
 | `evidence_basis` | `Enum` | never null. Origin only: `assay`, `ref_block`, `absence` (Decision 3) |
-| `gq` | `u8` | not given |
+| `gq` | `u16` | not given, or outside 0..65535 (counted in the warnings) |
 | `dp` | `u32` | not given |
 | `ad` | `list[u32]` | not given |
 | `qual` | `f32` | not given. It is the confidence in what ALT asserts: that the variant is there on a variant record, and that no variant is there on a monomorphic record (`alts = []`, where VCF defines it as `-10·log10 P(variant)`). The same threshold therefore works on both |
@@ -481,6 +483,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **0.0.3** (2026-09-30, found by loading the 124 PGP-HMS VCFs): `gq` widens to `u16` (22 files had GQ
+  above 255); an `ALT .` record with `INFO/END` is a block (Illumina gVCF; a Veritas file had 183 million
+  such records land in `calls`), and its `end_pos` is `END`; GP's scale is read from decisive values rather
+  than from the header version.
 - **0.0.2** (2026-09-30, found by the first loader over 503 PGP-HMS array files): `gt_alleles` may be
   null when the genotype text cannot be split without the site's alleles, and `phased` is null as a
   whole when the source says nothing about phase. Both loosen a "never null"; no column changed.

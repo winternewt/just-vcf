@@ -163,27 +163,28 @@ def test_header_repairs(tmp_path: Path) -> None:
 
 
 def test_out_of_range_values_are_counted(tmp_path: Path) -> None:
-    records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT:GQ\t0/1:300", "1\t200\t.\tC\tT\t.\t.\t.\tGT:GQ\t0/1:40"]
+    records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT:GQ\t0/1:70000", "1\t200\t.\tC\tT\t.\t.\t.\tGT:GQ\t0/1:300"]
     calls, _, warnings = frames(write(tmp_path, vcf_text(records, fmt=("GT", "GQ"))))
-    assert calls["gq"].to_list() == [None, 40]
-    assert warnings == ("1 GQ value(s) outside 0..255 set to null",)
+    assert calls["gq"].to_list() == [None, 300]
+    assert warnings == ("1 GQ value(s) outside 0..65535 set to null",)
 
 
 @pytest.mark.parametrize(
-    ("version", "values", "expected", "warned"),
+    ("version", "values", "expected", "warning"),
     [
-        ("VCFv4.2", "0,20,30", [1.0, 0.01, 0.001], False),
-        ("VCFv4.3", "0.9,0.09,0.01", [0.9, 0.09, 0.01], False),
-        ("VCFv4.3", "0,20,30", None, True),
-        ("VCFv4.2", "0.9,0.09,0.01", None, True),
+        ("VCFv4.2", "0,20,30", [1.0, 0.01, 0.001], None),
+        ("VCFv4.3", "0.9,0.09,0.01", [0.9, 0.09, 0.01], None),
+        ("VCFv4.3", "0,20,30", [1.0, 0.01, 0.001], "GP written as phred under a VCFv4.3 header"),
+        ("VCFv4.2", "0.9,0.09,0.01", [0.9, 0.09, 0.01], "GP written as probabilities under a VCFv4.2 header"),
+        ("VCFv4.2", "0.5,0.5,0.5", None, "GP is ambiguous"),
     ],
 )
-def test_gp_scale_follows_the_header(tmp_path: Path, version: str, values: str, expected, warned: bool) -> None:
+def test_gp_scale_is_read_from_decisive_values(tmp_path: Path, version: str, values: str, expected, warning) -> None:
     records = [f"1\t100\t.\tA\tG\t.\t.\t.\tGT:GP\t0/0:{values}"]
     calls, _, warnings = frames(write(tmp_path, vcf_text(records, version=version, fmt=("GT", "GP"))))
     got = calls["gp"][0]
     assert (got is None) if expected is None else got.to_list() == pytest.approx(expected, rel=1e-5)
-    assert any("GP scale" in w for w in warnings) is warned
+    assert [w for w in warnings if w.startswith("GP")] == ([] if warning is None else [next(w for w in warnings if w.startswith(warning))])
 
 
 def test_pp_converts_to_gp(tmp_path: Path) -> None:
@@ -273,3 +274,16 @@ def test_records_at_pos_zero_are_left_out_and_counted(tmp_path: Path) -> None:
     loaded = load(write(tmp_path, vcf_text(records)))
     assert loaded.calls.collect()["ids"].to_list() == [["rs1"]]
     assert "2 record(s) at POS 0 left out: polars-bio cannot read them" in loaded.warnings
+
+
+def test_illumina_gvcf_blocks(tmp_path: Path) -> None:
+    records = [
+        "1\t100\t.\tA\t.\t.\tPASS\tEND=150\tGT:GQ\t0/0:1200",
+        "1\t151\t.\tC\t.\t.\tPASS\t.\tGT:GQ\t0/0:30",
+        "1\t152\t.\tG\tT\t50\tPASS\t.\tGT:GQ\t0/1:99",
+    ]
+    loaded = load(write(tmp_path, vcf_text(records, fmt=("GT", "GQ"), info=("END",))))
+    calls, blocks = pl.collect_all([loaded.calls, loaded.blocks])
+    assert blocks.select("pos", "end_pos", "kind", "gq").rows() == [(100, 150, "ref", 1200)]
+    assert calls["pos"].to_list() == [151, 152], "a single monomorphic record without END stays a call"
+    assert loaded.facets.collect()["absence_means"][0] == "blocks"

@@ -54,6 +54,44 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P13 `write_vcf` drops undeclared columns | write-side twin of P1; answered by recipe in pb #351; related open pb #474 | polars-bio |
 | P14 fork after a polars-bio call hangs the child | inherent to native thread pools (plain Polars hangs too) | polars-bio (docs), low |
 
+## Verdicts by kind (2026-09-30)
+
+The same items, split by what they ask of upstream. An item sits in the first table that fits it. The
+*Ours* column is the work we carry whatever upstream does, in `src/just_vcf/loaders/vcf.py` unless
+another path is named.
+
+### Bugs: upstream contradicts the spec or its own docs
+
+| Item | Defect | Owner | Ours |
+|---|---|---|---|
+| P1 | undeclared FORMAT/INFO keys dropped without a word; the spec only says "should" declare | datafusion-bio-formats | declare them in a rewritten copy, warn (done) |
+| P3 | symbolic SV `end` = POS+SVLEN−1; negative SVLEN errors | zaeleus/noodles | compute `end` ourselves (done) |
+| P4 | leading GT phase indicator discarded after noodles parsed it | datafusion-bio-formats | withhold `phased[0]` and `source_gt` on 4.4+, warn (done) |
+| P6a | concurrent collects of one VCF panic on the stem-named table | polars-bio | register once under a unique name (done) |
+| P6b | `register_vcf` returns 0-based starts; docstring and global setting say 1-based | polars-bio | convert `start` and check the first record (done) |
+| P9 | a spec-legal POS 0 record fails the whole scan | datafusion-bio-formats | re-read without POS 0 rows, count them (done) |
+| P10 | spec-legal FORMAT `Number=LA/LR/LG/M` refuses the whole file | zaeleus/noodles | **none yet**: rewrite to `Number=.` and warn |
+
+### Feature requests: works as designed, we want more
+
+| Item | Ask | Owner | Ours |
+|---|---|---|---|
+| P7 | `format_fields` and `samples` on `register_vcf`, as `register_bcf` has | polars-bio | call private `SQL._register_variant` (done; breaks on upgrade) |
+| P6b | `use_zero_based` on `register_vcf`, as `register_bcf` and `register_vcf_zarr` have (same issue as the bug fix) | polars-bio | as above |
+| P10 | move the noodles fork past 0.91.0, which parses `Number=P` | datafusion-bio-formats | as above |
+| P13 | warn or refuse when `write_vcf`/`sink_vcf` drop an undeclared column; see open pb #474 | polars-bio | nothing until we write VCF through polars-bio |
+| P5 | document the `fmt_` rename, and that one sample gives flat columns while several give a `genotypes` struct | polars-bio (docs) | map columns by the header's own namespace (done) |
+| P11 | document that FILTER `.` reads as `""` | polars-bio (docs) | `""` → null (done, `:455`) |
+| P12 | document that multi-allelic ALT is joined with `\|` | polars-bio (docs) | split on `\|` (done, `:390`) |
+
+### Ours: the input or the platform, nothing to ask upstream
+
+| Item | Why it is ours | Ours |
+|---|---|---|
+| P2 | a late `##fileformat` makes the file invalid (`VCFv4.5.tex:142`) | reorder the header, warn (done) |
+| P8 | an unescaped backslash in a quoted header value is invalid (`VCFv4.5.tex:174`); a lenient noodles mode would be a nice-to-have, not a filing | retry on a stripped header, warn (done) |
+| P14 | no native thread pool survives `fork()`; plain Polars hangs the same way | never fork after polars-bio runs; use `spawn` (nothing in `src/` forks today) |
+
 ## P1 — INFO and FORMAT keys missing from the header are dropped silently
 
 Seen with polars-bio 0.36, while declaring the VCF formats (2026-09-29). A key that a row uses but the

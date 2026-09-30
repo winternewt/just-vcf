@@ -15,6 +15,10 @@ polars-bio (153 issues, 320 PRs), datafusion-bio-formats (80, 178) and zaeleus/n
 plus the docs, docstrings, `openspec/` designs and source of each. None of the nine is reported in any
 of those trackers, and no upstream non-goal covers any of them. Nothing was filed.
 
+P10–P14 and the harvest section at the end come from the same day's read-only sweep of the consumer
+siblings (`../just-prs`, `../just-dna-lite`, `../just-dna-format`) for polars-bio notes and workarounds,
+each re-checked on 0.36.0 the same way.
+
 The mirror is under `data/interim/` (git-ignored), for grepping:
 
 | Path | What | Pinned at |
@@ -44,6 +48,11 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P7 no `format_fields`/`samples` | never existed; `register_bcf` got them in #435 — ask parity | polars-bio |
 | P8 backslash in header | spec-correct strictness | low priority, don't file |
 | P9 POS 0 | noodles `None` by design (noodles #343); dbf turns it into the failure | datafusion-bio-formats |
+| P10 FORMAT `Number=LA/LR/LG/P/M` | spec-legal 4.5 header refuses the file; pinned noodles fork parses none; zaeleus master parses only `P` (since 0.91.0) | zaeleus/noodles (LA/LR/LG/M); dbf fork bump (P) |
+| P11 FILTER `.` read as `""` | intended-ish, undocumented; "not applied" becomes a value | polars-bio (docs), low |
+| P12 multi-allelic ALT joined with `\|` | intended (dbf #252), documented only in the dbf README | polars-bio (docs), low |
+| P13 `write_vcf` drops undeclared columns | write-side twin of P1; answered by recipe in pb #351; related open pb #474 | polars-bio |
+| P14 fork after a polars-bio call hangs the child | inherent to native thread pools (plain Polars hangs too) | polars-bio (docs), low |
 
 ## P1 — INFO and FORMAT keys missing from the header are dropped silently
 
@@ -130,6 +139,12 @@ INFO/FORMAT collisions for the multi-sample case; no maintainer position yet) an
 #258 (an INFO field named like a core column breaks the schema). If filed, ask polars-bio for the rename
 rule in the `scan_vcf` docstring.
 
+The shape also depends on the sample count, checked on 0.36.0 with INFO/DP and FORMAT/DP declared: one
+sample gives flat `DP` and `fmt_DP`, two samples give INFO `DP` plus a nested `genotypes` struct holding
+FORMAT/DP. just-dna-lite (`just-dna-pipelines/.../io.py`, ~L255-280) still drops a FORMAT field whenever
+INFO declares the same key, a workaround for a `DuplicateQualifiedField` error around polars-bio 0.19;
+on 0.36.0 that workaround only loses data.
+
 ## P6 — `scan_vcf` registers a stem-named table on every run, and `register_vcf` ignores the coordinate setting
 
 Seen with polars-bio 0.36 (2026-09-30). Two scans of one file in one plan, or `pl.collect_all` over two
@@ -156,6 +171,10 @@ global `datafusion.bio.coordinate_system_zero_based`, which is `false`. The docs
 reader uses 1-based coordinates", and PR #263 made 1-based the global default. Reproduced: a record at
 POS 100 comes back `start=99` from `register_vcf` and `start=100` from `scan_vcf`, with the global
 option `false`. **File at polars-bio:** pass the resolved global setting and add `use_zero_based`.
+
+just-prs carries the same two workarounds (a lock around a named `register_vcf` and `+1` on `start`,
+`src/just_prs/vcf.py:37-63`, test `tests/test_vcf.py:98`); its commit `c424bec` (2026-07-17) is the
+earliest dated record of both symptoms.
 
 ## P7 — `register_vcf` cannot restrict FORMAT fields or samples
 
@@ -209,3 +228,93 @@ failure. The noodles side is by design. zaeleus/noodles #343 (open since 2025-06
 maintainer answered that the record parses fine and the caller should handle it, and a commenter cited
 the telomere rule (`VCFv4.5.tex:396`). **File at datafusion-bio-formats:** map `None` to position 0, or
 at least skip the record with a count, instead of failing the scan. Cite noodles #343.
+
+## P10 — FORMAT `Number=LA`, `LR`, `LG`, `P` or `M` refuses the whole file
+
+Found 2026-09-30 through just-dna-format (`docs/probes/METHYLATION_PACBIO.md:286-291`, quoting rastair,
+which writes `Number=.` instead to dodge exactly this). VCF 4.4/4.5 add these FORMAT-only Number values
+(`VCFv4.5.tex:191-199`; `M` for base modifications, `:203-227`). On 0.36.0 a header declaring any of
+`LA`, `LR`, `LG` or `M` fails registration with `IO error: invalid record`, which does not point at the
+header. `P` was not run but takes the same path.
+
+Mitigation: none yet. The cached-copy header rewrite could turn these into `Number=.` and warn.
+
+*Upstream (2026-09-30).* No issue in any tracker. The pinned noodles fork's `parse_number`
+(`noodles-vcf/src/header/parser/record/value/map/format/number.rs:32`) accepts only `A`, `R`, `G`, `.`
+and integers. The `Number` enum already has variants for all five (`header/record/value/map/format/number.rs`).
+zaeleus/noodles master parses `P` for VCF ≥ 4.4 (commit `a8f7445`, noodles-vcf 0.91.0) and still not
+`LA`, `LR`, `LG` or `M`. **File at zaeleus/noodles** for the four; `P` needs datafusion-bio-formats to
+move its noodles fork past 0.91.0.
+
+## P11 — FILTER `.` comes back as an empty string
+
+Recorded in just-prs (`src/just_prs/normalize.py:50`) and in our CLAUDE.md §5; reproduced on 0.36.0: a
+record with FILTER `.` gives `filter == ""`. The spec says `.` means filters have not been applied
+(`VCFv4.5.tex:426`), which is unknown, not a value.
+
+Mitigation: the loader has to map `""` to null. No valid record has an empty FILTER, so the mapping is
+lossless.
+
+*Upstream (2026-09-30).* No issue, no docs. noodles yields no items for `.` (`noodles-vcf/src/record/filters.rs:48`)
+and datafusion-bio-formats joins that empty iterator into `""` (`physical_exec.rs:992`, also `:1263`,
+`:1531`, `:3165`); its `unwrap_or(".")` never fires. **Intended in effect, undocumented.** A docs note
+at polars-bio, low priority; asking for null would be a breaking change for them.
+
+## P12 — Multi-allelic ALT is joined with `|`
+
+Recorded in just-prs (`normalize.py:67`), just-dna-lite (CLAUDE.md) and our CLAUDE.md §5; reproduced on
+0.36.0: `ALT=T,G` gives `alt == "T|G"`.
+
+Mitigation: the loader splits `alt` on `|`.
+
+*Upstream (2026-09-30).* **Intended.** datafusion-bio-formats joins with `'|'` (`physical_exec.rs:990`
+and the other readers) and PR #252 pins the encoding in a test. It is documented only in the
+datafusion-bio-formats README (`bio-format-vcf/README.md:245`, the `vcf_ac`/`vcf_af` UDFs); the
+`scan_vcf` docstring and polars-bio docs do not say it. A docs note at polars-bio, low priority.
+
+## P13 — `write_vcf` and `sink_vcf` drop columns the header metadata does not declare
+
+Recorded in just-dna-lite (CLAUDE.md:561-563, `annotation/vcf_export_logic.py:57-105`); reproduced on
+0.36.0: a frame with a `score` column and no source metadata is written with INFO `.`, no `##INFO` line
+and no warning. Declaring `score` through `set_source_metadata` writes it. The write-side twin of P1.
+Missing core columns and a non-UInt32 `start` do raise, loudly.
+
+Mitigation: none needed until just-vcf writes VCF through polars-bio. When it does, declare every
+carried field and check the written header against the frame.
+
+*Upstream (2026-09-30).* polars-bio #351 (closed) got the `set_source_metadata` recipe as its answer;
+#464 (merged) added the `INFO_<id>` convention, which also needs the id declared; #474 (open) proposes
+an explicit column-to-id mapping. A column declared in neither INFO nor FORMAT metadata passes through
+`src/write.rs:395-405` unmarked and the serializer skips it. **File at polars-bio:** warn or refuse with
+the dropped column names; cite #351 and #474.
+
+## P14 — `fork()` after a polars-bio call hangs the child
+
+Recorded in just-dna-lite (`docs/GRANIAN_POLARS_FORK_DEADLOCK.md`, `docs/DAGSTER_GUIDE.md:179`);
+reproduced on 0.36.0 with synthetic input: a child forked after a warm `scan_vcf` or `describe_vcf`
+hangs on its next polars-bio call and ignores SIGTERM. A child forked after a plain Polars sort hangs on
+the next sort too, and `import polars_bio` alone is harmless.
+
+Mitigation: just-vcf must not use fork-based multiprocessing once polars-bio has run; use `spawn`.
+
+*Upstream (2026-09-30).* Nothing in any tracker or doc. polars-bio builds Tokio runtimes in its Rust
+entry points (`src/scan.rs:1101`, `:1176`), and neither Tokio nor Rayon survives `fork()`. **Inherent,
+not a bug.** At most a "use spawn" note in polars-bio docs.
+
+## Harvested and closed without an entry (2026-09-30)
+
+Items the sibling sweep found that need nothing from upstream now.
+
+| Source | Item | Verdict |
+|---|---|---|
+| just-dna-lite `just-dna-pipelines/.../io.py:113-116` | INFO `ALLELE_ID` (Number=R with `.`) panicked | fixed upstream (pb #312/#314, dbf #74/#178); passes on 0.36.0 |
+| just-dna-lite `io.py:308-312` | predicate pushdown bug in `_translate_in_expr` (0.23) | fixed by pb #407; semi-join and `is_in` pass on 0.36.0 |
+| just-prs `CLAUDE.md:593`, just-dna-lite `CLAUDE.md:559` | PGEN 512 MiB companion cap (pb #453) | fixed by pb #454 in 0.36.0; #453 still shows open |
+| just-dna-lite `webui/.../compute/tasks.py:21` | `scan_vcf` plan cannot be serialized or pickled | inherent to Polars Python IO sources (needs cloudpickle); not polars-bio's |
+| just-prs `CLAUDE.md:592` | "all columns in a record batch must have the same length" on multi-column aggregation | not reproduced on 4-row or 300k-row inputs; no version or query recorded |
+| just-prs `sample_scores/publish.py:226,248` | "invalid BGZF" on some `.vcf.gz` | not reproduced on plain, nameless, multi-member or misnamed gzip; needs the failing file's first 18 bytes |
+| just-prs `vcf.py:49-55` | `register_vcf(chunk_size=8, concurrent_fetches=1)` | no defect recorded; tuning |
+| just-dna-format | — | does not use polars-bio; its one indirect item is P10 |
+
+Two sibling workarounds are now harmful rather than stale: just-dna-lite's INFO/FORMAT key drop (see P5)
+and its `ALLELE_ID` blocklist. Both belong in just-dna-lite's `docs/FEEDBACK.md`, not here.

@@ -481,6 +481,13 @@ same applies when the user corrects a preference: it goes below, in their words,
   unlike the rest of `/data/genomes`, and CC0 per the PGP Researcher FAQ, so a small one may become an
   `assets/` fixture. Data types are self-reported, so a file labelled 23andMe may be something else. Check the file first:
   participant uploads can carry real names in file names.
+- A full copy of `/data/genomes` (a superset: `pgp-hms` plus every person's folder) is on the Krypton
+  array at `/mnt/krypton/Genomes/genomes`, an SMB 3.1.1 share (`//192.168.200.10/Krypton`, autofs) served
+  by a VM behind the local bridge `virbr-krypton`; `pgp.VALIDATE.txt` there records the hash check of the
+  PGP-HMS copy. Measured 2026-10-09 against the local NTFS copy: sequential reads 120–150 MB/s against
+  about 540 MB/s; `sniff` 55 ms against 15 ms per file; one VCF `load()` 16–30% slower, same rows; four
+  loads in parallel 81 s against 57 s, every Krypton worker finishing together, which means the array's
+  bandwidth is the limit.
 - `../just-prs/data/input/vcf/newton_winter.vcf` is BGZF despite the `.vcf` name.
 - Public WGS samples used by the sibling suites are on Zenodo, records 18370498 and 19487816.
 - `data/interim/` holds a greppable mirror of the VCF stack under polars-bio: clones of polars-bio,

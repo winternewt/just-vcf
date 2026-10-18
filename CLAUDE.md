@@ -95,11 +95,12 @@ How to run one:
 
 Two exceptions, neither of them a questionnaire:
 
-- **A conflict with the charter.** The charter wins.
-- **A conflict over what a session may do — an allow against a deny — goes to the nearer rule:
-  local over repo over global** (the seats kit's D69, as Claude Code resolves its own settings and
-  plugins). A setting local to this clone outranks this repo's rules, which outrank the user's global
-  preferences. A seat's grant in `docs/seats/` therefore outranks a global rule that forbids the same
+- **A conflict with the charter.** The charter wins, always. It stands above every layer of the
+  order below: no local setting, seat grant, repo rule or global preference outranks it, however near.
+- **Beneath the charter, a conflict over what a session may do — an allow against a deny — goes to
+  the nearer rule: local over repo over global** (the seats kit's D69, as Claude Code resolves its own
+  settings and plugins). A setting local to this clone outranks this repo's rules, which outrank the
+  user's global preferences. A seat's grant in `docs/seats/` therefore outranks a global rule that forbids the same
   act, without asking: the user confirmed it once, by merging the pull request that brought the grant
   in. This settles precedence only; it grants nothing no rule writes down. A contradiction about
   anything else — a dependency tier, a wire contract, a rule against what the code does — is still a
@@ -499,7 +500,8 @@ same applies when the user corrects a preference: it goes below, in their words,
   far order wins (global wins by conflict, resulting in everytime confirmation, which is functional
   equivalent of explicit requests (sync, blocked on action)). Therefore it only makes sense to confirm
   the overrides Once, which is done at kit signoff stage (merge)". §1 sends allow/deny conflicts to the
-  nearer rule; merging a seat's pull request is the one confirmation of its grant.
+  nearer rule; merging a seat's pull request is the one confirmation of its grant. Then: "Charter should
+  be always on top" — nearer-wins orders only what sits beneath the charter.
 
 ## 11. Learned workspace facts
 

@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `scripts/item-next.py` counts an id as taken only where a heading, a reservation or a tombstone row
+  owns it, so a sibling's id quoted in prose no longer sets the maximum (just-dna-format's `RM267`,
+  quoted in RM3, made it hand out RM268; RM268 keeps its number). A reservation now lands in its anchor
+  section instead of the first bullet list below it. `tests/test_item_next.py` covers both.
 - The triage loop no longer syncs from the gist: its algorithm is read at the frozen revision
   `96b69533` through that revision's URL until the seats kit's triage role replaces it.
 - The inbox watcher runs under the triage seat (`[seat.triage.watch.inbox]` in `.blueprints.toml`),

@@ -17,9 +17,9 @@ has to be a single atomic write.
 
 So this does both halves in one critical section:
 
-* **Scan** every markdown file under `SCAN_DIR` for `<ITEM_PREFIX><digits>` and compute the next number.
-  The whole tree rather than the index alone: a tracked item gets referenced from design threads, probe
-  notes and changelogs, and a scanner reading one file would hand out a number another document uses.
+* **Scan** every markdown file under `SCAN_DIR` for the lines that *own* an id, and compute the next
+  number. The whole tree rather than the index alone, because an item outlives its place in the index:
+  shipped ones move to a history file under their own heading.
 * **Reserve** it by appending a placeholder row to `INDEX` while holding an advisory lock, so the next
   scan sees the number as taken — the placeholder contains it.
 
@@ -30,6 +30,13 @@ so there is nothing to go stale and nothing to clean up. And `flock` binds an **
 atomic writer that renames a new file over your index leaves the holder locking an unlinked inode while
 a second process opens the new file and acquires immediately. Verified in a sandbox before this was
 written; locking the file you are appending to looks correct and excludes nothing.
+
+**An id is taken where a line owns it, never where prose mentions it.** Three forms own one: an item's
+heading (`## RM47 — …`, in the index or the history file), a reservation row and a tombstone row. A
+mention in a body does not, because nothing in free prose tells ours from a sibling's: just-vcf's RM3
+quoted just-dna-format's "Their RM267", and the first cut of this scan, which counted every mention,
+handed out RM268. Under the allocator a number is claimed only by a row this tool writes, so an id
+that owns no line was never claimed here.
 
 **A reservation is a visible row in the index, not a side-car.** A state file the index cannot see is
 how a number goes missing, which is the failure a complete index exists to prevent. So a claimed and
@@ -86,12 +93,19 @@ SCAN_DIR = pathlib.Path(os.environ.get("SCAN_DIR", INDEX.parent)).resolve()
 #: part of it — the same furniture hazard § 5 records for the inbox documents.
 ANCHOR = os.environ.get("ANCHOR", "")
 
-#: Every `<ITEM_PREFIX><digits>`, anywhere. Deliberately not anchored to an index row: the number must
-#: be free across every document, and a mention in a design thread or a probe note is a use.
-ITEM_RE = re.compile(rf"\b{re.escape(ITEM_PREFIX)}(\d+)\b")
-
 #: The reservation row. The marker is what a later scan counts, so it must contain the number.
 RESERVED_RE = re.compile(rf"^- 🔷 \*\*reserved\*\* \*\*{re.escape(ITEM_PREFIX)}(\d+)\*\*")
+
+#: A released reservation's row; `_tombstone` writes it.
+TOMBSTONE_RE = re.compile(rf"^- ✖ \*\*{re.escape(ITEM_PREFIX)}(\d+)\*\*")
+
+#: The lines that own an id: an item's heading, a reservation, a tombstone. Anchored at line start, so
+#: an id quoted in a body (ours or a sibling's) is never read as taken.
+OWNER_RES = (
+    re.compile(rf"^#{{1,6}}\s+{re.escape(ITEM_PREFIX)}(\d+)\b"),
+    RESERVED_RE,
+    TOMBSTONE_RE,
+)
 
 LOCK_UNAVAILABLE = (
     "advisory locking is unavailable for {where} ({why}), so this reservation is NOT excluded from a "
@@ -100,7 +114,7 @@ LOCK_UNAVAILABLE = (
 
 
 def used_numbers() -> dict[int, str]:
-    """`{number: first file it was seen in}` for every id mentioned anywhere under `SCAN_DIR`.
+    """`{number: first file it was seen in}` for every id a line owns anywhere under `SCAN_DIR`.
 
     A reservation placeholder counts as used, which is the whole mechanism.
     """
@@ -113,8 +127,11 @@ def used_numbers() -> dict[int, str]:
             # handed out, so it is reported rather than skipped silently.
             print(f"warning: could not read {path}, so its ids are unknown", file=sys.stderr)
             continue
-        for found in ITEM_RE.finditer(text):
-            seen.setdefault(int(found.group(1)), str(path))
+        for line in text.splitlines():
+            for owner in OWNER_RES:
+                found = owner.match(line)
+                if found:
+                    seen.setdefault(int(found.group(1)), str(path))
     return seen
 
 
@@ -161,7 +178,12 @@ def _tombstone(number: int) -> str:
 
 
 def _insert(text: str, row: str) -> str:
-    """Put `row` under `ANCHOR` (or the first `## ` heading), before that section's first list item.
+    """Put `row` under `ANCHOR` (or the first `## ` heading): before that section's first list item, or
+    at the section's end when it has none.
+
+    **The walk stops at the next heading.** It used to run on to the first list item anywhere below, so
+    under an empty `## Items` the row landed inside the bullet list of whichever item came first with
+    one, and read as part of that item.
 
     The end-of-file fallback is announced rather than silent: a row that lands under a document's
     closing prose reads as part of it, and finding that out later is worse than being told now.
@@ -170,9 +192,17 @@ def _insert(text: str, row: str) -> str:
     for i, line in enumerate(lines):
         if line.startswith(ANCHOR) if ANCHOR else line.startswith("## "):
             at = i + 1
-            while at < len(lines) and not lines[at].startswith("- "):
+            while at < len(lines) and not lines[at].startswith(("- ", "#")):
                 at += 1
-            lines.insert(at, row)
+            if at == len(lines) or lines[at].startswith("#"):
+                # No list in the section: end it with the row, set off by one blank line on each side,
+                # in place of the blank run that ended it.
+                end = at
+                while at > i + 1 and not lines[at - 1].strip():
+                    at -= 1
+                lines[at:end] = ["", row] + ([""] if end < len(lines) else [])
+            else:
+                lines.insert(at, row)
             return "\n".join(lines) + "\n"
     wanted = f"{ANCHOR!r} heading" if ANCHOR else "'## ' heading"
     print(

@@ -22,8 +22,10 @@ does; this one holds the local rules the pass reads.
 - Tracked items are roadmap entries, `RM<n>` in `docs/ROADMAP.md`, claimed with `scripts/item-next.py`.
 - The four scripts live in `scripts/`. The defaults of `triage-state.py`, `triage-archive.py`,
   `item-next.py` and `watch-inbox.sh` are derived from the script's own location, not from the working
-  directory, and the watcher's `RUNBOOK` default is `docs/seats/TRIAGE.md`. Those are the only changes
-  from the gist copies. The gist's `wake-on-inbox.sh` and `arm-on-prompt.py` were dropped when the
+  directory, and the watcher's `RUNBOOK` default is `docs/seats/TRIAGE.md`. `item-next.py` also counts
+  an id as taken only where a heading, a reservation or a tombstone owns it, never where prose quotes it
+  (a sibling's `RM267` in RM3 once set the maximum), and puts a reservation inside its anchor section,
+  never in a later item's list. The gist's `wake-on-inbox.sh` and `arm-on-prompt.py` were dropped when the
   watcher moved under the seat.
 - The watcher guards branch `main`.
 

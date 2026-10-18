@@ -38,7 +38,8 @@ state that already has one home.
 Repeated from `CLAUDE.md` because these are the ones a seat is most likely to meet:
 
 - Never `git add -A` or `git add .`; stage explicit paths and read `git status` first. Commit as you go;
-  never `git push`, publish or release unless told. No `--amend`, rebase, `reset --hard` or force.
+  never `git push`, publish or release unless told (the tooling seat's grant tells it to push `main`
+  and its patch tags). No `--amend`, rebase, `reset --hard` or force.
   Never `git stash drop` or `git stash clear`.
 - Another seat's uncommitted file is work in flight: commit your own paths by name; never stash,
   revert or commit theirs. The one exception is a consumer's item left uncommitted in the inbox, which

@@ -59,8 +59,20 @@ moves the pin and retires what the release replaced.
 
 ## Grant
 
-Commit on `main`. Nothing else: no push, tag, publish or release (`CLAUDE.md` §2), and no edit of a
-sibling repository or of the kit.
+Commit on `main`; push `main` to `origin` as a fast-forward; patch tags, pushed to `origin`; its own
+`fix/<n>` branches, deleted with `git branch -d` and on `origin` once `-d` succeeded; its own worktrees,
+removed after the merge. These are the tree operations the kit's tooling seat holds (the kit's
+`docs/seats/TOOLING.md`, "Grant"), given to this seat by the person on 2026-10-18: "tooling gets same
+set of grants on tree ops upstream tooling has". For this seat they stand over `CLAUDE.md` §2's "never
+push" and "never delete a branch without asking". The kit's claim tags (`bin/claim`) have no
+counterpart here: ids are claimed by `scripts/item-next.py`, which writes a row, not a tag.
+
+Not covered, so the person's: a force push, rewriting pushed history, `git branch -D`, deleting or
+moving a tag, another seat's worktree or branch, a push anywhere but `origin`, a minor or major tag, a
+release or a publish to the package index, and any edit of a sibling repository or of the kit.
+
+**Use it without asking.** The kit's tooling seat was corrected on its first runs for asking leave to
+do what its grant covers ("If you have the permission, why HITL me on tag item?").
 
 ## Never
 

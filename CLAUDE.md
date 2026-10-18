@@ -153,7 +153,9 @@ without its reason gets rationalised away at 2 a.m.
 - **Git: commit as you go, never push.** Land each coherent block as its own commit, semantically
   grouped: a behaviour plus its test, doc and changelog line in one commit. No conventional-commit
   prefixes. Tagging and local branches are allowed. **Never** `git push`, publish to PyPI, or cut a
-  release unless explicitly told. Never delete a branch without asking. No `--amend`, rebase,
+  release unless explicitly told. Never delete a branch without asking. The tooling seat's grant
+  (`docs/seats/TOOLING.md`) is such a telling: it pushes `main` and patch tags, and deletes its own
+  merged `fix/<n>` branches, without asking. No `--amend`, rebase,
   `reset --hard` or force-anything; a mistake is fixed forward. **Never `git stash drop` /
   `git stash clear`**, even on explicit request. **Never `git add -A` or `git add .`** — it sweeps in
   `.env` files, editor swap files and junk; stage explicit paths and read `git status` first.
@@ -513,6 +515,11 @@ same applies when the user corrects a preference: it goes below, in their words,
   enough" (relayed through the kit's seat-builder on the desk). `docs/TRUST.md` became a threat model
   per source with exfiltration as the one threat; the public-genomes-only rule for outside code and
   the per-run approvals went, and §2 says so.
+
+- 2026-10-18, tooling grant: "On top, tooling gets same set of grants on tree ops upstream tooling
+  has". The tooling seat may commit, push `main` as a fast-forward, push patch tags, and delete its own
+  merged `fix/<n>` branches and worktrees, as the kit's tooling seat does. §2's "never push" still
+  holds for every other seat.
 
 ## 11. Learned workspace facts
 

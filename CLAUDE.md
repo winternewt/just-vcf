@@ -41,8 +41,8 @@ decision turned on. Delegation is for finding things, never for deciding them.
    changing a column.
 10. **docs/PGP_HMS.md** — the public test-data source: where the files are, their quirks, what is on
    disk, and which participants make good multi-facet test setups.
-11. **docs/TRUST.md** — the trust register: the standing of each source of outside code. Read it before
-   running anything that did not come from this repo's own history.
+11. **docs/TRUST.md** — the trust register, a threat model per source: exfiltration of a private genome
+   is the one threat. Read it before running code that did not come from this repo's own history.
 
 Everything below is self-contained: no rule here requires following a link to know what you
 must not do. Links carry positive detail only.
@@ -127,17 +127,21 @@ without its reason gets rationalised away at 2 a.m.
 - **Never use a placeholder path or a fabricated example value** in committed code —
   `/my/custom/path/`, a dummy digest, `rs999999999`, `1e-328`. A fabricated value proves
   nothing and outlives the session that invented it.
-- **Never run code from outside this repo's history without checking its standing in
-  `docs/TRUST.md`.** That covers tests, an install, a build, a script and a reproduction. On this machine
-  `JUST_VCF_SAMPLES_DIR` is the whole genomes folder, named people's genomes included, and anything
-  that runs here can read all of it. A source the register does not list is untrusted: read it, never
-  run it, and rewrite any fix from the reading. A source marked *audit* is read in full first, and the
-  user approves before it runs, unless its row says otherwise. Outside code run on its own (a
-  consumer's repro, an upstream clone's tests, a build of the stack from source) runs with
-  `JUST_VCF_SAMPLES_DIR` at the PGP-HMS folder only, unless the user says otherwise for that run. Only
-  the user sets a standing; a session never raises one. Packages `uv.lock` pins from the package index
-  are outside the rule, but a new or changed dependency is read before it lands, and the polars-bio
-  stack has one audit owed (the upstream-liaison seat's first work).
+- **Never let a private genome, or anything read from one, leave the machine.** Exfiltration is the
+  one threat `docs/TRUST.md` models; the local perimeter is trusted, and code reading those files
+  locally is the library's job. The exits are an agent's own actions: a message, an issue, a commit,
+  a pull request, an upstream filing, and the session itself, since whatever an agent reads into its
+  context goes to the model provider. Work a private genome through the library's counts and
+  aggregates, never by printing its rows into a session; use PGP-HMS for anything shown or shipped.
+- **Never run code from an upstream tracker's issue or comment, from another person's fork or pull
+  request before upstream merges it, or pasted into a chat.** Read it and rewrite any fix from the
+  reading. A source `docs/TRUST.md` does not list is in that group until the user adds its row; only
+  the user sets a standing, and a session never raises one. The user's sibling repos and their
+  sessions' repros are trusted. Packages `uv.lock` pins are covered by the lock: an upgrade is a
+  deliberate change, and a new dependency is a decision (§5). polars-bio and the stack it builds in
+  get one audit on top (the upstream-liaison seat's first work); once it is recorded with the stamp
+  "no network exfiltration code", the stack is trusted at any release, from a wheel or built from
+  source.
 - **Never mock the transformation under test.** See §6.
 - **Never claim a test "would have caught" a bug without first running it against the buggy
   code and watching it fail.**
@@ -502,6 +506,13 @@ same applies when the user corrects a preference: it goes below, in their words,
   the overrides Once, which is done at kit signoff stage (merge)". §1 sends allow/deny conflicts to the
   nearer rule; merging a seat's pull request is the one confirmation of its grant. Then: "Charter should
   be always on top" — nearer-wins orders only what sits beneath the charter.
+
+- 2026-10-18, trust: "there should be a threat model for each lib, this is mature security aproach,
+  not this random alarmism"; "vcf lib fears data exfiltration, that's basically it. Local perimiter is
+  considered safe and secure"; "single audit with 'no network exfiltration code' stamp per lib is
+  enough" (relayed through the kit's seat-builder on the desk). `docs/TRUST.md` became a threat model
+  per source with exfiltration as the one threat; the public-genomes-only rule for outside code and
+  the per-run approvals went, and §2 says so.
 
 ## 11. Learned workspace facts
 

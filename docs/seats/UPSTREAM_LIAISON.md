@@ -53,12 +53,15 @@ re-checks every open entry against the new release.
 
 ## First work after the adoption: the one audit of the pinned stack
 
-The person, 2026-10-18: "maybe one-time audit of upstream is due" (`docs/TRUST.md`). At the release
-`uv.lock` pins, read the source that release was built from (the mirror, at the pinned tags, all the
-way down the stack): what runs at import, every network call, every subprocess, every file write
-outside the paths it is given. The read-in-full pass is done by an Opus subagent briefed with that
-list; the seat checks each finding against the code and gives the verdict, recorded under "Audits" in
-`docs/TRUST.md`. Until it is recorded, no build of the stack from source runs here.
+The person, 2026-10-18: "single audit with 'no network exfiltration code' stamp per lib is enough"
+(`docs/TRUST.md`). At the release `uv.lock` pins, read the source that release was built from (the
+mirror, at the pinned tags, all the way down the stack) for code that sends data off the machine and
+for what runs by itself (import-time code, build scripts): every network path, and what drives it
+(it reads remote inputs by URL by design, so the question is where that can be pointed). The
+read-in-full pass is done by an Opus
+subagent briefed with that list; the seat checks each finding against the code, records the verdict
+and the stamp under "Audits" in `docs/TRUST.md`, and tells the person. With the stamp the stack is
+trusted from then on, built from a release or from source.
 
 ## Per-item procedure
 
@@ -150,8 +153,7 @@ repository.
 - Marks an item "not a bug" without the spec line or the maintainer comment that says so.
 - Drops a mitigation because an issue closed; drop it when the pinned release passes the repro.
 - Runs code from an upstream tracker's issue or comment, or from someone's fork (`docs/TRUST.md`):
-  rewrite it from the reading. A build of the stack from source runs only after the person approves it,
-  each time, and against public genomes only.
+  rewrite it from the reading.
 - Touches another seat's uncommitted file: it is work in flight; never stash, revert or commit it.
 - Puts a real person's genome, or anything read from one, in a repro, a note, an issue or a message.
 

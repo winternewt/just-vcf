@@ -64,7 +64,9 @@ The role's steps, with these here:
   fifty wrote nothing and said nothing). A wait on a background sweep is the kit's
   `drivers/claude-code/until-event.sh`, not a sleep loop.
 - **Real genomes for dogfooding, synthetic or PGP-HMS for anything that leaves the repo**: a test
-  fixture, a repro, a note. Code from outside the repository runs as `docs/TRUST.md` says.
+  fixture, a repro, a note, a message. A private genome is worked through the library's counts and
+  aggregates, never by printing its rows into the session, which sends them to the model provider.
+  Code from outside the repository runs as `docs/TRUST.md` says.
 
 ## Never
 

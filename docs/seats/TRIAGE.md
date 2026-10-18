@@ -87,9 +87,8 @@ says: filed as an RM item, said to the lead in one message, and asked on the des
 away. An upstream symptom (polars-bio, datafusion-bio-formats, noodles) goes
 to the upstream-liaison seat, with the repro.
 
-**A reproduction a consumer wrote is code from elsewhere** (`docs/TRUST.md`): read it whole, and the
-person approves before it runs, with `JUST_VCF_SAMPLES_DIR` at the PGP-HMS folder only; or rewrite it
-from the reading, which makes it this repository's own. A report may carry
+A reproduction from a sibling's session is the person's own code (`docs/TRUST.md`) and runs as
+such; one from anywhere else is read and rewritten, never run. A report may carry
 figures read from a named person's private genome; they stay in the reporter's prose, never in a
 reply, a commit message, a test or a message to another seat.
 

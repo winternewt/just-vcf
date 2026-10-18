@@ -1,0 +1,9 @@
+# Who is on just-vcf's team, by chat account id (the seats kit's BASE.md, "Who speaks"). The repo is
+# private, so its team file lives here. A seat needs no entry: it is known by its account.
+# Add a person with the kit's `scripts/seats.py invite-human ROLE ADDRESS`, then
+# `seats.py humans team.toml --record`. Roles: maintainer, member, guest; rights: owner, contributor, none.
+
+[person.winternewt]
+zulip = 1213223
+role = "maintainer"
+right = "owner"

@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The repo runs on the seats kit (`agent-seat-blueprints`, plugin pinned at v0.1.60, local scope): three
+  seats, triage, upstream-liaison and a new lead, are taken with `/seats:seat <seat>` and declared in
+  `.blueprints.toml`, and `team.toml` lists the people. `docs/TRUST.md`, the trust register, decides
+  what outside code may run here. `CLAUDE.md` names it among the non-negotiables. `docs/seats/README.md`
+  drops the old priming line and announce round, which the kit now covers.
 - The charter is committed as `docs/CHARTER_DRAFT.md`. While it is a draft it is edited directly, with
   no amendment procedure; it becomes `docs/CHARTER.md` when the user signs it off.
 - A triage seat (`docs/seats/TRIAGE.md`) owns the consumer inbox, and `docs/seats/README.md` sets out how

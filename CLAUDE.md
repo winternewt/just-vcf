@@ -41,22 +41,30 @@ decision turned on. Delegation is for finding things, never for deciding them.
    changing a column.
 10. **docs/PGP_HMS.md** — the public test-data source: where the files are, their quirks, what is on
    disk, and which participants make good multi-facet test setups.
+11. **docs/TRUST.md** — the trust register: the standing of each source of outside code. Read it before
+   running anything that did not come from this repo's own history.
 
 Everything below is self-contained: no rule here requires following a link to know what you
 must not do. Links carry positive detail only.
 
-**Seats.** `docs/seats/` holds standing roles a session can take; every seat shares this file and adds
-its own priming file (`docs/seats/README.md` has the table and the conventions). Prime one with
-`prime from docs/seats/<SEAT>.md`.
+**Seats.** Three standing roles run here on the seats kit (`agent-seat-blueprints`). A session takes
+one with `/seats:seat <seat>`; every seat shares this file, the kit's base and its own priming file in
+`docs/seats/`. `.blueprints.toml` declares the seats and who may wake each one, `team.toml` lists the
+people by chat account, and `docs/seats/README.md` has the table. The kit's plugin is pinned at local
+scope in `.claude/settings.local.json`, which is untracked and git-ignored. Move this clone to another
+kit release with the kit's `bin/move-to-tag`; editing the ref in that file moves nothing.
 
-| Seat | Owns |
-|---|---|
-| `docs/seats/TRIAGE.md` | the consumer inbox and the triage loop's scripts and gist sync |
-| `docs/seats/UPSTREAM_LIAISON.md` | polars-bio and the layers under it, via `docs/POLARS_BIO_PENDING_FIXES.md` |
+| Seat | Priming | Owns |
+|---|---|---|
+| triage | `docs/seats/TRIAGE.md` | the consumer inbox (`docs/FEEDBACK.md`, `docs/FEEDBACK_HISTORY.md`), the `S<n>` ids, the triage loop's scripts and runbook |
+| upstream-liaison | `docs/seats/UPSTREAM_LIAISON.md` | polars-bio and the layers under it, via `docs/POLARS_BIO_PENDING_FIXES.md`, and the mirror under `data/interim/` |
+| lead | `docs/seats/LEAD.md`, `docs/seats/LEAD_NOTES.md` | the user's own coding sessions: the roadmap, the design, the build |
 
-**`.claude/`** holds one thing: `settings.json` registers `scripts/arm-on-prompt.py` as a
-`UserPromptSubmit` hook, which arms the inbox watcher when a prompt cites `docs/seats/TRIAGE.md`. There
-are no skills, agents or workflows yet.
+**`.claude/settings.json`**, the tracked one, holds one thing: it registers `scripts/arm-on-prompt.py`
+as a `UserPromptSubmit` hook, which arms the inbox watcher when a prompt cites `docs/seats/TRIAGE.md`.
+The triage seat's first work moves that watcher under the seat (`[seat.triage.watch.inbox]` in
+`.blueprints.toml`) and rewrites this paragraph in the same commit. Until then the hook stays: two
+wakers ring twice. The repo has no skills, agents or workflows of its own; the kit's come with its plugin.
 
 ---
 
@@ -107,6 +115,17 @@ without its reason gets rationalised away at 2 a.m.
 - **Never use a placeholder path or a fabricated example value** in committed code —
   `/my/custom/path/`, a dummy digest, `rs999999999`, `1e-328`. A fabricated value proves
   nothing and outlives the session that invented it.
+- **Never run code from outside this repo's history without checking its standing in
+  `docs/TRUST.md`.** That covers tests, an install, a build, a script and a reproduction. On this machine
+  `JUST_VCF_SAMPLES_DIR` is the whole genomes folder, named people's genomes included, and anything
+  that runs here can read all of it. A source the register does not list is untrusted: read it, never
+  run it, and rewrite any fix from the reading. A source marked *audit* is read in full first, and the
+  user approves before it runs, unless its row says otherwise. Outside code run on its own (a
+  consumer's repro, an upstream clone's tests, a build of the stack from source) runs with
+  `JUST_VCF_SAMPLES_DIR` at the PGP-HMS folder only, unless the user says otherwise for that run. Only
+  the user sets a standing; a session never raises one. Packages `uv.lock` pins from the package index
+  are outside the rule, but a new or changed dependency is read before it lands, and the polars-bio
+  stack has one audit owed (the upstream-liaison seat's first work).
 - **Never mock the transformation under test.** See §6.
 - **Never claim a test "would have caught" a bug without first running it against the buggy
   code and watching it fail.**

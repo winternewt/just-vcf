@@ -9,9 +9,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   file gets `facets.split_marker` when vt's `OLD_MULTIALLELIC` or a bcftools `--old-rec-tag` key tagged
   a record, and each signal is one warning with its count. In such a row a `0` can mean another ALT,
   and `gt_alleles` still reads it as REF: no value changed. Whether to withhold those `0`s is on the
-  person's desk (#45). Measured: no signal on four unsplit WGS VCFs (22.2 million calls). Not run: a
-  real split file (only synthetic ones), and the unsplit gVCFs, whose count was still running. The
-  detection is one extra pass over the file. A cached copy is rewritten once (`REWRITE_VERSION` 5),
+  person's desk (#45). Measured: no signal on four unsplit WGS VCFs (22.2 million calls) or on two
+  unsplit gVCFs. Not run: a real split file (only synthetic ones). The patterns are read from the
+  parquet spill, about 1.2 s on a 30 s load of 6.4 million calls; a second parse of the VCF had cost
+  12 to 17 s. A cached copy is rewritten once (`REWRITE_VERSION` 5),
   since the copy made for a refused header now keeps the marker keys.
 
 - The clone is on the seats kit v0.1.69, whose `watch-file.sh` asks the remote for its default branch

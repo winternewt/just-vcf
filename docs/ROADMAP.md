@@ -206,6 +206,8 @@ is Kleene: true when seen, null otherwise, never false, because a split file can
 four unsplit private WGS VCFs (DeepVariant ×2, DRAGEN, GATK HaplotypeCaller), 22.2 million calls: no
 signal fired. Only the DRAGEN file had positions with two records (10), none matching. The rate on a
 real split file is not measured (no bcftools here); a synthetic split VCF is caught at both its sites.
+The two unsplit DeepVariant gVCFs gave no signal either: no two call rows share a position once their
+reference blocks go to `blocks`, which never take part.
 
 **What the frame says about a `0` it cannot place.** No option changes `gt`, the row grain, or
 `source_gt` where it is kept (null on VCF 4.4+, P4). Not decided:

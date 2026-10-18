@@ -364,3 +364,11 @@ def test_split_markers_flag_their_rows(tmp_path: Path) -> None:
     assert facet["split_marker"] == "OLD_MULTIALLELIC,ORIGINAL"
     assert not {"INFO/ORIGINAL", "INFO/OLD_MULTIALLELIC"} & set(facet["dropped_fields"] or [])
     assert any(w.startswith("3 row(s) tagged as split") for w in loaded.warnings)
+
+
+def test_a_declared_marker_that_tags_nothing_leaves_the_facet_null(tmp_path: Path) -> None:
+    bcftools = '##INFO=<ID=ORIGINAL,Number=1,Type=String,Description="Original variant. Format: CHR|POS|REF|ALT|USED_ALT_IDX">'
+    records = ["1\t200\t.\tC\tG\t50\tPASS\tORIGINAL=1|199|TC|TG\tGT\t0/1"]  # realigned, not split
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=(bcftools,))))
+    assert loaded.facets.collect()["split_marker"][0] is None
+    assert loaded.calls.collect()["split_signal"].to_list() == [None] and loaded.warnings == ()

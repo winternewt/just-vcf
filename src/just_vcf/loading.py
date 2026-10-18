@@ -174,12 +174,27 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         stats = vcf.scan_stats(records)
         if left_out := vcf.pos_zero_left_out(cache):
             warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
-    calls, blocks, row_warnings, split_marker = vcf.to_rows(records, header, stats)
+    calls, blocks, row_warnings = vcf.to_rows(records, header, stats)
     warnings += row_warnings
     if (header.version_tuple or (0, 0)) >= (4, 4):
         warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
 
     facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={"sample_index": header.samples.index(chosen) if chosen else None})
+    calls_frame, blocks_frame = vcf.to_frames(calls, blocks, facet_id)
+    # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
+    # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
+    spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
+    spill.mkdir(parents=True, exist_ok=True)
+    pl.collect_all(
+        [
+            calls_frame.sink_parquet(spill / "calls.parquet", row_group_size=_SPILL_ROW_GROUP, lazy=True),
+            blocks_frame.sink_parquet(spill / "blocks.parquet", row_group_size=_SPILL_ROW_GROUP, lazy=True),
+        ]
+    )
+    contigs = [canonical_chrom(name) for name in stats["chroms"]]
+    spilled = pl.scan_parquet(spill / "calls.parquet")
+    flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
+    warnings += vcf.split_warnings(flagged, marker_rows, header)
     facet = {
         "facet_id": facet_id,
         "source_sha256": source_sha256,
@@ -196,28 +211,16 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         "vcf_version": header.version,
         "sample_meta": header.sample_meta,
         "dropped_fields": vcf.dropped_fields(header),
-        "split_marker": split_marker,
+        "split_marker": ",".join(sorted(header.split_markers)) if marker_rows else None,
     }
     facets = pl.LazyFrame([facet], schema={name: FACETS[name] for name in facet}).select(
         [pl.col(name) if name in facet else pl.lit(None, dtype=dtype).alias(name) for name, dtype in FACETS.items()]
     )
     for warning in warnings:
         logger.warning("%s: %s", facet_id, warning)
-    calls_frame, blocks_frame = vcf.to_frames(calls, blocks, facet_id)
-    # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
-    # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
-    spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-    spill.mkdir(parents=True, exist_ok=True)
-    pl.collect_all(
-        [
-            calls_frame.sink_parquet(spill / "calls.parquet", row_group_size=_SPILL_ROW_GROUP, lazy=True),
-            blocks_frame.sink_parquet(spill / "blocks.parquet", row_group_size=_SPILL_ROW_GROUP, lazy=True),
-        ]
-    )
-    contigs = [canonical_chrom(name) for name in stats["chroms"]]
     return Loaded(
         facets=facets,
-        calls=canonical_order_per_contig(pl.scan_parquet(spill / "calls.parquet"), contigs),
+        calls=canonical_order_per_contig(vcf.with_split_groups(spilled, flagged), contigs),
         blocks=canonical_order_per_contig(pl.scan_parquet(spill / "blocks.parquet"), contigs),
         warnings=tuple(warnings),
     )

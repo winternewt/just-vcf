@@ -262,7 +262,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
 | `sample_meta` | the file's `##SAMPLE` and `##PEDIGREE` lines for this sample, verbatim. Pedigree becomes GA4GH Pedigree later (charter) |
 | `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9) |
-| `split_marker` | the declared INFO key(s), comma-joined, that tagged a record as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
+| `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
@@ -321,7 +321,8 @@ A signal is evidence, not proof: an SNV and an indel on two haplotypes at one PO
 the slot pattern. Out of reach: Hail's split output, which sorts unphased calls (`0/1` + `0/1`); split
 indels that left-alignment moved to another POS; and a split file where no position kept two rows.
 Rows written with `.` for the other ALT (vt, Glow, vcflib, `bcftools --multi-overlaps .`) are already
-half-calls. Each signal is one warning line with its count.
+half-calls. Each signal is one warning line with its count. The patterns are read from the loader's
+parquet spill of `calls`, three columns, so they cost no second parse of the VCF.
 
 **`end_pos`.** It is named apart from polars-bio's `end` because that value is wrong for symbolic SV
 alleles (P3), so the two must not share a name. The rule follows VCF 4.5's computed END:

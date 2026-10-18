@@ -449,26 +449,26 @@ def _marker_expr(header: Header) -> pl.Expr:
     return pl.any_horizontal(tagged) if tagged else pl.lit(False)
 
 
-def split_groups(rows: pl.LazyFrame, header: Header, ploidy: int) -> tuple[pl.DataFrame, dict[str, int]]:
+def split_groups(calls: pl.LazyFrame, ploidy: int) -> tuple[pl.DataFrame, int]:
     """Positions whose rows look like one multi-allelic site written one row per ALT (RM270).
 
-    `rows` are the records that become `calls` (blocks left out), with `gt` and the source `chrom`
-    and `start`. Returns the flagged positions, `(chrom, start, rows, split_group)`, where
-    `split_group` is the pattern a position fits, and the count of marker-tagged rows per declared
-    marker key. One streaming pass; the result holds only flagged positions.
+    `calls` is a facet's `calls` frame before this pass, with `split_signal` set on marker-tagged rows
+    only; blocks are never in it. Returns the flagged positions, `(chrom, pos, rows, split_group)`,
+    where `split_group` is the pattern a position fits, and the number of marker-tagged rows. One
+    pass over three columns; the result holds only flagged positions.
     """
     slots = range(max(ploidy, 1))
     nonzero = [pl.col("gt").list.get(i, null_on_oob=True).fill_null(0) > 0 for i in slots]
     all_zero = pl.col("gt").list.eval(pl.element().is_not_null() & (pl.element() == 0)).list.all() & (pl.col("gt").list.len() > 0)
-    per_row = rows.select(
+    per_row = calls.select(
         "chrom",
-        "start",
+        "pos",
         pl.any_horizontal(nonzero).alias("nonref"),
         all_zero.fill_null(False).alias("all_zero"),
         *[flag.alias(f"slot_{i}") for i, flag in zip(slots, nonzero)],
     )
     groups = (
-        per_row.group_by("chrom", "start")
+        per_row.group_by("chrom", "pos")
         .agg(
             pl.len().alias("rows"),
             pl.col("nonref").sum().alias("nonref"),
@@ -478,7 +478,7 @@ def split_groups(rows: pl.LazyFrame, header: Header, ploidy: int) -> tuple[pl.Da
         .filter(pl.col("rows") > 1)
         .select(
             "chrom",
-            "start",
+            "pos",
             "rows",
             pl.when((pl.col("nonref") >= 2) & (pl.max_horizontal(f"slot_{i}" for i in slots) <= 1))
             .then(pl.lit(SplitSignal.SLOT_PATTERN.value))
@@ -488,10 +488,36 @@ def split_groups(rows: pl.LazyFrame, header: Header, ploidy: int) -> tuple[pl.Da
         )
         .filter(pl.col("split_group").is_not_null())
     )
-    keys = sorted(header.split_markers)
-    marked = rows.select([_tagged(key, header.split_markers[key]).sum().alias(key) for key in keys] or [pl.lit(0).alias("_none")])
-    flagged, counts = pl.collect_all([groups, marked])
-    return flagged.sort("chrom", "start"), {key: counts[key].item() for key in keys}
+    marked = calls.select((pl.col("split_signal") == SplitSignal.MARKER.value).sum())
+    flagged, marker_rows = pl.collect_all([groups, marked])
+    return flagged.sort("chrom", "pos"), marker_rows.item()
+
+
+def with_split_groups(calls: pl.LazyFrame, flagged: pl.DataFrame) -> pl.LazyFrame:
+    """`calls` with each flagged position's pattern in `split_signal`, where no marker set it first."""
+    return (
+        calls.join(flagged.lazy().select("chrom", "pos", "split_group"), on=["chrom", "pos"], how="left", maintain_order="left")
+        .with_columns(pl.coalesce(pl.col("split_signal"), pl.col("split_group").cast(CALLS["split_signal"])).alias("split_signal"))
+        .drop("split_group")
+    )
+
+
+def split_warnings(flagged: pl.DataFrame, marker_rows: int, header: Header) -> list[str]:
+    """One warning per RM270 signal that fired, with its count."""
+    warnings = []
+    if marker_rows:
+        warnings.append(
+            f"{marker_rows} row(s) tagged as split off a multi-allelic site (INFO {', '.join(sorted(header.split_markers))}): "
+            "a `0` there may mean another ALT, not REF (RM270)"
+        )
+    for signal in (SplitSignal.SLOT_PATTERN, SplitSignal.ALL_ZERO_BESIDE_ALT):
+        group = flagged.filter(pl.col("split_group") == signal.value)
+        if group.height:
+            warnings.append(
+                f"{group['rows'].sum()} row(s) at {group.height} position(s) look split one row per ALT ({signal.value}): "
+                "a `0` there may mean another ALT, not REF (RM270)"
+            )
+    return warnings
 
 
 def _alts_expr() -> pl.Expr:
@@ -503,9 +529,8 @@ def _alts_expr() -> pl.Expr:
     )
 
 
-def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str], str | None]:
-    """Lazy `calls` and `blocks` rows (without `facet_id`) from `read_records` output, the warnings,
-    and the facet's `split_marker`: the declared marker key(s) that tagged a record, or null."""
+def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str]]:
+    """Lazy `calls` and `blocks` rows (without `facet_id`) from `read_records` output, plus warnings."""
     warnings = [
         f"{stats[f'out_{key}']} {key} value(s) outside 0..{top} set to null"
         for key, top in _BOUNDED.items()
@@ -536,27 +561,10 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
     # A record is a block only when it asserts reference or nothing: a GT calling `<*>` stays a call.
     reference_or_nothing = pl.col("gt").is_null() | pl.col("gt").list.eval(pl.element().is_null() | (pl.element() == 0)).list.all()
     rows = rows.with_columns((pl.col("_block") & reference_or_nothing).alias("_block"))
-    # RM270: positions that look split one row per ALT, over the rows that become calls.
-    flagged, marked = split_groups(rows.filter(~pl.col("_block")), header, stats["ploidy_max"] or 1)
-    rows = rows.join(flagged.lazy().select("chrom", "start", "split_group"), on=["chrom", "start"], how="left").with_columns(
-        pl.when(_marker_expr(header) & ~pl.col("_block"))
-        .then(pl.lit(SplitSignal.MARKER.value))
-        .otherwise(pl.col("split_group"))
-        .alias("split_signal")
+    # RM270: a marker tags its own row here; the patterns need whole positions, read from the spill.
+    rows = rows.with_columns(
+        pl.when(_marker_expr(header)).then(pl.lit(SplitSignal.MARKER.value)).alias("split_signal")
     )
-    split_marker = ",".join(key for key, n in marked.items() if n) or None
-    if split_marker:
-        warnings.append(
-            f"{sum(marked.values())} row(s) tagged as split off a multi-allelic site (INFO {split_marker}): "
-            "a `0` there may mean another ALT, not REF (RM270)"
-        )
-    for signal in (SplitSignal.SLOT_PATTERN, SplitSignal.ALL_ZERO_BESIDE_ALT):
-        group = flagged.filter(pl.col("split_group") == signal.value)
-        if group.height:
-            warnings.append(
-                f"{group['rows'].sum()} row(s) at {group.height} position(s) look split one row per ALT ({signal.value}): "
-                "a `0` there may mean another ALT, not REF (RM270)"
-            )
     rows = _phase_sets(rows)
 
     gp, gp_warning = _gp(header, stats)
@@ -604,7 +612,7 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
         "dp_min",
         "gl",
     )
-    return calls, blocks, warnings, split_marker
+    return calls, blocks, warnings
 
 
 def _is_block_record(alts: pl.Expr) -> pl.Expr:

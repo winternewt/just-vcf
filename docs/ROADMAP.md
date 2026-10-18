@@ -142,7 +142,8 @@ Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scor
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
 1.1.0) writes a man's non-PAR X as `1/1` and `0/1`, a sex-aware one (DRAGEN) writes or filters it
 differently, and arrays split by vendor (23andMe one letter; AncestryDNA the same letter twice, per the
-`ancestrydna` format notes). A consumer reading `gt_alleles` cannot tell one copy from two.
+`ancestrydna` format notes; that format has no loader yet, RM2). A consumer reading `gt_alleles`
+cannot tell one copy from two.
 
 Reproduced 2026-10-18 against the code, on a synthetic VCF: `##DeepVariant_version=1.1.0` in the
 header still leaves `facets.caller` and `caller_version` null, and a male-X `1` loads as one allele

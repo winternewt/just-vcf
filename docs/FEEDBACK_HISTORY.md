@@ -90,3 +90,11 @@ What to do now: keep the stopgap, and keep its output shape close to RM269's (a 
 evidence it came from; caller, version and ploidy model per input), so moving to just-vcf is a swap of
 source. Watch `docs/CHANGELOG.md` for RM269.
 <!-- triaged: 0.1.0 · sha abd809824f31 -->
+
+**Status — correction, 2026-10-18.** The reply above says the same man "does load with a different
+list length by vendor today". That is wrong: just-vcf has no AncestryDNA loader yet. `sniff`
+recognises the file, and `load()` refuses it with `UnsupportedFormatError` ("no loader for
+ancestrydna"); the AncestryDNA loader is part of RM2's vendor CSVs, not shipped. The two-letter
+encoding comes from our `ancestrydna` format notes, not from a load. So today the vendor split shows
+up only once that loader lands, and RM269 has to cover it then. Nothing else in the reply changes.
+<!-- triaged: 0.1.0 · sha abd809824f31 -->

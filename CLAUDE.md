@@ -47,12 +47,13 @@ decision turned on. Delegation is for finding things, never for deciding them.
 Everything below is self-contained: no rule here requires following a link to know what you
 must not do. Links carry positive detail only.
 
-**Seats.** Three standing roles run here on the seats kit (`agent-seat-blueprints`). A session takes
+**Seats.** Four standing roles run here on the seats kit (`agent-seat-blueprints`). A session takes
 one with `/seats:seat <seat>`; every seat shares this file, the kit's base and its own priming file in
 `docs/seats/`. `.blueprints.toml` declares the seats and who may wake each one, `team.toml` lists the
 people by chat account, and `docs/seats/README.md` has the table. The kit's plugin is pinned at local
-scope in `.claude/settings.local.json`, which is untracked and git-ignored. Move this clone to another
-kit release with the kit's `bin/move-to-tag`; editing the ref in that file moves nothing.
+scope in `.claude/settings.local.json`, which is untracked and git-ignored. Only the tooling seat moves
+this clone to another kit release, with the kit's `bin/move-to-tag`; the other seats' sessions then
+`/reload-plugins` when it says so. Editing the ref in that file moves nothing.
 
 | Seat | Priming | Owns |
 |---|---|---|

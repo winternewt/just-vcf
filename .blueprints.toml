@@ -8,11 +8,10 @@ id = "just-vcf"
 wake_from = "just-vcf/lead just-vcf/upstream-liaison just-vcf/tooling */secretary"
 
 [seat.triage.watch.inbox]
-# One line when docs/FEEDBACK.md settles (150 s after the last save), naming what is pending. The
-# command is the tooling seat's; the line is triage's.
-cmd = "bash scripts/watch-inbox.sh"
-# A settle with nothing pending and the branch pause/resume notices ask nothing of the seat.
-skip = "nothing pending|watch paused|watch resumed"
+# One line when docs/FEEDBACK.md differs from HEAD and has settled (150 s unchanged), said once per
+# state, a restart included; paused off main. The kit's watcher (#76): the command is the tooling
+# seat's, the line triage's. `--branch main`, since this clone's origin/HEAD is not set.
+cmd = "sh kit:drivers/git/watch-file.sh --branch main docs/FEEDBACK.md"
 
 [seat.triage.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"

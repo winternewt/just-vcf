@@ -21,7 +21,8 @@ role, "Why it exists").
 ## What it owns
 
 - **The triage loop's scripts and their tests**: `scripts/triage-state.py`, `triage-archive.py`,
-  `item-next.py`, `watch-inbox.sh`, and `tests/test_item_next.py`. Triage keeps the loop itself: the
+  `item-next.py`, and `tests/test_item_next.py`. The inbox watcher is the kit's `watch-file.sh`; its
+  command line in `.blueprints.toml` is this seat's. Triage keeps the loop itself: the
   inbox, the history, the runbook, the `S<n>` ids. A change triage needs in a script is a request to
   this seat.
 - **The watcher tables in `.blueprints.toml`** (`[seat.<name>.watch.<label>]`): their commands and

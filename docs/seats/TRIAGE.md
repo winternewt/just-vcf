@@ -20,9 +20,9 @@ nothing is owed.
 ## What it owns
 
 - `docs/FEEDBACK.md` and `docs/FEEDBACK_HISTORY.md`, and the `S<n>` id series across both;
-- the inbox watcher's line: `watch-inbox.sh`, run by the watchdog as `[seat.triage.watch.inbox]`,
-  wakes this seat. The loop's scripts (`triage-state.py`, `triage-archive.py`, `item-next.py`,
-  `watch-inbox.sh`) are the tooling seat's (`docs/seats/TOOLING.md`): a change the loop needs in one
+- the inbox watcher's line: the kit's `watch-file.sh`, run by the watchdog as
+  `[seat.triage.watch.inbox]`, wakes this seat. The loop's scripts (`triage-state.py`,
+  `triage-archive.py`, `item-next.py`) and the watcher's command are the tooling seat's (`docs/seats/TOOLING.md`): a change the loop needs in one
   is a request to it, by message, never a patch here;
 - `docs/CONSUMER_TRIAGE_LOOP.md`, the runbook.
 
@@ -34,8 +34,10 @@ items.
 
 ## How work reaches it
 
-- **The inbox watcher**: a line saying `FEEDBACK.md settled`, from `watch-inbox.sh` under the seat's
-  watchdog; a settle with nothing pending is skipped. After a context clear, a watcher line is the
+- **The inbox watcher**: a line saying `docs/FEEDBACK.md: uncommitted, +N -M lines against HEAD`
+  (or `new, not in HEAD`), from the kit's `watch-file.sh` under the seat's watchdog, once the file has
+  sat unchanged for 150 s. It names no item: step 1's `--pending` does. Your own reply left
+  uncommitted past the settle rings it too; let that one go. After a context clear, a watcher line is the
   whole brief: re-read this file.
 - **A sibling's session relaying a report**, by message or by appending to the inbox. A consumer's
   item left in `docs/FEEDBACK.md` uncommitted is taken as it stands: committed alone, its prose

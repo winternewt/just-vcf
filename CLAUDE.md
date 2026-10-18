@@ -56,13 +56,15 @@ kit release with the kit's `bin/move-to-tag`; editing the ref in that file moves
 
 | Seat | Priming | Owns |
 |---|---|---|
-| triage | `docs/seats/TRIAGE.md` | the consumer inbox (`docs/FEEDBACK.md`, `docs/FEEDBACK_HISTORY.md`), the `S<n>` ids, the triage loop's scripts and runbook |
+| triage | `docs/seats/TRIAGE.md` | the consumer inbox (`docs/FEEDBACK.md`, `docs/FEEDBACK_HISTORY.md`), the `S<n>` ids, the triage loop's runbook |
 | upstream-liaison | `docs/seats/UPSTREAM_LIAISON.md` | polars-bio and the layers under it, via `docs/POLARS_BIO_PENDING_FIXES.md`, and the mirror under `data/interim/` |
 | lead | `docs/seats/LEAD.md`, `docs/seats/LEAD_NOTES.md` | the user's own coding sessions: the roadmap, the design, the build |
+| tooling | `docs/seats/TOOLING.md` | the machinery: the triage loop's scripts and their tests, the watcher commands in `.blueprints.toml`, the leak gate's install, the kit's pin in this clone |
 
 **The inbox watcher runs under the triage seat**: `.blueprints.toml` declares
-`[seat.triage.watch.inbox]`, so the seat's watchdog runs `scripts/watch-inbox.sh` for as long as a
-session holds the seat and delivers each settle to it. Nothing arms it from a prompt, and the repo
+`[seat.triage.watch.inbox]`, so the seat's watchdog runs the kit's `drivers/git/watch-file.sh` on
+`docs/FEEDBACK.md` for as long as a session holds the seat and delivers each settle to it. The command
+is the tooling seat's; the line is triage's. Nothing arms it from a prompt, and the repo
 tracks no `.claude/settings.json`. The repo has no skills, agents or workflows of its own; the kit's
 come with its plugin.
 
@@ -428,13 +430,12 @@ is mitigated here but still owed upstream, which legitimately appears in two.
 `docs/FEEDBACK.md` holds **open** consumer items (`## Sn — …`); `docs/FEEDBACK_HISTORY.md` holds
 answered ones verbatim. **Empty inbox ⟹ nothing owed.** The triage seat (`docs/seats/TRIAGE.md`) runs
 it. The runbook is `docs/CONSUMER_TRIAGE_LOOP.md`; the tools are in `scripts/` and run directly (stdlib
-only):
+only; the inbox watcher is the kit's, run by the triage seat's watchdog):
 
 ```bash
 ./scripts/triage-state.py --pending   # what needs work
 ./scripts/triage-state.py --next      # next unclaimed id, over BOTH files
 ./scripts/triage-archive.py S1        # move an answered item, verifying the move
-./scripts/watch-inbox.sh              # one line when the inbox settles
 ```
 
 The `.py` scripts are Python. Run them directly or with `python3`, **never with `bash`**: under

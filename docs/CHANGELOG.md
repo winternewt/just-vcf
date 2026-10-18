@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The inbox watcher is the kit's `drivers/git/watch-file.sh` (kit #76); `scripts/watch-inbox.sh` is
+  gone. Its line points at the uncommitted diff rather than naming pending ids, which the pass's
+  `triage-state.py --pending` lists anyway, and an item a sibling leaves while no session holds the
+  triage seat is now said at the next punch-in, where the old watcher stayed quiet about any edit that
+  predated it.
 - The pinned polars-bio stack (0.36.0, with datafusion-bio-formats, the noodles and bigtools forks,
   datafusion-bio-functions and OpenDAL at their locked revisions) was audited once for code that sends
   data off the machine, and stamped "no network exfiltration code" in `docs/TRUST.md`. Every network

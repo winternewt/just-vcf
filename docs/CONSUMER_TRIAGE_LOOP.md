@@ -20,9 +20,9 @@ does; this one holds the local rules the pass reads.
 
 - Inbox `docs/FEEDBACK.md`, history `docs/FEEDBACK_HISTORY.md`, item prefix `S`.
 - Tracked items are roadmap entries, `RM<n>` in `docs/ROADMAP.md`, claimed with `scripts/item-next.py`.
-- The four scripts live in `scripts/`. The defaults of `triage-state.py`, `triage-archive.py`,
-  `item-next.py` and `watch-inbox.sh` are derived from the script's own location, not from the working
-  directory, and the watcher's `RUNBOOK` default is `docs/seats/TRIAGE.md`. `item-next.py` also counts
+- The three scripts live in `scripts/`. The defaults of `triage-state.py`, `triage-archive.py` and
+  `item-next.py` are derived from the script's own location, not from the working directory. The
+  watcher is the kit's `drivers/git/watch-file.sh`; the gist's `watch-inbox.sh` was retired for it. `item-next.py` also counts
   an id as taken only where a heading, a reservation or a tombstone owns it, never where prose quotes it
   (a sibling's `RM267` in RM3 once set the maximum), and puts a reservation inside its anchor section,
   never in a later item's list. The gist's `wake-on-inbox.sh` and `arm-on-prompt.py` were dropped when the
@@ -32,15 +32,17 @@ does; this one holds the local rules the pass reads.
 ## Arming the watcher
 
 Nothing to arm by hand. `.blueprints.toml` declares `[seat.triage.watch.inbox]` with
-`cmd = "bash scripts/watch-inbox.sh"`, and the triage seat's watchdog runs it from the repo root for as
-long as a session holds the seat: started at punch-in, restarted with backoff if it exits, stopped with
-the seat. Each settle arrives as a watcher line, `FEEDBACK.md settled: S<n>(new) … — triage per
-docs/seats/TRIAGE.md`, and wakes an idle seat. The table's `skip` drops a settle with nothing pending
-and the branch pause and resume notices, as the gist's wrapper did. The watchdog reads the table only when it starts, so a
+`cmd = "sh kit:drivers/git/watch-file.sh --branch main docs/FEEDBACK.md"`, and the triage seat's
+watchdog runs it from the repo root for as long as a session holds the seat: started at punch-in,
+restarted with backoff if it exits, stopped with the seat. When the inbox differs from HEAD and has sat
+unchanged for 150 s, a watcher line arrives, `docs/FEEDBACK.md: uncommitted, +N -M lines against HEAD:
+git diff HEAD -- docs/FEEDBACK.md`, and wakes an idle seat. Each state is said once, across a restart
+too, so an item a sibling left while no one held the seat is said at the next punch-in. Off `main` it
+pauses silently. The line names no item; the pass's `--pending` does. The watchdog reads the table only when it starts, so a
 change to it takes `watchdog.py stop triage` and `/seats:seat triage` again.
 
-The watcher is a singleton per inbox: a second one started for the same file replaces the first. Never
-start it from the agent as well; two wakers ring twice.
+Never start a watcher from the agent as well: nothing stops a second one on the same file, and two
+wakers ring twice.
 
 ## Intake from Zulip and from other sessions
 

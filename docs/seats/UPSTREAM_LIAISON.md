@@ -3,8 +3,7 @@
 Taken with `/seats:seat upstream-liaison`. The seats kit's base (loaded at every session start)
 holds what every seat knows: messages, the desk, unattended runs, who speaks. `CLAUDE.md` holds the
 house rules. This file adds the seat; the kit has no liaison role yet, and this file is its first
-instance. `CLAUDE.md`'s seats paragraph and `docs/seats/README.md` (the old priming line, the announce
-round) are superseded by this file and the kit until the lead rewrites them (`docs/seats/LEAD_NOTES.md`).
+instance.
 
 Rewritten onto the kit's base by the kit's seat-builder (2026-10-18) from the pre-kit priming and
 five sessions of this repository read whole, one of them a sitting of this seat (2026-09-30 and

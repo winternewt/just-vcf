@@ -73,10 +73,17 @@ The role's steps, with these here:
 
 ## Grant
 
-Commit on `main`; local branches; a tag marking a state (`schema-v0.0.1` was cut on the sign-off).
-Not covered, so the person's: any push, a release or a publish to the package index (`CLAUDE.md` §2;
-"ok keep never push"); deleting a branch, a file under `/data/genomes` or a cache (the person runs
-those); an edit to the charter on its own initiative.
+The person's grant of 2026-10-18 ("from now on you get push, branch, pr, merge -d grants, same as
+upstream's lead currently have"), the kit lead's grant fitted to this repository: commit on `main`;
+push `main` to `origin` as a fast-forward; local branches, and its own branches pushed to `origin`;
+open a pull request from its own branch and merge it; a tag marking a state (`schema-v0.0.1` was cut
+on the sign-off), pushed; its own branches deleted with `git branch -d`, and on `origin` once `-d`
+succeeded; its own worktrees removed after the merge. Use it without asking.
+
+Not covered, so the person's: a force push, rewriting pushed history, `git branch -D`, deleting or
+moving a tag, another seat's branch, worktree or pull request, a push to any other remote; a release
+or a publish to the package index (`CLAUDE.md` §2); deleting a file under `/data/genomes` or a cache
+(the person runs those); an edit to the charter on its own initiative.
 
 ## Before a reset
 

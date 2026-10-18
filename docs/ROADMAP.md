@@ -173,3 +173,36 @@ Legality: minor. Filling `caller`/`caller_version`, a new nullable facet field a
 finding are all additive. Where the finding lives (a new frame or columns on an existing one) is a
 schema decision for the lead. just-prs builds a stopgap now (karyotype from its normalized parquet,
 caller and version as parquet metadata) and moves to this when it exists.
+
+## RM270 — Pre-split multi-allelic input
+Severity: high · Status: open · Owner: unassigned
+
+Motivating report: S2 (just-dna-lite, 2026-10-18). Many VCFs arrive already split one row per ALT, in
+the `bcftools norm -m-` convention, and their headers do not say so. In a split row the `0` of a
+genotype can stand for "another ALT", not REF: a `1/2` at `A>G,T` becomes `1/0` at `A>G` and `0/1` at
+`A>T`, and a `1/1` becomes `1/1` plus a `0/0` row for the uncarried ALT.
+
+Reproduced 2026-10-18 against the code, on a synthetic VCF: the loader keeps one `calls` row per record
+(SCHEMA Decision 1, A), so the split rows land as written, and `gt_alleles` maps each `0` onto
+`source_ref`. The split `1/2` loads as `["G","A"]` and `["A","T"]`, two calls with a reference copy the
+person does not have; the uncarried ALT's `0/0` row loads as `["C","C"]`, a hom-ref call. `warnings` is
+empty. The unsplit record of the same site loads as `["G","T"]`.
+
+What is open:
+
+1. **Detection.** Candidate signals: more than one record at one position, with genotypes that use
+   each allele slot once between them (`1/0` + `0/1`), or a `0/0` beside a non-reference record there;
+   a `bcftools norm --old-rec-tag` INFO field where present. Two records at one position are also
+   legitimate (an SNV and an indel sharing POS), so a signal is evidence, not proof, and the facet's
+   answer is a Kleene one: split, not split, or unknown.
+2. **What the frame says about a `0` it cannot place.** Options, not decided: a warning with a count
+   by pattern (patch); a nullable facet field saying the file is pre-split (minor); `gt_alleles` null
+   for a `0` in a row detected as split, since the source did not say which allele it is (changes
+   values a consumer reads today, so the changelog says so); re-joining the split records into the one
+   site they came from (a derived facet, charter 5, never a silent rewrite at load). Which of these is
+   a schema decision for the lead.
+3. **RM6's own split output** must not write this convention: a split row whose `0` means "another
+   ALT" carries the same ambiguity out to the next reader.
+
+Legality: detection, a warning and a new nullable field are additive (minor). Nulling `gt_alleles` for
+detected rows changes the meaning of values already emitted.

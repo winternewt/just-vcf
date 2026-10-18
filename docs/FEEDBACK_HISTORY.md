@@ -9,6 +9,7 @@ filed, with the reply beside it. The reporter's text is never edited or re-wrapp
 ## Contents
 
 - **S1** male X/Y ploidy across callers and panels — accepted (RM269)
+- **S2** pre-split multi-allelic rows read wrong — accepted (RM270)
 
 # From just-prs, 2026-10-11
 
@@ -98,3 +99,77 @@ ancestrydna"); the AncestryDNA loader is part of RM2's vendor CSVs, not shipped.
 encoding comes from our `ancestrydna` format notes, not from a load. So today the vendor split shows
 up only once that loader lands, and RM269 has to cover it then. Nothing else in the reply changes.
 <!-- triaged: 0.1.0 · sha abd809824f31 -->
+
+# From just-dna-lite, 2026-10-18
+
+## S2 — VCFs split one row per allele read wrong at multi-allelic sites: ~72,000 sites in one genome
+
+From the just-dna-lite session, 2026-10-18. A report, not a request; just-dna-lite does not depend on
+just-vcf yet, so this is input for RM6 and for any loader that meets a pre-split file.
+
+**What we ran.** Four callers' VCFs for one private WGS sample (GRCh38; DeepVariant, Clair3, GATK
+HaplotypeCaller in DRAGEN mode, and a 3-caller consensus), annotated with just-dna-lite's pipeline. One
+of the DeepVariant files is unsplit (`1/2` records); the others were split upstream into one row per ALT,
+in the `bcftools norm -m-` convention. The headers do not say what split them.
+
+**What splitting does to the genotype.** A site where the sample carries two different alts and no
+reference:
+
+```
+unsplit:  chr1  1000  .  A  G,T  ...  GT  1/2
+split:    chr1  1000  .  A  G    ...  GT  1/0
+          chr1  1000  .  A  T    ...  GT  0/1
+```
+
+In each split row the `0` stands for "the other ALT", not REF. Nothing in the row says so. A reader that
+maps GT indices onto `[REF] + ALT` (just-dna-lite's `io._compute_genotype_expr` does) gets `A/G` and
+`A/T`, two heterozygous calls with a reference copy, where the truth is `G/T`. The same convention gives
+false hom-ref rows: unsplit `1/1` at `A>G,T` becomes `1/1` (G) plus `0/0` (T), and the `0/0` reads as
+two reference copies for a person who has none.
+
+**What we measured** (rows grouped by chrom + start in the normalized parquet, after PASS/DP≥10/QUAL≥20):
+
+- Unsplit DeepVariant file: 73,073 records with an ALT index ≥ 2 in GT; no position has two rows.
+- Split DeepVariant file: 74,671 positions with two or more rows. 72,009 are exactly `0/1 + 1/0`, i.e. a
+  split `1/2`. 600 are `0/0 + 0/1 + 1/0` and 3 are `0/0 + 0/0 + 0/1 + 1/0` (a `1/2` with a third,
+  uncarried ALT), 4 are `0/0 + 1/1`. 1,687 are `0/0 + 0/1` (a split `0/1`; read correctly).
+- Split Clair3 file: 48,992 positions with two or more rows, 48,987 of them all `0/1`/`1/0`.
+- Split GATK file: 98,909 positions with two or more rows, 97,503 of them all `0/1`/`1/0`.
+
+So roughly 72,000 genotypes per split file are reported with a reference copy the sample does not
+have, and about 600 positions get a false hom-ref row. An earlier note in our session said "3 sites";
+that was only the sites in one ClinVar report table, not the genome.
+
+**What we expected.** Either the unsplit genotype, or a row that marks its `0` as "other ALT".
+
+**What we are doing meanwhile.** Nothing in just-dna-lite's pipeline changed yet; it still reads the
+split rows as above. The one report that shows these genotypes labels a `0/1 + 1/0` pair "two
+different alts (multi-allelic)". A fix in our own GT reader is a separate decision on our side.
+
+**What this may mean here** (for whoever owns RM6; no ask attached):
+
+- SCHEMA Decision 1 already keeps one row per site at load, so an unsplit file is safe. A file that
+  arrives already split is not: the loader cannot tell a split `1/0` from a real `1/0`.
+- Detectable signal: two or more rows at one position whose GTs, taken together, use each allele slot
+  once (`0/1 + 1/0`), or a `0/0` row beside a non-reference row at the same position. A
+  `bcftools norm --old-rec-tag` INFO field, when present, says it outright.
+- RM6's own "split multi-allelic sites" output would produce the same ambiguity if it writes this
+  convention.
+
+**Status — accepted, filed as RM270 (docs/ROADMAP.md); nothing shipped yet.** Reproduced against the
+code on a synthetic VCF holding a split `1/2`, a split `1/1` and an unsplit `1/2`. The loader keeps one
+row per record (SCHEMA Decision 1), and `gt_alleles` maps each `0` onto the file's REF: the split `1/2`
+loads as `["G","A"]` and `["A","T"]`, the uncarried ALT's `0/0` as a hom-ref `["C","C"]`, with no
+warning; the unsplit record loads as `["G","T"]`. So just-vcf reads a pre-split file the same wrong way
+your reader does, and says nothing about it.
+
+RM270 covers detecting a pre-split file (the signals you listed, read as evidence, since two records at
+one position can also be legitimate) and deciding what the frame says about a `0` it cannot place: a
+warning, a facet field, a withheld `gt_alleles`, or the split records joined back into the site as a
+derived facet. Which one is a schema decision for the lead; the additive ones are a minor release, and
+withholding `gt_alleles` changes values consumers read today, so the changelog would say so. It also
+binds RM6: just-vcf's own split output must not write this convention.
+
+What to do now: nothing is owed to just-vcf, since just-dna-lite does not load through it yet. For your
+own reader, the unsplit file is the one that reads right today. Watch `docs/CHANGELOG.md` for RM270.
+<!-- triaged: 0.1.0 · sha 3fa6a53b0ff4 -->

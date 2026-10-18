@@ -13,6 +13,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   datafusion-bio-functions and OpenDAL at their locked revisions) was audited once for code that sends
   data off the machine, and stamped "no network exfiltration code" in `docs/TRUST.md`. Every network
   request starts from a `scheme://` path the caller passed; just-vcf passes local paths only.
+- Triage answered S2 (just-dna-lite: a VCF split one row per ALT reads wrong, since a split row's `0`
+  can mean another ALT, not REF). Reproduced: the loader reads such a file the same way, with no
+  warning. Filed as RM270, pre-split multi-allelic input; it also binds RM6's split output.
 - A report can reach the triage seat as a message: from another session on this machine, or on Zulip
   (`just-vcf/triage`) from a person or a seated repo. The seat files it into `docs/FEEDBACK.md` verbatim
   and answers there. Appending to the inbox stays the main route. `docs/FEEDBACK.md` says how,

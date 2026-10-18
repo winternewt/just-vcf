@@ -32,8 +32,9 @@ The roadmap was read against the code on 2026-10-18 (da410cc): nothing open had 
 status lines say what exists. Schema at 0.0.4.
 
 - **RM270** (split multi-allelic rows): B, the flags, shipped (1559215). C, withholding the uncertain
-  `0`s slot by slot, waits on desk #45 (default: B only). D, the re-join, goes with RM6. The detector's
-  false-positive count on the two private gVCFs was running at the commit; its result goes into RM270.
+  `0`s slot by slot, waits on desk #45 (default: B only, already built). D, the re-join, goes with RM6.
+  No signal on four unsplit VCFs or two unsplit gVCFs; the patterns read the spill, about 1.2 s on a
+  30 s load (e82e4af). Not measured: a real split file.
 - **Desk #43**: the order of work (default: the roadmap pass first), which this sitting followed.
 - **Open, not started**: RM269 (karyotype finding and caller ploidy model, a schema call), RM2's next
   loaders, RM3, RM4, RM6, RM268 (cache eviction).

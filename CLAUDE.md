@@ -73,7 +73,8 @@ wakers ring twice. The repo has no skills, agents or workflows of its own; the k
 **When two rules conflict — this file against a sibling repo's, this file against the user's
 global preferences, a rule against what the code actually does — stop and run a
 questionnaire. Do not pick the one that looks better, do not synthesize a compromise, and do
-not silently follow the more specific file.** A contradiction between two live rules is
+not silently follow the more specific file** — except for the two cases at the end of this
+section, the charter and allow/deny precedence. A contradiction between two live rules is
 almost always a real difference in the repos' natures (a published library's dependency tier
 against an app's, a wire contract against internal state), and inferring which nature applies
 here is exactly the guess that produces a rule nobody agreed to.
@@ -92,7 +93,17 @@ How to run one:
    below, the reasoning into *Learned user preferences* in the user's own words. An answered
    contradiction that is not written down gets re-asked, which is worse than having guessed.
 
-The one exception: a conflict with the charter is not a questionnaire. The charter wins.
+Two exceptions, neither of them a questionnaire:
+
+- **A conflict with the charter.** The charter wins.
+- **A conflict over what a session may do — an allow against a deny — goes to the nearer rule:
+  local over repo over global** (the seats kit's D69, as Claude Code resolves its own settings and
+  plugins). A setting local to this clone outranks this repo's rules, which outrank the user's global
+  preferences. A seat's grant in `docs/seats/` therefore outranks a global rule that forbids the same
+  act, without asking: the user confirmed it once, by merging the pull request that brought the grant
+  in. This settles precedence only; it grants nothing no rule writes down. A contradiction about
+  anything else — a dependency tier, a wire contract, a rule against what the code does — is still a
+  questionnaire.
 
 ---
 
@@ -483,6 +494,12 @@ same applies when the user corrects a preference: it goes below, in their words,
 
 - 2026-09-30, doc names: "upper_snake to all, and convention to onboarding gist". Every `docs/`
   markdown file is UPPER_SNAKE, seat files included; the onboarding gist's template carries the same rule.
+
+- 2026-10-18, rule precedence: "kit is right, near order wins. This is intentional, otherwise it becomes
+  far order wins (global wins by conflict, resulting in everytime confirmation, which is functional
+  equivalent of explicit requests (sync, blocked on action)). Therefore it only makes sense to confirm
+  the overrides Once, which is done at kit signoff stage (merge)". §1 sends allow/deny conflicts to the
+  nearer rule; merging a seat's pull request is the one confirmation of its grant.
 
 ## 11. Learned workspace facts
 

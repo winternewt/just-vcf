@@ -37,3 +37,7 @@ dist/
 *.parquet
 *.db
 *.sqlite
+
+# The leak gate's local lists (the seats kit): they name what the gate protects, so never tracked
+.leak_words
+.leak_allow

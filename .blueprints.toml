@@ -5,9 +5,11 @@ id = "just-vcf"
 [seat.triage]
 # Answers consumer feedback (docs/seats/TRIAGE.md). The other two seats relay a consumer report to it;
 # a desk's secretary relays the person's answers.
-# Its inbox watcher is still armed by the repo's own prompt hook (.claude/settings.json); it moves here,
-# as [seat.triage.watch.inbox], when that hook is removed, never before: two wakers ring twice.
 wake_from = "just-vcf/lead just-vcf/upstream-liaison */secretary"
+
+[seat.triage.watch.inbox]
+# One line when docs/FEEDBACK.md settles (150 s after the last save), naming what is pending.
+cmd = "bash scripts/watch-inbox.sh"
 
 [seat.triage.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"

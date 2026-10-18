@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The inbox watcher runs under the triage seat (`[seat.triage.watch.inbox]` in `.blueprints.toml`),
+  started and stopped with the seat by its watchdog. The `UserPromptSubmit` hook, `.claude/settings.json`
+  that held it, `scripts/arm-on-prompt.py` and `scripts/wake-on-inbox.sh` are gone.
 - The repo runs on the seats kit (`agent-seat-blueprints`, plugin pinned at v0.1.60, local scope): three
   seats, triage, upstream-liaison and a new lead, are taken with `/seats:seat <seat>` and declared in
   `.blueprints.toml`, and `team.toml` lists the people. `docs/TRUST.md`, the trust register, is a

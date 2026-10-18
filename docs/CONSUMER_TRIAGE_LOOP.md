@@ -18,26 +18,24 @@ path defaults. Before it, `b063b65ef777cf06002e6fa14953d6503692d1f1`, adopted 20
 
 - Inbox `docs/FEEDBACK.md`, history `docs/FEEDBACK_HISTORY.md`, item prefix `S`.
 - Tracked items are roadmap entries, `RM<n>` in `docs/ROADMAP.md`, claimed with `scripts/item-next.py`.
-- All six scripts live in `scripts/`. The defaults of `triage-state.py`, `triage-archive.py`,
+- The four scripts live in `scripts/`. The defaults of `triage-state.py`, `triage-archive.py`,
   `item-next.py` and `watch-inbox.sh` are derived from the script's own location, not from the working
   directory, and the watcher's `RUNBOOK` default is `docs/seats/TRIAGE.md`. Those are the only changes
-  from the gist copies and must not be overwritten when syncing. `wake-on-inbox.sh` and
-  `arm-on-prompt.py` are byte-identical to the gist.
+  from the gist copies. The gist's `wake-on-inbox.sh` and `arm-on-prompt.py` were dropped when the
+  watcher moved under the seat.
 - The watcher guards branch `main`.
 
 ## Arming the watcher
 
-`.claude/settings.json` registers `arm-on-prompt.py` as a `UserPromptSubmit` hook with
-`RUNBOOK=docs/seats/TRIAGE.md`. A prompt that contains that path, in any wording, starts
-`wake-on-inbox.sh` detached; it runs the watcher with no harness deadline and posts each settle into the
-session through its inbox socket. `RUNBOOK` passes through to the watcher, so its line reads
-`… triage per docs/seats/TRIAGE.md`, and the hook ignores anything starting `[watcher ` so a watcher
-post never re-arms it. Citing this file instead of the seat file arms nothing: the seat file is the one
-entry point.
+Nothing to arm by hand. `.blueprints.toml` declares `[seat.triage.watch.inbox]` with
+`cmd = "bash scripts/watch-inbox.sh"`, and the triage seat's watchdog runs it from the repo root for as
+long as a session holds the seat: started at punch-in, restarted with backoff if it exits, stopped with
+the seat. Each settle arrives as a watcher line, `FEEDBACK.md settled: S<n>(new) … — triage per
+docs/seats/TRIAGE.md`, and wakes an idle seat. The watchdog reads the table only when it starts, so a
+change to it takes `watchdog.py stop triage` and `/seats:seat triage` again.
 
-The arming is checked by its canary, not by a test: an `[watcher …] armed` message must arrive in the
-turn that armed it. If it does not, the socket message format changed, and the fallback is the one-shot
-arming in the gist's `TRIAGE_LOOP.md` §2. Never start the wrapper from the agent; a hook arms it.
+The watcher is a singleton per inbox: a second one started for the same file replaces the first. Never
+start it from the agent as well; two wakers ring twice.
 
 ## Syncing with the gist
 

@@ -60,11 +60,11 @@ kit release with the kit's `bin/move-to-tag`; editing the ref in that file moves
 | upstream-liaison | `docs/seats/UPSTREAM_LIAISON.md` | polars-bio and the layers under it, via `docs/POLARS_BIO_PENDING_FIXES.md`, and the mirror under `data/interim/` |
 | lead | `docs/seats/LEAD.md`, `docs/seats/LEAD_NOTES.md` | the user's own coding sessions: the roadmap, the design, the build |
 
-**`.claude/settings.json`**, the tracked one, holds one thing: it registers `scripts/arm-on-prompt.py`
-as a `UserPromptSubmit` hook, which arms the inbox watcher when a prompt cites `docs/seats/TRIAGE.md`.
-The triage seat's first work moves that watcher under the seat (`[seat.triage.watch.inbox]` in
-`.blueprints.toml`) and rewrites this paragraph in the same commit. Until then the hook stays: two
-wakers ring twice. The repo has no skills, agents or workflows of its own; the kit's come with its plugin.
+**The inbox watcher runs under the triage seat**: `.blueprints.toml` declares
+`[seat.triage.watch.inbox]`, so the seat's watchdog runs `scripts/watch-inbox.sh` for as long as a
+session holds the seat and delivers each settle to it. Nothing arms it from a prompt, and the repo
+tracks no `.claude/settings.json`. The repo has no skills, agents or workflows of its own; the kit's
+come with its plugin.
 
 ---
 

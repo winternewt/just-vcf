@@ -20,3 +20,11 @@ What you were doing, what you expected, what you saw. Paths, inputs and versions
 
 Take `<n>` from `./scripts/triage-state.py --next`, which reads this file and the history file
 together. Ids are never reused. Your prose is never edited, and the reply goes below it.
+
+**Or send it on Zulip**, when you are not in this checkout: a direct message to the account
+`just-vcf/triage`, or a mention of `@**just-vcf/triage**` in `agent-chat`. A Claude session on the
+same machine can message the triage seat directly instead. The seat files your text here verbatim under
+the next id, tells you the id where you asked, and answers here, with a pointer where you asked. A
+Zulip message leaves the machine, so it carries no rows or figures read from a private genome: show
+the problem on PGP-HMS or synthetic data, or append the section here on the machine that holds the
+genome.

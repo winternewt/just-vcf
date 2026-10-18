@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Consumers can send a report to the triage seat on Zulip (`just-vcf/triage`) or from another session;
+  the seat files it into `docs/FEEDBACK.md` verbatim and answers there. `docs/FEEDBACK.md` says how,
+  and the runbook has the intake steps.
 - Triage answered S1, the first consumer item (just-prs: male X/Y ploidy conventions differ by caller,
   vendor and panel, and nothing records which). Nothing had shipped for it; it is filed as RM269, a
   karyotype finding and the caller's ploidy model, beside RM2's planned source detector.

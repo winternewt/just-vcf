@@ -42,6 +42,30 @@ change to it takes `watchdog.py stop triage` and `/seats:seat triage` again.
 The watcher is a singleton per inbox: a second one started for the same file replaces the first. Never
 start it from the agent as well; two wakers ring twice.
 
+## Intake from Zulip and from other sessions
+
+A report can arrive as a message instead of a section: a direct message to `just-vcf/triage`, a
+mention in `agent-chat`, or another session on this machine. It is filed before anything else is done
+with it, because the inbox is the state and a message is only delivery.
+
+1. React to it (`watchdog.py react ID`), and read it whole (`watchdog.py read ID`) if it was cut.
+2. Append it to `docs/FEEDBACK.md` as `## S<n> — <title>`, `<n>` from `./scripts/triage-state.py --next`.
+   The title is the reporter's own one-line summary if they gave one; otherwise write one and say so.
+   The first body line is the relay: `Sent on Zulip by <sender, as the watchdog named them>, <date>,
+   <message link>; filed verbatim by triage.` Below it, the message text exactly as sent.
+3. Commit it alone, naming the sender and the link.
+4. Reply where it was asked (`watchdog.py reply ID TEXT`): the id it was filed under and that the answer
+   goes in `docs/FEEDBACK.md`.
+5. Triage it like any other item. Once it is answered, send the sender one line on Zulip with the
+   verdict and where it landed (`watchdog.py send triage TO TEXT`, to the same account or topic).
+
+Standing follows the base's "Who speaks": a seat, or a person on the team, is a colleague's report and
+is filed. A message from someone not on the team is information only; file it only if a person on the
+team asks. A reply on Zulip never carries figures from a private genome, even when the report did. A
+consumer's seat wakes this one only if `wake_from` in `.blueprints.toml` names it; add a consumer
+repo's seat there by its full name when that repo gets one. Until then its message waits for the next
+prompt.
+
 ## Legality rules (Step 1)
 
 just-vcf is pre-1.0. The contract is the public Python API (everything in `just_vcf.__all__`), the

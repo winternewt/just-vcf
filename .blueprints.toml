@@ -1,0 +1,29 @@
+[repo]
+# The repo's channel takes this name too; the seats talk in agent-chat and announcements (D104).
+id = "just-vcf"
+
+[seat.triage]
+# Answers consumer feedback (docs/seats/TRIAGE.md). The other two seats relay a consumer report to it;
+# a desk's secretary relays the person's answers.
+# Its inbox watcher is still armed by the repo's own prompt hook (.claude/settings.json); it moves here,
+# as [seat.triage.watch.inbox], when that hook is removed, never before: two wakers ring twice.
+wake_from = "just-vcf/lead just-vcf/upstream-liaison */secretary"
+
+[seat.triage.zulip]
+pool = "~/.config/agent-seat-blueprints/zulip/pool"
+
+[seat.upstream-liaison]
+# Owns what is known about polars-bio and the layers under it (docs/seats/UPSTREAM_LIAISON.md). Triage
+# and the lead hand it an upstream symptom; a desk's secretary relays the person's go for a filing.
+wake_from = "just-vcf/triage just-vcf/lead */secretary"
+
+[seat.upstream-liaison.zulip]
+pool = "~/.config/agent-seat-blueprints/zulip/pool"
+
+[seat.lead]
+# The person's own coding sessions here (docs/seats/LEAD.md): the roadmap, the design, the build.
+# Triage hands it a fix too big for a pass; the liaison, a mitigation to change at a pin bump.
+wake_from = "just-vcf/triage just-vcf/upstream-liaison */secretary"
+
+[seat.lead.zulip]
+pool = "~/.config/agent-seat-blueprints/zulip/pool"

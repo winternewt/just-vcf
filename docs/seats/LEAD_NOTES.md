@@ -1,6 +1,7 @@
 # Lead seat — notes
 
-State as of 2026-10-18; no session has held the seat yet. Rewritten to the present before each reset.
+State as of 2026-10-19, after the first seating (2026-10-18 to 19). Rewritten to the present before
+each reset.
 
 ## Open
 
@@ -27,6 +28,12 @@ State as of 2026-10-18; no session has held the seat yet. Rewritten to the prese
 
 ## In flight
 
-Read from the last sittings: RM2 (loaders) and RM3 (REF design) open; the schema at 0.0.3; RM269 (a
-person's karyotype finding, from S1) filed by triage for the lead's schema call. Check the roadmap
-against what exists before taking these as current (the role, step 1).
+The roadmap was read against the code on 2026-10-18 (da410cc): nothing open had shipped whole; the
+status lines say what exists. Schema at 0.0.4.
+
+- **RM270** (split multi-allelic rows): B, the flags, shipped (1559215). C, withholding the uncertain
+  `0`s slot by slot, waits on desk #45 (default: B only). D, the re-join, goes with RM6. The detector's
+  false-positive count on the two private gVCFs was running at the commit; its result goes into RM270.
+- **Desk #43**: the order of work (default: the roadmap pass first), which this sitting followed.
+- **Open, not started**: RM269 (karyotype finding and caller ploidy model, a schema call), RM2's next
+  loaders, RM3, RM4, RM6, RM268 (cache eviction).

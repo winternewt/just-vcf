@@ -304,7 +304,7 @@ zaeleus/noodles master parses `P` for VCF ≥ 4.4 (commit `a8f7445`, noodles-vcf
 move its noodles fork past 0.91.0.
 
 *Re-checked (2026-10-18), after the stack audit read the noodles fork's delta.* The fork relaxes header
-validation (`noodles-vcf/src/header/parser/record/value.rs:230-234`, `:254`), but only the check of a
+validation (`noodles-vcf/src/header/parser/record/value.rs:230-234`, `:254-256`), but only the check of a
 reserved key's declared `Number` against the spec's table, which runs after parsing. `parse_number`
 (`number.rs:32-41`) is unchanged and still rejects `LA`, `LR`, `LG`, `P` and `M`. A synthetic 4.5 file
 declaring `FORMAT=<ID=LAD,Number=LR,...>` still fails registration on 0.36.0 with `IO error: invalid

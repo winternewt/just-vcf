@@ -10,6 +10,8 @@ wake_from = "just-vcf/lead just-vcf/upstream-liaison */secretary"
 [seat.triage.watch.inbox]
 # One line when docs/FEEDBACK.md settles (150 s after the last save), naming what is pending.
 cmd = "bash scripts/watch-inbox.sh"
+# A settle with nothing pending and the branch pause/resume notices ask nothing of the seat.
+skip = "nothing pending|watch paused|watch resumed"
 
 [seat.triage.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"

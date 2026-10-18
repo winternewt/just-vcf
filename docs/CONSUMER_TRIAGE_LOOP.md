@@ -35,7 +35,8 @@ Nothing to arm by hand. `.blueprints.toml` declares `[seat.triage.watch.inbox]` 
 `cmd = "bash scripts/watch-inbox.sh"`, and the triage seat's watchdog runs it from the repo root for as
 long as a session holds the seat: started at punch-in, restarted with backoff if it exits, stopped with
 the seat. Each settle arrives as a watcher line, `FEEDBACK.md settled: S<n>(new) … — triage per
-docs/seats/TRIAGE.md`, and wakes an idle seat. The watchdog reads the table only when it starts, so a
+docs/seats/TRIAGE.md`, and wakes an idle seat. The table's `skip` drops a settle with nothing pending
+and the branch pause and resume notices, as the gist's wrapper did. The watchdog reads the table only when it starts, so a
 change to it takes `watchdog.py stop triage` and `/seats:seat triage` again.
 
 The watcher is a singleton per inbox: a second one started for the same file replaces the first. Never

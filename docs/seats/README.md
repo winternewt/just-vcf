@@ -12,11 +12,12 @@ taken one does the task it was given and takes no seat's work.
 
 | Seat | Priming | Notes | Reached by | What it does |
 |---|---|---|---|---|
-| **triage** | [TRIAGE.md](TRIAGE.md) | none: its state is `docs/FEEDBACK.md` | the inbox watcher; a relayed consumer report | Answers consumer feedback: triages, replies in the document, routes, archives. Owns the triage loop's scripts and runbook. Never designs a major change unasked. |
+| **triage** | [TRIAGE.md](TRIAGE.md) | none: its state is `docs/FEEDBACK.md` | the inbox watcher; a relayed consumer report | Answers consumer feedback: triages, replies in the document, routes, archives. Owns the runbook. Never designs a major change unasked. |
 | **upstream-liaison** | [UPSTREAM_LIAISON.md](UPSTREAM_LIAISON.md) | none: its state is `docs/POLARS_BIO_PENDING_FIXES.md` | an upstream symptom from the lead or triage; its own checks at each start | Owns what we know about polars-bio and the layers under it: reproduces, locates, decides verdicts, drafts filings. Never files without the user's go. |
 | **lead** | [LEAD.md](LEAD.md), on the kit's `lead` role | [LEAD_NOTES.md](LEAD_NOTES.md) | the user; an RM item from triage; a mitigation from the liaison | The user's own coding sessions: the roadmap, the design, the build. Hands upstream symptoms to the liaison and consumer reports to triage. |
+| **tooling** | [TOOLING.md](TOOLING.md), on the kit's `plumber` role | none: its state is its issues | a tool's fault from any seat; a kit release or reply | Owns the machinery: the triage loop's scripts, the watcher commands, the leak gate's install, the kit's pin (it alone moves it). Files the kit's gaps on the kit's issues. Never judges what its tools carry. |
 
-`.blueprints.toml` declares the three seats and who may wake each one. `team.toml` lists the people on
+`.blueprints.toml` declares the four seats and who may wake each one. `team.toml` lists the people on
 the team by chat account. `docs/TRUST.md` is the trust register every seat checks before outside code
 runs here.
 
@@ -27,16 +28,18 @@ priming file: what is in flight, what it waits on, what it learned and has not y
 durable. It is rewritten to the present before a reset, not appended to, and committed by path. It
 holds state, not rules; a lesson still true next week moves into the priming file or `CLAUDE.md`.
 
-The lead has one. Triage and the liaison have none, on purpose. The triage loop derives its state
-from `docs/FEEDBACK.md` by fingerprinting the reporter's text, and the liaison's state is its ledger. A
-notes file for either would be a second copy of state that already has one home.
+The lead has one. Triage, the liaison and the tooling seat have none, on purpose. The triage loop
+derives its state from `docs/FEEDBACK.md` by fingerprinting the reporter's text, the liaison's state is
+its ledger, and the tooling seat's is its issues. A notes file for any of them would be a second copy of
+state that already has one home.
 
 ## What stays true for every seat
 
 Repeated from `CLAUDE.md` because these are the ones a seat is most likely to meet:
 
 - Never `git add -A` or `git add .`; stage explicit paths and read `git status` first. Commit as you go;
-  never `git push`, publish or release unless told. No `--amend`, rebase, `reset --hard` or force.
+  never `git push`, publish or release unless told (the lead's and the tooling seat's grants tell them to push `main`
+  as a fast-forward). No `--amend`, rebase, `reset --hard` or force.
   Never `git stash drop` or `git stash clear`.
 - Another seat's uncommitted file is work in flight: commit your own paths by name; never stash,
   revert or commit theirs. The one exception is a consumer's item left uncommitted in the inbox, which

@@ -150,12 +150,13 @@ without its reason gets rationalised away at 2 a.m.
   Everything under `/data/genomes` belongs to a named person: not even a 1000-line head of it goes into
   `assets/`. Tests point at `JUST_VCF_SAMPLES_DIR` and skip when it is absent. Consented-public data
   (PGP-HMS) is the fixture source once the leecher exists.
-- **Git: commit as you go; only the lead seat pushes.** Land each coherent block as its own commit, semantically
+- **Git: commit as you go; only the lead and tooling seats push.** Land each coherent block as its own commit, semantically
   grouped: a behaviour plus its test, doc and changelog line in one commit. No conventional-commit
   prefixes. Tagging and local branches are allowed. **Never** `git push`, publish to PyPI, or cut a
   release unless explicitly told, except the lead seat's grant in `docs/seats/LEAD.md` (push `main`
-  as a fast-forward, its own branches and pull requests, merge, tags: cut, moved or deleted). Never delete
-  a branch without asking, except the lead's own, with `git branch -d`. No `--amend`, rebase,
+  as a fast-forward, its own branches and pull requests, merge, tags: cut, moved or deleted) and the
+  tooling seat's in `docs/seats/TOOLING.md` (push `main` as a fast-forward, patch tags). Never delete a
+  branch without asking, except the lead's or the tooling seat's own, with `git branch -d`. No `--amend`, rebase,
   `reset --hard` or force-anything; a mistake is fixed forward. **Never `git stash drop` /
   `git stash clear`**, even on explicit request. **Never `git add -A` or `git add .`** — it sweeps in
   `.env` files, editor swap files and junk; stage explicit paths and read `git status` first.
@@ -521,6 +522,11 @@ same applies when the user corrects a preference: it goes below, in their words,
   enough" (relayed through the kit's seat-builder on the desk). `docs/TRUST.md` became a threat model
   per source with exfiltration as the one threat; the public-genomes-only rule for outside code and
   the per-run approvals went, and §2 says so.
+
+- 2026-10-18, tooling grant: "On top, tooling gets same set of grants on tree ops upstream tooling
+  has". The tooling seat may commit, push `main` as a fast-forward, push patch tags, and delete its own
+  merged `fix/<n>` branches and worktrees, as the kit's tooling seat does. Triage and
+  upstream-liaison still never push.
 
 ## 11. Learned workspace facts
 

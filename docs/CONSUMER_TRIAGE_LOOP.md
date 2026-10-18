@@ -1,18 +1,20 @@
 # Consumer triage loop — just-vcf
 
-This repo runs the document-as-inbox triage loop published at
-<https://gist.github.com/winternewt/54b94bda01812be937b892146d1bb254>. The gist's `TRIAGE_LOOP.md` is
-the full pattern: the algorithm (Step 0 through Step 5), the five-verdict routing, and every gotcha
-found by running it. This file holds only what is local to just-vcf.
+This repo runs the document-as-inbox triage loop. Its algorithm (Step 0 through Step 5), the
+five-verdict routing and the gotchas found by running it are in `TRIAGE_LOOP.md` at gist revision
+`96b6953362bb4854e05db04334086c43c9eeb170`, and only there:
+<https://gist.githubusercontent.com/winternewt/54b94bda01812be937b892146d1bb254/raw/96b6953362bb4854e05db04334086c43c9eeb170/TRIAGE_LOOP.md>.
+Read it through that revision's own URL, never the gist's latest. The loop moved off gists into the
+seats kit (the person, 2026-09-30), so nothing is synced from the gist any more; this revision stands
+until the kit's triage role replaces it. This file holds only what is local to just-vcf.
 
 The session that runs this loop is the **triage seat**, primed from
 [seats/TRIAGE.md](seats/TRIAGE.md). That file says what the seat owns, how it starts and what it never
 does; this one holds the local rules the pass reads.
 
-**Adopted through gist revision `96b6953362bb4854e05db04334086c43c9eeb170`, 2026-09-30.** That line is
-the baseline. Update it whenever an adoption lands. This revision brought the Claude Code arming,
-`wake-on-inbox.sh` and `arm-on-prompt.py`; the four existing scripts were identical to it apart from our
-path defaults. Before it, `b063b65ef777cf06002e6fa14953d6503692d1f1`, adopted 2026-09-28.
+**Frozen at gist revision `96b6953362bb4854e05db04334086c43c9eeb170`, adopted 2026-09-30.** Before it,
+`b063b65ef777cf06002e6fa14953d6503692d1f1`, adopted 2026-09-28. The scripts' docstrings cite
+`TRIAGE_LOOP.md` sections; they mean that revision.
 
 ## Local parameterization
 
@@ -36,20 +38,6 @@ change to it takes `watchdog.py stop triage` and `/seats:seat triage` again.
 
 The watcher is a singleton per inbox: a second one started for the same file replaces the first. Never
 start it from the agent as well; two wakers ring twice.
-
-## Syncing with the gist
-
-```sh
-GIST=54b94bda01812be937b892146d1bb254
-curl -sf "https://api.github.com/gists/$GIST" \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["history"][0]["version"])'
-```
-
-The same sha as the baseline means nothing arrived. A different one means fetch the files pinned to
-that revision (`<gist>/raw/<version>/<name>`; the unversioned raw URL is CDN-stale for a while after a
-write), diff the code with comments stripped, and adopt behaviour changes only. Run the ledger over
-both documents afterwards. If a fingerprint moved, the gist changed `fingerprint()`, and the markers
-need restamping, said so in the commit message.
 
 ## Legality rules (Step 1)
 

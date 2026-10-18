@@ -4,6 +4,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The triage loop no longer syncs from the gist: its algorithm is read at the frozen revision
+  `96b69533` through that revision's URL until the seats kit's triage role replaces it.
 - The inbox watcher runs under the triage seat (`[seat.triage.watch.inbox]` in `.blueprints.toml`),
   started and stopped with the seat by its watchdog. The `UserPromptSubmit` hook, `.claude/settings.json`
   that held it, `scripts/arm-on-prompt.py` and `scripts/wake-on-inbox.sh` are gone.

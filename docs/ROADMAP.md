@@ -219,7 +219,7 @@ real split file is not measured (no bcftools here); a synthetic split VCF is cau
 
 `gl`, `gp` and `ad` on a flagged row stay as written: they compare REF with one ALT and inherit the
 ambiguity, and the row flag is what tells a reader so. The lead recommends B and C now, D inside RM6,
-put to the person on the desk 2026-10-19.
+put to the person on the desk 2026-10-19 (desk #45; on silence, B is built and C waits for a yes).
 
 **RM6's own split output** must not write this convention: it writes `.` for the other ALT, as vt,
 Glow, vcflib and `bcftools --multi-overlaps .` do.

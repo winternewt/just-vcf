@@ -20,9 +20,10 @@ nothing is owed.
 ## What it owns
 
 - `docs/FEEDBACK.md` and `docs/FEEDBACK_HISTORY.md`, and the `S<n>` id series across both;
-- the loop's machinery in `scripts/`: `triage-state.py`, `triage-archive.py`, `item-next.py` and
-  `watch-inbox.sh`, the inbox watcher the watchdog runs as `[seat.triage.watch.inbox]`. They stay
-  until the kit ships a triage role; its release says when to `git rm` them;
+- the inbox watcher's line: `watch-inbox.sh`, run by the watchdog as `[seat.triage.watch.inbox]`,
+  wakes this seat. The loop's scripts (`triage-state.py`, `triage-archive.py`, `item-next.py`,
+  `watch-inbox.sh`) are the tooling seat's (`docs/seats/TOOLING.md`): a change the loop needs in one
+  is a request to it, by message, never a patch here;
 - `docs/CONSUMER_TRIAGE_LOOP.md`, the runbook.
 
 No notes file: the inbox is the state (`triage-state.py` fingerprints the reporter's text). Anything

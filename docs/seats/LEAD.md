@@ -12,7 +12,7 @@ schema and loaders sitting (2026-09-29 to 2026-10-11) is where the lead's habits
 
 | What | Here |
 |---|---|
-| the plan | `docs/ROADMAP.md`, active items only; shipped ones to `docs/ROADMAP_HISTORY.md`. A new id from `INDEX=docs/ROADMAP.md ITEM_PREFIX=RM ./scripts/item-next.py --note "…"`, never by reading the highest (the triage seat owns the script) |
+| the plan | `docs/ROADMAP.md`, active items only; shipped ones to `docs/ROADMAP_HISTORY.md`. A new id from `INDEX=docs/ROADMAP.md ITEM_PREFIX=RM ./scripts/item-next.py --note "…"`, never by reading the highest (the tooling seat owns the script) |
 | the charter | `docs/CHARTER_DRAFT.md`: it wins over any plan; edited directly while a draft, only on the person's word |
 | decisions | where the design they shape lives: the schema's as its `## Decision N` sections and open questions in `docs/SCHEMA.md`; the person's preferences in their words in `CLAUDE.md` §10, the workspace's facts and measurements in §11 |
 | versions | the schema versions itself in its own document (0.0.1 at the person's sign-off, a bump each time a real file forces a change, said to the person); the package's version only from `pyproject.toml` |

@@ -3,12 +3,13 @@
 id = "just-vcf"
 
 [seat.triage]
-# Answers consumer feedback (docs/seats/TRIAGE.md). The other two seats relay a consumer report to it;
-# a desk's secretary relays the person's answers.
-wake_from = "just-vcf/lead just-vcf/upstream-liaison */secretary"
+# Answers consumer feedback (docs/seats/TRIAGE.md). The lead and the liaison relay a consumer report to
+# it; the tooling seat, a change to a loop script; a desk's secretary relays the person's answers.
+wake_from = "just-vcf/lead just-vcf/upstream-liaison just-vcf/tooling */secretary"
 
 [seat.triage.watch.inbox]
-# One line when docs/FEEDBACK.md settles (150 s after the last save), naming what is pending.
+# One line when docs/FEEDBACK.md settles (150 s after the last save), naming what is pending. The
+# command is the tooling seat's; the line is triage's.
 cmd = "bash scripts/watch-inbox.sh"
 # A settle with nothing pending and the branch pause/resume notices ask nothing of the seat.
 skip = "nothing pending|watch paused|watch resumed"
@@ -19,7 +20,7 @@ pool = "~/.config/agent-seat-blueprints/zulip/pool"
 [seat.upstream-liaison]
 # Owns what is known about polars-bio and the layers under it (docs/seats/UPSTREAM_LIAISON.md). Triage
 # and the lead hand it an upstream symptom; a desk's secretary relays the person's go for a filing.
-wake_from = "just-vcf/triage just-vcf/lead */secretary"
+wake_from = "just-vcf/triage just-vcf/lead just-vcf/tooling */secretary"
 
 [seat.upstream-liaison.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"
@@ -27,7 +28,20 @@ pool = "~/.config/agent-seat-blueprints/zulip/pool"
 [seat.lead]
 # The person's own coding sessions here (docs/seats/LEAD.md): the roadmap, the design, the build.
 # Triage hands it a fix too big for a pass; the liaison, a mitigation to change at a pin bump.
-wake_from = "just-vcf/triage just-vcf/upstream-liaison */secretary"
+wake_from = "just-vcf/triage just-vcf/upstream-liaison just-vcf/tooling */secretary"
 
 [seat.lead.zulip]
+pool = "~/.config/agent-seat-blueprints/zulip/pool"
+
+[seat.tooling]
+# Owns the machinery (docs/seats/TOOLING.md): the triage loop's scripts, the watcher commands, the leak
+# gate's install, the kit's pin. Every seat here brings it a tool's fault; the kit's tooling seat may
+# reach it about an issue it filed there.
+wake_from = "just-vcf/triage just-vcf/upstream-liaison just-vcf/lead agents-kit/tooling */secretary"
+
+# This repository's issues, where its tool requests live: each event a line.
+[seat.tooling.watch.issues]
+cmd = "sh kit:bin/py kit:drivers/github/watch-issues.py --origin"
+
+[seat.tooling.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"

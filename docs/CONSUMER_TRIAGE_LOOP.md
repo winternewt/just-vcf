@@ -44,8 +44,11 @@ start it from the agent as well; two wakers ring twice.
 
 ## Intake from Zulip and from other sessions
 
-A report can arrive as a message instead of a section: a direct message to `just-vcf/triage`, a
-mention in `agent-chat`, or another session on this machine. It is filed before anything else is done
+A report can arrive as a message instead of a section: from another session on this machine, or on
+Zulip, a direct message to `just-vcf/triage` or a mention in `agent-chat`. The consumers' sessions
+(just-prs, just-dna-lite) hold no seats, so they have no Zulip account. For them the inbox file and
+session-to-session messages are the routes; Zulip carries a person's report, or a seated repo's. It is
+filed before anything else is done
 with it, because the inbox is the state and a message is only delivery.
 
 1. React to it (`watchdog.py react ID`), and read it whole (`watchdog.py read ID`) if it was cut.

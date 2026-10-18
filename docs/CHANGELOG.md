@@ -4,8 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
-- Consumers can send a report to the triage seat on Zulip (`just-vcf/triage`) or from another session;
-  the seat files it into `docs/FEEDBACK.md` verbatim and answers there. `docs/FEEDBACK.md` says how,
+- A report can reach the triage seat as a message: from another session on this machine, or on Zulip
+  (`just-vcf/triage`) from a person or a seated repo. The seat files it into `docs/FEEDBACK.md` verbatim
+  and answers there. Appending to the inbox stays the main route. `docs/FEEDBACK.md` says how,
   and the runbook has the intake steps.
 - Triage answered S1, the first consumer item (just-prs: male X/Y ploidy conventions differ by caller,
   vendor and panel, and nothing records which). Nothing had shipped for it; it is filed as RM269, a

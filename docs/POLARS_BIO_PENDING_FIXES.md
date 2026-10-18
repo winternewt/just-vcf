@@ -1,8 +1,16 @@
 # polars-bio: pending fixes
 
 Behaviour of polars-bio that needs an upstream change first. Each entry notes the mitigation already in
-place here. polars-bio has no local clone or inbox; filing goes to its GitHub issue tracker, and the
-issue reference is recorded here once filed.
+place here. polars-bio has no inbox; filing goes to its GitHub issue tracker, and the issue reference
+is recorded here once filed. The mirror under `data/interim/` (below) is a read-only clone at the
+pinned revisions, for locating code paths; it is never edited and never filed into.
+
+No watcher follows upstream (decided 2026-10-18, at the seat's first seating). A polars-bio release
+changes nothing we run until `uv.lock` moves, and the seat's start check compares the lock against the
+pin below, so a pin move still triggers the re-check pass. The kit's `watch-remote.sh` would also
+report every polars-bio trunk commit, and `watch-issues.py` every updated issue in the repo; both are
+noise while nothing here is filed. Revisit at the first filing: a `watch-issues.py` filtered to the
+`Filed:` numbers would then replace the reply check at each start.
 
 polars-bio reads VCF through two layers it does not own in-repo: `datafusion-bio-formats` (the table
 provider, same org) and a biodatageeks fork of `noodles` (the parser). An entry names the layer the

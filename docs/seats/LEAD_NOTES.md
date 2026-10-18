@@ -5,12 +5,13 @@ State as of 2026-10-18; no session has held the seat yet. Rewritten to the prese
 ## Open
 
 1. **The data cache holds whole private genomes** (RM268): eviction is owed.
-2. **The leak gate**: the person said yes on 2026-10-18, with the real names of the people under
-   `/data/genomes/` only, not their folder names (those are already in tracked prose). The lists are
-   git-ignored (4ff8393). Waiting on the person to write `.leak_words`; then the lead sets
-   `core.hooksPath` to the pinned kit copy's `.githooks/` and tells triage that its commits are
-   gated. That path is versioned, so after a kit move it keeps the old gate until it is re-pointed;
-   the kit owes the real install (agent-seat-blueprints#83, filed on the person's word).
+2. **The leak gate is on** (2026-10-18, the person's yes): `core.hooksPath` points at the v0.1.67
+   kit copy's `.githooks/`. `.leak_words` (git-ignored, 4ff8393) holds the VCF sample names of the
+   private genomes, read with `vcf_samples` and written without printing them; DeepVariant's
+   `default` was dropped. Folder names are left out, as they are in tracked prose already. The path
+   is versioned: after a kit move, re-point it, or it keeps the old gate. The kit owes the real
+   install (agent-seat-blueprints#83, filed on the person's word). Not covered: a name in a file
+   name rather than a VCF header.
 
 ## Tools, settled at the first seating (2026-10-18)
 

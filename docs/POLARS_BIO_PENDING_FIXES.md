@@ -33,7 +33,10 @@ The mirror is under `data/interim/` (git-ignored), for grepping:
 |---|---|---|
 | `polars-bio/` | full clone, docs in `docs/` | `a1f724f` (2026-09-21) = released 0.36.0; `diff` against the installed wheel is clean |
 | `datafusion-bio-formats/` | full clone | tag `v1.13.1`, the one polars-bio 0.36.0 pins |
-| `noodles/` | biodatageeks fork, one commit | `42a3c01`, the rev datafusion-bio-formats pins |
+| `noodles/` | biodatageeks fork, full history; remote `upstream` = zaeleus/noodles | `42a3c01`, the rev datafusion-bio-formats pins; 21 commits on `noodles-0.113.0` (`fe2b112`) |
+| `opendal/` | apache/opendal, full clone (remote reads: s3, gcs, azblob, http) | `1755db1`, the rev datafusion-bio-formats pins; main, 279 commits after `v0.55.0`, not a release |
+| `bigtools/` | biodatageeks fork; remote `upstream` = jackh726/bigtools | `0d7a572`, the rev polars-bio's `Cargo.lock` pins; 17 commits on upstream `b1fd283` |
+| `datafusion-bio-functions/` | full clone, LFS files left as pointers | tag `v0.22.2`, the one polars-bio 0.36.0 pins |
 | `hts-specs/` | `VCFv4.2.tex`, `VCFv4.3.tex`, `VCFv4.5.tex` | samtools/hts-specs master |
 | `polars-bio-issues/*.json` | tracker dumps; `q.py '<regex>' [file…]` greps title and body | 2026-09-30 |
 

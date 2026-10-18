@@ -154,7 +154,7 @@ without its reason gets rationalised away at 2 a.m.
   grouped: a behaviour plus its test, doc and changelog line in one commit. No conventional-commit
   prefixes. Tagging and local branches are allowed. **Never** `git push`, publish to PyPI, or cut a
   release unless explicitly told, except the lead seat's grant in `docs/seats/LEAD.md` (push `main`
-  as a fast-forward, its own branches and pull requests, merge, tags marking a state). Never delete
+  as a fast-forward, its own branches and pull requests, merge, tags: cut, moved or deleted). Never delete
   a branch without asking, except the lead's own, with `git branch -d`. No `--amend`, rebase,
   `reset --hard` or force-anything; a mistake is fixed forward. **Never `git stash drop` /
   `git stash clear`**, even on explicit request. **Never `git add -A` or `git add .`** — it sweeps in
@@ -482,7 +482,8 @@ same applies when the user corrects a preference: it goes below, in their words,
   same as upstream's lead currently have" (said to the lead seat, after 29 commits sat unpushed). The
   lead seat pushes `main` fast-forward, its own branches and pull requests, merges, and deletes its
   own branches with `-d`; triage and upstream-liaison still never push. A release and a PyPI publish
-  stay the person's.
+  stay the person's. Then: "actually, get deleting and moving tags also, tags are metadata with small
+  blast radius for deletion-by-mistake". The lead deletes and moves tags too, on `origin` as well.
 - 2026-09-28, charter: yes, "but no heavy stance on no-calls. … a bayesian based fuzzy 0(unknown) ..
   PHRED-like(confident genotype). … each position is probably an n-vector of probabilities or log or
   something, tbd; No binary call-no call definitely."

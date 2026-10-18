@@ -3,8 +3,7 @@
 Taken with `/seats:seat lead`, by the person's own coding sessions here. This repository's lead is
 the seats kit's role `lead` (`classes/lead/LEAD.md` in the kit, at the tag this clone pins), filled
 for just-vcf: read that role first, then this file, then `docs/seats/LEAD_NOTES.md`. The kit's base
-(loaded at every session start) and `CLAUDE.md` hold the rest. `CLAUDE.md`'s seats paragraph and `docs/seats/README.md` (the old priming line, the announce
-round) are superseded by this file and the kit until the lead rewrites them (`docs/seats/LEAD_NOTES.md`).
+(loaded at every session start) and `CLAUDE.md` hold the rest.
 
 Drafted by the kit's seat-builder (2026-10-18) from five sessions of this repository read whole: the
 schema and loaders sitting (2026-09-29 to 2026-10-11) is where the lead's habits below come from.

@@ -32,7 +32,7 @@ does; this one holds the local rules the pass reads.
 ## Arming the watcher
 
 Nothing to arm by hand. `.blueprints.toml` declares `[seat.triage.watch.inbox]` with
-`cmd = "sh kit:drivers/git/watch-file.sh --branch main docs/FEEDBACK.md"`, and the triage seat's
+`cmd = "sh kit:drivers/git/watch-file.sh docs/FEEDBACK.md"`, and the triage seat's
 watchdog runs it from the repo root for as long as a session holds the seat: started at punch-in,
 restarted with backoff if it exits, stopped with the seat. When the inbox differs from HEAD and has sat
 unchanged for 150 s, a watcher line arrives, `docs/FEEDBACK.md: uncommitted, +N -M lines against HEAD:

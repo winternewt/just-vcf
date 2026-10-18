@@ -4,6 +4,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The clone is on the seats kit v0.1.69, whose `watch-file.sh` asks the remote for its default branch
+  (kit #88), so the inbox watcher's command no longer names `--branch main`.
 - The inbox watcher is the kit's `drivers/git/watch-file.sh` (kit #76); `scripts/watch-inbox.sh` is
   gone. Its line points at the uncommitted diff rather than naming pending ids, which the pass's
   `triage-state.py --pending` lists anyway, and an item a sibling leaves while no session holds the

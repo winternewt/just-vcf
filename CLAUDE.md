@@ -520,7 +520,7 @@ same applies when the user corrects a preference: it goes below, in their words,
   - `angellos/2024_genotec.txt` — a 23andMe-format array export, the only consumer array file locally.
   - `advocate/deepvariant/`, `john/deepvariant/` — DeepVariant `.g.vcf.gz` + `.vcf.gz` pairs with `.tbi`.
   - `anton/variants/` — GRCh37 CrossMap/Picard liftover outputs, with reject files.
-  - `olga/BorysovaGenome.liftover38to37.zip` — a zipped VCF; `ksuhaster/deepvariant/*.zip` likewise.
+  - `olga/` — a zipped VCF (a GRCh38→37 liftover); `ksuhaster/deepvariant/*.zip` likewise.
   - `sergey/` — a DRAGEN `hard-filtered.vcf.gz` and a GATK HaplotypeCaller VCF.
   - `gennet/` — HapMap CEU lifted VCFs. `prive/`, `aadr/`, `dataverse_66p1/` are ancestry reference data.
 - `/data/genomes/pgp-hms/participants/<hu>/` holds PGP-HMS data per person (`scripts/pgp_participants.py`):

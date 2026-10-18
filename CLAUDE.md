@@ -394,8 +394,9 @@ is mitigated here but still owed upstream, which legitimately appears in two.
   what was changed. Update it in the same commit as the port.
 - **Consumer → producer intake.** When something belongs in a repo we consume but do not own
   (polars-bio, or a sibling library), **do not edit or commit that repo** beyond appending your item.
-  File into its **`docs/FEEDBACK.md`** where it has one; polars-bio has no local clone and no inbox, so
-  use its GitHub issue tracker and record the reference here. Record the integration change in our
+  File into its **`docs/FEEDBACK.md`** where it has one. polars-bio has no inbox, so use its GitHub
+  issue tracker and record the reference here. Its clone under `data/interim/` is a read-only mirror at
+  the pinned revisions, for locating code paths; it is never edited and never filed into. Record the integration change in our
   `docs/CHANGELOG.md`.
   - **Reformulate; do not forward.** Restate it as a fact about the thing they own, say you are
     relaying, and name the motivating case.

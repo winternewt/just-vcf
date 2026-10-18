@@ -278,6 +278,14 @@ maintainer answered that the record parses fine and the caller should handle it,
 the telomere rule (`VCFv4.5.tex:396`). **File at datafusion-bio-formats:** map `None` to position 0, or
 at least skip the record with a count, instead of failing the scan. Cite noodles #343.
 
+*Re-checked (2026-10-18), after the stack audit read the noodles fork's delta.* The fork does change POS 0,
+but only in the `RecordBuf` parser (`noodles-vcf/src/io/reader/record_buf/position.rs`, 21 commits over
+`noodles-0.113.0`): there `0` is now invalid and `.` is missing. datafusion-bio-formats reads VCF
+through the lazy `noodles_vcf::Record` (`physical_exec.rs:1173`), whose `variant_start`
+(`noodles-vcf/src/record/fields.rs:22-36`) the fork did not touch and which still returns `None` for
+`0`. The owning layer stays datafusion-bio-formats. A synthetic two-record 4.5 file with one POS 0 row
+still fails `scan_vcf(...).collect()` on 0.36.0 with `Execution error: Missing variant start`.
+
 ## P10 — FORMAT `Number=LA`, `LR`, `LG`, `P` or `M` refuses the whole file
 
 Found 2026-09-30 through just-dna-format (`docs/probes/METHYLATION_PACBIO.md:286-291`, quoting rastair,
@@ -294,6 +302,13 @@ and integers. The `Number` enum already has variants for all five (`header/recor
 zaeleus/noodles master parses `P` for VCF ≥ 4.4 (commit `a8f7445`, noodles-vcf 0.91.0) and still not
 `LA`, `LR`, `LG` or `M`. **File at zaeleus/noodles** for the four; `P` needs datafusion-bio-formats to
 move its noodles fork past 0.91.0.
+
+*Re-checked (2026-10-18), after the stack audit read the noodles fork's delta.* The fork relaxes header
+validation (`noodles-vcf/src/header/parser/record/value.rs:230-234`, `:254`), but only the check of a
+reserved key's declared `Number` against the spec's table, which runs after parsing. `parse_number`
+(`number.rs:32-41`) is unchanged and still rejects `LA`, `LR`, `LG`, `P` and `M`. A synthetic 4.5 file
+declaring `FORMAT=<ID=LAD,Number=LR,...>` still fails registration on 0.36.0 with `IO error: invalid
+record`. Verdict unchanged.
 
 ## P11 — FILTER `.` comes back as an empty string
 

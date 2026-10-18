@@ -17,7 +17,7 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; VCF dialects, CGI and vendor CSVs next) · Owner: unassigned
+Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; checked 2026-10-18: 10 of the 39 declared formats load, the 9 rsid-table layouts and `vcf`; the VCF dialects `vcf_cgi`, `vcf_freebayes_varscan2`, `vcf_no_meta` and `bcf`, CGI, AncestryDNA, FTDNA and the vendor CSVs are next) · Owner: lead
 
 **Shipped:** content-based detection. `just_vcf.sniff` and the declarative registry in
 `just_vcf.formats` (docs/FORMATS.md). Over the PGP-HMS participants, 8 of about 1,740 files stay unknown,
@@ -61,7 +61,7 @@ Header evidence found while declaring the VCF formats:
 Not identifiable from the header: 23andMe's exome VCF, the Dante- and Nebula-named uploads (generic GATK).
 
 ## RM3 — REF lookup and padding
-Severity: high · Status: open · Owner: unassigned
+Severity: high · Status: open (checked 2026-10-18: nothing built; every row's `ref_check` is `not_run`) · Owner: lead
 
 Port just-prs `reference_allele.py` (reference-panel tier, FASTA tier, FASTA build check). New work:
 ALT derivation from genotype against REF, indel anchor bases, chr-prefixed FASTA support, emitting
@@ -88,19 +88,19 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-Severity: medium · Status: open · Owner: unassigned
+Severity: medium · Status: open (checked 2026-10-18: array and imputed tables set `callset_type`, and Illumina gVCF blocks go to `blocks`; a VCF facet's `callset_type` is still null, and WGS/WES/panel is not inferred) · Owner: lead
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
 
 ## RM5 — Population inference
-Severity: medium · Status: open · Owner: unassigned
+Severity: medium · Status: open · Owner: lead
 
 Port the just-prs `ancestry/` package (PCA projection, KNN, proportions, consensus) behind the
 `[ancestry]` extra, without the `PRSCatalog` wrappers or the Hugging Face pull.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: open · Owner: unassigned
+Severity: high · Status: open (checked 2026-10-18: no writer yet) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -109,7 +109,7 @@ writer that keeps FORMAT/GT (just-dna-lite's writer drops them).
 
 
 ## RM268 — Cache eviction
-Severity: medium · Status: open · Owner: unassigned
+Severity: medium · Status: open · Owner: lead
 
 Nothing ever removes anything from `JUST_VCF_CACHE_DIR`. It holds two kinds of entry:
 
@@ -136,7 +136,7 @@ Options, not decided: sweep stale-version entries on each load; an explicit `cle
 API (and in the CLI once it exists); a size cap with least-recently-used eviction.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: open · Owner: unassigned
+Severity: high · Status: open · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -175,7 +175,7 @@ schema decision for the lead. just-prs builds a stopgap now (karyotype from its 
 caller and version as parquet metadata) and moves to this when it exists.
 
 ## RM270 — Pre-split multi-allelic input
-Severity: high · Status: open · Owner: unassigned
+Severity: high · Status: open (the frame's answer to an unplaceable `0` is the person's call, surveyed first) · Owner: lead
 
 Motivating report: S2 (just-dna-lite, 2026-10-18). Many VCFs arrive already split one row per ALT, in
 the `bcftools norm -m-` convention, and their headers do not say so. In a split row the `0` of a

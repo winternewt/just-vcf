@@ -3,14 +3,11 @@
 Taken with `/seats:seat triage`. The seats kit's base (loaded at every session start) holds what
 every seat knows: messages, the desk, unattended runs, who speaks. `CLAUDE.md` holds the house rules.
 This file adds the seat. The kit has no triage role yet; this file is its first instance, and the
-role is drawn from it later. The procedure is in `docs/CONSUMER_TRIAGE_LOOP.md`. `CLAUDE.md`'s seats
-paragraph and `docs/seats/README.md` (the old priming line, the announce round) are superseded by this
-file and the kit until the lead rewrites them (`docs/seats/LEAD_NOTES.md`).
+role is drawn from it later. The procedure is in `docs/CONSUMER_TRIAGE_LOOP.md`.
 
 Rewritten onto the kit's base by the kit's seat-builder (2026-10-18) from the pre-kit priming and
-five sessions of this repository read whole. No session had yet sat as triage: the inbox's only item
-(S1) arrived by relay and went untriaged, so the loop's rules below come from where it was built,
-not from a run here.
+five sessions of this repository read whole; revised after the first sitting, which moved the watcher
+under the seat, retired the gist sync, fixed `item-next.py` and answered S1.
 
 ## Why this seat exists
 
@@ -23,8 +20,9 @@ nothing is owed.
 ## What it owns
 
 - `docs/FEEDBACK.md` and `docs/FEEDBACK_HISTORY.md`, and the `S<n>` id series across both;
-- the loop's machinery in `scripts/`: `triage-state.py`, `triage-archive.py`, `item-next.py`,
-  `watch-inbox.sh`, `wake-on-inbox.sh`, `arm-on-prompt.py`, and the hook in `.claude/settings.json`;
+- the loop's machinery in `scripts/`: `triage-state.py`, `triage-archive.py`, `item-next.py` and
+  `watch-inbox.sh`, the inbox watcher the watchdog runs as `[seat.triage.watch.inbox]`. They stay
+  until the kit ships a triage role; its release says when to `git rm` them;
 - `docs/CONSUMER_TRIAGE_LOOP.md`, the runbook.
 
 No notes file: the inbox is the state (`triage-state.py` fingerprints the reporter's text). Anything
@@ -35,10 +33,9 @@ items.
 
 ## How work reaches it
 
-- **The inbox watcher**: a line saying `FEEDBACK.md settled`. Once the swap below is done, the seat's
-  watchdog runs `watch-inbox.sh` and delivers each line. Until then the repo's old hook arms a watcher
-  only on a prompt naming `docs/seats/TRIAGE.md`, which `/seats:seat triage` does not: that is why the
-  swap is the first work. After a context clear, a watcher line is the whole brief: re-read this file.
+- **The inbox watcher**: a line saying `FEEDBACK.md settled`, from `watch-inbox.sh` under the seat's
+  watchdog; a settle with nothing pending is skipped. After a context clear, a watcher line is the
+  whole brief: re-read this file.
 - **A sibling's session relaying a report**, by message or by appending to the inbox. A consumer's
   item left in `docs/FEEDBACK.md` uncommitted is taken as it stands: committed alone, its prose
   untouched, the commit naming who relayed it (one report sat uncommitted with nobody owning it).
@@ -50,28 +47,6 @@ items.
 
 1. `./scripts/triage-state.py --pending`: every item needing work, and any structure complaint.
 2. Take up what it found, oldest first.
-
-## First work after the adoption
-
-In this order, each its own commit:
-
-1. **The watcher moves under the seat.** Remove the `UserPromptSubmit` hook from
-   `.claude/settings.json`, and `git rm` `scripts/arm-on-prompt.py` and `scripts/wake-on-inbox.sh`;
-   in the same commit add to `.blueprints.toml`:
-   `[seat.triage.watch.inbox]` with `cmd = "bash scripts/watch-inbox.sh"`. Never both at once: two
-   wakers ring twice. The runbook's "Arming the watcher" section and `CLAUDE.md`'s `.claude/` paragraph
-   are rewritten in the same commit. The watchdog reads the table only when it starts: then
-   `watchdog.py stop triage` and `/seats:seat triage`. Check it: an edit to the inbox wakes the seated
-   session once, about 150 s after it settles.
-2. **The gist is retired.** The loop moved off gists into the seats kit (the person, 2026-09-30); the
-   runbook's "Syncing with the gist" step goes. The algorithm (Steps 0 to 5) is read at the baseline
-   revision the runbook names, through that revision's own URL, never the gist's latest, until the
-   kit's triage role replaces it.
-3. **`item-next.py` miscounts**: it took a sibling's `RM267`, quoted inside RM3, as this roadmap's
-   highest id and handed out RM268, and put its placeholder line inside RM3's list. Fix it with a
-   test that fails on the old code; RM268 keeps its number, since renumbering breaks what already
-   cites it.
-4. **S1**, the item a just-prs session left uncommitted, by the loop.
 
 ## A pass
 

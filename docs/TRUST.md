@@ -45,5 +45,76 @@ its row.
 
 ## Audits
 
-None yet. Each audit is recorded here: the release read, what was read in full and what was not, every
-network path found and what drives it, the verdict, and the stamp when it holds.
+Each audit is recorded here: the release read, what was read in full and what was not, every network
+path found and what drives it, the verdict, and the stamp when it holds.
+
+### polars-bio 0.36.0 and what it builds in (2026-10-18, upstream-liaison)
+
+**Stamp: no network exfiltration code.** Nothing in the stack sends data anywhere on its own: no
+telemetry, no update check, no crash reporter, no socket outside the HTTP client, no subprocess, and no
+remote write, upload or delete reachable from polars-bio. Every network request starts from a path the
+caller passed with a `scheme://` prefix. A local path never builds a network client and never loads a
+credential. just-vcf hands polars-bio local paths only.
+
+**What was read.** The source each piece of the pinned build came from, at the revision polars-bio's
+`Cargo.lock` and `uv.lock` pin, all under `data/interim/` (the ledger's mirror table lists them). Five
+read-only Opus subagents each took one slice. The seat re-checked every claim in the list below against
+the code before recording it.
+
+| Piece | Revision | How it was read |
+|---|---|---|
+| polars-bio Python package | `a1f724f` = 0.36.0; byte-identical to the installed wheel's `.py` files | all 24 modules in full, plus `pyproject.toml`, `Makefile`, `requirements.txt` |
+| polars-bio Rust extension | same | all of `src/*.rs` in full, plus `Cargo.toml` and `rust-toolchain.toml` |
+| datafusion-bio-formats | `v1.13.1` | `bio-format-core` and `bio-format-vcf` in full; the other 15 linked format crates by grep, reading in full any file a hit landed in; `bio-format-ensembl-cache` skipped (not linked) |
+| noodles, biodatageeks fork | `42a3c01` | the fork's 21 commits over `noodles-0.113.0` (`fe2b112`) in full; the rest is zaeleus upstream, read by grep |
+| bigtools, biodatageeks fork | `0d7a572` | the fork's 17 commits over upstream `b1fd283` in full; manifest and remote-file module in full |
+| datafusion-bio-functions | `v0.22.2` | manifests in full; the three linked crates (ranges, pileup, fastqc) by grep, with the files a hit landed in read; `bio-function-vep` not linked |
+| Apache OpenDAL | `1755db1` (main, 279 commits after `v0.55.0`, not a release) | the compiled-in services (s3, gcs, azblob, azure-common, http) and layers (logging, retry, timeout, concurrent-limit) in full; `opendal-core` by grep |
+
+**Not read**: the crates.io dependencies, ridden on the lock pin as any package is (the row above).
+Among them are the ones that matter most to this question: `reqsign-*` 3.0.1 (the credential chains),
+`reqwest` 0.12.28 and 0.13.4, `object_store` 0.13.2, `ctor`, and the native build scripts
+(`hdf5-metno-src`, `libsqlite3-sys`, `libdeflate-sys`, `aws-lc-sys` and others). Neither was the
+compiled `.so` itself; the source is what was read.
+
+**Every network path, and what drives it.** All of them sit behind
+`datafusion-bio-formats/datafusion/bio-format-core/src/object_storage.rs:447-466`
+(`get_storage_type`): a path is remote only when it carries a recognised `scheme://`, and an unknown
+scheme falls back to local. `RemoteObject::open` returns an error for a local path (`:956-961`) before
+any operator or credential chain is built.
+
+- Reads from the caller's URL through an OpenDAL operator, read-only: S3 `:810-827`, Azure Blob
+  `:859-872`, HTTP `:880-912`, GCS `:931-948`. The destination is the URL's bucket or host. Two
+  environment variables can redirect it: `AWS_ENDPOINT_URL` (`:813`) for S3, which OpenDAL extends to
+  `AWS_ENDPOINT` and `AWS_S3_ENDPOINT` (`opendal/core/services/s3/src/backend.rs:790-799`), and
+  `AZURE_ENDPOINT_URL` (`object_storage.rs:566`).
+- A companion index probe for a remote BCF or BGEN file, at the same host with `.csi` or `.bgi` appended
+  (`bio-format-vcf/src/table_provider.rs:1025-1045`). A text VCF's index is looked up only for a local
+  path (`:1089`).
+- **One request to a host the caller did not name.** On an `s3://` path with neither `AWS_REGION` nor
+  `AWS_DEFAULT_REGION` set, region discovery sends an unsigned HEAD to `https://s3.amazonaws.com/<bucket>`
+  (`object_storage.rs:728-737`, through `opendal/core/services/s3/src/backend.rs:649-656`), even when
+  `AWS_ENDPOINT_URL` points elsewhere. It carries the bucket name and nothing read from a file.
+- Credentials, lazily at the first signed request, through `reqsign` (not read). Depending on the
+  service and on `allow_anonymous`, that can contact the cloud's instance-metadata endpoint, STS or an
+  OAuth token service. polars-bio's Rust `*ReadOptions::default()` sets `allow_anonymous: false`
+  (`polars-bio/src/option.rs:353` and the others like it); the Python layer passes `True` by default.
+- OpenDAL's HTTP client is `reqwest::Client::new()` (`opendal/core/core/src/raw/http_util/client.rs:50`).
+  reqwest's defaults (not read) honour the `*_PROXY` variables and follow redirects, so a server's
+  3xx can move a request to another host.
+
+**What runs by itself.** On import: the Python package configures the root logger to stderr
+(`polars_bio/logging.py:3-7`), sets `POLARS_FORCE_NEW_STREAMING` (`__init__.py:53-61`), and builds
+one session context (`context.py:140`). The extension's module init forwards Rust logs to Python logging
+(`src/lib.rs:1528`). OpenDAL's `#[ctor]` (`opendal/core/src/lib.rs:236-240`) fills an in-memory service
+registry at load. None of it does I/O. No crate in the read set has a `build.rs` that is compiled in, and
+none has `[build-dependencies]`.
+
+**Compiled out, checked in `Cargo.lock`.** bigtools' remote reader (`attohttpc`, feature `remote`):
+`bio-format-bbi` takes `default-features = false, features = ["read"]`, and `attohttpc` is absent from
+the lock. noodles' `htsget` and `refget` clients (reqwest): not in the lock. Nothing in noodles-cram
+fetches a reference over the network, as htslib does by default.
+
+**Residual, accepted.** The not-read crates above. A later release is not re-audited, only re-checked
+at its pin move (the row above). For a remote path only: the bucket-name HEAD to AWS, the credential
+chains, and redirect following. None of these fires for the local files just-vcf reads.

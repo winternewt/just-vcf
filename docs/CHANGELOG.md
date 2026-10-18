@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The pinned polars-bio stack (0.36.0, with datafusion-bio-formats, the noodles and bigtools forks,
+  datafusion-bio-functions and OpenDAL at their locked revisions) was audited once for code that sends
+  data off the machine, and stamped "no network exfiltration code" in `docs/TRUST.md`. Every network
+  request starts from a `scheme://` path the caller passed; just-vcf passes local paths only.
 - A report can reach the triage seat as a message: from another session on this machine, or on Zulip
   (`just-vcf/triage`) from a person or a seated repo. The seat files it into `docs/FEEDBACK.md` verbatim
   and answers there. Appending to the inbox stays the main route. `docs/FEEDBACK.md` says how,

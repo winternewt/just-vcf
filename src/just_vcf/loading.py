@@ -174,7 +174,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         stats = vcf.scan_stats(records)
         if left_out := vcf.pos_zero_left_out(cache):
             warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
-    calls, blocks, row_warnings = vcf.to_rows(records, header, stats)
+    calls, blocks, row_warnings, split_marker = vcf.to_rows(records, header, stats)
     warnings += row_warnings
     if (header.version_tuple or (0, 0)) >= (4, 4):
         warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
@@ -196,6 +196,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         "vcf_version": header.version,
         "sample_meta": header.sample_meta,
         "dropped_fields": vcf.dropped_fields(header),
+        "split_marker": split_marker,
     }
     facets = pl.LazyFrame([facet], schema={name: FACETS[name] for name in facet}).select(
         [pl.col(name) if name in facet else pl.lit(None, dtype=dtype).alias(name) for name, dtype in FACETS.items()]

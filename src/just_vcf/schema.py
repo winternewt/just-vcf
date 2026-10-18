@@ -15,7 +15,7 @@ import polars as pl
 
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.3"
+SCHEMA_VERSION = "0.0.4"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -72,6 +72,21 @@ class CallsetType(str, Enum):
     IMPUTED = "imputed"
 
 
+class SplitSignal(str, Enum):
+    """Why a `calls` row looks like one record of a multi-allelic site written one row per ALT (RM270).
+
+    In such a row a `0` can mean another ALT, not REF. Where more than one fits, the first listed wins.
+    """
+
+    MARKER = "marker"
+    """The row carries a split marker: INFO `OLD_MULTIALLELIC` (vt, Glow), or a bcftools
+    `--old-rec-tag` value with its `USED_ALT_IDX` field."""
+    SLOT_PATTERN = "slot_pattern"
+    """Two or more non-reference rows at one position, each GT slot non-zero in at most one of them."""
+    ALL_ZERO_BESIDE_ALT = "all_zero_beside_alt"
+    """A fully called all-`0` row beside a non-reference row at the same position."""
+
+
 class AssemblyLabelBasis(str, Enum):
     """How a facet's `assembly_label` was obtained."""
 
@@ -111,6 +126,7 @@ FACETS = pl.Schema(
         "vcf_version": pl.String,
         "sample_meta": pl.List(pl.String),
         "dropped_fields": pl.List(pl.String),
+        "split_marker": pl.String,
     }
 )
 """One row per facet (SCHEMA.md Decision 5)."""
@@ -145,6 +161,7 @@ CALLS = pl.Schema(
         "qual": pl.Float32,
         "filters": pl.List(pl.String),
         "sample_filters": pl.List(pl.String),
+        "split_signal": enum_dtype(SplitSignal),
     }
 )
 """One row per site per facet (SCHEMA.md Decision 6)."""

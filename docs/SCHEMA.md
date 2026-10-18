@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.3.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.4.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -262,6 +262,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
 | `sample_meta` | the file's `##SAMPLE` and `##PEDIGREE` lines for this sample, verbatim. Pedigree becomes GA4GH Pedigree later (charter) |
 | `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9) |
+| `split_marker` | the declared INFO key(s), comma-joined, that tagged a record as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
@@ -302,6 +303,25 @@ With Decisions 1–5 as recommended:
 | `qual` | `f32` | not given. It is the confidence in what ALT asserts: that the variant is there on a variant record, and that no variant is there on a monomorphic record (`alts = []`, where VCF defines it as `-10·log10 P(variant)`). The same threshold therefore works on both |
 | `filters` | `list[str]` | the source said `.` or has no filter column. `["PASS"]` is literal. Site-level |
 | `sample_filters` | `list[str]` | FORMAT `FT`: whether *this sample's* genotype passed, separate from the site. Null = not given |
+| `split_signal` | `Enum` | no sign that the row is one record of a multi-allelic site split one row per ALT. Otherwise why it looks so: `marker`, `slot_pattern` or `all_zero_beside_alt` (rule below). In such a row a `0` can mean another ALT, not REF |
+
+**`split_signal`.** A file split one row per ALT (bcftools `norm -m-`, Hail, GATK) can write the
+other ALT of a genotype as `0`, so `1/2` at `A>G,T` becomes `1/0` at `A>G` and `0/1` at `A>T`, and
+`gt_alleles` reads each `0` as REF (RM270). The loader flags such rows and changes no value. Within a
+contig, over the rows that become `calls` (blocks never take part), first match wins:
+
+1. `marker`: the row carries INFO `OLD_MULTIALLELIC` (vt, Glow), or a value with five `|` fields under
+   a key declared with bcftools' `--old-rec-tag` Description. A record bcftools only realigned has
+   four and is not flagged.
+2. `slot_pattern`: two or more non-reference rows at one `pos`, each GT slot non-zero in at most one.
+3. `all_zero_beside_alt`: a fully called all-`0` row, of any ploidy, beside a non-reference row at
+   the same `pos`. Every row of the position gets the signal.
+
+A signal is evidence, not proof: an SNV and an indel on two haplotypes at one POS (`0|1`, `1|0`) fit
+the slot pattern. Out of reach: Hail's split output, which sorts unphased calls (`0/1` + `0/1`); split
+indels that left-alignment moved to another POS; and a split file where no position kept two rows.
+Rows written with `.` for the other ALT (vt, Glow, vcflib, `bcftools --multi-overlaps .`) are already
+half-calls. Each signal is one warning line with its count.
 
 **`end_pos`.** It is named apart from polars-bio's `end` because that value is wrong for symbolic SV
 alleles (P3), so the two must not share a name. The rule follows VCF 4.5's computed END:
@@ -482,6 +502,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **0.0.4** (2026-10-19, RM270, from S2): `calls.split_signal` and `facets.split_marker` flag rows
+  that look like one multi-allelic site written one row per ALT. Both additive; no value changed.
 
 - **0.0.3** (2026-09-30, found by loading the 124 PGP-HMS VCFs): `gq` widens to `u16` (22 files had GQ
   above 255); an `ALT .` record with `INFO/END` is a block (Illumina gVCF; a Veritas file had 183 million

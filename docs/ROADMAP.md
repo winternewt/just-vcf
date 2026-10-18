@@ -175,7 +175,7 @@ schema decision for the lead. just-prs builds a stopgap now (karyotype from its 
 caller and version as parquet metadata) and moves to this when it exists.
 
 ## RM270 — Pre-split multi-allelic input
-Severity: high · Status: open (the frame's answer to an unplaceable `0` is the person's call, surveyed first) · Owner: lead
+Severity: high · Status: in progress (B, the flags, shipped 2026-10-19 as schema 0.0.4; C, withholding, waits on desk #45; D goes with RM6) · Owner: lead
 
 Motivating report: S2 (just-dna-lite, 2026-10-18). Many VCFs arrive already split one row per ALT, in
 the `bcftools norm -m-` convention, and their headers do not say so. In a split row the `0` of a

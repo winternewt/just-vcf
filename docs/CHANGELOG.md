@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Schema 0.0.4 (RM270, from S2): a VCF row that looks like one record of a multi-allelic site written one
+  row per ALT gets `calls.split_signal` (`marker`, `slot_pattern` or `all_zero_beside_alt`), the
+  file gets `facets.split_marker` when vt's `OLD_MULTIALLELIC` or a bcftools `--old-rec-tag` key tagged
+  a record, and each signal is one warning with its count. In such a row a `0` can mean another ALT,
+  and `gt_alleles` still reads it as REF: no value changed. Whether to withhold those `0`s is on the
+  person's desk (#45). Measured: no signal on four unsplit WGS VCFs (22.2 million calls). Not run: a
+  real split file (only synthetic ones), and the unsplit gVCFs, whose count was still running. The
+  detection is one extra pass over the file. A cached copy is rewritten once (`REWRITE_VERSION` 5),
+  since the copy made for a refused header now keeps the marker keys.
+
 - The clone is on the seats kit v0.1.69, whose `watch-file.sh` asks the remote for its default branch
   (kit #88), so the inbox watcher's command no longer names `--branch main`.
 - The inbox watcher is the kit's `drivers/git/watch-file.sh` (kit #76); `scripts/watch-inbox.sh` is

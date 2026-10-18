@@ -15,6 +15,7 @@ from just_vcf.schema import (
     EvidenceBasis,
     PhaseSetKind,
     RefCheck,
+    SplitSignal,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
 
@@ -37,6 +38,7 @@ __all__ = [
     "RefCheck",
     "Sniffed",
     "SniffOutcome",
+    "SplitSignal",
     "UnsupportedFormatError",
     "__version__",
     "load",

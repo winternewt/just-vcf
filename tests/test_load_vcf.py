@@ -1,4 +1,5 @@
 import gzip
+import re
 import zipfile
 from pathlib import Path
 
@@ -249,6 +250,17 @@ def test_header_polars_bio_refuses_is_retried_with_structural_lines(tmp_path: Pa
     assert any("refused the file" in w for w in loaded.warnings)
 
 
+def test_split_marker_survives_the_structural_retry(tmp_path: Path) -> None:
+    extra = (
+        '##GATKCommandLine.X=<ID=X,Version=1,CommandLineOptions="reference=C:\\Users\\x\\ref.fa">',
+        '##INFO=<ID=OLD_MULTIALLELIC,Number=1,Type=String,Description="Original chr:pos:ref:alt encoding">',
+    )
+    records = ["1\t100\t.\tA\tG\t.\t.\tOLD_MULTIALLELIC=1:100:A/G/T\tGT\t1/."]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=extra)))
+    assert any("refused the file" in w for w in loaded.warnings)
+    assert loaded.calls.collect()["split_signal"].to_list() == ["marker"]
+
+
 def test_a_scalar_key_declared_as_a_list_keeps_its_value(tmp_path: Path) -> None:
     extra = ('##FORMAT=<ID=GQ,Number=.,Type=Integer,Description="Platypus-style GQ">',)
     records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT:GQ\t0/1:45", "1\t200\t.\tC\tT\t.\t.\t.\tGT:GQ\t0/1:12,30"]
@@ -287,3 +299,68 @@ def test_illumina_gvcf_blocks(tmp_path: Path) -> None:
     assert blocks.select("pos", "end_pos", "kind", "gq").rows() == [(100, 150, "ref", 1200)]
     assert calls["pos"].to_list() == [151, 152], "a single monomorphic record without END stays a call"
     assert loaded.facets.collect()["absence_means"][0] == "blocks"
+
+
+def test_split_rows_are_flagged_and_left_as_written(tmp_path: Path) -> None:
+    """RM270: rows that look like one multi-allelic site written one row per ALT get `split_signal`;
+    `gt` and `gt_alleles` stay as the file wrote them (option B)."""
+    records = [
+        "1\t100\t.\tA\tG\t50\tPASS\t.\tGT\t1/0",  # a split 1/2: each 0 is the other ALT
+        "1\t100\t.\tA\tT\t50\tPASS\t.\tGT\t0/1",
+        "1\t200\t.\tC\tG\t50\tPASS\t.\tGT\t1/1",  # a split 1/1 at C>G,T: the T row is all zero
+        "1\t200\t.\tC\tT\t50\tPASS\t.\tGT\t0/0",
+        "1\t300\t.\tC\tG,T\t50\tPASS\t.\tGT\t1/2",  # unsplit
+        "1\t400\t.\tA\tG\t50\tPASS\t.\tGT\t0/1",
+        "1\t400\t.\tA\t<*>\t.\t.\tEND=410\tGT\t0/0",  # a block at a call's position: not a call row
+        "1\t500\t.\tA\tG\t50\tPASS\t.\tGT\t1",  # haploid: the all-zero rule is any ploidy
+        "1\t500\t.\tA\tT\t50\tPASS\t.\tGT\t0",
+        "1\t600\t.\tA\tG\t50\tPASS\t.\tGT\t0/1",  # two het rows sharing one slot: not the pattern
+        "1\t600\t.\tA\tAT\t50\tPASS\t.\tGT\t0/1",
+        "1\t700\t.\tA\tG\t50\tPASS\t.\tGT\t0|1",  # a real SNV and indel on two haplotypes look split
+        "1\t700\t.\tAT\tA\t50\tPASS\t.\tGT\t1|0",
+        "1\t800\t.\tA\tG\t50\tPASS\t.\tGT\t0/0",  # hom-ref at a split site: every 0 there is REF
+        "1\t800\t.\tA\tT\t50\tPASS\t.\tGT\t0/0",
+    ]
+    path = write(tmp_path, vcf_text(records, info=("END",)))
+    calls, blocks, warnings = frames(path)
+    assert calls.schema == CALLS and calls.height == len(records) - 1 and blocks.height == 1
+    assert_gt_consistent(calls)
+    signals = {(row["pos"], row["alts"][0]): row["split_signal"] for row in calls.iter_rows(named=True)}
+    assert signals == {
+        (100, "G"): "slot_pattern", (100, "T"): "slot_pattern",
+        (200, "G"): "all_zero_beside_alt", (200, "T"): "all_zero_beside_alt",
+        (300, "G"): None, (400, "G"): None,
+        (500, "G"): "all_zero_beside_alt", (500, "T"): "all_zero_beside_alt",
+        (600, "G"): None, (600, "AT"): None,
+        (700, "G"): "slot_pattern", (700, "A"): "slot_pattern",
+        (800, "G"): None, (800, "T"): None,
+    }
+    counted = [re.match(r"(\d+) row\(s\) at (\d+) position\(s\) .* \((\w+)\):", w) for w in warnings if "RM270" in w]
+    assert {m.group(3): (int(m.group(1)), int(m.group(2))) for m in counted} == {
+        "slot_pattern": (4, 2), "all_zero_beside_alt": (4, 2),
+    }
+    assert load(path).facets.collect()["split_marker"][0] is None
+
+
+def test_split_markers_flag_their_rows(tmp_path: Path) -> None:
+    """A bcftools `--old-rec-tag` key, whatever its name, marks a row only with its USED_ALT_IDX field;
+    vt's OLD_MULTIALLELIC marks every row it is on. Both are read, so neither is a dropped field."""
+    bcftools = '##INFO=<ID=ORIGINAL,Number=1,Type=String,Description="Original variant. Format: CHR|POS|REF|ALT|USED_ALT_IDX">'
+    vt = '##INFO=<ID=OLD_MULTIALLELIC,Number=1,Type=String,Description="Original chr:pos:ref:alt encoding">'
+    records = [
+        "1\t100\t.\tA\tG\t50\tPASS\tORIGINAL=1|100|A|G,T|1\tGT\t0/1",  # a split 0/1, which no pattern fits
+        "1\t100\t.\tA\tT\t50\tPASS\tORIGINAL=1|100|A|G,T|2\tGT\t0/0",
+        "1\t200\t.\tC\tG\t50\tPASS\tORIGINAL=1|199|TC|TG\tGT\t0/1",  # realigned only: four fields
+        "1\t300\t.\tG\tA\t50\tPASS\tOLD_MULTIALLELIC=1:300:G/A/C\tGT\t1/.",
+        "1\t400\t.\tT\tC\t50\tPASS\t.\tGT\t0/1",
+    ]
+    path = write(tmp_path, vcf_text(records, extra_meta=(bcftools, vt)))
+    loaded = load(path)
+    calls = loaded.calls.collect()
+    signals = {row["pos"]: row["split_signal"] for row in calls.iter_rows(named=True) if row["alts"] != ["T"]}
+    assert signals == {100: "marker", 200: None, 300: "marker", 400: None}
+    assert calls.filter(pl.col("alts") == ["T"])["split_signal"].to_list() == ["marker"]
+    facet = loaded.facets.collect().row(0, named=True)
+    assert facet["split_marker"] == "OLD_MULTIALLELIC,ORIGINAL"
+    assert not {"INFO/ORIGINAL", "INFO/OLD_MULTIALLELIC"} & set(facet["dropped_fields"] or [])
+    assert any(w.startswith("3 row(s) tagged as split") for w in loaded.warnings)

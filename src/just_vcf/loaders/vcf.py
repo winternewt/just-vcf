@@ -30,7 +30,7 @@ import polars_bio as pb
 from polars_bio.sql import SQL
 
 from just_vcf.bgzf import BgzfWriter
-from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, canonical_chrom_expr, conform
+from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +57,20 @@ FORMAT_KEYS: dict[str, tuple[str, str]] = {
 INFO_KEYS = ("END", "SVLEN")
 """INFO keys the loader reads, for `end_pos` only."""
 
+SPLIT_MARKER_ID = "OLD_MULTIALLELIC"
+"""The INFO key vt decompose and Glow write on a record split off a multi-allelic site."""
+
+BCFTOOLS_OLD_REC = "Original variant. Format: CHR|POS|REF|ALT|USED_ALT_IDX"
+"""The Description bcftools norm writes for its `--old-rec-tag` key, whatever the key is named
+(vcfnorm.c). Only a split record gets the fifth, `USED_ALT_IDX`, field; a realigned one has four."""
+
 _SV_LENGTH_TYPES = ("DEL", "DUP", "INV", "CNV")
 """Symbolic allele types whose extent is `SVLEN` bases after POS. INS and breakends end at POS."""
 
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 4
+REWRITE_VERSION = 5
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused."""
 
 _HEADER_READ_CAP = 64 << 20
@@ -86,11 +93,28 @@ Everything else is read by `read_header`, not by polars-bio."""
 def _keep_in_structural_copy(line: str) -> bool:
     if line.startswith(_STRUCTURAL_META):
         return True
-    declared = re.match(r"^##(INFO|FORMAT)=<ID=([^,>]+)", line)
+    declared = re.match(r"^##(INFO|FORMAT)=<(.*)>$", line)
     if not declared:
         return False
-    kind, key = declared.groups()
-    return key in (INFO_KEYS if kind == "INFO" else FORMAT_KEYS)
+    kind, body = declared.groups()
+    attrs = _attrs(body)
+    if kind == "INFO":
+        return attrs.get("ID") in INFO_KEYS or _split_marker_kind(attrs) is not None
+    return attrs.get("ID") in FORMAT_KEYS
+
+
+def _attrs(body: str) -> dict[str, str]:
+    """The key=value pairs of a structured meta line, quotes left on."""
+    return dict(re.findall(r'(\w+)=("(?:[^"\\]|\\.)*"|[^,]*)', body))
+
+
+def _split_marker_kind(attrs: dict[str, str]) -> str | None:
+    """`vt` or `bcftools` when a declared INFO key marks records split off a multi-allelic site."""
+    if attrs.get("ID") == SPLIT_MARKER_ID:
+        return "vt"
+    if attrs.get("Description", "").strip('"') == BCFTOOLS_OLD_REC:
+        return "bcftools"
+    return None
 
 
 @dataclass
@@ -108,6 +132,8 @@ class Header:
     contigs: list[dict] = field(default_factory=list)
     sample_meta: list[str] = field(default_factory=list)
     format_first: bool = True
+    split_markers: dict[str, str] = field(default_factory=dict)
+    """Declared INFO keys that mark split records → `vt` or `bcftools` (`_split_marker_kind`)."""
 
     @property
     def version_tuple(self) -> tuple[int, int] | None:
@@ -148,9 +174,11 @@ def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:
         if not structured:
             continue
         kind, body = structured.groups()
-        attrs = dict(re.findall(r'(\w+)=("(?:[^"\\]|\\.)*"|[^,]*)', body))
+        attrs = _attrs(body)
         if kind == "INFO" and "ID" in attrs:
             header.info[attrs["ID"]] = attrs.get("Number", ".")
+            if marker := _split_marker_kind(attrs):
+                header.split_markers[attrs["ID"]] = marker
         elif kind == "FORMAT" and "ID" in attrs:
             header.format[attrs["ID"]] = attrs.get("Number", ".")
         elif kind == "contig" and "ID" in attrs:
@@ -306,7 +334,7 @@ def read_records(path: Path, header: Header, sample: str | None, first_record: b
     INFO keys become `info_<KEY>` and FORMAT keys `fmt_<KEY>`, whatever polars-bio names them. Every
     carried key is present, as a typed null when the file does not declare it.
     """
-    info = [key for key in INFO_KEYS if key in header.info]
+    info = [key for key in INFO_KEYS if key in header.info] + sorted(header.split_markers)
     fmt = [key for key in FORMAT_KEYS if key in header.format] if sample is not None else []
     multi = sample is not None and len(header.samples) > 1
     frame = scan(path, info, fmt, sample if multi else None)
@@ -346,6 +374,12 @@ def read_records(path: Path, header: Header, sample: str | None, first_record: b
         elif number != "1" and not is_list:
             reshaped.append(pl.concat_list(pl.col(name)).alias(name))
     frame = frame.with_columns(reshaped)
+    # A marker declared with a Number other than 1 comes back as a list: its first value is enough.
+    frame = frame.with_columns(
+        (pl.col(name).list.first() if isinstance(schema[name], pl.List) else pl.col(name)).cast(pl.String).alias(name)
+        for name in (f"info_{key}" for key in header.split_markers)
+        if name in present
+    )
     return frame.with_columns(
         [pl.lit(None, dtype=_dtype(number, kind)).alias(f"fmt_{key}") for key, (number, kind) in FORMAT_KEYS.items() if f"fmt_{key}" not in present]
         + [pl.lit(None, dtype=pl.List(pl.Int32) if key == "SVLEN" else pl.Int32).alias(f"info_{key}") for key in INFO_KEYS if f"info_{key}" not in present]
@@ -376,11 +410,88 @@ def scan_stats(records: pl.LazyFrame) -> dict:
         # Reading GT makes polars-bio parse every sample field here, where a value it cannot parse
         # can still be retried (P7), rather than when the caller collects the frames.
         pl.col("fmt_GT").null_count().alias("gt_missing"),
+        (_gt_body().str.count_matches(r"[/|]").max() + 1).alias("ploidy_max"),
         *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith("_multi_")],
     )
     row = _collect(plan).row(0, named=True)
     row["chroms"] = sorted(row["chroms"] or [])
     return row
+
+
+def _gt_body() -> pl.Expr:
+    """GT text without a VCF 4.4 leading phase indicator."""
+    return pl.col("fmt_GT").str.replace_all(r"^[/|]", "")
+
+
+def _gt_expr() -> pl.Expr:
+    """GT's allele indices, a null per `.`; null where the record has no GT."""
+    return (
+        pl.when(pl.col("fmt_GT").is_null())
+        .then(None)
+        .otherwise(
+            _gt_body().str.replace_all(r"\|", "/").str.split("/").list.eval(
+                pl.when(pl.element() == ".").then(None).otherwise(pl.element()).cast(pl.UInt8, strict=False)
+            )
+        )
+    )
+
+
+def _tagged(key: str, kind: str) -> pl.Expr:
+    """True on a record INFO `key` tags as split off a multi-allelic site: any vt value, or a
+    bcftools value with its fifth, `USED_ALT_IDX`, field."""
+    column = pl.col(f"info_{key}")
+    return column.is_not_null() if kind == "vt" else column.str.count_matches(r"\|").fill_null(0) == 4
+
+
+def _marker_expr(header: Header) -> pl.Expr:
+    """True on a record any declared split marker tags."""
+    tagged = [_tagged(key, kind) for key, kind in sorted(header.split_markers.items())]
+    return pl.any_horizontal(tagged) if tagged else pl.lit(False)
+
+
+def split_groups(rows: pl.LazyFrame, header: Header, ploidy: int) -> tuple[pl.DataFrame, dict[str, int]]:
+    """Positions whose rows look like one multi-allelic site written one row per ALT (RM270).
+
+    `rows` are the records that become `calls` (blocks left out), with `gt` and the source `chrom`
+    and `start`. Returns the flagged positions, `(chrom, start, rows, split_group)`, where
+    `split_group` is the pattern a position fits, and the count of marker-tagged rows per declared
+    marker key. One streaming pass; the result holds only flagged positions.
+    """
+    slots = range(max(ploidy, 1))
+    nonzero = [pl.col("gt").list.get(i, null_on_oob=True).fill_null(0) > 0 for i in slots]
+    all_zero = pl.col("gt").list.eval(pl.element().is_not_null() & (pl.element() == 0)).list.all() & (pl.col("gt").list.len() > 0)
+    per_row = rows.select(
+        "chrom",
+        "start",
+        pl.any_horizontal(nonzero).alias("nonref"),
+        all_zero.fill_null(False).alias("all_zero"),
+        *[flag.alias(f"slot_{i}") for i, flag in zip(slots, nonzero)],
+    )
+    groups = (
+        per_row.group_by("chrom", "start")
+        .agg(
+            pl.len().alias("rows"),
+            pl.col("nonref").sum().alias("nonref"),
+            pl.col("all_zero").sum().alias("all_zero"),
+            *[pl.col(f"slot_{i}").sum().alias(f"slot_{i}") for i in slots],
+        )
+        .filter(pl.col("rows") > 1)
+        .select(
+            "chrom",
+            "start",
+            "rows",
+            pl.when((pl.col("nonref") >= 2) & (pl.max_horizontal(f"slot_{i}" for i in slots) <= 1))
+            .then(pl.lit(SplitSignal.SLOT_PATTERN.value))
+            .when((pl.col("all_zero") >= 1) & (pl.col("nonref") >= 1))
+            .then(pl.lit(SplitSignal.ALL_ZERO_BESIDE_ALT.value))
+            .alias("split_group"),
+        )
+        .filter(pl.col("split_group").is_not_null())
+    )
+    keys = sorted(header.split_markers)
+    marked = rows.select([_tagged(key, header.split_markers[key]).sum().alias(key) for key in keys] or [pl.lit(0).alias("_none")])
+    flagged, counts = pl.collect_all([groups, marked])
+    return flagged.sort("chrom", "start"), {key: counts[key].item() for key in keys}
 
 
 def _alts_expr() -> pl.Expr:
@@ -392,8 +503,9 @@ def _alts_expr() -> pl.Expr:
     )
 
 
-def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str]]:
-    """Lazy `calls` and `blocks` rows (without `facet_id`) from `read_records` output, plus warnings."""
+def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str], str | None]:
+    """Lazy `calls` and `blocks` rows (without `facet_id`) from `read_records` output, the warnings,
+    and the facet's `split_marker`: the declared marker key(s) that tagged a record, or null."""
     warnings = [
         f"{stats[f'out_{key}']} {key} value(s) outside 0..{top} set to null"
         for key, top in _BOUNDED.items()
@@ -413,18 +525,10 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
     )
 
     gt_text = pl.col("fmt_GT")
-    body = gt_text.str.replace_all(r"^[/|]", "")
-    seps = body.str.extract_all(r"[/|]")
+    seps = _gt_body().str.extract_all(r"[/|]")
     first_phased = pl.lit(None, dtype=pl.Boolean) if v44 else pl.when(seps.list.contains("/")).then(pl.lit(False)).otherwise(pl.lit(True))
     rows = rows.with_columns(
-        pl.when(gt_text.is_null())
-        .then(None)
-        .otherwise(
-            body.str.replace_all(r"\|", "/").str.split("/").list.eval(
-                pl.when(pl.element() == ".").then(None).otherwise(pl.element()).cast(pl.UInt8, strict=False)
-            )
-        )
-        .alias("gt"),
+        _gt_expr().alias("gt"),
         pl.when(gt_text.is_null()).then(None).otherwise(pl.concat_list(first_phased, seps.list.eval(pl.element() == "|"))).alias("phased"),
     )
     allele_list = pl.concat_list(pl.col("source_ref"), pl.col("alts"))
@@ -432,6 +536,27 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
     # A record is a block only when it asserts reference or nothing: a GT calling `<*>` stays a call.
     reference_or_nothing = pl.col("gt").is_null() | pl.col("gt").list.eval(pl.element().is_null() | (pl.element() == 0)).list.all()
     rows = rows.with_columns((pl.col("_block") & reference_or_nothing).alias("_block"))
+    # RM270: positions that look split one row per ALT, over the rows that become calls.
+    flagged, marked = split_groups(rows.filter(~pl.col("_block")), header, stats["ploidy_max"] or 1)
+    rows = rows.join(flagged.lazy().select("chrom", "start", "split_group"), on=["chrom", "start"], how="left").with_columns(
+        pl.when(_marker_expr(header) & ~pl.col("_block"))
+        .then(pl.lit(SplitSignal.MARKER.value))
+        .otherwise(pl.col("split_group"))
+        .alias("split_signal")
+    )
+    split_marker = ",".join(key for key, n in marked.items() if n) or None
+    if split_marker:
+        warnings.append(
+            f"{sum(marked.values())} row(s) tagged as split off a multi-allelic site (INFO {split_marker}): "
+            "a `0` there may mean another ALT, not REF (RM270)"
+        )
+    for signal in (SplitSignal.SLOT_PATTERN, SplitSignal.ALL_ZERO_BESIDE_ALT):
+        group = flagged.filter(pl.col("split_group") == signal.value)
+        if group.height:
+            warnings.append(
+                f"{group['rows'].sum()} row(s) at {group.height} position(s) look split one row per ALT ({signal.value}): "
+                "a `0` there may mean another ALT, not REF (RM270)"
+            )
     rows = _phase_sets(rows)
 
     gp, gp_warning = _gp(header, stats)
@@ -479,7 +604,7 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
         "dp_min",
         "gl",
     )
-    return calls, blocks, warnings
+    return calls, blocks, warnings, split_marker
 
 
 def _is_block_record(alts: pl.Expr) -> pl.Expr:
@@ -586,7 +711,7 @@ def _bounded(key: str, dtype: pl.DataType) -> pl.Expr:
 
 def dropped_fields(header: Header) -> list[str]:
     """Declared keys the frames do not carry, namespaced."""
-    info = [f"INFO/{key}" for key in header.info if key not in INFO_KEYS]
+    info = [f"INFO/{key}" for key in header.info if key not in INFO_KEYS and key not in header.split_markers]
     fmt = [f"FORMAT/{key}" for key in header.format if key not in FORMAT_KEYS]
     return sorted(info) + sorted(fmt)
 

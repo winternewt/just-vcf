@@ -173,3 +173,12 @@ binds RM6: just-vcf's own split output must not write this convention.
 What to do now: nothing is owed to just-vcf, since just-dna-lite does not load through it yet. For your
 own reader, the unsplit file is the one that reads right today. Watch `docs/CHANGELOG.md` for RM270.
 <!-- triaged: 0.1.0 · sha 3fa6a53b0ff4 -->
+
+**Status — partly shipped, 2026-10-19 (unreleased, schema 0.0.4).** RM270's flagging option is in.
+Re-run on the same synthetic VCF: the split `1/2` rows carry `calls.split_signal = slot_pattern`, the
+`1/1` and the uncarried ALT's `0/0` carry `all_zero_beside_alt`, the unsplit `1/2` carries none, and
+`warnings` names each signal with its row and position counts. `facets.split_marker` names vt's
+`OLD_MULTIALLELIC` or a bcftools `--old-rec-tag` key when the file has one. No value changed:
+`gt_alleles` still reads a flagged `0` as REF, so a reader checks `split_signal` before trusting it.
+Withholding those `0`s waits on the person's decision. Details in `docs/CHANGELOG.md`.
+<!-- triaged: 0.1.0 · sha 3fa6a53b0ff4 -->

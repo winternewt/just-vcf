@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Triage answered S1, the first consumer item (just-prs: male X/Y ploidy conventions differ by caller,
+  vendor and panel, and nothing records which). Nothing had shipped for it; it is filed as RM269, a
+  karyotype finding and the caller's ploidy model, beside RM2's planned source detector.
 - `scripts/item-next.py` counts an id as taken only where a heading, a reservation or a tombstone row
   owns it, so a sibling's id quoted in prose no longer sets the maximum (just-dna-format's `RM267`,
   quoted in RM3, made it hand out RM268; RM268 keeps its number). A reservation now lands in its anchor

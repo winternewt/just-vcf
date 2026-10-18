@@ -134,3 +134,41 @@ Constraints on a fix:
 
 Options, not decided: sweep stale-version entries on each load; an explicit `clear_cache()` in the
 API (and in the CLI once it exists); a size cap with least-recently-used eviction.
+
+## RM269 — Karyotype finding and the caller's ploidy model
+Severity: high · Status: open · Owner: unassigned
+
+Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
+convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
+1.1.0) writes a man's non-PAR X as `1/1` and `0/1`, a sex-aware one (DRAGEN) writes or filters it
+differently, and arrays split by vendor (23andMe one letter; AncestryDNA the same letter twice, per the
+`ancestrydna` format notes). A consumer reading `gt_alleles` cannot tell one copy from two.
+
+Reproduced 2026-10-18 against the code, on a synthetic VCF: `##DeepVariant_version=1.1.0` in the
+header still leaves `facets.caller` and `caller_version` null, and a male-X `1` loads as one allele
+beside `1/1` as two, exactly as written (SCHEMA Decision 2). Nothing in the frames can say the karyotype;
+SCHEMA.md's XYY stress case already lists that as open.
+
+Two halves:
+
+1. **Caller, version and ploidy model on the facet.** `caller` and `caller_version` exist in `facets`
+   and are never filled; RM2's planned `source` detector fills them. This item adds what RM2's table
+   lacks: `##bcftools_callVersion`, and the caller's ploidy model as a new nullable facet field (sex-aware,
+   diploid everywhere, or an explicit ploidy), read from the header where it says so and null where it
+   does not. Which headers say so is not checked yet: DRAGEN's and GATK's recorded command lines are
+   the candidates, and whether any DeepVariant header records haploid contigs is open. Never guessed
+   from the caller's name alone.
+2. **A person-level karyotype finding with its own provenance.** Evidence without depth: the non-PAR X
+   heterozygous fraction and the presence of PASS Y calls, which separate XX, XY, XXY and X0 on a WGS
+   facet. XYY needs depth, so it waits for a coverage facet. Weak or contradictory evidence gives
+   unknown, never the nearest class. The vocabulary is GA4GH Phenopackets' `KaryotypicSex`, used
+   verbatim (charter invariant 2). PAR bounds are per assembly and are domain constants.
+
+Constraints: list length stays the number of haplotypes the source wrote (Decision 2). The finding sits
+beside the facets and is never a rewrite of `calls`: no GT is collapsed to haploid by the loader. An
+array facet without Y probes, or a targeted panel, says unknown.
+
+Legality: minor. Filling `caller`/`caller_version`, a new nullable facet field and a new person-level
+finding are all additive. Where the finding lives (a new frame or columns on an existing one) is a
+schema decision for the lead. just-prs builds a stopgap now (karyotype from its normalized parquet,
+caller and version as parquet metadata) and moves to this when it exists.

@@ -188,21 +188,41 @@ Reproduced 2026-10-18 against the code, on a synthetic VCF: the loader keeps one
 person does not have; the uncarried ALT's `0/0` row loads as `["C","C"]`, a hom-ref call. `warnings` is
 empty. The unsplit record of the same site loads as `["G","T"]`.
 
-What is open:
+**Prior art** (read from source and docs, 2026-10-18). bcftools `norm -m-` writes the other ALT as `0`
+by default, keeping GT slots, and `.` with `--multi-overlaps .` (1.17+); its `--old-rec-tag` INFO
+(1.12+) is opt-in. Hail's `split_multi_hts` downcodes to `0` and sorts unphased calls, so its split
+`1/2` is `0/1` + `0/1`, and its `a_index`/`was_split` are row fields an exported VCF lacks. GATK
+`LeftAlignAndTrimVariants --split-multi-allelics` writes `0`, except that every sample becomes `./.` when
+any sample is `1/2`. vt `decompose`, Glow and vcflib `vcfbreakmulti` write `.`, and vt and Glow add INFO
+`OLD_MULTIALLELIC`. The VCF spec says nothing about split records. `bcftools norm -m+` re-joins slot by
+slot (`1/0` + `0/1` gives `1/2`). Rows written with `.` already load as half-calls and are safe.
 
-1. **Detection.** Candidate signals: more than one record at one position, with genotypes that use
-   each allele slot once between them (`1/0` + `0/1`), or a `0/0` beside a non-reference record there;
-   a `bcftools norm --old-rec-tag` INFO field where present. Two records at one position are also
-   legitimate (an SNV and an indel sharing POS), so a signal is evidence, not proof, and the facet's
-   answer is a Kleene one: split, not split, or unknown.
-2. **What the frame says about a `0` it cannot place.** Options, not decided: a warning with a count
-   by pattern (patch); a nullable facet field saying the file is pre-split (minor); `gt_alleles` null
-   for a `0` in a row detected as split, since the source did not say which allele it is (changes
-   values a consumer reads today, so the changelog says so); re-joining the split records into the one
-   site they came from (a derived facet, charter 5, never a silent rewrite at load). Which of these is
-   a schema decision for the lead.
-3. **RM6's own split output** must not write this convention: a split row whose `0` means "another
-   ALT" carries the same ambiguity out to the next reader.
+**Detection**, three signals per `pos` within a contig, reported separately and never folded into one
+flag: a **marker** (INFO `OLD_MULTIALLELIC`, or a value of the `--old-rec-tag` shape
+`CHROM|POS|REF|ALT|IDX`); the **slot pattern** (two or more non-reference rows, each GT slot non-zero in
+at most one); and an **all-zero row of any ploidy beside a non-reference row**. On the facet, a marker
+is Kleene: true when seen, null otherwise, never false, because a split file can show no signal at all
+(Hail's sorted output, split indels that left-alignment moved to another POS). Measured 2026-10-18 on
+four unsplit private WGS VCFs (DeepVariant ×2, DRAGEN, GATK HaplotypeCaller), 22.2 million calls: no
+signal fired. Only the DRAGEN file had positions with two records (10), none matching. The rate on a
+real split file is not measured (no bcftools here); a synthetic split VCF is caught at both its sites.
+
+**What the frame says about a `0` it cannot place.** No option changes `gt`, the row grain, or
+`source_gt` where it is kept (null on VCF 4.4+, P4). Not decided:
+
+| | What the frame says | Legality | Cost |
+|---|---|---|---|
+| A. Warn only | a warning per signal, with a count | patch | every flagged row stays wrong for a reader that skips warnings |
+| B. A + flags | `facets.split_marker` (Kleene) and a nullable row column `split_signal` naming the signal | minor | values stay wrong, but every flagged row can be found |
+| C. B + slot-aware withhold | in a flagged group, a `0` becomes null in `gt_alleles` only in a slot where another row of the group is non-zero; a slot zero in every row keeps its REF | values read today change (pre-1.0, changelog says so) | a false positive loses a true REF copy, never states a false one; amends Decision 2: `gt` and `gt_alleles` agree except where withheld, and a null means uncalled or withheld |
+| D. Re-join as a derived facet | each flagged group merged into one site slot by slot, as `bcftools -m+` does (`relation = normalized`, charter 5) | minor | the most work; GT only, since bcftools subsets PL/AD to REF + one ALT; phasing across slots may be lost |
+
+`gl`, `gp` and `ad` on a flagged row stay as written: they compare REF with one ALT and inherit the
+ambiguity, and the row flag is what tells a reader so. The lead recommends B and C now, D inside RM6,
+put to the person on the desk 2026-10-19.
+
+**RM6's own split output** must not write this convention: it writes `.` for the other ALT, as vt,
+Glow, vcflib and `bcftools --multi-overlaps .` do.
 
 Legality: detection, a warning and a new nullable field are additive (minor). Nulling `gt_alleles` for
 detected rows changes the meaning of values already emitted.

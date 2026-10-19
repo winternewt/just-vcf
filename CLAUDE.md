@@ -188,7 +188,7 @@ without its reason gets rationalised away at 2 a.m.
 - **Never edit or re-wrap a reporter's prose** in the feedback inbox — not when answering it,
   not when moving it. Replies are appended below it.
 - **Never reuse a feedback id**, not even one answered as a non-issue. Compute the next id
-  from the inbox **and** the history file: `sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --next`.
+  from the inbox **and** the history file: `sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next`.
 - **Never treat "no reply" as "no work done."** Establish what already shipped before
   reproducing a reported item, and certainly before designing for it.
 - **Never write a placeholder reply.** Leave an untriaged item unanswered and say what was skipped.
@@ -408,7 +408,7 @@ is mitigated here but still owed upstream, which legitimately appears in two.
   *orient* — and every prohibition lives here in full.
 - **`docs/ROADMAP.md` is active-only.** Shipped items move to `docs/ROADMAP_HISTORY.md` with their
   rationale. Nothing is deleted; it is relocated. Claim a new `RMn` with
-  `ITEM_PREFIX=RM sh "$KIT/bin/py" "$KIT/classes/triage/item-next.py" --note "…"` (§8's `$KIT`), never by grepping the
+  `ITEM_PREFIX=RM sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/item-next.py" --note "…"` (§8), never by grepping the
   highest id — two sessions reading the same number both write it.
 - **`docs/CHANGELOG.md` records what shipped**, newest first — including cross-repo integration
   changes, so agents in sibling repos are not surprised.
@@ -431,16 +431,17 @@ is mitigated here but still owed upstream, which legitimately appears in two.
 `docs/FEEDBACK.md` holds **open** consumer items (`## Sn — …`); `docs/FEEDBACK_HISTORY.md` holds
 answered ones verbatim. **Empty inbox ⟹ nothing owed.** The triage seat (`docs/seats/TRIAGE.md`) runs
 it. The runbook is `docs/CONSUMER_TRIAGE_LOOP.md`. The loop's scripts and its inbox watcher are the seats
-kit's, run from the copy this clone is pinned to. `$KIT` below is that copy:
-`~/.claude/plugins/cache/agent-seat-blueprints/seats/<version>`, `<version>` being the tag
-`.claude/settings.local.json` pins, without its `v`. A seated session sees it in the path of the
-`watchdog.py` its hook prints. Run them in this clone; they default to its `docs/`:
+kit's, run from the copy this clone is pinned to. The plugin's session-start hook exports that copy as
+`$BLUEPRINTS_KIT` into every session of this clone. A session without the plugin sets it by hand:
+`BLUEPRINTS_KIT=~/.claude/plugins/cache/agent-seat-blueprints/seats/<version>`, `<version>` being the
+tag `.claude/settings.local.json` pins, without its `v`. Unset, a command says so and runs nothing. Run
+them in this clone; they default to its `docs/`:
 
 ```bash
-sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --pending   # what needs work
-sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --next      # next unclaimed id, over BOTH files
-sh "$KIT/bin/py" "$KIT/classes/triage/triage-archive.py" S1        # move an answered item, verifying the move
-ITEM_PREFIX=RM sh "$KIT/bin/py" "$KIT/classes/triage/item-next.py" --note "…"   # reserve the next RM<n>
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --pending   # what needs work
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next      # next unclaimed id, over BOTH files
+sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-archive.py" S1        # move an answered item, verifying the move
+ITEM_PREFIX=RM sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/item-next.py" --note "…"   # reserve the next RM<n>
 ```
 
 The `.py` scripts are Python. Run them through `bin/py`, **never with `bash`**: under bash the

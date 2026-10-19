@@ -4,6 +4,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The triage commands name `$BLUEPRINTS_KIT`, which the seats kit's session-start hook exports from kit
+  v0.1.78 (kit #96), instead of a `$KIT` each session had to find by hand.
 - The triage runbook, `docs/CONSUMER_TRIAGE_LOOP.md`, now points at the seats kit's `LOOP.md` (v0.1.77)
   instead of the frozen gist, and keeps only the local parameters, the intake routes and the legality
   rules. The inbox header pins the next id again (S3), for a reporter who cannot run the kit's `--next`.

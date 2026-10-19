@@ -2,7 +2,7 @@
 
 This repo runs the document-as-inbox triage loop. Its procedure (Step 0 through Step 5), the
 five-verdict routing, the scripts, both watchers and the gotchas found by running it are in the seats
-kit's runbook, `classes/triage/LOOP.md` in the kit copy this clone pins (`$KIT`, `CLAUDE.md` §8), and
+kit's runbook, `classes/triage/LOOP.md` in the kit copy this clone pins (`$BLUEPRINTS_KIT`, `CLAUDE.md` §8), and
 only there. The seat that runs it is primed from the kit's `classes/triage/TRIAGE.md` and
 [seats/TRIAGE.md](seats/TRIAGE.md). This file holds only what `LOOP.md` does not: the local
 parameters, the intake routes and the legality rules.
@@ -32,7 +32,7 @@ filed before anything else is done
 with it, because the inbox is the state and a message is only delivery.
 
 1. React to it (`watchdog.py react ID`), and read it whole (`watchdog.py read ID`) if it was cut.
-2. Append it to `docs/FEEDBACK.md` as `## S<n> — <title>`, `<n>` from `sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --next`.
+2. Append it to `docs/FEEDBACK.md` as `## S<n> — <title>`, `<n>` from `sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next`.
    The title is the reporter's own one-line summary if they gave one; otherwise write one and say so.
    The first body line is the relay: `Sent on Zulip by <sender, as the watchdog named them>, <date>,
    <message link>; filed verbatim by triage.` Below it, the message text exactly as sent.

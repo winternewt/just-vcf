@@ -39,7 +39,13 @@ restarted with backoff if it exits, stopped with the seat. When the inbox differ
 unchanged for 150 s, a watcher line arrives, `docs/FEEDBACK.md: uncommitted, +N -M lines against HEAD:
 git diff HEAD -- docs/FEEDBACK.md`, and wakes an idle seat. Each state is said once, across a restart
 too, so an item a sibling left while no one held the seat is said at the next punch-in. Off `main` it
-pauses silently. The line names no item; the pass's `--pending` does. The watchdog reads the table only when it starts, so a
+pauses silently. The line names no item; the pass's `--pending` does.
+
+A second table, `[seat.triage.watch.inbox-commits]`, runs the kit's `drivers/git/watch-remote.sh --path
+docs/FEEDBACK.md`: a line, `trunk main: <sha> by <author>: <subject>`, when a commit touching the inbox
+reaches origin's `main` from somewhere this clone's `main` has not seen, a report its writer committed
+and pushed. Commits already in the local branch are not said, so triage's own commits here wake nobody.
+Its first start says once where the trunk is. The watchdog reads the table only when it starts, so a
 change to it takes `watchdog.py stop triage` and `/seats:seat triage` again.
 
 Never start a watcher from the agent as well: nothing stops a second one on the same file, and two

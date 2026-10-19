@@ -4,6 +4,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The triage seat has a second watcher, the kit's `watch-remote.sh --path docs/FEEDBACK.md`, for a report
+  committed and pushed from elsewhere, which the inbox watcher cannot see once the file matches HEAD.
 - The triage loop runs the seats kit's scripts (`classes/triage/` from kit v0.1.77) instead of copies in
   `scripts/`. `triage-state.py`, `triage-archive.py`, `item-next.py` and `tests/test_item_next.py` are
   gone; the kit's versions gave the same ledger, the same next `S` id and the same next `RM` id on this

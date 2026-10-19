@@ -13,6 +13,13 @@ wake_from = "just-vcf/lead just-vcf/upstream-liaison just-vcf/tooling */secretar
 # command is the tooling seat's, the line triage's.
 cmd = "sh kit:drivers/git/watch-file.sh docs/FEEDBACK.md"
 
+[seat.triage.watch.inbox-commits]
+# One line when a commit to docs/FEEDBACK.md lands on origin's main that this clone's main does not
+# hold: a report committed elsewhere, which watch-file.sh cannot see (the file then matches HEAD). The
+# kit's trunk watcher, as its triage runbook sets it up; commits already in the local branch, such as
+# triage's own in this checkout, are not said.
+cmd = "sh kit:drivers/git/watch-remote.sh --path docs/FEEDBACK.md"
+
 [seat.triage.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"
 

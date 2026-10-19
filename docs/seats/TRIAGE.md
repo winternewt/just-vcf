@@ -38,7 +38,9 @@ items.
 - **The inbox watcher**: a line saying `docs/FEEDBACK.md: uncommitted, +N -M lines against HEAD`
   (or `new, not in HEAD`), from the kit's `watch-file.sh` under the seat's watchdog, once the file has
   sat unchanged for 150 s. It names no item: step 1's `--pending` does. Your own reply left
-  uncommitted past the settle rings it too; let that one go. After a context clear, a watcher line is the
+  uncommitted past the settle rings it too; let that one go.
+- **The trunk watcher**: `trunk main: <sha> by <author>: <subject>`, a commit to the inbox that reached
+  origin from elsewhere (`[seat.triage.watch.inbox-commits]`): a report its writer committed. After a context clear, a watcher line is the
   whole brief: re-read this file.
 - **A sibling's session relaying a report**, by message or by appending to the inbox. A consumer's
   item left in `docs/FEEDBACK.md` uncommitted is taken as it stands: committed alone, its prose

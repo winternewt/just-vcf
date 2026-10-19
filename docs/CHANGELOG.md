@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A filter on a loaded VCF's `calls` that had split-flagged rows ran about 20 times slower than a full
+  collect (169 s against 8.5 s on a real genome split one row per ALT), because the flagged positions
+  were joined below the per-contig sort, which kept the filter from reaching the parquet scan. They
+  join above it now, and not at all when nothing is flagged. A file with nothing flagged was not
+  affected (1.7 s against 1.5 s for the same filter).
 - The triage commands name `$BLUEPRINTS_KIT`, which the seats kit's session-start hook exports from kit
   v0.1.78 (kit #96), instead of a `$KIT` each session had to find by hand.
 - The triage runbook, `docs/CONSUMER_TRIAGE_LOOP.md`, now points at the seats kit's `LOOP.md` (v0.1.77)

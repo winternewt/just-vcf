@@ -495,6 +495,8 @@ def split_groups(calls: pl.LazyFrame, ploidy: int) -> tuple[pl.DataFrame, int]:
 
 def with_split_groups(calls: pl.LazyFrame, flagged: pl.DataFrame) -> pl.LazyFrame:
     """`calls` with each flagged position's pattern in `split_signal`, where no marker set it first."""
+    if flagged.is_empty():
+        return calls
     return (
         calls.join(flagged.lazy().select("chrom", "pos", "split_group"), on=["chrom", "pos"], how="left", maintain_order="left")
         .with_columns(pl.coalesce(pl.col("split_signal"), pl.col("split_group").cast(CALLS["split_signal"])).alias("split_signal"))

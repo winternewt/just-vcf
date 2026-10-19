@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 LOADABLE_FORMATS: frozenset[str] = rsid_table.FORMATS | vcf.FORMATS
 """Format ids `load` can read. Grows as loaders land."""
 
-_SPILL_ROW_GROUP = 200_000
+SPILL_ROW_GROUP = 200_000
 """Rows per parquet row group in a spill. Small enough that a contig filter skips most of the file."""
 
 _IMPUTED_FORMATS = frozenset({"genes_for_good_imputed"})
@@ -187,8 +187,8 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     spill.mkdir(parents=True, exist_ok=True)
     pl.collect_all(
         [
-            calls_frame.sink_parquet(spill / "calls.parquet", row_group_size=_SPILL_ROW_GROUP, lazy=True),
-            blocks_frame.sink_parquet(spill / "blocks.parquet", row_group_size=_SPILL_ROW_GROUP, lazy=True),
+            calls_frame.sink_parquet(spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
+            blocks_frame.sink_parquet(spill / "blocks.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
         ]
     )
     contigs = [canonical_chrom(name) for name in stats["chroms"]]
@@ -220,7 +220,8 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         logger.warning("%s: %s", facet_id, warning)
     return Loaded(
         facets=facets,
-        calls=canonical_order_per_contig(vcf.with_split_groups(spilled, flagged), contigs),
+        # The flagged positions join above the per-contig sort, so a filter still reaches the parquet scan.
+        calls=vcf.with_split_groups(canonical_order_per_contig(spilled, contigs), flagged),
         blocks=canonical_order_per_contig(pl.scan_parquet(spill / "blocks.parquet"), contigs),
         warnings=tuple(warnings),
     )

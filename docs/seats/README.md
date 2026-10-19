@@ -15,7 +15,7 @@ taken one does the task it was given and takes no seat's work.
 | **triage** | [TRIAGE.md](TRIAGE.md) | none: its state is `docs/FEEDBACK.md` | the inbox watcher; a relayed consumer report | Answers consumer feedback: triages, replies in the document, routes, archives. Owns the runbook. Never designs a major change unasked. |
 | **upstream-liaison** | [UPSTREAM_LIAISON.md](UPSTREAM_LIAISON.md) | none: its state is `docs/POLARS_BIO_PENDING_FIXES.md` | an upstream symptom from the lead or triage; its own checks at each start | Owns what we know about polars-bio and the layers under it: reproduces, locates, decides verdicts, drafts filings. Never files without the user's go. |
 | **lead** | [LEAD.md](LEAD.md), on the kit's `lead` role | [LEAD_NOTES.md](LEAD_NOTES.md) | the user; an RM item from triage; a mitigation from the liaison | The user's own coding sessions: the roadmap, the design, the build. Hands upstream symptoms to the liaison and consumer reports to triage. |
-| **tooling** | [TOOLING.md](TOOLING.md), on the kit's `plumber` role | none: its state is its issues | a tool's fault from any seat; a kit release or reply | Owns the machinery: the triage loop's scripts, the watcher commands, the leak gate's install, the kit's pin (it alone moves it). Files the kit's gaps on the kit's issues. Never judges what its tools carry. |
+| **tooling** | [TOOLING.md](TOOLING.md), on the kit's `plumber` role | none: its state is its issues | a tool's fault from any seat; a kit release or reply | Owns the machinery: the watcher commands, the leak gate's install, the kit's pin (it alone moves it). The triage loop's scripts are the kit's; it files their faults and the kit's other gaps on the kit's issues. Never judges what its tools carry. |
 
 `.blueprints.toml` declares the four seats and who may wake each one. `team.toml` lists the people on
 the team by chat account. `docs/TRUST.md` is the trust register every seat checks before outside code
@@ -44,7 +44,7 @@ Repeated from `CLAUDE.md` because these are the ones a seat is most likely to me
 - Another seat's uncommitted file is work in flight: commit your own paths by name; never stash,
   revert or commit theirs. The one exception is a consumer's item left uncommitted in the inbox, which
   triage commits as it stands.
-- Never `uv pip install`; never bare `python`. The stdlib triage scripts run directly, never under `bash`.
+- Never `uv pip install`; never bare `python`. The kit's triage scripts run through the kit's `bin/py` (`CLAUDE.md` §8), never under `bash`.
 - Never edit or commit a sibling repo beyond appending an item to its `docs/FEEDBACK.md`.
 - Never run outside code without checking its standing in `docs/TRUST.md`.
 - Never resolve a contradiction between two rules by inference: run the questionnaire in `CLAUDE.md` §1.

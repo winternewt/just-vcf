@@ -2,7 +2,7 @@
 
 Active items only, newest decisions first. Shipped items move to
 [ROADMAP_HISTORY.md](ROADMAP_HISTORY.md). Claim a new id with
-`INDEX=docs/ROADMAP.md ITEM_PREFIX=RM ./scripts/item-next.py --note "…"`.
+`ITEM_PREFIX=RM sh "$KIT/bin/py" "$KIT/classes/triage/item-next.py" --note "…"`, `$KIT` as `CLAUDE.md` §8 says.
 
 ## Items
 

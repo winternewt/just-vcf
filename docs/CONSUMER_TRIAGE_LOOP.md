@@ -19,14 +19,15 @@ does; this one holds the local rules the pass reads.
 ## Local parameterization
 
 - Inbox `docs/FEEDBACK.md`, history `docs/FEEDBACK_HISTORY.md`, item prefix `S`.
-- Tracked items are roadmap entries, `RM<n>` in `docs/ROADMAP.md`, claimed with `scripts/item-next.py`.
-- The three scripts live in `scripts/`. The defaults of `triage-state.py`, `triage-archive.py` and
-  `item-next.py` are derived from the script's own location, not from the working directory. The
-  watcher is the kit's `drivers/git/watch-file.sh`; the gist's `watch-inbox.sh` was retired for it. `item-next.py` also counts
-  an id as taken only where a heading, a reservation or a tombstone owns it, never where prose quotes it
-  (a sibling's `RM267` in RM3 once set the maximum), and puts a reservation inside its anchor section,
-  never in a later item's list. The gist's `wake-on-inbox.sh` and `arm-on-prompt.py` were dropped when the
-  watcher moved under the seat.
+- Tracked items are roadmap entries, `RM<n>` in `docs/ROADMAP.md`, claimed with the kit's `item-next.py`.
+- The loop's three scripts are the kit's, `classes/triage/` in the pinned copy (`$KIT`, `CLAUDE.md` §8),
+  run in this clone through `sh "$KIT/bin/py"`. They default to this clone's `docs/FEEDBACK.md`,
+  `docs/FEEDBACK_HISTORY.md` and `docs/ROADMAP.md`. This repository's own copies were retired for them;
+  the kit's carry both fixes made here: `item-next.py` counts an id only where a heading, a reservation,
+  a tombstone or a changelog line owns it, never where other prose quotes it (a sibling's `RM267` in RM3
+  once set the maximum), and puts a reservation inside its anchor section. The watcher is the kit's
+  `drivers/git/watch-file.sh`; the gist's `watch-inbox.sh`, `wake-on-inbox.sh` and `arm-on-prompt.py`
+  were retired for it.
 - The watcher guards branch `main`.
 
 ## Arming the watcher
@@ -54,7 +55,7 @@ filed before anything else is done
 with it, because the inbox is the state and a message is only delivery.
 
 1. React to it (`watchdog.py react ID`), and read it whole (`watchdog.py read ID`) if it was cut.
-2. Append it to `docs/FEEDBACK.md` as `## S<n> — <title>`, `<n>` from `./scripts/triage-state.py --next`.
+2. Append it to `docs/FEEDBACK.md` as `## S<n> — <title>`, `<n>` from `sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --next`.
    The title is the reporter's own one-line summary if they gave one; otherwise write one and say so.
    The first body line is the relay: `Sent on Zulip by <sender, as the watchdog named them>, <date>,
    <message link>; filed verbatim by triage.` Below it, the message text exactly as sent.

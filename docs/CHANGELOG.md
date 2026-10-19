@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The triage loop runs the seats kit's scripts (`classes/triage/` from kit v0.1.77) instead of copies in
+  `scripts/`. `triage-state.py`, `triage-archive.py`, `item-next.py` and `tests/test_item_next.py` are
+  gone; the kit's versions gave the same ledger, the same next `S` id and the same next `RM` id on this
+  clone's documents. The commands now read `sh "$KIT/bin/py" "$KIT/classes/triage/<script>"`, with
+  `$KIT` the pinned kit copy (`CLAUDE.md` §8). The kit's `item-next.py` also counts an id mentioned in a
+  changelog as taken.
 - Schema 0.0.4 (RM270, from S2): a VCF row that looks like one record of a multi-allelic site written one
   row per ALT gets `calls.split_signal` (`marker`, `slot_pattern` or `all_zero_beside_alt`), the
   file gets `facets.split_marker` when vt's `OLD_MULTIALLELIC` or a bcftools `--old-rec-tag` key tagged

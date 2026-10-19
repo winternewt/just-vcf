@@ -20,11 +20,12 @@ role, "Why it exists").
 
 ## What it owns
 
-- **The triage loop's scripts and their tests**: `scripts/triage-state.py`, `triage-archive.py`,
-  `item-next.py`, and `tests/test_item_next.py`. The inbox watcher is the kit's `watch-file.sh`; its
-  command line in `.blueprints.toml` is this seat's. Triage keeps the loop itself: the
-  inbox, the history, the runbook, the `S<n>` ids. A change triage needs in a script is a request to
-  this seat.
+- **The triage loop's scripts are the kit's** (`classes/triage/`: `triage-state.py`,
+  `triage-archive.py`, `item-next.py`, tested there), run from the pinned copy since kit v0.1.77; this
+  repository's copies were retired for them. A fault or a change a seat here needs in one comes to this
+  seat, which files it to the kit (`report-to-kit`) and moves the pin once a release carries the fix.
+  The inbox watcher is the kit's `watch-file.sh`; its command line in `.blueprints.toml` is this seat's.
+  Triage keeps the loop itself: the inbox, the history, the runbook, the `S<n>` ids.
 - **The watcher tables in `.blueprints.toml`** (`[seat.<name>.watch.<label>]`): their commands and
   skip patterns. Which seats exist and who may wake them is the seat-builder's.
 - **The leak gate's install**: `core.hooksPath`, pointed at the pinned kit copy's `.githooks/`. That
@@ -66,7 +67,7 @@ removed after the merge. These are the tree operations the kit's tooling seat ho
 `docs/seats/TOOLING.md`, "Grant"), given to this seat by the person on 2026-10-18: "tooling gets same
 set of grants on tree ops upstream tooling has". For this seat they stand over `CLAUDE.md` §2's "never
 push" and "never delete a branch without asking". The kit's claim tags (`bin/claim`) have no
-counterpart here: ids are claimed by `scripts/item-next.py`, which writes a row, not a tag.
+counterpart here: ids are claimed by the kit's `item-next.py`, which writes a row, not a tag.
 
 Not covered, so the person's: a force push, rewriting pushed history, `git branch -D`, deleting or
 moving a tag, another seat's worktree or branch, a push anywhere but `origin`, a minor or major tag, a

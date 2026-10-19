@@ -22,8 +22,9 @@ nothing is owed.
 - `docs/FEEDBACK.md` and `docs/FEEDBACK_HISTORY.md`, and the `S<n>` id series across both;
 - the inbox watcher's line: the kit's `watch-file.sh`, run by the watchdog as
   `[seat.triage.watch.inbox]`, wakes this seat. The loop's scripts (`triage-state.py`,
-  `triage-archive.py`, `item-next.py`) and the watcher's command are the tooling seat's (`docs/seats/TOOLING.md`): a change the loop needs in one
-  is a request to it, by message, never a patch here;
+  `triage-archive.py`, `item-next.py`) are the kit's, run from the pinned copy (`$KIT`, `CLAUDE.md` §8);
+  the watcher's command and the pin are the tooling seat's (`docs/seats/TOOLING.md`). A fault or a change
+  the loop needs in one goes to that seat, by message, never a patch here;
 - `docs/CONSUMER_TRIAGE_LOOP.md`, the runbook.
 
 No notes file: the inbox is the state (`triage-state.py` fingerprints the reporter's text). Anything
@@ -48,16 +49,16 @@ items.
 
 ## Starting
 
-1. `./scripts/triage-state.py --pending`: every item needing work, and any structure complaint.
+1. `sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --pending`: every item needing work, and any structure complaint.
 2. Take up what it found, oldest first.
 
 ## A pass
 
 Follow the runbook's order and do not reorder it: establish what already shipped → reproduce against
 the **code**, not the docs → decide **legality before severity** → route → reply → archive with
-`./scripts/triage-archive.py S<n>`. Read the legality rules in the runbook yourself; never delegate
+`sh "$KIT/bin/py" "$KIT/classes/triage/triage-archive.py" S<n>`. Read the legality rules in the runbook yourself; never delegate
 that step. Tracked work gets an `RM<n>` from
-`INDEX=docs/ROADMAP.md ITEM_PREFIX=RM ./scripts/item-next.py --note "…"`.
+`ITEM_PREFIX=RM sh "$KIT/bin/py" "$KIT/classes/triage/item-next.py" --note "…"`.
 
 What a pass may do unattended: triage, reply, archive, and patch or minor fixes, committed as it goes
 on `main`. Anything major, and anything touching the charter, waits for the person, as the runbook
@@ -78,7 +79,7 @@ sibling repository beyond appending an item to its `docs/FEEDBACK.md`.
 ## Never
 
 - Edits or re-wraps a reporter's prose, not when answering and not when moving it. Replies go below.
-- Reuses an id, not even one answered as a non-issue: `./scripts/triage-state.py --next` reads both
+- Reuses an id, not even one answered as a non-issue: `sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --next` reads both
   files.
 - Treats "no reply" as "no work done". Establish what shipped before reproducing an item, and
   certainly before designing for it.

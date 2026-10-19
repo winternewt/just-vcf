@@ -18,8 +18,8 @@ Append a top-level section at the end of this file:
 What you were doing, what you expected, what you saw. Paths, inputs and versions.
 ```
 
-Take `<n>` from `./scripts/triage-state.py --next`, which reads this file and the history file
-together. Ids are never reused. Your prose is never edited, and the reply goes below it.
+Take `<n>` from `sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --next`, run in this clone, which reads this file and the history
+file together. `$KIT` is the seats kit copy the clone pins (`CLAUDE.md` §8 says where it is). Ids are never reused. Your prose is never edited, and the reply goes below it.
 
 Appending here is the main route, and it works from any session on this machine. A session that would
 rather not write here can message the triage seat directly, session to session on the same machine.

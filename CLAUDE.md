@@ -25,7 +25,7 @@ decision turned on. Delegation is for finding things, never for deciding them.
    amendments go through a procedure, only when the user signs it off. Edits to it are still the user's
    call, never an agent's own initiative.
 2. **docs/ROADMAP.md** — active-only, forward-only. One `## RMn — name` section per *open* item with a
-   severity/status/owner line. Claim new ids with `scripts/item-next.py`, never by grepping (§8).
+   severity/status/owner line. Claim new ids with the kit's `item-next.py`, never by grepping (§8).
 3. **docs/CHANGELOG.md** — what actually shipped, newest first.
 4. **docs/DOGFOODING.md** — open findings from using the shipped surface for real work. Read it before
    touching the tool or API surface.
@@ -60,7 +60,7 @@ this clone to another kit release, with the kit's `bin/move-to-tag`; the other s
 | triage | `docs/seats/TRIAGE.md` | the consumer inbox (`docs/FEEDBACK.md`, `docs/FEEDBACK_HISTORY.md`), the `S<n>` ids, the triage loop's runbook |
 | upstream-liaison | `docs/seats/UPSTREAM_LIAISON.md` | polars-bio and the layers under it, via `docs/POLARS_BIO_PENDING_FIXES.md`, and the mirror under `data/interim/` |
 | lead | `docs/seats/LEAD.md`, `docs/seats/LEAD_NOTES.md` | the user's own coding sessions: the roadmap, the design, the build |
-| tooling | `docs/seats/TOOLING.md` | the machinery: the triage loop's scripts and their tests, the watcher commands in `.blueprints.toml`, the leak gate's install, the kit's pin in this clone |
+| tooling | `docs/seats/TOOLING.md` | the machinery: the watcher commands in `.blueprints.toml`, the leak gate's install, the kit's pin in this clone; the triage loop's scripts are the kit's, and a fault in one goes through it to the kit |
 
 **The inbox watcher runs under the triage seat**: `.blueprints.toml` declares
 `[seat.triage.watch.inbox]`, so the seat's watchdog runs the kit's `drivers/git/watch-file.sh` on
@@ -120,8 +120,8 @@ without its reason gets rationalised away at 2 a.m.
   writes into the venv without touching `pyproject.toml` or the lockfile, so the next clean
   checkout silently lacks the dependency.
 - **Never call bare `python` / `python3`.** Always `uv run python …`, `uv run pytest …`,
-  `uv run <script>`. A bare interpreter bypasses the project environment. The stdlib-only triage
-  scripts in `scripts/` are the one exception; they run directly.
+  `uv run <script>`. A bare interpreter bypasses the project environment. The kit's triage scripts
+  are the one exception; they run through the kit's own `bin/py` (§8).
 - **Never hardcode a version string.** It comes from `pyproject.toml`, via
   `importlib.metadata.version("just-vcf")`. Two sources of truth drift, and the one you
   read is the wrong one.
@@ -188,7 +188,7 @@ without its reason gets rationalised away at 2 a.m.
 - **Never edit or re-wrap a reporter's prose** in the feedback inbox — not when answering it,
   not when moving it. Replies are appended below it.
 - **Never reuse a feedback id**, not even one answered as a non-issue. Compute the next id
-  from the inbox **and** the history file: `./scripts/triage-state.py --next`.
+  from the inbox **and** the history file: `sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --next`.
 - **Never treat "no reply" as "no work done."** Establish what already shipped before
   reproducing a reported item, and certainly before designing for it.
 - **Never write a placeholder reply.** Leave an untriaged item unanswered and say what was skipped.
@@ -210,7 +210,7 @@ assets/               fixtures that MUST travel with the repo — committed, syn
 data/input/           input samples          ─┐
 data/interim/         generated intermediates ├─ git-ignored, never travels
 data/output/          results                ─┘
-scripts/              triage-loop tools and operational one-offs (the PGP-HMS leecher), not importable
+scripts/              operational one-offs (the PGP-HMS leecher, the sniff corpus), not importable
 ```
 
 - `data/` is git-ignored by ignore-all + allowlist (`data/.gitignore`: `*`, `!.gitignore`). To commit a
@@ -408,7 +408,7 @@ is mitigated here but still owed upstream, which legitimately appears in two.
   *orient* — and every prohibition lives here in full.
 - **`docs/ROADMAP.md` is active-only.** Shipped items move to `docs/ROADMAP_HISTORY.md` with their
   rationale. Nothing is deleted; it is relocated. Claim a new `RMn` with
-  `INDEX=docs/ROADMAP.md ITEM_PREFIX=RM ./scripts/item-next.py --note "…"`, never by grepping the
+  `ITEM_PREFIX=RM sh "$KIT/bin/py" "$KIT/classes/triage/item-next.py" --note "…"` (§8's `$KIT`), never by grepping the
   highest id — two sessions reading the same number both write it.
 - **`docs/CHANGELOG.md` records what shipped**, newest first — including cross-repo integration
   changes, so agents in sibling repos are not surprised.
@@ -430,17 +430,21 @@ is mitigated here but still owed upstream, which legitimately appears in two.
 
 `docs/FEEDBACK.md` holds **open** consumer items (`## Sn — …`); `docs/FEEDBACK_HISTORY.md` holds
 answered ones verbatim. **Empty inbox ⟹ nothing owed.** The triage seat (`docs/seats/TRIAGE.md`) runs
-it. The runbook is `docs/CONSUMER_TRIAGE_LOOP.md`; the tools are in `scripts/` and run directly (stdlib
-only; the inbox watcher is the kit's, run by the triage seat's watchdog):
+it. The runbook is `docs/CONSUMER_TRIAGE_LOOP.md`. The loop's scripts and its inbox watcher are the seats
+kit's, run from the copy this clone is pinned to. `$KIT` below is that copy:
+`~/.claude/plugins/cache/agent-seat-blueprints/seats/<version>`, `<version>` being the tag
+`.claude/settings.local.json` pins, without its `v`. A seated session sees it in the path of the
+`watchdog.py` its hook prints. Run them in this clone; they default to its `docs/`:
 
 ```bash
-./scripts/triage-state.py --pending   # what needs work
-./scripts/triage-state.py --next      # next unclaimed id, over BOTH files
-./scripts/triage-archive.py S1        # move an answered item, verifying the move
+sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --pending   # what needs work
+sh "$KIT/bin/py" "$KIT/classes/triage/triage-state.py" --next      # next unclaimed id, over BOTH files
+sh "$KIT/bin/py" "$KIT/classes/triage/triage-archive.py" S1        # move an answered item, verifying the move
+ITEM_PREFIX=RM sh "$KIT/bin/py" "$KIT/classes/triage/item-next.py" --note "…"   # reserve the next RM<n>
 ```
 
-The `.py` scripts are Python. Run them directly or with `python3`, **never with `bash`**: under
-bash the docstring executes as commands and `import` reaches ImageMagick.
+The `.py` scripts are Python. Run them through `bin/py`, **never with `bash`**: under bash the
+docstring executes as commands and `import` reaches ImageMagick.
 
 Triage order: establish what already shipped → reproduce against the **code**, not the docs →
 decide **legality before severity** → route → reply → archive.

@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The triage runbook, `docs/CONSUMER_TRIAGE_LOOP.md`, now points at the seats kit's `LOOP.md` (v0.1.77)
+  instead of the frozen gist, and keeps only the local parameters, the intake routes and the legality
+  rules. The inbox header pins the next id again (S3), for a reporter who cannot run the kit's `--next`.
 - The triage seat has a second watcher, the kit's `watch-remote.sh --path docs/FEEDBACK.md`, for a report
   committed and pushed from elsewhere, which the inbox watcher cannot see once the file matches HEAD.
 - The triage loop runs the seats kit's scripts (`classes/triage/` from kit v0.1.77) instead of copies in

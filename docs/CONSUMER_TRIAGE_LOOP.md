@@ -1,55 +1,26 @@
 # Consumer triage loop — just-vcf
 
-This repo runs the document-as-inbox triage loop. Its algorithm (Step 0 through Step 5), the
-five-verdict routing and the gotchas found by running it are in `TRIAGE_LOOP.md` at gist revision
-`96b6953362bb4854e05db04334086c43c9eeb170`, and only there:
-<https://gist.githubusercontent.com/winternewt/54b94bda01812be937b892146d1bb254/raw/96b6953362bb4854e05db04334086c43c9eeb170/TRIAGE_LOOP.md>.
-Read it through that revision's own URL, never the gist's latest. The loop moved off gists into the
-seats kit (the person, 2026-09-30), so nothing is synced from the gist any more; this revision stands
-until the kit's triage role replaces it. This file holds only what is local to just-vcf.
+This repo runs the document-as-inbox triage loop. Its procedure (Step 0 through Step 5), the
+five-verdict routing, the scripts, both watchers and the gotchas found by running it are in the seats
+kit's runbook, `classes/triage/LOOP.md` in the kit copy this clone pins (`$KIT`, `CLAUDE.md` §8), and
+only there. The seat that runs it is primed from the kit's `classes/triage/TRIAGE.md` and
+[seats/TRIAGE.md](seats/TRIAGE.md). This file holds only what `LOOP.md` does not: the local
+parameters, the intake routes and the legality rules.
 
-The session that runs this loop is the **triage seat**, primed from
-[seats/TRIAGE.md](seats/TRIAGE.md). That file says what the seat owns, how it starts and what it never
-does; this one holds the local rules the pass reads.
-
-**Frozen at gist revision `96b6953362bb4854e05db04334086c43c9eeb170`, adopted 2026-09-30.** Before it,
-`b063b65ef777cf06002e6fa14953d6503692d1f1`, adopted 2026-09-28. The scripts' docstrings cite
-`TRIAGE_LOOP.md` sections; they mean that revision.
+Before the kit, the loop was read from the gist `TRIAGE_LOOP.md`, frozen at revision `96b69533`
+(adopted 2026-09-30; `b063b65e` before it). The kit's `LOOP.md` replaces it.
 
 ## Local parameterization
 
 - Inbox `docs/FEEDBACK.md`, history `docs/FEEDBACK_HISTORY.md`, item prefix `S`.
 - Tracked items are roadmap entries, `RM<n>` in `docs/ROADMAP.md`, claimed with the kit's `item-next.py`.
-- The loop's three scripts are the kit's, `classes/triage/` in the pinned copy (`$KIT`, `CLAUDE.md` §8),
-  run in this clone through `sh "$KIT/bin/py"`. They default to this clone's `docs/FEEDBACK.md`,
-  `docs/FEEDBACK_HISTORY.md` and `docs/ROADMAP.md`. This repository's own copies were retired for them;
-  the kit's carry both fixes made here: `item-next.py` counts an id only where a heading, a reservation,
-  a tombstone or a changelog line owns it, never where other prose quotes it (a sibling's `RM267` in RM3
-  once set the maximum), and puts a reservation inside its anchor section. The watcher is the kit's
-  `drivers/git/watch-file.sh`; the gist's `watch-inbox.sh`, `wake-on-inbox.sh` and `arm-on-prompt.py`
-  were retired for it.
-- The watcher guards branch `main`.
-
-## Arming the watcher
-
-Nothing to arm by hand. `.blueprints.toml` declares `[seat.triage.watch.inbox]` with
-`cmd = "sh kit:drivers/git/watch-file.sh docs/FEEDBACK.md"`, and the triage seat's
-watchdog runs it from the repo root for as long as a session holds the seat: started at punch-in,
-restarted with backoff if it exits, stopped with the seat. When the inbox differs from HEAD and has sat
-unchanged for 150 s, a watcher line arrives, `docs/FEEDBACK.md: uncommitted, +N -M lines against HEAD:
-git diff HEAD -- docs/FEEDBACK.md`, and wakes an idle seat. Each state is said once, across a restart
-too, so an item a sibling left while no one held the seat is said at the next punch-in. Off `main` it
-pauses silently. The line names no item; the pass's `--pending` does.
-
-A second table, `[seat.triage.watch.inbox-commits]`, runs the kit's `drivers/git/watch-remote.sh --path
-docs/FEEDBACK.md`: a line, `trunk main: <sha> by <author>: <subject>`, when a commit touching the inbox
-reaches origin's `main` from somewhere this clone's `main` has not seen, a report its writer committed
-and pushed. Commits already in the local branch are not said, so triage's own commits here wake nobody.
-Its first start says once where the trunk is. The watchdog reads the table only when it starts, so a
-change to it takes `watchdog.py stop triage` and `/seats:seat triage` again.
-
-Never start a watcher from the agent as well: nothing stops a second one on the same file, and two
-wakers ring twice.
+- The scripts run with the kit's defaults, which are this clone's paths. The two fixes made here before
+  the kit took them over (`item-next.py` counting an id only where a line owns it, and a reservation
+  landing in its anchor section) are in the kit's copies.
+- The next id is pinned in the inbox header for a reporter who cannot run the kit's `--next`. The seat
+  moves the pin in the commit that files each item; where the two disagree, `--next` wins.
+- The watchers' commands are the tooling seat's. Never start a watcher from the agent as well: nothing
+  stops a second one on the same file, and two wakers ring twice.
 
 ## Intake from Zulip and from other sessions
 
@@ -92,8 +63,5 @@ VCF and parquet shapes it emits, and the CLI once there is one.
 - When a consumer reads a shape, **add rather than redefine**. A consumer compensating for the old
   meaning breaks silently otherwise.
 
-## What a pass may do unattended
-
-Triage, reply and archive in this repo, committing as it goes on `main`. Fixes that fall under
-"patch" or "minor" may land in the same pass. Anything "major", and anything that edits the charter,
-waits for the user.
+A patch or minor fix may land in the triage pass. Anything major, and anything that edits the charter,
+waits for the person.

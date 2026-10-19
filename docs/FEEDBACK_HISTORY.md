@@ -9,7 +9,7 @@ filed, with the reply beside it. The reporter's text is never edited or re-wrapp
 ## Contents
 
 - **S1** male X/Y ploidy across callers and panels — accepted (RM269)
-- **S2** pre-split multi-allelic rows read wrong — accepted (RM270)
+- **S2** pre-split multi-allelic rows read wrong — shipped (RM270)
 
 # From just-prs, 2026-10-11
 
@@ -181,4 +181,14 @@ Re-run on the same synthetic VCF: the split `1/2` rows carry `calls.split_signal
 `OLD_MULTIALLELIC` or a bcftools `--old-rec-tag` key when the file has one. No value changed:
 `gt_alleles` still reads a flagged `0` as REF, so a reader checks `split_signal` before trusting it.
 Withholding those `0`s waits on the person's decision. Details in `docs/CHANGELOG.md`.
+<!-- triaged: 0.1.0 · sha 3fa6a53b0ff4 -->
+
+**Status — shipped, 2026-10-19 (unreleased).** The person chose the re-join, and RM270 is closed.
+`rejoin_split(loaded)` turns the rows a pre-split VCF wrote one per ALT back into one site each, as a
+derived facet (`relation = split_rejoined`); the loaded facet is left as it was. Re-run on the same
+synthetic VCF: the split `1/2` comes back as `A>G,T` with `gt_alleles` `["G","T"]`, the split `1/1`
+with the uncarried ALT as `["G","G"]`, matching the unsplit record beside them. It works from the rows
+alone, so the likelihood vectors are withheld, and a position it cannot read as one site stays as
+written, still flagged. What to do now: once just-dna-lite loads through just-vcf, call `rejoin_split`
+on a pre-split file and read the derived facet. Details in `docs/CHANGELOG.md`.
 <!-- triaged: 0.1.0 · sha 3fa6a53b0ff4 -->

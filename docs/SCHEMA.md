@@ -53,7 +53,8 @@ What one row of the calls frame is.
 
 **Recommendation: A.** The per-allele view is a lazy function over the frame (`explode` on the parallel
 lists), not a stored shape. Splitting and left-aligning stay RM6 operations that produce a *derived*
-facet (charter 5), not something the loader does silently.
+facet (charter 5), not something the loader does silently. Re-joining a file that arrived split one row
+per ALT is one too: `rejoin_split` (RM270), under `split_signal` below.
 
 ## Decision 2: how the genotype is written
 
@@ -256,7 +257,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4) |
 | `absence_means` | Decision 4 |
 | `phasing_method` | null unless stated |
-| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`) |
+| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`) |
 | `contig_map` | `list[struct{source, chrom}]`: how this file's contig names were mapped (Decision 7) |
 | `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
@@ -323,6 +324,28 @@ indels that left-alignment moved to another POS; and a split file where no posit
 Rows written with `.` for the other ALT (vt, Glow, vcflib, `bcftools --multi-overlaps .`) are already
 half-calls. Each signal is one warning line with its count. The patterns are read from the loader's
 parquet spill of `calls`, three columns, so they cost no second parse of the VCF.
+
+**Re-joining: `rejoin_split(loaded)`** returns a derived facet (`relation = split_rejoined`,
+`derived_from` the parent, which is never changed). Per position, the rows that carry a
+`split_signal` (only those) become one site, from the rows alone, as `bcftools norm -m+` does:
+
+- `source_ref` is the longest REF; every other must be a prefix of it, and each ALT is extended by the
+  REF bases it lacks (`A>G` beside `AT>A` becomes `AT>GT`). No FASTA is read.
+- `alts` are the distinct extended alleles, **sorted by allele string**: split rows do not say the
+  source's ALT order, so a consumer compares ALTs as a set, or through `gt_alleles`.
+- Each GT slot takes the one allele the rows place there; `0` when no row places an ALT and a row says
+  `0`; null when every row is null there. bcftools' `0` and vt's `.` read alike.
+- `ids` and `filters` are unions (sorted; `PASS` only when no row failed a filter); `phased`, the phase
+  sets, `dp` and `qual` are kept when every row agrees and null otherwise.
+- Withheld: `gl`, `gp`, `ad`, `gq`, `dosage`, `source_alleles` (split rows hold REF against one ALT,
+  and the full vectors would need the reads, which is calling genotypes), and `source_gt` (no file
+  wrote the joined text).
+
+A position stays as written, its rows still flagged, when it cannot be read as one site: two ALTs in
+one slot, rows of different ploidy, a symbolic allele, REFs that are not prefixes of one another, an
+index past a row's ALTs, or a row with no genotype. Each reason is one warning with a count. Not done:
+grouping by the bcftools marker's original record, which would also catch split indels that
+left-alignment moved to another POS.
 
 **`end_pos`.** It is named apart from polars-bio's `end` because that value is wrong for symbolic SV
 alleles (P3), so the two must not share a name. The rule follows VCF 4.5's computed END:

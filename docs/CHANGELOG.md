@@ -4,6 +4,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `rejoin_split(loaded)` (RM270 D, the person's choice on desk #45) re-joins the rows a pre-split VCF
+  wrote one per ALT into one site each, as a derived facet (`relation = split_rejoined`; the parent is
+  untouched). It works from the rows alone, with no FASTA and no reads, so it gives back the genotype
+  (`gt`, `gt_alleles`) and withholds the likelihood vectors (`gl`, `gp`, `ad`, `gq`), which split rows
+  cannot rebuild. ALTs come out sorted by allele string. A position it cannot read as one site stays
+  as written, its rows still flagged, with a warning per reason. Tested against the unsplit form of the
+  same synthetic sites, and on a real genome: its 89,855 multi-allelic records split the bcftools way
+  (185,402 rows), loaded and re-joined, gave back every one of the 88,713 sites carrying an ALT,
+  matching the unsplit file; the 1,142 split hom-ref or no-call sites stay as two rows, correctly
+  unflagged. 23 s on that 6.4M-call genome; with nothing flagged it passes every row through. Not run:
+  a file split by bcftools itself, or by Hail or GATK. RM270 moves to the roadmap history; RM6 keeps
+  its rule that its own split output writes `.` for the other ALT.
+
 - A filter on a loaded VCF's `calls` that had split-flagged rows ran about 20 times slower than a full
   collect (169 s against 8.5 s on a real genome split one row per ALT), because the flagged positions
   were joined below the per-contig sort, which kept the filter from reaching the parquet scan. They

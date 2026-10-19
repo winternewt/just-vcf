@@ -3,6 +3,7 @@
 from importlib.metadata import version
 
 from just_vcf.loading import LOADABLE_FORMATS, Loaded, MultiSampleError, UnsupportedFormatError, load, vcf_samples
+from just_vcf.rejoin import rejoin_split
 from just_vcf.schema import (
     BLOCKS,
     CALLS,
@@ -43,6 +44,7 @@ __all__ = [
     "__version__",
     "load",
     "open_payload",
+    "rejoin_split",
     "sniff",
     "vcf_samples",
 ]

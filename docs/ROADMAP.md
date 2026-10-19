@@ -175,7 +175,7 @@ schema decision for the lead. just-prs builds a stopgap now (karyotype from its 
 caller and version as parquet metadata) and moves to this when it exists.
 
 ## RM270 — Pre-split multi-allelic input
-Severity: high · Status: in progress (B, the flags, shipped 2026-10-19 as schema 0.0.4; C, withholding, waits on desk #45; D goes with RM6) · Owner: lead
+Severity: high · Status: in progress (B, the flags, shipped 2026-10-19 as schema 0.0.4; D, the re-join, decided 2026-10-19 and being built; C dropped) · Owner: lead
 
 Motivating report: S2 (just-dna-lite, 2026-10-18). Many VCFs arrive already split one row per ALT, in
 the `bcftools norm -m-` convention, and their headers do not say so. In a split row the `0` of a
@@ -220,8 +220,11 @@ reference blocks go to `blocks`, which never take part.
 | D. Re-join as a derived facet | each flagged group merged into one site slot by slot, as `bcftools -m+` does (`relation = normalized`, charter 5) | minor | the most work; GT only, since bcftools subsets PL/AD to REF + one ALT; phasing across slots may be lost |
 
 `gl`, `gp` and `ad` on a flagged row stay as written: they compare REF with one ALT and inherit the
-ambiguity, and the row flag is what tells a reader so. The lead recommends B and C now, D inside RM6,
-put to the person on the desk 2026-10-19 (desk #45; on silence, B is built and C waits for a yes).
+ambiguity, and the row flag is what tells a reader so. The lead recommended B and C now and D inside
+RM6 (desk #45). **Decided 2026-10-19**, the person: "4 if it can be implemented w/o bam, else 3". It
+can: the re-join needs only the split rows, as `bcftools norm -m+` does; reads would only rebuild the
+full likelihood vectors, which is variant calling (charter). So D is built now, GT only, beside B;
+C is not built.
 
 **RM6's own split output** must not write this convention: it writes `.` for the other ALT, as vt,
 Glow, vcflib and `bcftools --multi-overlaps .` do.

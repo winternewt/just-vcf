@@ -31,10 +31,11 @@ each reset.
 The roadmap was read against the code on 2026-10-18 (da410cc): nothing open had shipped whole; the
 status lines say what exists. Schema at 0.0.4.
 
-- **RM270** (split multi-allelic rows): B, the flags, shipped (1559215). C, withholding the uncertain
-  `0`s slot by slot, waits on desk #45 (default: B only, already built). D, the re-join, goes with RM6.
-  No signal on four unsplit VCFs or two unsplit gVCFs; the patterns read the spill, about 1.2 s on a
-  30 s load (e82e4af). Not measured: a real split file.
+- **RM270** (split multi-allelic rows) shipped 2026-10-19 and is in the roadmap history: B, the
+  flags (1559215, e82e4af, the join placement fixed in 5f08965), and D, `rejoin_split` (2e84f1f), the
+  person's choice on desk #45. Checked on a real genome split the bcftools way: all 88,713 sites with an
+  ALT come back as the unsplit file has them. Not run: a file split by bcftools itself, Hail or GATK.
+- **F8** (a sites-only VCF does not load, our spill, older than RM270): open in docs/DOGFOODING.md.
 - **Desk #43**: the order of work (default: the roadmap pass first), which this sitting followed.
 - **Open, not started**: RM269 (karyotype finding and caller ploidy model, a schema call), RM2's next
   loaders, RM3, RM4, RM6, RM268 (cache eviction).

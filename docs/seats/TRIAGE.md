@@ -15,8 +15,8 @@ this seat.
 |---|---|
 | consumers | `just-prs`, `just-dna-lite`, anyone using the package |
 | the inbox | `docs/FEEDBACK.md`, its history `docs/FEEDBACK_HISTORY.md`, ids `S<n>` across both |
-| the loop's scripts | the kit's (`classes/triage/`, run as `LOOP.md` §2 says), or the copies under `scripts/` while the tooling seat keeps them (`docs/seats/TOOLING.md`); a change the loop needs is a request to the tooling seat, never a patch here |
-| the watcher | `[seat.triage.watch.inbox]`, the kit's `watch-file.sh` on the inbox; its command is the tooling seat's |
+| the loop's scripts | the kit's (`classes/triage/`, run as `LOOP.md` §2 says); a change the loop needs is a request to the tooling seat (`docs/seats/TOOLING.md`), never a patch here |
+| the watchers | `[seat.triage.watch.inbox]`, the kit's `watch-file.sh`, for an item left uncommitted; `[seat.triage.watch.inbox-commits]`, `watch-remote.sh --path docs/FEEDBACK.md`, for one a reporter pushed; their commands are the tooling seat's |
 | tracked work | an `RM<n>` in `docs/ROADMAP.md`, from `item-next.py` with `INDEX=docs/ROADMAP.md ITEM_PREFIX=RM` and `--note "…"`; the roadmap is the lead's beyond filing the item |
 | legality rules | `docs/CONSUMER_TRIAGE_LOOP.md`, this repository's runbook, where it says more than `LOOP.md` |
 | upstream | a symptom in polars-bio, datafusion-bio-formats or noodles goes to the upstream-liaison seat, with the repro |

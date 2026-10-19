@@ -121,7 +121,9 @@ Nothing ever removes anything from `JUST_VCF_CACHE_DIR`. It holds two kinds of e
 - `vcf/<key>/`: rewritten copies of inputs polars-bio cannot read as they are
   (`loaders/vcf.py` `readable_path`), plus a `structural/` copy for a file polars-bio refused. The key
   hashes the source digest, the archive member and `REWRITE_VERSION`.
-- `frames/<facet_id>-<SCHEMA_VERSION>/`: the calls and blocks parquet spill from `load`.
+- `frames/<facet_id>-<SCHEMA_VERSION>/`: the calls and blocks parquet spill from `load`, and since
+  RM270 the calls spill of a `rejoin_split` facet, under the derived `facet_id`. Nothing in the cache
+  ties that id to its parent, so an eviction that keys on a source file does not see it.
 
 Because the version is part of each key, every bump of `REWRITE_VERSION` or `SCHEMA_VERSION` orphans
 every earlier entry, and nothing collects them. Measured 2026-10-03: after the 2026-09-30 dogfooding

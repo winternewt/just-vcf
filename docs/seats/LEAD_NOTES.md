@@ -35,7 +35,7 @@ status lines say what exists. Schema at 0.0.4.
   flags (1559215, e82e4af, the join placement fixed in 5f08965), and D, `rejoin_split` (2e84f1f), the
   person's choice on desk #45. Checked on a real genome split the bcftools way: all 88,713 sites with an
   ALT come back as the unsplit file has them. Not run: a file split by bcftools itself, Hail or GATK.
-- **F8** (a sites-only VCF does not load, our spill, older than RM270): open in docs/DOGFOODING.md.
+- **F8** resolved 2026-10-22 (desk #61's default): a sites-only VCF is refused with `NoSampleError`.
 - **Desk #43**: the order of work; closed unanswered 2026-10-21, so its default (the roadmap pass first) stands, as followed.
 - **Desk #57** (start RM269): worked under its default. Header survey, X/Y counts and a critic's read are
   in RM269 (bb78932..967719f). **Desk #61** asks how much to build: facts only, plus an X-copy estimate

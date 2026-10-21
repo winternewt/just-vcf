@@ -37,7 +37,7 @@ status lines say what exists. Schema at 0.0.4.
   ALT come back as the unsplit file has them. Not run: a file split by bcftools itself, Hail or GATK.
 - **F8** (a sites-only VCF does not load, our spill, older than RM270): open in docs/DOGFOODING.md.
 - **Desk #43**: the order of work; closed unanswered 2026-10-21, so its default (the roadmap pass first) stands, as followed.
-- **Desk #57**: start RM269 now (survey, critic, counts on the local genomes, then the design as its own
-  desk question)? Filed 2026-10-21 after the chat question went unanswered; its default is to start, so
-  the lead works on under it. No schema change ships before that second question is answered.
+- **Desk #57** (start RM269): worked under its default. Header survey, X/Y counts and a critic's read are
+  in RM269 (bb78932..967719f). **Desk #61** asks how much to build: facts only, plus an X-copy estimate
+  (recommended), or the full label. Its default: nothing for RM269, the lead moves on to F8.
 - **Open, not started**: RM2's next loaders, RM3, RM4, RM6, RM268 (cache eviction).

@@ -163,9 +163,14 @@ Two halves:
    and are never filled; RM2's planned `source` detector fills them. This item adds what RM2's table
    lacks: `##bcftools_callVersion`, and the caller's ploidy model as a new nullable facet field (sex-aware,
    diploid everywhere, or an explicit ploidy), read from the header where it says so and null where it
-   does not. Which headers say so is not checked yet: DRAGEN's and GATK's recorded command lines are
-   the candidates, and whether any DeepVariant header records haploid contigs is open. Never guessed
-   from the caller's name alone.
+   does not. Never guessed from the caller's name alone. Checked 2026-10-21 on the 32 local private
+   VCFs (header keys and option names only): DRAGEN writes `##referenceSexKaryotype=` (a two-letter
+   value, the karyotype it called with) beside `##DRAGENCommandLine`; GATK writes the ploidy in its
+   recorded command lines, `sample_ploidy=2` (GenotypeGVCFs, 6 files) or `--sample-ploidy 2`
+   (HaplotypeCaller), which says diploid everywhere unless a per-contig ploidy is also given; the 15
+   DeepVariant files carry only `##DeepVariant_version`, so their model is unknown from the header.
+   The 2 CrossMap/Picard liftovers and 7 files with a bare `##source` say nothing. PGP-HMS files
+   (freeBayes, VarScan2) are not on disk now and are unchecked.
 2. **A person-level karyotype finding with its own provenance.** Evidence without depth: the non-PAR X
    heterozygous fraction and the presence of PASS Y calls, which separate XX, XY, XXY and X0 on a WGS
    facet. XYY needs depth, so it waits for a coverage facet. Weak or contradictory evidence gives

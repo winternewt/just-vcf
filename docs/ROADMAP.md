@@ -182,7 +182,7 @@ Two halves:
    evidence works. **PASS Y calls do not**: every DeepVariant and GATK file in both clusters has
    2,666–10,759 PASS Y ALT calls outside the PARs, so their presence cannot tell XX from XY or XXY.
    Y evidence needs a region rule (the male-specific X-degenerate region, without the X-transposed
-   and ampliconic parts, as somalier and peddy restrict it) or depth, and until it has one the
+   and ampliconic parts; which tools restrict it so is for the survey to check) or depth, and until it has one the
    finding cannot separate XXY from XX or X0 from XY. The build is needed for the PAR bounds, and
    `load` fills `assembly_label` only where the header states it (none of these 16 did); the count
    used the header's chrX length. A sex-aware caller (DRAGEN, per its documentation) writes one

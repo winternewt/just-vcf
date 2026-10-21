@@ -190,6 +190,37 @@ Two halves:
    hemizygous evidence, not as missing. The vocabulary is GA4GH Phenopackets' `KaryotypicSex`, used
    verbatim (charter invariant 2). PAR bounds are per assembly and are domain constants.
 
+Critique (2026-10-22, an adversarial read of this entry; tool behaviour marked unverified is the
+critic's recollection, not checked here):
+
+- Without a working Y signal no class can be named honestly: a high X share fits XX, XXY or XXX, a low
+  one XY, X0 or XYY, so "never the nearest class" leaves every answer unknown. A Y region rule (or
+  depth) is a precondition for any class, not a refinement.
+- A haploid GT is the caller's (or the array vendor's) sex decision, not evidence: counting it fills a
+  value from the source that checks it. Keep what the caller asserted as its own line, count het/hom
+  only on calls written diploid, and read a caller's conflict filter (DRAGEN `PloidyConflict`) as Y
+  evidence.
+- The two clusters come from a few unlabelled people; a cut-off fitted to them is a number read off a
+  data dump. Calibrate on PGP-HMS (self-reported sex on the profile, unverified; a second caller
+  family) or cite a published rule (plink `--check-sex` F 0.2/0.8, unverified), with a minimum site count.
+- "Ploidy model" interprets tools: GATK `sample_ploidy=2` is a default that per-interval options may
+  override (unverified), DRAGEN's karyotype line may be given or estimated (unverified), DeepVariant
+  1.6's `--haploid_contigs` does not reach the header (unverified, consistent with the 15 local files).
+  Better: the header's ploidy lines verbatim, plus observed counts of one-, two- and n-allele GTs on
+  autosomes, non-PAR X, non-PAR Y and MT.
+- Depth is already in the frames (`dp`, `ad`, `blocks.dp_min`): X-het allele balance is the signal for
+  contamination and mosaic 45,X/46,XX, which het share alone misses.
+- There is no person in the schema. Evidence belongs per facet (a struct on `facets` or a small findings
+  frame) and a verdict to a function returning a result with a reason (`no_build`, `y_unusable`,
+  `caller_asserted_only`, `too_few_sites`, `intermediate`, `facets_disagree`, `not_wgs`); liftovers of
+  one callset are one piece of evidence, not several (`derived_from`).
+- `KaryotypicSex` belongs to a Phenopackets Individual and has no place for an inference: use its values
+  inside a just-vcf-named inferred field, and say the result is not cytogenetic. An XX male gives XX
+  correctly (karyotype, not sex). just-prs needs the X copy count for dosage; that may be the thing to
+  expose first.
+- LANDSCAPE names somalier for sex checks: say why this is built here, or take its sites. Arrays may do
+  better than planned (female Y probes are no-calls; AncestryDNA doubles X letters).
+
 Constraints: list length stays the number of haplotypes the source wrote (Decision 2). The finding sits
 beside the facets and is never a rewrite of `calls`: no GT is collapsed to haploid by the loader. An
 array facet without Y probes, or a targeted panel, says unknown.

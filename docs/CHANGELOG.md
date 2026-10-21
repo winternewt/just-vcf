@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A sites-only VCF (no FORMAT column, no sample) is refused by `load` with the new `NoSampleError`
+  (exported), instead of failing inside the parquet spill with a polars conversion error (F8). Minor:
+  a new exception; nothing that loaded before changes, facet ids included.
+
 - The kit's scripts are named by their new names since kit v0.1.86 (`bin/py.sh`, `bin/move-to-tag.py`,
   `bin/claim.sh`) in `CLAUDE.md`, the seat texts, the inbox headers and the tooling seat's issues watcher.
   The old names still work as symlinks in the kit. The pin is at v0.1.87.

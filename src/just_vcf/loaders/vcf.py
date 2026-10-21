@@ -81,6 +81,10 @@ class MultiSampleError(ValueError):
     """The file holds more than one sample and none was chosen."""
 
 
+class NoSampleError(ValueError):
+    """The file holds no sample (a sites-only VCF): it has sites, but no person's genotype to load."""
+
+
 class HeaderRefused(ValueError):
     """polars-bio refused the file: its header (P8), or a field value it could not parse (P7)."""
 
@@ -328,15 +332,15 @@ def _register(**kwargs) -> None:
         raise
 
 
-def read_records(path: Path, header: Header, sample: str | None, first_record: bytes | None) -> pl.LazyFrame:
-    """The records of one sample (or none, for a sites-only file) with flat, namespaced columns.
+def read_records(path: Path, header: Header, sample: str, first_record: bytes | None) -> pl.LazyFrame:
+    """The records of one sample with flat, namespaced columns.
 
     INFO keys become `info_<KEY>` and FORMAT keys `fmt_<KEY>`, whatever polars-bio names them. Every
     carried key is present, as a typed null when the file does not declare it.
     """
     info = [key for key in INFO_KEYS if key in header.info] + sorted(header.split_markers)
-    fmt = [key for key in FORMAT_KEYS if key in header.format] if sample is not None else []
-    multi = sample is not None and len(header.samples) > 1
+    fmt = [key for key in FORMAT_KEYS if key in header.format]
+    multi = len(header.samples) > 1
     frame = scan(path, info, fmt, sample if multi else None)
     if first_record is not None:
         fields = first_record.decode("utf-8", errors="replace").split("\t")

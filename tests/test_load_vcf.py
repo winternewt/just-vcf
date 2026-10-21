@@ -6,7 +6,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import MultiSampleError, load, vcf_samples
+from just_vcf import MultiSampleError, NoSampleError, load, vcf_samples
 from just_vcf.schema import BLOCKS, CALLS
 
 FORMAT_LINES = {
@@ -95,6 +95,16 @@ def test_multi_sample_needs_a_choice(tmp_path: Path) -> None:
     assert (child["gt"][0].to_list(), child["gq"][0]) == ([1, 1], 40)
     assert (mother["gt"][0].to_list(), mother["gq"][0]) == ([0, 1], 30)
     assert load(path, sample="child").facets.collect()["facet_id"][0] != load(path, sample="mother").facets.collect()["facet_id"][0]
+
+
+def test_sites_only_vcf_is_refused(tmp_path: Path) -> None:
+    records = ["1\t100\t.\tA\tG\t50\tPASS\t.", "2\t200\trs1\tC\tT,G\t.\t.\t."]
+    path = write(tmp_path, vcf_text(records, samples=(), fmt=()))
+    assert vcf_samples(path) == []
+    with pytest.raises(NoSampleError):
+        load(path)
+    with pytest.raises(MultiSampleError):
+        load(path, sample="S1")
 
 
 def test_blocks_are_all_star_records_asserting_reference(tmp_path: Path) -> None:

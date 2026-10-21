@@ -49,17 +49,3 @@ header line carries an extra `#` (`###contig`, `##CHROM`) are recognised as `vcf
 one needs its own format id, as `23andme_csv` has. Not fixed: three files.
 
 A third failure in the sweep is a corrupt upload (`gzip -t` fails too), and its error is correct.
-
-## F8 — A sites-only VCF does not load
-
-Severity: medium · Found 2026-10-19 while testing `rejoin_split` (RM270).
-
-A VCF with no FORMAT column and no sample (a sites-only file, as annotation sources and some
-callers' site lists are) fails in `load` with polars' `InvalidOperationError: to_arrow() conversion
-failed: cannot convert (Null) to (... LargeUtf8 ...)`, raised by the parquet spill (`_load_vcf`'s
-`sink_parquet`). It failed the same way before RM270 (checked at c746325), so it is older than the
-split flags. polars-bio itself reads the file: `pb.scan_vcf` returns the two records with their eight
-site columns. So the fault is on our side, most likely a column the loader adds as an untyped null
-for the absent sample. Repro: a two-record VCF 4.2 with one `##contig` line and an eight-column
-header. Not fixed yet; a sites-only file has no genotype, so it is a `calls` frame of nulls at best,
-and whether the loader should take one at all is part of the fix.

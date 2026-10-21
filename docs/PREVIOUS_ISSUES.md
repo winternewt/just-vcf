@@ -4,6 +4,25 @@ Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with it
 code pointer. Check here before re-investigating something that looks fixed.
 
 
+## F8 — A sites-only VCF does not load
+
+Severity: medium · Found 2026-10-19 while testing `rejoin_split` (RM270).
+
+A VCF with no FORMAT column and no sample (a sites-only file, as annotation sources and some
+callers' site lists are) fails in `load` with polars' `InvalidOperationError: to_arrow() conversion
+failed: cannot convert (Null) to (... LargeUtf8 ...)`, raised by the parquet spill (`_load_vcf`'s
+`sink_parquet`). It failed the same way before RM270 (checked at c746325), so it is older than the
+split flags. polars-bio itself reads the file: `pb.scan_vcf` returns the two records with their eight
+site columns. So the fault is on our side, most likely a column the loader adds as an untyped null
+for the absent sample. Repro: a two-record VCF 4.2 with one `##contig` line and an eight-column
+header. A sites-only file has no genotype, so it is a `calls` frame of nulls at best.
+
+Resolved 2026-10-22: `load` refuses it with `NoSampleError`, before anything is read or spilled. just-vcf
+holds a person's calls (the charter's first line), and a file with no sample column has none to hold;
+a `calls` frame of null genotypes would look like a person with nothing called. `vcf_samples` still
+reads the file and returns `[]`, and `sample=` on it is refused as a missing sample, as before. Code:
+`loading.py` `_load_vcf`; test: `tests/test_load_vcf.py` `test_sites_only_vcf_is_refused`.
+
 ## F6 — A bz2 or zip VCF was copied out as plain text first
 
 Found 2026-09-30 by loading the 124 PGP-HMS VCFs. polars-bio reads plain, gzip and BGZF VCF directly

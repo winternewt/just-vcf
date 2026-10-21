@@ -16,7 +16,7 @@ from platformdirs import user_cache_dir
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.loaders import rsid_table, vcf
-from just_vcf.loaders.vcf import MultiSampleError
+from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
     BLOCKS,
     FACETS,
@@ -71,7 +71,8 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
     """Load `source` (a path, or a `sniff` result for it) into the three frames.
 
     `sample` picks one sample of a multi-sample VCF; a VCF with several samples and no choice is
-    refused with `MultiSampleError`. It is ignored for formats that hold one person by construction.
+    refused with `MultiSampleError`, and a sites-only VCF, which holds no sample, with `NoSampleError`.
+    `sample` is ignored for formats that hold one person by construction.
     """
     sniffed = source if isinstance(source, Sniffed) else sniff(Path(source))
     if not sniffed or sniffed.format not in LOADABLE_FORMATS:
@@ -148,7 +149,9 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         )
     if sample is not None and sample not in header.samples:
         raise vcf.MultiSampleError(f"{sniffed.path}: the requested sample is not in the file")
-    chosen = sample if sample is not None else (header.samples[0] if header.samples else None)
+    if not header.samples:
+        raise vcf.NoSampleError(f"{sniffed.path}: a sites-only VCF, with no sample column to load")
+    chosen = sample if sample is not None else header.samples[0]
 
     warnings: list[str] = []
     missing = vcf.undeclared_format_keys(header, data)
@@ -179,7 +182,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     if (header.version_tuple or (0, 0)) >= (4, 4):
         warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
 
-    facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={"sample_index": header.samples.index(chosen) if chosen else None})
+    facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={"sample_index": header.samples.index(chosen)})
     calls_frame, blocks_frame = vcf.to_frames(calls, blocks, facet_id)
     # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
     # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.

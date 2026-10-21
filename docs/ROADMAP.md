@@ -174,7 +174,20 @@ Two halves:
 2. **A person-level karyotype finding with its own provenance.** Evidence without depth: the non-PAR X
    heterozygous fraction and the presence of PASS Y calls, which separate XX, XY, XXY and X0 on a WGS
    facet. XYY needs depth, so it waits for a coverage facet. Weak or contradictory evidence gives
-   unknown, never the nearest class. The vocabulary is GA4GH Phenopackets' `KaryotypicSex`, used
+   unknown, never the nearest class.
+   Counted 2026-10-21 on the local single-sample VCFs with PASS calls (16 files, several of them
+   liftovers of one callset; aggregates only, and kept here without naming a file, since a file's
+   class would name a person's sex). The non-PAR X heterozygous share of PASS ALT calls falls in two
+   clusters, 0.009–0.115 (11 files) and 0.580–0.626 (5 files), with nothing between: that half of the
+   evidence works. **PASS Y calls do not**: every DeepVariant and GATK file in both clusters has
+   2,666–10,759 PASS Y ALT calls outside the PARs, so their presence cannot tell XX from XY or XXY.
+   Y evidence needs a region rule (the male-specific X-degenerate region, without the X-transposed
+   and ampliconic parts, as somalier and peddy restrict it) or depth, and until it has one the
+   finding cannot separate XXY from XX or X0 from XY. The build is needed for the PAR bounds, and
+   `load` fills `assembly_label` only where the header states it (none of these 16 did); the count
+   used the header's chrX length. A sex-aware caller (DRAGEN, per its documentation) writes one
+   allele on non-PAR X and Y for an XY sample, so the X share must count a haploid call as
+   hemizygous evidence, not as missing. The vocabulary is GA4GH Phenopackets' `KaryotypicSex`, used
    verbatim (charter invariant 2). PAR bounds are per assembly and are domain constants.
 
 Constraints: list length stays the number of haplotypes the source wrote (Decision 2). The finding sits

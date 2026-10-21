@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The kit's scripts are named by their new names since kit v0.1.86 (`bin/py.sh`, `bin/move-to-tag.py`,
+  `bin/claim.sh`) in `CLAUDE.md`, the seat texts, the inbox headers and the tooling seat's issues watcher.
+  The old names still work as symlinks in the kit. The pin is at v0.1.87.
+
 - `rejoin_split(loaded)` (RM270 D, the person's choice on desk #45) re-joins the rows a pre-split VCF
   wrote one per ALT into one site each, as a derived facet (`relation = split_rejoined`; the parent is
   untouched). It works from the rows alone, with no FASTA and no reads, so it gives back the genotype

@@ -12,7 +12,7 @@ schema and loaders sitting (2026-09-29 to 2026-10-11) is where the lead's habits
 
 | What | Here |
 |---|---|
-| the plan | `docs/ROADMAP.md`, active items only; shipped ones to `docs/ROADMAP_HISTORY.md`. A new id from `ITEM_PREFIX=RM sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/item-next.py" --note "…"`, never by reading the highest (the script is the kit's) |
+| the plan | `docs/ROADMAP.md`, active items only; shipped ones to `docs/ROADMAP_HISTORY.md`. A new id from `ITEM_PREFIX=RM sh "${BLUEPRINTS_KIT:?}/bin/py.sh" "$BLUEPRINTS_KIT/classes/triage/item-next.py" --note "…"`, never by reading the highest (the script is the kit's) |
 | the charter | `docs/CHARTER_DRAFT.md`: it wins over any plan; edited directly while a draft, only on the person's word |
 | decisions | where the design they shape lives: the schema's as its `## Decision N` sections and open questions in `docs/SCHEMA.md`; the person's preferences in their words in `CLAUDE.md` §10, the workspace's facts and measurements in §11 |
 | versions | the schema versions itself in its own document (0.0.1 at the person's sign-off, a bump each time a real file forces a change, said to the person); the package's version only from `pyproject.toml` |

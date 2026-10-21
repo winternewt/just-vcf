@@ -4,7 +4,7 @@ Items moved out of [FEEDBACK.md](FEEDBACK.md) once answered, verbatim: the repor
 filed, with the reply beside it. The reporter's text is never edited or re-wrapped on the way here.
 
 **Ids are never reused**, including the ones archived here. The next id is computed from both files:
-`sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next`.
+`sh "${BLUEPRINTS_KIT:?}/bin/py.sh" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next`.
 
 ## Contents
 

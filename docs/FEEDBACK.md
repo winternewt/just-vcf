@@ -18,7 +18,7 @@ Append a top-level section at the end of this file:
 What you were doing, what you expected, what you saw. Paths, inputs and versions.
 ```
 
-Next id: S3. Or take `<n>` from `sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next`, run in
+Next id: S3. Or take `<n>` from `sh "${BLUEPRINTS_KIT:?}/bin/py.sh" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next`, run in
 this clone, which reads this file and the history file together; where the two disagree, `--next` wins. A session with the seats plugin has `$BLUEPRINTS_KIT` set; elsewhere `CLAUDE.md` §8 says what to set it to. Ids are never reused. Your prose is never edited, and the reply goes below it.
 
 Appending here is the main route, and it works from any session on this machine. A session that would

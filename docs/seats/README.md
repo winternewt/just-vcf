@@ -44,7 +44,7 @@ Repeated from `CLAUDE.md` because these are the ones a seat is most likely to me
 - Another seat's uncommitted file is work in flight: commit your own paths by name; never stash,
   revert or commit theirs. The one exception is a consumer's item left uncommitted in the inbox, which
   triage commits as it stands.
-- Never `uv pip install`; never bare `python`. The kit's triage scripts run through the kit's `bin/py` (`CLAUDE.md` §8), never under `bash`.
+- Never `uv pip install`; never bare `python`. The kit's triage scripts run through the kit's `bin/py.sh` (`CLAUDE.md` §8), never under `bash`.
 - Never edit or commit a sibling repo beyond appending an item to its `docs/FEEDBACK.md`.
 - Never run outside code without checking its standing in `docs/TRUST.md`.
 - Never resolve a contradiction between two rules by inference: run the questionnaire in `CLAUDE.md` §1.

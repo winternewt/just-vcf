@@ -32,7 +32,7 @@ filed before anything else is done
 with it, because the inbox is the state and a message is only delivery.
 
 1. React to it (`watchdog.py react ID`), and read it whole (`watchdog.py read ID`) if it was cut.
-2. Append it to `docs/FEEDBACK.md` as `## S<n> — <title>`, `<n>` from `sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next`.
+2. Append it to `docs/FEEDBACK.md` as `## S<n> — <title>`, `<n>` from `sh "${BLUEPRINTS_KIT:?}/bin/py.sh" "$BLUEPRINTS_KIT/classes/triage/triage-state.py" --next`.
    The title is the reporter's own one-line summary if they gave one; otherwise write one and say so.
    The first body line is the relay: `Sent on Zulip by <sender, as the watchdog named them>, <date>,
    <message link>; filed verbatim by triage.` Below it, the message text exactly as sent.

@@ -32,7 +32,7 @@ role, "Why it exists").
   path is versioned, so each kit move re-points it in the same sitting. The list itself
   (`.leak_words`, git-ignored) is the person's: what names it carries was their call, made with the
   lead; this seat never reads it out, prints it or commits it.
-- **The kit's pin in this clone.** This seat alone moves it (the kit's `bin/move-to-tag`), then tells
+- **The kit's pin in this clone.** This seat alone moves it (the kit's `bin/move-to-tag.py`), then tells
   the other seats to `/reload-plugins`; none of them runs `move-to-tag`. It moves when a release
   carries a fix a seat here waits on, or when the kit's announcement says a release needs it; never
   back.
@@ -66,7 +66,7 @@ Commit on `main`; push `main` to `origin` as a fast-forward; patch tags, pushed 
 removed after the merge. These are the tree operations the kit's tooling seat holds (the kit's
 `docs/seats/TOOLING.md`, "Grant"), given to this seat by the person on 2026-10-18: "tooling gets same
 set of grants on tree ops upstream tooling has". For this seat they stand over `CLAUDE.md` §2's "never
-push" and "never delete a branch without asking". The kit's claim tags (`bin/claim`) have no
+push" and "never delete a branch without asking". The kit's claim tags (`bin/claim.sh`) have no
 counterpart here: ids are claimed by the kit's `item-next.py`, which writes a row, not a tag.
 
 Not covered, so the person's: a force push, rewriting pushed history, `git branch -D`, deleting or

@@ -2,7 +2,7 @@
 
 Active items only, newest decisions first. Shipped items move to
 [ROADMAP_HISTORY.md](ROADMAP_HISTORY.md). Claim a new id with
-`ITEM_PREFIX=RM sh "${BLUEPRINTS_KIT:?}/bin/py" "$BLUEPRINTS_KIT/classes/triage/item-next.py" --note "…"`; `CLAUDE.md` §8 says where `$BLUEPRINTS_KIT` comes from.
+`ITEM_PREFIX=RM sh "${BLUEPRINTS_KIT:?}/bin/py.sh" "$BLUEPRINTS_KIT/classes/triage/item-next.py" --note "…"`; `CLAUDE.md` §8 says where `$BLUEPRINTS_KIT` comes from.
 
 ## Items
 

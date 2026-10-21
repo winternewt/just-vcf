@@ -47,7 +47,7 @@ wake_from = "just-vcf/triage just-vcf/upstream-liaison just-vcf/lead agents-kit/
 
 # This repository's issues, where its tool requests live: each event a line.
 [seat.tooling.watch.issues]
-cmd = "sh kit:bin/py kit:drivers/github/watch-issues.py --origin"
+cmd = "sh kit:bin/py.sh kit:drivers/github/watch-issues.py --origin"
 
 [seat.tooling.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"

@@ -98,5 +98,10 @@ status lines say what exists. Schema at 0.0.4.
   stated; (8) CGI native `wgs` only by `#TITLE`, no `classify` fallback. Lead's decision on (5): the stale
   sweep removes only entries of an older version, never a newer one (two installs share the user cache).
   (7) REWRITE_VERSION: no stale copy reachable; bump on the next rewrite-rule change.
+- **Builder run paused, 2026-10-23** (decided work done): merged consistency decisions (36dbecc, 0.0.11)
+  and the review fixes (2aa5436). 1,046 passed. Desk #86 asks what next (interview Part 2, CLI, 0.1 prep,
+  or stop; default stop). Also open: ruff is not a dev dependency (about 200 findings in the tree); the
+  local `.env` samples dir has no PGP-HMS, so the opt-in PGP tests skip unless run with
+  `JUST_VCF_SAMPLES_DIR=/mnt/krypton/Genomes/genomes`.
 - **Open, not started**: CLI (MVP row 18; not decided), the rest of Part 2 of docs/MVP_READINESS.md (the
   interview).

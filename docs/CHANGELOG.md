@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF re-saved by a spreadsheet (quoted fields with doubled quotes, tab-padded meta lines, bare-CR
+  line ends) loads under `vcf`: the re-save is undone with `csv` and polars-bio reads a rewritten copy,
+  with a warning (F7, now resolved). `vcf_samples` reads such a file too.
+
 - A VCF whose column line is written `##CHROM` (two Veritas SV/CNV uploads, F7) loads: that line is
   read as the column line where no `#CHROM` exists, and `###` meta lines are kept without being read as
   declarations. An ALT of letters outside `ACGTN` (`CNV`) is no VCF allele: it gets no variant class

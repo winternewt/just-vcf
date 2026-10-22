@@ -596,3 +596,53 @@ def test_an_alt_that_is_no_vcf_allele_has_no_variant_class(tmp_path: Path) -> No
     assert calls["alts"].to_list() == [["CNV"], ["AT"], ["R"]]
     assert loaded.facets.collect()["variant_classes"].to_list() == [[{"variant_class": "indel", "alleles": 1}]]
     assert any(w.startswith("2 record(s) carry an ALT that is no VCF allele") for w in loaded.warnings), loaded.warnings
+
+
+def _spreadsheet_resave(text: str) -> bytes:
+    """`text` as a spreadsheet re-saves a tab file: CSV quoting of fields holding a comma or a quote,
+    lines padded with empty fields to the widest row, bare-CR line ends. The test's own encoder."""
+    rows = [line.split("\t") for line in text.rstrip("\n").split("\n")]
+    width = max(len(row) for row in rows)
+    out = []
+    for row in rows:
+        cells = ['"' + cell.replace('"', '""') + '"' if ("," in cell or '"' in cell) else cell for cell in row]
+        out.append("\t".join(cells + [""] * (width - len(cells))))
+    return "\r".join(out).encode() + b"\r"
+
+
+def test_a_vcf_resaved_by_a_spreadsheet_loads_as_the_text_it_was_saved_from(tmp_path: Path) -> None:
+    """F7: a VCF re-saved by a spreadsheet: quoted `"##…""…""` meta lines padded with tabs, quoted
+    INFO and sample fields, bare-CR line ends."""
+    records = [
+        '1\t100\trs1\tA\tG\t50\tPASS\tEFF=A(B|C),D(E);NOTE="x"\tGT:AD:PL\t0/1:10,12:40,0,50',
+        "1\t200\t.\tC\tCT,T\t60\tLowQual\tEFF=F\tGT:AD:PL\t1/2:1,5,6:90,30,80,20,0,70",
+        "2\t300\t.\tG\t.\t.\t.\t.\tGT:AD:PL\t./.",
+    ]
+    meta = (
+        '##FILTER=<ID=LowQual,Description="Low quality">',
+        '##INFO=<ID=EFF,Number=.,Type=String,Description="Effects, as \'A(B|C)\'">',
+        '##INFO=<ID=NOTE,Number=1,Type=String,Description="Note">',
+    )
+    plain = vcf_text(records, fmt=("GT", "AD", "PL"), extra_meta=meta)
+    resaved = write(tmp_path, "", "resaved.vcf")
+    resaved.write_bytes(_spreadsheet_resave(plain))
+    assert b'"##INFO=<ID=EFF' in resaved.read_bytes() and b"\n" not in resaved.read_bytes()
+
+    expected, _, _ = frames(write(tmp_path, plain, "plain.vcf"))
+    loaded = load(resaved)
+    calls = loaded.calls.collect()
+    facet = loaded.facets.collect().row(0, named=True)
+    columns = ["chrom", "pos", "ids", "source_ref", "alts", "gt_alleles", "ad", "gl", "qual", "filters"]
+    assert calls.select(columns).rows() == expected.select(columns).rows()
+    assert calls.filter(pl.col("pos") == 100)["ad"].to_list() == [[10, 12]]
+    assert "INFO/EFF" in facet["dropped_fields"] and "INFO/NOTE" in facet["dropped_fields"]
+    assert vcf_samples(resaved) == ["S1"]
+    assert any(w.startswith("the file was re-saved by a spreadsheet") for w in loaded.warnings)
+
+
+def test_crlf_and_plain_vcfs_are_not_taken_for_a_resave(tmp_path: Path) -> None:
+    text = vcf_text(["1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/1"])
+    for name, body in (("lf.vcf", text.encode()), ("crlf.vcf", text.replace("\n", "\r\n").encode())):
+        path = tmp_path / name
+        path.write_bytes(body)
+        assert not any("spreadsheet" in w for w in load(path).warnings), name

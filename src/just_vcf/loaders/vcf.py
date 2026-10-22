@@ -16,11 +16,14 @@ here from VCF 4.5's END rule, not taken from polars-bio, whose `end` is one shor
 haplotype's `phased` entry is withheld rather than reported from the rewritten text.
 """
 
+import csv
 import hashlib
+import io
 import logging
 import re
 import shutil
 import struct
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -190,6 +193,9 @@ class Header:
     sample_meta: list[str] = field(default_factory=list)
     format_first: bool = True
     hashed_column_line: bool = False
+    resaved: bool = False
+    """The file was re-saved by a spreadsheet (F7): read through `undo_resave`, so polars-bio needs the
+    rewritten copy. Set by the caller that chose to read it so."""
     """The column line was written `##CHROM` (F7: Veritas SV and CNV uploads), so polars-bio cannot
     read the file as it is."""
     split_markers: dict[str, str] = field(default_factory=dict)
@@ -236,6 +242,61 @@ def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:
     header = _parse_header(meta, columns)
     header.hashed_column_line = from_hashed
     return header, data
+
+
+RESAVE_HEAD_BYTES = 64 << 10
+"""How much of a payload `is_resaved` looks at."""
+
+_QUOTED_META = re.compile(rb'(\A|[\r\n])"##')
+
+
+def is_resaved(head: bytes) -> bool:
+    """Whether a VCF payload's head shows a spreadsheet's re-save (F7): a meta line wrapped in quotes
+    (`"##FILTER=<…""Low quality"">"`), or lines ended by a bare CR with no LF at all."""
+    return bool(_QUOTED_META.search(head)) or (b"\r" in head and b"\n" not in head)
+
+
+class _Lines(io.RawIOBase):
+    """A readable byte stream over an iterator of byte chunks."""
+
+    def __init__(self, chunks: Iterator[bytes]) -> None:
+        self._chunks = chunks
+        self._left = b""
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        while not self._left:
+            chunk = next(self._chunks, None)
+            if chunk is None:
+                return 0
+            self._left = chunk
+        size = min(len(buffer), len(self._left))
+        buffer[:size] = self._left[:size]
+        self._left = self._left[size:]
+        return size
+
+
+def undo_resave(handle: BinaryIO) -> BinaryIO:
+    """A spreadsheet-re-saved VCF payload as the tab-separated text it was saved from (F7).
+
+    The re-save is CSV quoting applied to a tab file: a field holding a comma or a quote is wrapped in
+    quotes with its own quotes doubled (an INFO with `EFF=…,…`, a sample field whose AD is `12,0`), meta
+    lines are padded with empty fields to the widest row, and lines may end in a bare CR. `csv` undoes the
+    quoting, universal newlines the CRs, and trailing empty fields are dropped from `##` lines only. What
+    the spreadsheet did to a value's text (a QUAL written `6980.9` for `6980.90`) cannot be undone or seen.
+    """
+    text = io.TextIOWrapper(handle, encoding="utf-8", errors="replace", newline=None)
+
+    def lines() -> Iterator[bytes]:
+        for row in csv.reader(text, delimiter="\t", quotechar='"'):
+            if row and row[0].startswith("##"):
+                while len(row) > 1 and row[-1] == "":
+                    row.pop()
+            yield ("\t".join(row) + "\n").encode()
+
+    return io.BufferedReader(_Lines(lines()), 1 << 20)
 
 
 def read_bcf_header(handle: BinaryIO) -> tuple[Header, bytes | None]:
@@ -442,7 +503,7 @@ def readable_path(
     `cache` is the entry (`vcf/<key>`); it is written, or reused, under its lock, with `origin` in its
     manifest (`just_vcf.cache.writing`).
     """
-    as_is = header.format_first and not header.hashed_column_line and not missing and not structural_only
+    as_is = header.format_first and not header.hashed_column_line and not header.resaved and not missing and not structural_only
     if layers in ((), ("gzip",), ("bgzf",)) and as_is:
         return path
     with cache_index.writing(cache, cache_index.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION}, origin):

@@ -12,7 +12,9 @@ The rules are in docs/SCHEMA.md ("Normalizing"); in short:
    genotypes over `[REF, ALT]` (haploid or diploid) only where no GT slot holds another ALT, because
    otherwise the slice leaves out the genotype the caller chose; `gp` and `dosage` are withheld (a
    posterior over part of the genotypes no longer sums to 1, and making it do so changes the
-   values). A site holding a symbolic allele (`<DEL>`, `<*>`, a breakend) is left as written.
+   values). `<*>` beside concrete ALTs names no allele and gets no row; a site left with one ALT is
+   an ordinary biallelic row, not flagged. A site whose genotype calls `<*>`, or that holds another
+   symbolic allele (`<DEL>`, a breakend), is left as written.
 2. **Left-align and trim** each biallelic sequence row whose REF matched the reference
    (`ref_check = match`), with the standard algorithm (Tan et al. 2015, vt, `bcftools norm -f`):
    drop a common last base, and when an allele runs empty, extend both to the left with the
@@ -170,6 +172,9 @@ def _normalize_contig(rows: pl.DataFrame, store: ReferenceStore, contig: Contig 
 _SYMBOLIC = r"^<|\[|\]"
 """A symbolic allele (`<DEL>`, `<*>`) or a breakend."""
 
+UNSPECIFIED = "<*>"
+"""VCF 4.5's unspecified allele (`<NON_REF>` is loaded as it)."""
+
 
 def _slots(ploidy: int) -> list[pl.Expr]:
     return [pl.col("gt").list.get(slot, null_on_oob=True) for slot in range(ploidy)]
@@ -182,23 +187,45 @@ def _per_slot(values: list[pl.Expr]) -> pl.Expr:
 
 def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
     """Every multi-allelic row as one row per ALT; rows that are biallelic, or cannot be split, as they are."""
+    if rows.is_empty():
+        # polars 1.x cannot type `list.contains` on a gathered list over zero rows.
+        return rows
     multi = (pl.col("alts").list.len() >= 2).fill_null(False)
-    symbolic = pl.col("alts").list.eval(pl.element().str.contains(_SYMBOLIC)).list.any()
+    # `<*>` (DeepVariant's non-reference allele beside the ALTs of a variant record) names no allele:
+    # it gets no row of its own. Any other symbolic allele keeps its site as written.
+    symbolic = pl.col("alts").list.eval(pl.element().str.contains(_SYMBOLIC) & (pl.element() != UNSPECIFIED)).list.any()
+    star = pl.col("alts").list.contains(UNSPECIFIED)
+    # A genotype calling `<*>` says a haplotype carries some other allele, which no split row can hold.
+    star_called = (pl.concat_list(pl.lit(""), pl.col("alts")).list.gather(pl.col("gt"), null_on_oob=True).list.contains(UNSPECIFIED)).fill_null(False)
     unindexed = pl.col("gt").is_null() & pl.col("gt_alleles").is_not_null()
-    n_symbolic, n_unindexed = rows.select((multi & symbolic).sum().alias("a"), (multi & ~symbolic & unindexed).sum().alias("b")).row(0)
+    n_symbolic, n_star_called, n_unindexed = rows.select(
+        (multi & symbolic).sum().alias("a"),
+        (multi & ~symbolic & star_called).sum().alias("b"),
+        (multi & ~symbolic & ~star_called & unindexed).sum().alias("c"),
+    ).row(0)
     counts["unsplit_symbolic"] += n_symbolic
+    counts["unsplit_star_called"] += n_star_called
     counts["unsplit_unindexed"] += n_unindexed
-    target = multi & ~symbolic & ~unindexed
+    target = multi & ~symbolic & ~star_called & ~unindexed
+    # Evaluated once as a mask: polars cannot type the gathered list in a filter predicate.
+    target = rows.select(target.alias("_target")).to_series()
     work = rows.filter(target)
     if work.is_empty():
         return rows
-    counts["split_sites"] += work.height
-    ploidy = work.select(pl.col("gt").list.len().max()).item() or 0
     n = pl.col("alts").list.len().cast(pl.Int64)
+    concrete = n - pl.col("alts").list.eval(pl.element() == UNSPECIFIED).list.sum().cast(pl.Int64)
+    counts["star_sites"] += work.filter(star).height
     k = pl.col("_k")
+    ploidy = work.select(pl.col("gt").list.len().max()).item() or 0
     slots = _slots(ploidy)
-    pieces = work.with_columns(pl.int_ranges(1, n + 1, dtype=pl.Int64).alias("_k")).explode("_k", empty_as_null=False)
-    counts["split_rows"] += pieces.height
+    # `_k` indexes the parent's ALTs, so the vector slices below read the parent's own order and length.
+    pieces = (
+        work.with_columns(pl.int_ranges(1, n + 1, dtype=pl.Int64).alias("_k"), concrete.alias("_concrete"))
+        .explode("_k", empty_as_null=False)
+        .filter(pl.col("alts").list.get(k - 1) != UNSPECIFIED)
+    )
+    counts["split_sites"] += work.filter(concrete >= 2).height
+    counts["split_rows"] += pieces.filter(pl.col("_concrete") >= 2).height
     alt = pl.col("alts").list.get(k - 1)
     other_alt = pl.any_horizontal([(g.is_not_null() & (g != 0) & (g != k)).fill_null(False) for g in slots]) if slots else pl.lit(False)
     indexable = (pl.col("source_alleles") == pl.concat_list(pl.col("source_ref"), pl.col("alts"))).fill_null(False)
@@ -236,7 +263,9 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
         pl.lit(None, dtype=CALLS["gp"]).alias("gp"),
         pl.lit(None, dtype=CALLS["dosage"]).alias("dosage"),
         pl.lit(None, dtype=CALLS["source_gt"]).alias("source_gt"),
-        pl.lit(SplitSignal.MARKER.value, dtype=CALLS["split_signal"]).alias("split_signal"),
+        # One row of a site that had two or more ALTs; a site left with one beside `<*>` is an
+        # ordinary biallelic row, with nothing for rejoin_split to join.
+        pl.when(pl.col("_concrete") >= 2).then(pl.lit(SplitSignal.MARKER.value, dtype=CALLS["split_signal"])).alias("split_signal"),
         pl.col("gl").is_not_null().alias("_had_gl"),
         (pl.col("gl").is_not_null() | pl.col("ad").is_not_null()).alias("_had_vector"),
         pl.col("gp").is_not_null().alias("_had_gp"),
@@ -421,6 +450,11 @@ def _warnings(counts: Counter[str]) -> list[str]:
             f"{counts['split_sites']} multi-allelic site(s) split into {counts['split_rows']} row(s), one per ALT; "
             "a GT slot holding another ALT is written `.`, and each row carries split_signal = marker"
         )
+    if counts["star_sites"]:
+        lines.append(
+            f"{counts['star_sites']} site(s) held `<*>` beside their ALTs: `<*>` dropped, it names no allele; a site "
+            "left with one ALT is an ordinary biallelic row, not flagged as split"
+        )
     if counts["gp_withheld"]:
         lines.append(f"{counts['gp_withheld']} split row(s): GP withheld (a posterior over part of the genotypes is not one)")
     if counts["gl_other_alt"]:
@@ -454,7 +488,12 @@ def _warnings(counts: Counter[str]) -> list[str]:
         if counts[key]:
             lines.append(f"{counts[key]} row(s) not left-aligned or trimmed: {reason}")
     if counts["unsplit_symbolic"]:
-        lines.append(f"{counts['unsplit_symbolic']} multi-allelic row(s) left as written: a symbolic allele (`<*>`, `<DEL>`, a breakend)")
+        lines.append(f"{counts['unsplit_symbolic']} multi-allelic row(s) left as written: a symbolic allele (`<DEL>`, a breakend)")
+    if counts["unsplit_star_called"]:
+        lines.append(
+            f"{counts['unsplit_star_called']} multi-allelic row(s) left as written: the genotype calls `<*>`, which no "
+            "split row could hold"
+        )
     if counts["unsplit_unindexed"]:
         lines.append(f"{counts['unsplit_unindexed']} multi-allelic row(s) left as written: a genotype that is not indexed")
     if counts["flagged"]:

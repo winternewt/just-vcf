@@ -204,7 +204,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, and normalization, `normalize`: split, left-align, trim, dedup, sort; left: gVCF blocks, splitting `<*>` sites, strand, liftover, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, and normalization, `normalize`: split, left-align, trim, dedup, sort; left: gVCF blocks, strand, liftover, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -291,9 +291,15 @@ rejected:
 - On a moved or trimmed row, `source_ref`, `ref_check`, `source_gt` and the VRS ids are null and `ref`
   carries the new REF. Rejected: `ref_check = match` on the new bases, which would compare the sequence
   with itself; and keeping the old `source_ref`, which no longer describes the row's span.
-- Sites with a symbolic allele (`<*>`, `<DEL>`, breakends) are left as written. bcftools splits `<*>`
-  off as its own `0/.` row, which our loader would read back as a reference block; a DeepVariant gVCF
-  writes `<*>` on every variant record, so these stay multi-allelic for now.
+- Sites with a symbolic allele (`<DEL>`, breakends) are left as written. Since 2026-10-22 `<*>` beside
+  concrete ALTs (every variant record of a DeepVariant gVCF) is dropped from the split rows: the
+  concrete ALTs are split, the vectors sliced over the parent's alleles where exact, and a site left
+  with one ALT is an ordinary biallelic row with no split flag. A site whose genotype calls `<*>` stays
+  as written, counted. Rejected: bcftools' own `0/.` row for `<*>`, which our loader would read back as
+  a reference block; dropping `<*>` where the genotype calls it, which loses a haplotype's stated
+  non-reference allele; and flagging every row of a `<*>` site, which would make each DeepVariant
+  variant record look pre-split, so a second `normalize` would hold it and `rejoin_split` would try to
+  join a lone row.
 - Only `ref_check = match` rows are aligned or trimmed. Rejected: trimming unchecked rows, which needs
   no bases but rewrites a REF nobody has shown to be right.
 - A deletion written as ALT `-` (F12) is anchored by `normalize`, on the base before, once REF has

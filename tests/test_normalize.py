@@ -150,14 +150,55 @@ def test_vectors_are_sliced_exactly_or_withheld(tmp_path: Path, store: Reference
 def test_symbolic_sites_are_left_as_written(tmp_path: Path, store: ReferenceStore) -> None:
     p = 120
     ref = at("1", p)
-    records = [record("1", p, ref, f"{other(ref)},<*>", "0/1"), record("1", p + 5, at("1", p + 5), f"{other(at('1', p + 5))},*", "1/2")]
+    records = [record("1", p, ref, f"{other(ref)},<DEL>", "0/1"), record("1", p + 5, at("1", p + 5), f"{other(at('1', p + 5))},*", "1/2")]
     parent, out = normalized(tmp_path, store, records)
     calls = out.calls.collect()
-    assert calls.filter(pl.col("pos") == p)["alts"].to_list() == [[other(ref), "<*>"]]
+    assert calls.filter(pl.col("pos") == p)["alts"].to_list() == [[other(ref), "<DEL>"]]
     assert calls.filter(pl.col("pos") == p)["split_signal"].to_list() == [None]
     # `*` is an allele like any other here, as bcftools splits it.
     assert sorted(calls.filter(pl.col("pos") == p + 5)["alts"].to_list()) == sorted([[other(at("1", p + 5))], ["*"]])
     assert any("1 multi-allelic row(s) left as written: a symbolic allele" in w for w in out.warnings)
+
+
+def test_the_unspecified_allele_is_dropped_from_split_rows(tmp_path: Path, store: ReferenceStore) -> None:
+    # DeepVariant writes `<*>` (gVCF) or `<NON_REF>` (its VCF) beside the ALTs of every variant record.
+    # `<*>` names no allele: the concrete ALTs are split, `<*>` gets no row, and the vectors are sliced
+    # to [REF, ALT] where that is exact.
+    end_t = HOMOPOLYMER + 7
+    p, q, r = 130, 140, 150
+    a, b = [x for x in "ACGT" if x != at("1", q)][:2]
+    records = [
+        record("1", p, at("1", p), f"{other(at('1', p))},<*>", "0/1"),
+        record("1", q, at("1", q), f"{a},{b},<*>", "1/2"),
+        record("1", r, at("1", r), f"{other(at('1', r))},<NON_REF>", "0/2"),  # the genotype calls `<*>`
+        record("1", end_t - 1, at("1", end_t - 1, 2), f"{at('1', end_t - 1)},<*>", "1/1"),  # an indel at a run's end
+    ]
+    parent, out = normalized(tmp_path, store, records)
+    calls = out.calls.collect()
+    source = {row["pos"]: row for row in parent.calls.collect().iter_rows(named=True)}
+    rows = {row["pos"]: row for row in calls.iter_rows(named=True)}
+
+    single = calls.filter(pl.col("pos") == p).row(0, named=True)
+    assert calls.filter(pl.col("pos") == p).height == 1
+    assert single["alts"] == [other(at("1", p))] and single["gt"] == [0, 1]
+    assert single["gl"] == source[p]["gl"][:3] and single["ad"] == source[p]["ad"][:2]
+    assert single["source_alleles"] == [at("1", p), other(at("1", p))]
+    assert single["gp"] is None
+    # One concrete ALT left: an ordinary biallelic row, not one record of a split site.
+    assert single["split_signal"] is None
+
+    split = calls.filter(pl.col("pos") == q)
+    assert sorted(split["alts"].to_list()) == sorted([[a], [b]])
+    assert set(split["split_signal"].to_list()) == {"marker"}
+
+    # A genotype that calls `<*>` says a haplotype carries some other allele; no split row could hold it.
+    assert rows[r]["alts"] == [other(at("1", r)), "<*>"] and rows[r]["gt"] == source[r]["gt"]
+
+    # The indel, freed of `<*>`, is left-aligned like any other.
+    assert (HOMOPOLYMER - 1, "CT", ("C",)) in {(row["pos"], row["ref"], tuple(row["alts"])) for row in calls.iter_rows(named=True)}
+    assert not any("<*>" in row["alts"] for row in calls.iter_rows(named=True) if row["pos"] != r)
+    assert any(w.startswith("3 site(s) held `<*>` beside their ALTs: `<*>` dropped") for w in out.warnings), out.warnings
+    assert any("1 multi-allelic row(s) left as written: the genotype calls `<*>`" in w for w in out.warnings), out.warnings
 
 
 # --- left-alignment and trimming ----------------------------------------------------------------

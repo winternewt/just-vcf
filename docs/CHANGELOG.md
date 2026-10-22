@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `normalize` drops `<*>` (and `<NON_REF>`) from the ALTs it splits: DeepVariant's variant records,
+  `A>G,<*>`, become plain biallelic rows (no split flag) with `ad` and `gl` sliced exactly, and are
+  then left-aligned like any other. Sites with two or more concrete ALTs beside `<*>` split as before,
+  each row `split_signal = marker`. A site whose genotype calls `<*>`, and sites holding another
+  symbolic allele, stay as written, counted. Before, every site holding `<*>` was left multi-allelic.
+
 - `normalize` judges a duplicate on what the row states: the columns a move clears (`source_ref`,
   `ref_check`, `source_gt`, the VRS ids) no longer make two rows differ, so an indel the source wrote
   twice, once already left-aligned, with the same genotype and evidence, is one row (the unmoved one)

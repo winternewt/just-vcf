@@ -465,8 +465,15 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    - `gp` and `dosage` are withheld: a posterior over part of the genotypes does not sum to 1, and
      rescaling it would change the values;
    - `source_alleles` is the row's `[REF, ALT]` where any vector is kept, null otherwise.
-   A site holding a symbolic allele (`<*>`, `<DEL>`, a breakend) is left as written: a split `<*>` row
-   would read back as a reference block. `*` is split like any allele.
+   `<*>` beside concrete ALTs (DeepVariant writes it on every variant record of a gVCF, and
+   `<NON_REF>`, loaded as `<*>`, in its VCF) names no allele, so it gets no row: the concrete ALTs are
+   split as above, indexed over the parent's own allele list, so `ad` and `gl` are sliced exactly as
+   for any other ALT and withheld where the slice would not hold the called genotype. A site left with
+   one concrete ALT is an ordinary biallelic row, with `split_signal` null; `split_signal = marker` is
+   set only where two or more concrete ALTs were split. Left as written, counted: a site whose
+   genotype calls `<*>` (a haplotype carries some other allele, which no split row could hold), and a
+   site holding any other symbolic allele (`<DEL>`, a breakend). bcftools' own `0/.` row for `<*>` was
+   set aside: the loader would read it back as a reference block. `*` is split like any allele.
 2. **Left-align and trim**, only on biallelic sequence rows with `ref_check = match`: drop a common last
    base, and when an allele runs empty, prepend the reference base before both and step `pos` back;
    repeat; then drop common first bases while both alleles keep one. At position 1 an allele keeps

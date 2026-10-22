@@ -35,6 +35,7 @@ from just_vcf.schema import (
     empty,
 )
 from just_vcf.sniff import Sniffed, open_payload, sniff
+from just_vcf.source import detect_source
 
 logger = logging.getLogger(__name__)
 
@@ -183,102 +184,187 @@ def vcf_samples(source: Path | str | Sniffed) -> list[str]:
     if not sniffed or sniffed.format not in vcf.FORMATS:
         raise UnsupportedFormatError(sniffed)
     with open_payload(sniffed) as handle:
-        header, _ = vcf.read_header(handle)
+        header = vcf.read_bcf_header(handle)[0] if sniffed.format == vcf.BCF else vcf.read_header(handle)[0]
     return header.samples
 
 
 def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
+    binary = sniffed.format == vcf.BCF
     with open_payload(sniffed) as handle:
-        header, data = vcf.read_header(handle)
-    if len(header.samples) > 1 and sample is None:
-        raise vcf.MultiSampleError(
-            f"{sniffed.path}: {len(header.samples)} samples; pass sample= to load one "
-            "(just_vcf.vcf_samples lists them)"
-        )
-    if sample is not None and sample not in header.samples:
-        raise vcf.MultiSampleError(f"{sniffed.path}: the requested sample is not in the file")
-    if not header.samples:
-        raise vcf.NoSampleError(f"{sniffed.path}: a sites-only VCF, with no sample column to load")
-    chosen = sample if sample is not None else header.samples[0]
-
+        if binary:
+            header, first_record = vcf.read_bcf_header(handle)
+            data: list[bytes] = []
+        else:
+            header, data = vcf.read_header(handle)
+            first_record = data[0] if data else None
     warnings: list[str] = []
-    missing = vcf.undeclared_format_keys(header, data)
+    if sniffed.format == vcf.FREEBAYES_VARSCAN2:
+        # One person, two callers (SCHEMA Decision 8): one facet per caller, whatever the columns.
+        parts = vcf.caller_parts(header, data)
+    else:
+        if len(header.samples) > 1 and sample is None:
+            raise vcf.MultiSampleError(
+                f"{sniffed.path}: {len(header.samples)} samples; pass sample= to load one "
+                "(just_vcf.vcf_samples lists them)"
+            )
+        if sample is not None and sample not in header.samples:
+            raise vcf.MultiSampleError(f"{sniffed.path}: the requested sample is not in the file")
+        if not header.samples:
+            raise vcf.NoSampleError(f"{sniffed.path}: a sites-only VCF, with no sample column to load")
+        chosen = sample if sample is not None else header.samples[0]
+        parts = [vcf.Part(sample=chosen, options={"sample_index": header.samples.index(chosen)})]
+
+    missing = vcf.undeclared_keys(header, data)
     if missing:
-        warnings.append(f"FORMAT key(s) used but not declared, declared by the loader: {', '.join(missing)}")
-        header.format.update({key: vcf.FORMAT_KEYS[key][0] for key in missing})
-    if not header.format_first:
+        warnings.append(f"key(s) used but not declared, declared by the loader: {', '.join(missing)}")
+        vcf.declare(header, missing)
+    if unfit := vcf.unfit_keys(header):
+        warnings.append(
+            "FORMAT key(s) declared with a Number that is not one value per allele or genotype, not carried: "
+            + ", ".join(f"{key} (Number={number})" for key, number in sorted(unfit.items()))
+        )
+    if not header.meta:
+        warnings.append(
+            "no meta lines: read under a synthesised header (##fileformat=VCFv4.2 and the carried keys the "
+            "rows use); the file states no VCF version, no contigs and no build"
+        )
+    elif not header.format_first:
         warnings.append("##fileformat was not the first line; the header was reordered for reading")
     source_sha256 = _sha256(sniffed.path)
     cache = cache_dir() / "vcf" / hashlib.sha256(f"{source_sha256}!{sniffed.member}!{vcf.REWRITE_VERSION}".encode()).hexdigest()[:32]
+    source = detect_source(header.meta, get_spec(sniffed.format).vendor)
+    warnings += source.warnings
+    gl_phred = source.caller == "CGAPipeline"
+    if gl_phred:
+        warnings.append("CGAPipeline writes GL in phred units (GQ is the gap between the two best): read as GL / 10")
+    if (header.version_tuple or (0, 0)) >= (4, 4):
+        warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
+    versions = {caller.name: caller.version for caller in source.callers}
+    label, basis, label_warnings = _assembly_label(sniffed.build, header.contigs)
+    warnings += label_warnings
+
+    facets: list[dict] = []
+    facet_stats: list[dict] = []
+    calls_parts: list[pl.LazyFrame] = []
+    blocks_parts: list[pl.LazyFrame] = []
+    for part in parts:
+        part_warnings: list[str] = []
+        if binary:
+            # A BCF declares every key it uses, and its header cannot be rewritten without re-encoding
+            # the records, so a refusal from polars-bio is final here.
+            path = vcf.readable_bcf_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), cache)
+            records = part.select(vcf.read_records(path, header, part.sample, first_record, extra_info=part.info))
+            stats = vcf.scan_stats(records)
+        else:
+            records, stats = _read_text_records(sniffed, header, missing, data, cache, part, part_warnings)
+        calls, blocks, row_warnings = vcf.to_rows(records, header, stats, text_gt=not binary, gl_phred=gl_phred)
+        part_warnings += row_warnings
+
+        facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options=part.options)
+        calls_frame, blocks_frame = vcf.to_frames(calls, blocks, facet_id)
+        # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
+        # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
+        spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
+        spill.mkdir(parents=True, exist_ok=True)
+        pl.collect_all(
+            [
+                calls_frame.sink_parquet(spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
+                blocks_frame.sink_parquet(spill / "blocks.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
+            ]
+        )
+        contigs = [canonical_chrom(name) for name in stats["chroms"]]
+        spilled = pl.scan_parquet(spill / "calls.parquet")
+        flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
+        part_warnings += vcf.split_warnings(flagged, marker_rows, header)
+        if source.callset_type:
+            kind = source.callset_type
+        else:
+            inference = callset.classify(spilled, list(header.format), callset.imputation_marker(header.meta, list(header.info)))
+            logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
+            kind = inference.callset_type if inference else None
+        caller = part.caller if part.split else source.caller
+        facets.append(
+            {
+                "facet_id": facet_id,
+                "source_sha256": source_sha256,
+                "source_path": str(sniffed.path),
+                "member": sniffed.member,
+                "format_id": sniffed.format,
+                "family": sniffed.family.value if sniffed.family else None,
+                "vendor": source.vendor,
+                "caller": caller,
+                "caller_version": versions.get(caller) if part.split else source.caller_version,
+                "ploidy_statements": source.ploidy_statements,
+                # What the header states (array or imputed content) wins; RM4 infers the rest from the rows.
+                "callset_type": kind.value if kind else None,
+                "phasing_method": source.phasing_method,
+                "relation": vcf.CALLER_SPLIT if part.split else None,
+                "sample": part.sample,
+                "assembly_label": label,
+                "assembly_label_basis": basis.value if basis else None,
+                "sorted_name_length_pairs_digest": sorted_name_length_pairs_digest(header.contigs),
+                # A one-column merge facet holds only the sites its caller alone found: absent there is unknown.
+                "absence_means": (AbsenceMeans.UNKNOWN if part.sf_alone else callset.absence_means(kind, stats["any_block"])).value,
+                "contig_map": contig_map(stats["chroms"]),
+                "header_contigs": header.contigs,
+                "vcf_version": header.version,
+                "sample_meta": header.sample_meta,
+                "dropped_fields": vcf.dropped_fields(header, data),
+                "split_marker": ",".join(sorted(header.split_markers)) if marker_rows else None,
+            }
+        )
+        # The flagged positions join above the per-contig sort, so a filter still reaches the parquet scan.
+        calls_parts.append(vcf.with_split_groups(canonical_order_per_contig(spilled, contigs), flagged))
+        blocks_parts.append(canonical_order_per_contig(pl.scan_parquet(spill / "blocks.parquet"), contigs))
+        if part.sf_alone:
+            shared = facet_stats[0].get("shared_sources", 0)
+            part_warnings.append(
+                f"one data column: at the {shared} site(s) another caller also found, the merge kept that caller's "
+                "genotype, so this facet holds only the sites it alone found; absent here is unknown"
+            )
+        facet_stats.append(stats)
+        warnings += [f"{part.caller or 'unnamed caller'} facet: {w}" if part.split else w for w in part_warnings]
+
+    order = sorted(range(len(facets)), key=lambda i: facets[i]["facet_id"])
+    frame = pl.LazyFrame([facets[i] for i in order], schema={name: FACETS[name] for name in facets[0]}).select(
+        [pl.col(name) if name in facets[0] else pl.lit(None, dtype=dtype).alias(name) for name, dtype in FACETS.items()]
+    )
+    for warning in warnings:
+        logger.warning("%s: %s", facets[order[0]]["facet_id"], warning)
+    return Loaded(
+        facets=frame,
+        calls=_concat([calls_parts[i] for i in order]),
+        blocks=_concat([blocks_parts[i] for i in order]),
+        warnings=tuple(warnings),
+    )
+
+
+def _concat(frames: list[pl.LazyFrame]) -> pl.LazyFrame:
+    """One facet's frame as it is; several, one after another (they are already in facet order)."""
+    return frames[0] if len(frames) == 1 else pl.concat(frames, how="vertical", parallel=False)
+
+
+def _read_text_records(
+    sniffed: Sniffed, header: vcf.Header, missing: list[str], data: list[bytes], cache: Path, part: "vcf.Part", warnings: list[str]
+) -> tuple[pl.LazyFrame, dict]:
+    """A text VCF's records for one part and their stats, read once more from a structural copy if
+    polars-bio refuses the first read (P7, P8). The retry is reported in `warnings`."""
     path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache)
     try:
-        records = vcf.read_records(path, header, chosen, data[0] if data else None)
-        stats = vcf.scan_stats(records)
+        records = part.select(vcf.read_records(path, header, part.sample, data[0] if data else None, extra_info=part.info))
+        return records, vcf.scan_stats(records)
     except vcf.HeaderRefused as err:
         warnings.append(
             f"polars-bio refused the file ({err}); read again with a header of only the carried INFO and "
             "FORMAT keys and the FILTER, ALT and contig lines"
         )
-        path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache, structural_only=True)
-        first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
-        records = vcf.read_records(path, header, chosen, first)
-        stats = vcf.scan_stats(records)
-        if left_out := vcf.pos_zero_left_out(cache):
-            warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
-    calls, blocks, row_warnings = vcf.to_rows(records, header, stats)
-    warnings += row_warnings
-    if (header.version_tuple or (0, 0)) >= (4, 4):
-        warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
-
-    facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={"sample_index": header.samples.index(chosen)})
-    calls_frame, blocks_frame = vcf.to_frames(calls, blocks, facet_id)
-    # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
-    # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
-    spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-    spill.mkdir(parents=True, exist_ok=True)
-    pl.collect_all(
-        [
-            calls_frame.sink_parquet(spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
-            blocks_frame.sink_parquet(spill / "blocks.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
-        ]
-    )
-    contigs = [canonical_chrom(name) for name in stats["chroms"]]
-    spilled = pl.scan_parquet(spill / "calls.parquet")
-    flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
-    warnings += vcf.split_warnings(flagged, marker_rows, header)
-    label, basis, label_warnings = _assembly_label(sniffed.build, header.contigs)
-    warnings += label_warnings
-    kind = callset.classify(spilled, list(header.format), callset.imputation_marker(header.meta, list(header.info)))
-    logger.info("%s: callset type %s (%s)", facet_id, kind.callset_type.value if kind else "unknown", kind.reason)
-    facet = {
-        "facet_id": facet_id,
-        "source_sha256": source_sha256,
-        "source_path": str(sniffed.path),
-        "member": sniffed.member,
-        "format_id": sniffed.format,
-        "family": sniffed.family.value if sniffed.family else None,
-        "sample": chosen,
-        "assembly_label": label,
-        "assembly_label_basis": basis.value if basis else None,
-        "sorted_name_length_pairs_digest": sorted_name_length_pairs_digest(header.contigs),
-        "callset_type": kind.callset_type.value if kind else None,
-        "absence_means": callset.absence_means(kind.callset_type, stats["any_block"]).value,
-        "contig_map": contig_map(stats["chroms"]),
-        "header_contigs": header.contigs,
-        "vcf_version": header.version,
-        "sample_meta": header.sample_meta,
-        "dropped_fields": vcf.dropped_fields(header),
-        "split_marker": ",".join(sorted(header.split_markers)) if marker_rows else None,
-    }
-    for warning in warnings:
-        logger.warning("%s: %s", facet_id, warning)
-    return Loaded(
-        facets=_facet_frame(facet),
-        # The flagged positions join above the per-contig sort, so a filter still reaches the parquet scan.
-        calls=vcf.with_split_groups(canonical_order_per_contig(spilled, contigs), flagged),
-        blocks=canonical_order_per_contig(pl.scan_parquet(spill / "blocks.parquet"), contigs),
-        warnings=tuple(warnings),
-    )
+    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache, structural_only=True)
+    first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
+    records = part.select(vcf.read_records(path, header, part.sample, first, extra_info=part.info))
+    stats = vcf.scan_stats(records)
+    if left_out := vcf.pos_zero_left_out(cache):
+        warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
+    return records, stats
 
 
 def _assembly_label(stated: str | None, contigs: list[dict]) -> tuple[str | None, AssemblyLabelBasis | None, list[str]]:

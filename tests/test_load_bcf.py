@@ -1,0 +1,101 @@
+"""BCF loads into the same frames as the text VCF it was written from (pysam writes the fixtures)."""
+
+import zipfile
+from pathlib import Path
+
+import polars as pl
+import pytest
+
+from just_vcf import load, sniff, vcf_samples
+from test_load_vcf import FORMAT_LINES, INFO_LINES, assert_gt_consistent, vcf_text, write
+
+pysam = pytest.importorskip("pysam", reason="pysam (the [reference] extra) writes the BCF fixtures")
+
+RECORDS = [
+    "1\t100\trs1;rs2\tA\tG,T\t50\tq10\t.\tGT:GQ:DP:AD:PL\t1/2:30:7:0,3,4:90,40,0,50,20,80",
+    "1\t200\t.\tACG\tA\t.\tPASS\t.\tGT:GQ:DP:AD:PL\t0|1:20:9:5,4:30,0,60",
+    "1\t300\t.\tG\t<*>\t.\t.\tEND=313\tGT:GQ:DP:AD:PL\t0/0:60:.:.:0,60,900",
+    "2\t5\t.\tT\t.\t.\t.\t.\tGT:GQ:DP:AD:PL\t./.:.:.:.:.",
+    "2\t10\t.\tC\tT\t.\t.\t.\tGT:GQ:DP:AD:PL\t1:.:.:.:.",
+]
+FMT = ("GT", "GQ", "DP", "AD", "PL")
+
+
+def to_bcf(text_vcf: Path, target: Path, mode: str = "wb") -> Path:
+    with pysam.VariantFile(str(text_vcf)) as source, pysam.VariantFile(str(target), mode, header=source.header) as out:
+        for record in source:
+            out.write(record)
+    return target
+
+
+def collected(path: Path) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    loaded = load(path)
+    facets, calls, blocks = pl.collect_all([loaded.facets, loaded.calls, loaded.blocks])
+    return facets, calls, blocks
+
+
+@pytest.fixture
+def text_vcf(tmp_path: Path) -> Path:
+    q10 = ('##FILTER=<ID=q10,Description="Quality below 10">',)
+    return write(tmp_path, vcf_text(RECORDS, fmt=FMT, info=("END",), extra_meta=q10), "calls.vcf")
+
+
+def test_bcf_loads_the_same_rows_as_its_text(tmp_path: Path, text_vcf: Path) -> None:
+    bcf = to_bcf(text_vcf, tmp_path / "calls.bcf")
+    assert sniff(bcf).format == "bcf"
+    text_facets, text_calls, text_blocks = collected(text_vcf)
+    facets, calls, blocks = collected(bcf)
+    assert facets["format_id"].to_list() == ["bcf"] and facets["facet_id"][0] != text_facets["facet_id"][0]
+    assert calls.height == len(RECORDS) - 1 and blocks.height == 1
+    assert calls.drop("facet_id", "source_gt").equals(text_calls.drop("facet_id", "source_gt"))
+    assert blocks.drop("facet_id").equals(text_blocks.drop("facet_id"))
+    assert calls["source_gt"].null_count() == calls.height, "a BCF wrote no genotype text"
+    assert text_calls["source_gt"].null_count() == 0
+    assert_gt_consistent(calls)
+    keep = ["header_contigs", "vcf_version", "sample", "dropped_fields", "absence_means", "ploidy_statements"]
+    assert facets.select(keep).equals(text_facets.select(keep))
+    assert vcf_samples(bcf) == ["S1"]
+
+
+@pytest.mark.parametrize("how", ["renamed", "uncompressed", "zipped"])
+def test_a_bcf_under_another_name_or_layer_is_copied_and_read(tmp_path: Path, text_vcf: Path, how: str) -> None:
+    _, reference, _ = collected(to_bcf(text_vcf, tmp_path / "reference.bcf"))
+    if how == "renamed":
+        path = to_bcf(text_vcf, tmp_path / "upload.dat")
+    elif how == "uncompressed":
+        path = to_bcf(text_vcf, tmp_path / "raw.bcf", mode="wb0")
+    else:
+        inner = to_bcf(text_vcf, tmp_path / "inner.bcf")
+        path = tmp_path / "upload.zip"
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.write(inner, "genome.bcf")
+    sniffed = sniff(path)
+    assert sniffed.format == "bcf", sniffed
+    _, calls, _ = collected(path)
+    assert calls.drop("facet_id").equals(reference.drop("facet_id"))
+
+
+def test_multi_sample_bcf_needs_a_choice(tmp_path: Path) -> None:
+    records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT:GQ\t0/1:30\t1/1:40"]
+    text = write(tmp_path, vcf_text(records, samples=("mother", "child"), fmt=("GT", "GQ")), "trio.vcf")
+    bcf = to_bcf(text, tmp_path / "trio.bcf")
+    assert vcf_samples(bcf) == ["mother", "child"]
+    child = load(bcf, sample="child").calls.collect()
+    assert (child["gt"][0].to_list(), child["gq"][0]) == ([1, 1], 40)
+
+
+def test_contig_dictionary_follows_idx(tmp_path: Path) -> None:
+    """A header whose `##contig` lines carry IDX out of line order: the first record's contig is read
+    by its dictionary index, so the coordinate check still compares the right names."""
+    meta = [
+        "##fileformat=VCFv4.2",
+        "##contig=<ID=2,length=243199373,IDX=1>",
+        "##contig=<ID=1,length=249250621,IDX=0>",
+        INFO_LINES["END"],
+        FORMAT_LINES["GT"],
+    ]
+    columns = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1"
+    text = write(tmp_path, "\n".join([*meta, columns, "1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/1", "2\t7\t.\tC\tT\t.\t.\t.\tGT\t1/1"]) + "\n")
+    bcf = to_bcf(text, tmp_path / "idx.bcf")
+    calls = load(bcf).calls.collect()
+    assert list(zip(calls["chrom"], calls["pos"], strict=True)) == [("1", 100), ("2", 7)]

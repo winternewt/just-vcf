@@ -116,8 +116,9 @@ entry says how.
 - **Text kinds look at one line.** A headerless BED cannot be named `not_variant_data` without a
   multi-line shape check, so it stays `unknown`.
 - **Array or imputed content inside a VCF.** Illumina GenotypingToVCF, 23andMe conversions, Genes for
-  Good and Gencove VCFs parse as `vcf`, but an absent site means unknown. `Family` has no axis for it;
-  a header-based `source` detector (the VCF agent's table is in the RM2 entry) would supply it.
+  Good and Gencove VCFs parse as `vcf`, but an absent site means unknown. `Family` has no axis for it.
+  Closed by the loader, not by `sniff`: the `source` detector (`just_vcf/source.py`) reads the full
+  header and sets the facet's `callset_type` to `array` or `imputed` where the header says so.
 - **Half-calls** (`1|.`, `0/.`) are not expressible in `no_call`. In the array tables a half-call
   is a `-` (FTDNA `-A`) or a `0` (AncestryDNA) beside a letter, and the loader keeps the called allele
   in its slot: `[null, "A"]`. A whole no-call spelling (`spec.no_call`) is a token: in formats that

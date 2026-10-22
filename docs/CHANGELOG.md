@@ -49,6 +49,62 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   4 deCODEme (build 36 from the zip), 4 Genos, 1 Color and 1 RSID/RESULT table load with no error; of
   the 2 Final Reports, the GSA one loads (665,604 calls) and the Forward/Design one is refused.
 
+- A CGI no-called span written with a haploid `.` (male X and Y) now goes to `blocks` like `./.`.
+  polars-bio 0.36 returns a haploid `.` GT as null, so these 139,310 records of a PGP-HMS vcfBeta had
+  stayed in `calls` with no genotype at all. The same polars-bio behaviour makes a haploid `.` in any
+  VCF load with `gt`, `gt_alleles` and `source_gt` null rather than one null haplotype (open).
+
+- `load` reads PGP-HMS's freeBayes+VarScan2 merges (`vcf_freebayes_varscan2`, RM2) as two facets in
+  one `Loaded`, one per caller (SCHEMA Decision 8), each with `relation = caller_split` and its caller
+  and version. A row goes to a caller when INFO/SF lists its index. In the one-column layout most PGP
+  merges have, the VarScan2 facet holds only the sites VarScan2 alone found, and a warning counts the
+  shared sites whose VarScan2 genotype the merge dropped. A `Loaded` can now hold several facets:
+  `facets` has a row each, and `calls` and `blocks` run facet by facet in `facet_id` order. Not done:
+  reading VarScan2's genotypes back from the `-orig` key=value table, which has no loader.
+- `load` reads Complete Genomics' VCF (`vcf_cgi`, RM2). Its `<CGA_NOCALL>` spans and its ALT `.`
+  records with no allele called go to `blocks` as `no_call` (to END, or over REF); its `<CGA_CNVWIN>`
+  copy-number windows are left out with a count; half-calls keep their called allele. GL is read in
+  phred units (gl = GL / 10) wherever the header names CGAPipeline: in every one of 126,604 rows with
+  GQ in a PGP-HMS vcfBeta, GQ was the gap between the two best GL values. CGI's AD (`Number=2`, per GT
+  slot) is not carried. The rules follow the declared alleles, so a CGI VCF that lost its `##center`
+  line and sniffs as `vcf` loads the same way.
+- A VCF's `ad`, `gl` and `gp` are now withheld where they cannot be indexed over the row's alleles:
+  a row whose AD is not one value per allele, or whose PL, GL, GP or PP is not one per genotype of its
+  ploidy, gets null there, with one warning per key and a count. A key declared with a fixed count
+  (VarScan2's AD, `Number=1`, the ALT depth; CGI's AD, `Number=2`, reads per GT slot) is not carried
+  and is listed in `dropped_fields`. Found loading the PGP-HMS `vcf_no_meta` file, where 141,814
+  VarScan2 rows had put their ALT depth into `ad` as if it were per allele. Files whose vectors fit
+  are unchanged.
+- `load` reads `vcf_no_meta`, a VCF body under a bare `#CHROM` line (RM2). The loader synthesises
+  `##fileformat` and declares the carried keys the rows use; `vcf_version` stays null. For every VCF,
+  an undeclared INFO `END` or `SVLEN` is now declared too, so a block whose header forgot END keeps
+  its extent instead of ending at POS, and `dropped_fields` also lists the keys the first 1,000 rows use
+  without a declaration (polars-bio drops those unread, P1). Cached rewrites are made once more
+  (`REWRITE_VERSION` 6). Dogfooded on the one PGP-HMS `vcf_no_meta` file (a freeBayes+VarScan2 merge
+  stripped of its meta lines): 7,123,137 calls in 236 s over the SMB share; its INFO/SF split by
+  caller is not applied (no `##sourceFiles` line says which index is which caller).
+- `load` reads BCF (`bcf`, RM2). polars-bio reads the records; just-vcf reads the header out of the
+  binary layout itself, and the first record's contig and position to check polars-bio's coordinates,
+  as it does for text. polars-bio takes BCF only from a path named `.bcf`, so a BCF under another name
+  or inside an archive is read from a copy in `JUST_VCF_CACHE_DIR`. Rows equal those of the same file
+  as text VCF, except `source_gt`, which stays null: a BCF wrote no genotype text. Tested on BCFs
+  written by pysam; no real BCF is on disk.
+- A loaded VCF's facet now says who made it, from its header alone (RM2's `source` detector,
+  `just_vcf/source.py`): `vendor` (the party the header names as delivering the file), `caller` and
+  `caller_version` (the program that wrote the genotypes: GATK HaplotypeCaller or UnifiedGenotyper,
+  DRAGEN, DeepVariant, freeBayes, VarScan2, CGAPipeline, Isaac/starling, CASAVA, Platypus, Manta,
+  aengine, bcftools call, loimpute, Minimac), every row of RM2's header-evidence table plus
+  `##bcftools_callVersion`. Tools that only touched the file (SelectVariants, ApplyVQSR, bcftools view)
+  are not caller evidence. Two callers in one header leave `caller` null with one warning naming both;
+  a `vcf-merge` of callers is not a conflict. Where the header says the content is array or imputed
+  genotypes (Illumina GenotypingToVCF, the Open Humans and DNA.Land 23andMe conversions, Gencove,
+  Minimac, Genes for Good), `callset_type` is `array` or `imputed`; nothing else sets it yet (RM4).
+  `phasing_method` is filled from `##eagleVersion`. New facet column `ploidy_statements` (RM269 half
+  1): the header's ploidy lines verbatim (`##referenceSexKaryotype=XY`, GATK `sample_ploidy=2`,
+  `bcftools call --ploidy GRCh38`), with no vocabulary. Schema change: one new nullable column, minor.
+  Checked against the 233 PGP-HMS pipeline VCF headers (CGI and freeBayes+VarScan2): every one names
+  its caller, none conflicts.
+
 - A sites-only VCF (no FORMAT column, no sample) is refused by `load` with the new `NoSampleError`
   (exported), instead of failing inside the parquet spill with a polars conversion error (F8). Minor:
   a new exception; nothing that loaded before changes, facet ids included.

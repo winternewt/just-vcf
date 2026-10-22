@@ -112,6 +112,7 @@ FACETS = pl.Schema(
         "vendor": pl.String,
         "caller": pl.String,
         "caller_version": pl.String,
+        "ploidy_statements": pl.List(pl.String),
         "sample": pl.String,
         "assembly_label": pl.String,
         "assembly_label_basis": enum_dtype(AssemblyLabelBasis),

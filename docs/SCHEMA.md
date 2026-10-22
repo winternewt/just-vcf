@@ -180,6 +180,12 @@ The warnings name a header that disagreed. Values that settle neither (within [0
 FORMAT/DP are different quantities with the same name. The loader resolves each key by the header's
 namespace and never by the column name polars-bio gives it.
 
+A vector is carried only where it can be indexed: `ad` needs one value per allele, `gl` and `gp` one
+per genotype of the row's ploidy (checked for haploid and diploid rows). A row whose vector has
+another length gets null there, counted in the warnings. A key declared with a fixed count is a
+different quantity under the same name and is not carried at all (VarScan2's AD, `Number=1`, is the
+ALT depth; CGI's AD, `Number=2`, counts reads per GT slot); it is listed in `dropped_fields`.
+
 A dosage (VCF `DS`, the expected count of the second allele) is one number. It cannot be turned into a
 posterior triple, because two unknowns do not follow from one number, so it gets its own column:
 `dosage: f32`, with `gp` left null unless the source also gave GP.
@@ -223,6 +229,13 @@ included), or when it has no ALT (`.`) and an `INFO/END` extent, which is how Il
 reference block. Either way its GT must assert reference or nothing; a GT calling `<*>` stays a call. A record with `ALT=TC,<*>` is a variant call that also carries the `<*>` allele, and it
 stays in `calls` with `<*>` in `alts`. A monomorphic record (ALT `.`) stays in `calls` too.
 
+Complete Genomics' VCF (`vcf_cgi`, or any VCF declaring its alleles) adds two block kinds, both
+`no_call`: a `<CGA_NOCALL>` record spans POS to INFO `END`, and, where the header declares
+`CGA_NOCALL`, a record with ALT `.`, no `END` and no allele called (`./.`, `.|.`, or a haploid `.`,
+which polars-bio 0.36 returns as a null GT) spans its REF. Its
+`<CGA_CNVWIN>` records are 2 kb copy-number windows, not genotypes, and are left out with a count. A
+half-called reference span (`0|.`, ALT `.`) stays a call.
+
 A 4.5 block states its length per sample in FORMAT `LEN`. INFO `END` is deprecated and only a fallback
 when `LEN` is missing. Blocks keep the source's `MIN_DP` as `dp_min`, and not the block's average `DP`.
 A block with an average depth of 25 can still hold an uncovered base.
@@ -250,12 +263,13 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `facet_id` (required) | deterministic: a digest of the source bytes, the archive member, the sample and the load options. Loading the same file twice gives the same id (charter 12) |
 | `source_sha256`, `source_path`, `member` | what was read. The path is a label, not identity |
 | `format_id`, `family` | from `sniff` |
-| `vendor`, `caller`, `caller_version` | the RM2 `source` detector. Null = not identifiable, never guessed |
+| `vendor`, `caller`, `caller_version` | the RM2 `source` detector, from header lines only. Null = not identifiable, never guessed. `vendor` is the party the header names as delivering the file (`##center`, `##generatedby`), falling back to the format's own vendor (`vcf_cgi`); a caller's maker is not a vendor. `caller` is the program that wrote the genotypes; tools that only touched the file afterwards (GATK SelectVariants, ApplyVQSR, bcftools view) are not evidence. Two callers in one header leave both fields null, with a warning; so do two versions of one caller for `caller_version` |
+| `ploidy_statements` | the header's ploidy lines verbatim, in header order (RM269 half 1): a meta line whose key names a ploidy or karyotype (DRAGEN `##referenceSexKaryotype=XY`, CGI `##source_MAX_PLOIDY`), and each ploidy option of a recorded command line, prefixed with the line it came from (`GATKCommandLine HaplotypeCaller: --sample-ploidy 2`, `bcftools_callCommand: --ploidy GRCh38`). An option whose value is a path writes `<path>` for it. No vocabulary: reading a model out of these is the karyotype work's job. `[]` = a VCF header with none; null = not a VCF. just-vcf's own shape |
 | `sample` | the sample column name, verbatim. **Identifying**: PGP uploads carry real names here. Logs, warnings and error messages name the `facet_id`, never the sample |
 | `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` (contig lengths) or null. A stated label is kept when the lengths disagree, with a warning (RM4, below) |
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
-| `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below) |
+| `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
 | `phasing_method` | null unless stated |
 | `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`) |
@@ -326,7 +340,7 @@ With Decisions 1–5 as recommended:
 | `vrs_errors` | `list[str]` | parallel to `vrs_allele_ids`: what minting itself reported for an allele it tried and could not mint (`not_justifiable`, `no_contig`, …). Null where minting succeeded or never ran. Only facts that minting alone learns go here; see "Why an id is missing" below |
 | `gt_alleles` | `list[str]` | the genotype text cannot be split into haplotypes without the site's alleles (Living DNA writes an indel's two allele sequences back to back, `CCA`); `source_gt` keeps the text. Entries null per uncalled haplotype |
 | `gt` | `list[u8]` | there is no allele list to index yet. Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
-| `source_gt` | `str` | the source wrote no genotype text. The file's raw text, not polars-bio's rewrite of it |
+| `source_gt` | `str` | the source wrote no genotype text (a BCF encodes GT in binary). The file's raw text, not polars-bio's rewrite of it |
 | `phased` | `list[bool]` | the source says nothing about phase for the whole row (every array export). Otherwise parallel to `gt_alleles`, with an element null where the source did not say for that haplotype |
 | `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS or PSL value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. Keyed by kind: PS per chromosome, PSL per file (Decision 2) |
 | `phase_set_kinds` | `list[Enum]` | parallel to `phase_sets`: `ps` or `psl`. Null where the haplotype is unphased |
@@ -468,6 +482,16 @@ the same collection still has both.
 | C. Merged VCF only, split on SF | Always loses VarScan2 on shared sites, even when the `-orig` table would have kept it |
 
 **Recommendation: B.**
+
+**Built 2026-10-22, from the merged VCF only.** `load` returns both facets in one `Loaded`, in
+`facet_id` order, each with `relation = caller_split` and its own `caller` (read from the merge's
+`##sourceFiles` names, `.FB.` and `.VS.`; null where they do not say). A row belongs to a caller when
+INFO/SF lists its index. With a column per caller, each facet reads its own column. With one data
+column, the column holds the first caller's genotype wherever that caller found the site, so the
+VarScan2 facet holds only the sites VarScan2 alone found, and a warning counts the shared sites it
+lost. `derived_from` stays null: the merged file is not loaded as a facet of its own (that is option
+A), so there is no parent row to point at. Not built: sourcing from the `-orig` key=value table,
+which has no loader yet.
 
 ## Decision 9: INFO and FORMAT fields the schema does not name
 

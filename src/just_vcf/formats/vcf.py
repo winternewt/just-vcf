@@ -69,6 +69,14 @@ VCF_CGI = FormatSpec(
         "`##source_*` lines record the annotation database versions, not tools.",
         "PGP-HMS holds one per CGI genome beside the native var/masterVar files of the same assembly; the "
         "var file is the fuller callset (it states reference-called spans too).",
+        "FORMAT GL is declared `Type=Integer` and written in phred units, best genotype 0: in 126,604 of "
+        "126,604 rows with GQ in one file, GQ was the gap between the two best. The loader reads gl = GL / 10.",
+        "FORMAT AD is declared `Number=2` and counts reads per GT slot (`1/1` writes `3,3`), not per allele: "
+        "not carried.",
+        "On male X and Y the no-called spans write a haploid `.`; polars-bio 0.36 returns that GT as null, "
+        "the same as a record with no GT, so the loader reads a null GT on such a record as a no-call.",
+        "No ALT `.` record is called reference (`0/0`) in the first 400k rows: reference-called positions "
+        "are absent. Whether absence means reference here is not settled, so `absence_means` stays `blocks`.",
     ),
     example=(
         "##fileformat=VCFv4.1\n"
@@ -129,6 +137,11 @@ VCF_FREEBAYES_VARSCAN2 = FormatSpec(
         "(chr10 before chr1). Some FILTER values are VarScan2's (str10, indelError).",
         "PGP-HMS arvados collections hold one per sequenced genome. A copy stripped of every meta line "
         "detects as `vcf_no_meta`; its rows still carry SF and both callers' keys.",
+        "VarScan2 declares AD as Number=1 (the ALT depth only), so AD is not carried; freeBayes's GL is "
+        "log10 (Number=G) and is.",
+        "The loader returns one facet per caller (SCHEMA Decision 8, `relation = caller_split`): the caller "
+        "of an index comes from the `.FB.`/`.VS.` names on `##sourceFiles`; in the one-column layout the "
+        "VarScan2 facet holds only the sites VarScan2 alone found, and a warning counts the shared ones.",
     ),
     example=(
         "##fileformat=VCFv4.1\n"
@@ -223,7 +236,9 @@ VCF_NO_META = FormatSpec(
     notes=(
         "polars-bio 0.36 rejects the file ('invalid record'). Prepending `##fileformat` makes it readable, but "
         "every INFO and FORMAT key without a definition is then dropped silently, GT included: synthesise a "
-        "definition for each key seen in the rows.",
+        "definition for each key seen in the rows. The loader does this for the keys the frames carry "
+        "(GT, GQ, DP, AD, PL, … and INFO END, SVLEN) and lists every other key the first rows use in "
+        "`dropped_fields`; the facet's `vcf_version` stays null, since the file states none.",
         "No build statement is possible; the build comes from the data or from a sibling file.",
         "The one PGP-HMS case is a freeBayes+VarScan2 merge stripped of its meta lines (one `Sample1` column, "
         "INFO SF, both callers' FORMAT keys): split it as `vcf_freebayes_varscan2`'s notes describe.",
@@ -245,6 +260,14 @@ BCF = FormatSpec(
     delimiter=None,
     header=HeaderMode.VCF,
     genotype_encoding="FORMAT/GT, binary-encoded",
+    notes=(
+        "polars-bio 0.36 reads BCF only from a path named `.bcf` (any other name fails with 'empty "
+        "input'), so a BCF under another name or inside an archive is read from a copy named `input.bcf`.",
+        "The header is the VCF header text inside the binary layout; the loader reads it itself, and the "
+        "first record's contig index and 0-based POS to check polars-bio's coordinates.",
+        "A BCF wrote no genotype text, so `source_gt` stays null; polars-bio's rendering is not the file's.",
+        "No PGP-HMS file on disk is a BCF (2026-10-22); the tests write theirs with pysam.",
+    ),
 )
 
 _FBVS_KV_COLUMNS: tuple[ColumnSpec, ...] = (

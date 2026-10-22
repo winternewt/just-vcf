@@ -382,3 +382,77 @@ def test_a_declared_marker_that_tags_nothing_leaves_the_facet_null(tmp_path: Pat
     loaded = load(write(tmp_path, vcf_text(records, extra_meta=(bcftools,))))
     assert loaded.facets.collect()["split_marker"][0] is None
     assert loaded.calls.collect()["split_signal"].to_list() == [None] and loaded.warnings == ()
+
+
+def test_vcf_no_meta_loads_under_a_synthesised_header(tmp_path: Path) -> None:
+    """A `#CHROM` line with no meta lines (`vcf_no_meta`): the carried keys the rows use are declared
+    by the loader, the rest are listed as dropped, and the rows equal the same body under a header."""
+    body = [
+        "chr1\t752566\t.\tG\tA\t50.2\t.\tAB=0.5;SF=0\tGT:RO:AO:GQ\t0/1:7:5:40",
+        "chr1\t776546\t.\tA\tG\t.\tPASS\tADP=28;SF=1\tGT:FREQ\t0/1:28.57%",
+        "chr2\t100\t.\tC\t<*>\t.\t.\tEND=180;SF=0\tGT:GQ\t0/0:30",
+    ]
+    columns = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSample1"
+    bare = write(tmp_path, "\n".join([columns, *body]) + "\n", "bare.vcf")
+    from just_vcf import sniff
+
+    assert sniff(bare).format == "vcf_no_meta"
+    loaded = load(bare)
+    calls, blocks = pl.collect_all([loaded.calls, loaded.blocks])
+    facet = loaded.facets.collect().row(0, named=True)
+    assert calls["gt"].to_list() == [[0, 1], [0, 1]] and calls["gq"].to_list() == [40, None]
+    assert blocks.select("chrom", "pos", "end_pos", "kind").rows() == [("2", 100, 180, "ref")]
+    assert (facet["format_id"], facet["vcf_version"], facet["header_contigs"]) == ("vcf_no_meta", None, [])
+    assert facet["dropped_fields"] == ["INFO/AB", "INFO/ADP", "INFO/SF", "FORMAT/AO", "FORMAT/FREQ", "FORMAT/RO"]
+    assert any(w.startswith("no meta lines") for w in loaded.warnings)
+    assert any("INFO/END" in w and "FORMAT/GT" in w and "not declared" in w for w in loaded.warnings)
+
+    headed = write(tmp_path, vcf_text([], fmt=("GT", "GQ"), info=("END",)).split("#CHROM")[0] + columns + "\n" + "\n".join(body) + "\n", "headed.vcf")
+    reference = load(headed)
+    ref_calls, ref_blocks = pl.collect_all([reference.calls, reference.blocks])
+    assert calls.drop("facet_id").equals(ref_calls.drop("facet_id"))
+    assert blocks.drop("facet_id").equals(ref_blocks.drop("facet_id"))
+
+
+def test_an_undeclared_end_is_declared_so_a_block_keeps_its_extent(tmp_path: Path) -> None:
+    records = ["1\t100\t.\tG\t<NON_REF>\t.\t.\tEND=113\tGT:GQ\t0/0:60", "1\t200\t.\tA\t.\t.\tPASS\tEND=250\tGT\t0/0"]
+    loaded = load(write(tmp_path, vcf_text(records, fmt=("GT", "GQ"))))
+    blocks = loaded.blocks.collect()
+    assert blocks.select("pos", "end_pos").rows() == [(100, 113), (200, 250)]
+    assert any("INFO/END" in w and "not declared" in w for w in loaded.warnings)
+
+
+def test_vectors_not_parallel_to_their_alleles_are_withheld(tmp_path: Path) -> None:
+    """`ad` is one value per allele and `gl`/`gp` one per genotype. A row whose vector has another
+    length is withheld and counted, never truncated; a haploid row needs one value per allele."""
+    records = [
+        "1\t100\t.\tA\tG\t.\t.\t.\tGT:AD:PL\t0/1:5,4:30,0,60",  # fits
+        "1\t200\t.\tC\tT\t.\t.\t.\tGT:AD:PL\t0/1:4:30,0",  # VarScan2-style ALT depth; two PL for three genotypes
+        "1\t300\t.\tG\tA,C\t.\t.\t.\tGT:AD:PL\t1/2:0,3,4:90,40,0,50,20,80",  # fits, multi-allelic
+        "1\t400\t.\tT\tC\t.\t.\t.\tGT:AD:PL\t1:0,9:90,0",  # haploid: two genotypes
+        "1\t500\t.\tT\tC\t.\t.\t.\tGT:AD:GP\t0/1:3,3:0.1,0.8",  # GP short by one
+    ]
+    loaded = load(write(tmp_path, vcf_text(records, fmt=("GT", "AD", "PL", "GP"))))
+    calls = loaded.calls.collect()
+    rows = {row["pos"]: row for row in calls.iter_rows(named=True)}
+    assert rows[100]["ad"] == [5, 4] and rows[100]["gl"] == pytest.approx([-3.0, 0.0, -6.0])
+    assert rows[200]["ad"] is None and rows[200]["gl"] is None and rows[200]["source_alleles"] is None
+    assert rows[300]["ad"] == [0, 3, 4] and len(rows[300]["gl"]) == 6
+    assert rows[400]["ad"] == [0, 9] and rows[400]["gl"] == pytest.approx([-9.0, 0.0])
+    assert rows[500]["gp"] is None and rows[500]["ad"] == [3, 3]
+    assert set(loaded.warnings) >= {
+        "1 AD value(s) not one per allele set to null",
+        "1 PL value(s) not one per genotype set to null",
+        "1 GP value(s) not one per genotype set to null",
+    }
+
+
+def test_a_vector_key_declared_with_a_fixed_count_is_not_carried(tmp_path: Path) -> None:
+    """VarScan2 declares AD as Number=1 (the ALT depth) and CGI as Number=2 (per GT slot): neither is
+    one value per allele, so `ad` stays null and the key is listed as dropped."""
+    extra = ('##FORMAT=<ID=AD,Number=2,Type=Integer,Description="Allelic depths (number of reads in each observed allele)">',)
+    records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT:AD\t1/1:3,3"]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=extra)))
+    assert loaded.calls.collect()["ad"].to_list() == [None]
+    assert "FORMAT/AD" in loaded.facets.collect()["dropped_fields"][0].to_list()
+    assert any("not carried: AD (Number=2)" in w for w in loaded.warnings)

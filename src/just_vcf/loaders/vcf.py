@@ -20,6 +20,7 @@ import hashlib
 import logging
 import re
 import shutil
+import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -34,8 +35,25 @@ from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKin
 
 logger = logging.getLogger(__name__)
 
-FORMATS: frozenset[str] = frozenset({"vcf"})
+FORMATS: frozenset[str] = frozenset({"vcf", "bcf", "vcf_no_meta", "vcf_cgi", "vcf_freebayes_varscan2"})
 """Format ids this loader reads. The dialects with their own ids join as their quirks are handled."""
+
+BCF = "bcf"
+"""Binary VCF: the header is read from the binary layout here, the records by polars-bio."""
+
+FREEBAYES_VARSCAN2 = "vcf_freebayes_varscan2"
+"""PGP-HMS's vcf-merge of freeBayes and VarScan2: one facet per caller, split on INFO/SF."""
+
+SELECTION_INFO = ("SF",)
+"""INFO keys read only to select a part's rows. The structural copy made for a refused header keeps
+them, or the retry could not split the file."""
+
+CALLER_SPLIT = "caller_split"
+"""The just-vcf relation of a facet that holds one caller's rows of a file merging several callers."""
+
+_MERGE_CALLERS = {"FB": "freeBayes", "VS": "VarScan2"}
+"""The caller tokens PGP's pipeline puts in the merged inputs' names (`chr1.FB.vcf.gz`), as the
+merge's `##sourceFiles` line records them."""
 
 FORMAT_KEYS: dict[str, tuple[str, str]] = {
     "GT": ("1", "String"),
@@ -54,8 +72,13 @@ FORMAT_KEYS: dict[str, tuple[str, str]] = {
 }
 """FORMAT keys the schema carries, with the Number and Type VCF 4.5 reserves for them."""
 
-INFO_KEYS = ("END", "SVLEN")
-"""INFO keys the loader reads, for `end_pos` only."""
+VECTOR_NUMBERS: dict[str, str] = {"AD": "R", "PL": "G", "GL": "G", "GP": "G", "PP": "G"}
+"""Carried vectors that are parallel to the alleles (R) or the genotypes (G). A file declaring one of
+them with a fixed count is using the name for something else: VarScan2's AD (Number=1) is the ALT
+depth only, CGI's AD (Number=2) counts reads per GT slot, not per allele. Those are not carried."""
+
+INFO_KEYS: dict[str, tuple[str, str]] = {"END": ("1", "Integer"), "SVLEN": ("A", "Integer")}
+"""INFO keys the loader reads, for `end_pos` only, with the Number and Type VCF 4.5 gives them."""
 
 SPLIT_MARKER_ID = "OLD_MULTIALLELIC"
 """The INFO key vt decompose and Glow write on a record split off a multi-allelic site."""
@@ -64,13 +87,19 @@ BCFTOOLS_OLD_REC = "Original variant. Format: CHR|POS|REF|ALT|USED_ALT_IDX"
 """The Description bcftools norm writes for its `--old-rec-tag` key, whatever the key is named
 (vcfnorm.c). Only a split record gets the fifth, `USED_ALT_IDX`, field; a realigned one has four."""
 
+CGI_NOCALL = "<CGA_NOCALL>"
+"""Complete Genomics' no-called span: INFO END gives its extent. It goes to `blocks` as `no_call`."""
+
+CGI_CNV_WINDOW = "<CGA_CNVWIN>"
+"""Complete Genomics' 2 kb copy-number window: coverage, not a genotype. Left out of the frames."""
+
 _SV_LENGTH_TYPES = ("DEL", "DUP", "INV", "CNV")
 """Symbolic allele types whose extent is `SVLEN` bases after POS. INS and breakends end at POS."""
 
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 5
+REWRITE_VERSION = 6
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused."""
 
 _HEADER_READ_CAP = 64 << 20
@@ -103,7 +132,7 @@ def _keep_in_structural_copy(line: str) -> bool:
     kind, body = declared.groups()
     attrs = _attrs(body)
     if kind == "INFO":
-        return attrs.get("ID") in INFO_KEYS or _split_marker_kind(attrs) is not None
+        return attrs.get("ID") in INFO_KEYS or attrs.get("ID") in SELECTION_INFO or _split_marker_kind(attrs) is not None
     return attrs.get("ID") in FORMAT_KEYS
 
 
@@ -137,6 +166,8 @@ class Header:
     sample_meta: list[str] = field(default_factory=list)
     format_first: bool = True
     split_markers: dict[str, str] = field(default_factory=dict)
+    alt_ids: set[str] = field(default_factory=set)
+    """Symbolic alleles the header declares with `##ALT` (`CGA_NOCALL`, `NON_REF`, `DEL`…)."""
     """Declared INFO keys that mark split records → `vt` or `bcftools` (`_split_marker_kind`)."""
 
     @property
@@ -166,6 +197,54 @@ def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:
             raise ValueError("no #CHROM line in the first 64 MiB")
     if not columns:
         raise ValueError("no #CHROM line")
+    return _parse_header(meta, columns), data
+
+
+def read_bcf_header(handle: BinaryIO) -> tuple[Header, bytes | None]:
+    """A BCF's header, and its first record's CHROM and 1-based POS as a `CHROM\tPOS` line.
+
+    `handle` is the decompressed payload (`open_payload` peels the BGZF layer). The layout is BCF 2.x:
+    the magic `BCF` with major version 2 and a minor version byte, a little-endian u32 header length, the VCF header text NUL-terminated, then
+    records whose shared part starts with `l_shared`, `l_indiv`, the contig's dictionary index and the
+    0-based POS. That position is what `read_records` checks polars-bio's coordinates against.
+    """
+    magic = handle.read(5)
+    if magic[:4] != b"BCF\x02":
+        raise ValueError("not a BCF 2 payload")
+    (length,) = struct.unpack("<I", handle.read(4))
+    text = handle.read(length).rstrip(b"\0").decode("utf-8", errors="replace")
+    meta = [line for line in text.splitlines() if line.startswith("##")]
+    columns = next((line[1:].split("\t") for line in text.splitlines() if line.startswith("#") and not line.startswith("##")), [])
+    if not columns:
+        raise ValueError("no #CHROM line in the BCF header")
+    header = _parse_header(meta, columns)
+    shared = handle.read(16)
+    if len(shared) < 16:
+        return header, None
+    _, _, contig, pos = struct.unpack("<IIii", shared)
+    names = _contig_dictionary(meta)
+    if not 0 <= contig < len(names) or names[contig] is None:
+        raise ValueError(f"the first BCF record names contig index {contig}, which the header does not declare")
+    return header, f"{names[contig]}\t{pos + 1}".encode()
+
+
+def _contig_dictionary(meta: list[str]) -> list[str | None]:
+    """BCF's contig dictionary: `##contig` lines in order, or by their `IDX` where the header gives one."""
+    entries = []
+    for line in meta:
+        declared = re.match(r"^##contig=<(.*)>$", line)
+        if declared and "ID" in (attrs := _attrs(declared.group(1))):
+            entries.append((attrs["ID"], int(attrs["IDX"]) if attrs.get("IDX", "").isdigit() else None))
+    if not any(idx is not None for _, idx in entries):
+        return [name for name, _ in entries]
+    names: list[str | None] = [None] * (max(idx for _, idx in entries if idx is not None) + 1)
+    for name, idx in entries:
+        if idx is not None:
+            names[idx] = name
+    return names
+
+
+def _parse_header(meta: list[str], columns: list[str]) -> Header:
     header = Header(
         meta=meta,
         columns=columns,
@@ -185,6 +264,8 @@ def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:
                 header.split_markers[attrs["ID"]] = marker
         elif kind == "FORMAT" and "ID" in attrs:
             header.format[attrs["ID"]] = attrs.get("Number", ".")
+        elif kind == "ALT" and "ID" in attrs:
+            header.alt_ids.add(attrs["ID"])
         elif kind == "contig" and "ID" in attrs:
             length = attrs.get("length")
             header.contigs.append(
@@ -192,17 +273,113 @@ def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:
             )
         elif kind in ("SAMPLE", "PEDIGREE"):
             header.sample_meta.append(line)
-    return header, data
+    return header
 
 
-def undeclared_format_keys(header: Header, data: list[bytes]) -> list[str]:
-    """Carried FORMAT keys the rows use without the header declaring them."""
-    used: set[str] = set()
+def row_keys(data: list[bytes]) -> tuple[set[str], set[str]]:
+    """The INFO and FORMAT keys the rows in `data` use."""
+    info: set[str] = set()
+    fmt: set[str] = set()
     for raw in data:
         fields = raw.decode("utf-8", errors="replace").rstrip("\r\n").split("\t")
+        if len(fields) > 7 and fields[7] not in ("", "."):
+            info.update(item.split("=", 1)[0] for item in fields[7].split(";") if item)
         if len(fields) > 8:
-            used.update(fields[8].split(":"))
-    return sorted(key for key in used if key in FORMAT_KEYS and key not in header.format)
+            fmt.update(fields[8].split(":"))
+    return info, fmt
+
+
+def undeclared_keys(header: Header, data: list[bytes]) -> list[str]:
+    """Carried keys the rows use without the header declaring them, namespaced (`INFO/END`, `FORMAT/GT`)."""
+    info, fmt = row_keys(data)
+    return sorted(f"INFO/{key}" for key in info if key in INFO_KEYS and key not in header.info) + sorted(
+        f"FORMAT/{key}" for key in fmt if key in FORMAT_KEYS and key not in header.format
+    )
+
+
+def declare(header: Header, missing: list[str]) -> None:
+    """Record the loader's declarations of `missing` keys in `header`, as `readable_path` writes them."""
+    for name in missing:
+        namespace, key = name.split("/", 1)
+        if namespace == "INFO":
+            header.info[key] = INFO_KEYS[key][0]
+        else:
+            header.format[key] = FORMAT_KEYS[key][0]
+
+
+@dataclass
+class Part:
+    """One facet's share of a VCF: which sample column, which rows, and what makes its id."""
+
+    sample: str
+    options: dict
+    caller: str | None = None
+    split: bool = False
+    """A caller's share of a merged file (`relation = caller_split`)."""
+    sf: int | None = None
+    """Keep the rows whose INFO/SF lists this source index."""
+    sf_alone: bool = False
+    """Keep them only where SF lists no other index (the merge kept another caller's genotype there)."""
+
+    @property
+    def info(self) -> tuple[str, ...]:
+        return SELECTION_INFO if self.sf is not None else ()
+
+    def select(self, records: pl.LazyFrame) -> pl.LazyFrame:
+        """`records` restricted to this part's rows. An `f` after an index marks the record as
+        filtered in that source; the record is still that source's."""
+        if self.sf is None:
+            return records
+        indices = pl.col("info_SF").list.eval(pl.element().str.strip_chars_end("f"))
+        keep = indices.list.contains(str(self.sf))
+        if self.sf_alone:
+            keep = keep & indices.list.eval(pl.element() != str(self.sf)).list.any().not_()
+        return records.filter(keep.fill_null(False))
+
+
+def caller_parts(header: Header, data: list[bytes]) -> list[Part]:
+    """The parts of a freeBayes+VarScan2 merge: one per source index of its `##sourceFiles` lines.
+
+    The caller of an index is read from the merged input's name on those lines (`.FB.`, `.VS.`);
+    lines that disagree, or a name without a token, leave it null. Two layouts (FORMATS.md): with one
+    data column per caller, each index reads its own column, in `##sourceFiles` order; with one data
+    column, it holds the first index's genotype wherever that caller found the site, so a later index
+    keeps only the rows where it was the sole caller, and says what it lost.
+    """
+    callers: dict[int, set[str | None]] = {}
+    for line in header.meta:
+        if re.match(r"^##sourceFiles_\d{8}\.\d+=", line):
+            for index, name in re.findall(r"(\d+):([^,]+)", line.split("=", 1)[1]):
+                token = next((t for t in _MERGE_CALLERS if re.search(rf"[._]{t}[._]", name)), None)
+                callers.setdefault(int(index), set()).add(_MERGE_CALLERS.get(token) if token else None)
+    indices = sorted(callers) or [0, 1]
+    columns = len(header.samples)
+    per_caller = columns >= len(indices) and bool(data) and all(len(raw.split(b"\t")) >= 9 + columns for raw in data)
+    parts = []
+    for position, index in enumerate(indices):
+        named = callers.get(index, {None})
+        caller = next(iter(named)) if len(named) == 1 else None
+        lone = not per_caller and position > 0
+        parts.append(
+            Part(
+                sample=header.samples[position] if per_caller else header.samples[0],
+                options={"caller_index": index},
+                caller=caller,
+                split=True,
+                sf=index,
+                sf_alone=lone,
+            )
+        )
+    return parts
+
+
+def unfit_keys(header: Header) -> dict[str, str]:
+    """Carried vector keys the header declares with a Number they cannot be read under → that Number."""
+    return {
+        key: header.format[key]
+        for key, number in VECTOR_NUMBERS.items()
+        if key in header.format and header.format[key] not in (number, ".")
+    }
 
 
 def readable_path(
@@ -238,10 +415,11 @@ def readable_path(
                     continue
                 declared.add(key.groups())
             out.write(f"{line}\n".encode())
-        for key in missing:
-            number, kind = FORMAT_KEYS[key]
+        for name in missing:
+            namespace, key = name.split("/", 1)
+            number, kind = (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key]
             out.write(
-                f'##FORMAT=<ID={key},Number={number},Type={kind},'
+                f'##{namespace}=<ID={key},Number={number},Type={kind},'
                 f'Description="Declared by just-vcf: used by the rows, missing from the header">\n'.encode()
             )
         out.write(("#" + "\t".join(header.columns) + "\n").encode())
@@ -263,6 +441,27 @@ def readable_path(
                 if not raw.startswith(b"#"):
                     out.write(raw)
                     break
+            shutil.copyfileobj(source, out, 16 << 20)
+    done.touch()
+    return target
+
+
+def readable_bcf_path(path: Path, layers: tuple[str, ...], opener, cache: Path) -> Path:
+    """A path polars-bio reads as BCF: it picks BCF by the `.bcf` name and refuses any other name
+    ("empty input", probed with 0.36). The file itself when it is named so and not wrapped in another
+    layer, else a copy under `cache` named `input.bcf`: the bytes as they are when only BGZF wraps
+    them, else the decompressed payload written as BGZF."""
+    if layers in ((), ("bgzf",)) and path.name.lower().endswith(".bcf"):
+        return path
+    target = cache / "input.bcf"
+    done = cache / "input.bcf.complete"
+    if done.exists():
+        return target
+    cache.mkdir(parents=True, exist_ok=True)
+    if layers in ((), ("bgzf",)):
+        shutil.copyfile(path, target)
+    else:
+        with opener() as source, target.open("wb") as raw, BgzfWriter(raw) as out:
             shutil.copyfileobj(source, out, 16 << 20)
     done.touch()
     return target
@@ -332,14 +531,18 @@ def _register(**kwargs) -> None:
         raise
 
 
-def read_records(path: Path, header: Header, sample: str, first_record: bytes | None) -> pl.LazyFrame:
+def read_records(
+    path: Path, header: Header, sample: str, first_record: bytes | None, extra_info: tuple[str, ...] = ()
+) -> pl.LazyFrame:
     """The records of one sample with flat, namespaced columns.
 
     INFO keys become `info_<KEY>` and FORMAT keys `fmt_<KEY>`, whatever polars-bio names them. Every
-    carried key is present, as a typed null when the file does not declare it.
+    carried key is present, as a typed null when the file does not declare it. `extra_info` are INFO
+    keys read for selecting rows (`SF`), as lists of strings.
     """
-    info = [key for key in INFO_KEYS if key in header.info] + sorted(header.split_markers)
-    fmt = [key for key in FORMAT_KEYS if key in header.format]
+    info = [key for key in INFO_KEYS if key in header.info] + sorted(header.split_markers) + list(extra_info)
+    unfit = unfit_keys(header)
+    fmt = [key for key in FORMAT_KEYS if key in header.format and key not in unfit]
     multi = len(header.samples) > 1
     frame = scan(path, info, fmt, sample if multi else None)
     if first_record is not None:
@@ -384,6 +587,11 @@ def read_records(path: Path, header: Header, sample: str, first_record: bytes | 
         for name in (f"info_{key}" for key in header.split_markers)
         if name in present
     )
+    frame = frame.with_columns(
+        (pl.col(name).cast(pl.List(pl.String)) if isinstance(schema[name], pl.List) else pl.col(name).cast(pl.String).str.split(",")).alias(name)
+        for name in (f"info_{key}" for key in extra_info)
+        if name in present
+    )
     return frame.with_columns(
         [pl.lit(None, dtype=_dtype(number, kind)).alias(f"fmt_{key}") for key, (number, kind) in FORMAT_KEYS.items() if f"fmt_{key}" not in present]
         + [pl.lit(None, dtype=pl.List(pl.Int32) if key == "SVLEN" else pl.Int32).alias(f"info_{key}") for key in INFO_KEYS if f"info_{key}" not in present]
@@ -408,6 +616,7 @@ def scan_stats(records: pl.LazyFrame) -> dict:
         *out_of_range,
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.max().max().alias("gp_max"),
         _is_block_record(alts).any().alias("any_block"),
+        (alts.list.len().eq(1) & alts.list.first().eq(CGI_CNV_WINDOW)).sum().alias("cnv_windows"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).is_not_null().sum().alias("gp_rows"),
         (pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.sum() - 1.0).abs().gt(0.02).sum().alias("gp_off_one"),
         pl.col("chrom").unique().implode().alias("chroms"),
@@ -416,10 +625,33 @@ def scan_stats(records: pl.LazyFrame) -> dict:
         pl.col("fmt_GT").null_count().alias("gt_missing"),
         (_gt_body().str.count_matches(r"[/|]").max() + 1).alias("ploidy_max"),
         *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith("_multi_")],
+        *[
+            (pl.col(f"fmt_{key}").is_not_null() & ~_fits(pl.col(f"fmt_{key}"), key, alts)).sum().alias(f"unfit_{key}")
+            for key in VECTOR_NUMBERS
+        ],
+        *(
+            [pl.col("info_SF").list.eval(pl.element().str.strip_chars_end("f")).list.n_unique().gt(1).sum().alias("shared_sources")]
+            if "info_SF" in records.collect_schema().names()
+            else []
+        ),
     )
     row = _collect(plan).row(0, named=True)
     row["chroms"] = sorted(row["chroms"] or [])
     return row
+
+
+def _fits(vector: pl.Expr, key: str, alts: pl.Expr) -> pl.Expr:
+    """True where `vector` has the length its Number requires on this row: one value per allele
+    (R), or one per genotype of the row's ploidy (G; checked for haploid and diploid GT, and diploid
+    when GT is missing, as the spec says to assume)."""
+    alleles = alts.list.len().cast(pl.Int64) + 1
+    if VECTOR_NUMBERS[key] == "R":
+        return vector.list.len() == alleles
+    ploidy = (_gt_body().str.count_matches(r"[/|]") + 1).fill_null(2)
+    genotypes = (
+        pl.when(ploidy == 1).then(alleles).when(ploidy == 2).then(alleles * (alleles + 1) // 2).otherwise(None)
+    )
+    return (vector.list.len() == genotypes).fill_null(True)
 
 
 def _gt_body() -> pl.Expr:
@@ -535,12 +767,29 @@ def _alts_expr() -> pl.Expr:
     )
 
 
-def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str]]:
-    """Lazy `calls` and `blocks` rows (without `facet_id`) from `read_records` output, plus warnings."""
+def to_rows(
+    records: pl.LazyFrame, header: Header, stats: dict, text_gt: bool = True, gl_phred: bool = False
+) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str]]:
+    """Lazy `calls` and `blocks` rows (without `facet_id`) from `read_records` output, plus warnings.
+
+    `text_gt` is False for a BCF: its genotypes are binary, so the GT text polars-bio renders is
+    not something the file wrote, and `source_gt` stays null. `gl_phred` is True for Complete
+    Genomics' CGAPipeline, which writes GL as integers in phred units (GQ is the gap between the two
+    best values), so `gl` is GL / 10.
+
+    Complete Genomics' record classes are read by their declared alleles, whatever the format id:
+    `<CGA_CNVWIN>` rows are copy-number windows and are left out; `<CGA_NOCALL>` rows are no-called
+    spans to END; and where the header declares `CGA_NOCALL`, a record with ALT `.`, no END and a GT
+    with no allele called is a no-called span over its REF, so it goes to `blocks` too.
+    """
     warnings = [
         f"{stats[f'out_{key}']} {key} value(s) outside 0..{top} set to null"
         for key, top in _BOUNDED.items()
         if stats[f"out_{key}"]
+    ] + [
+        f"{stats[f'unfit_{key}']} {key} value(s) not one per {'allele' if number == 'R' else 'genotype'} set to null"
+        for key, number in VECTOR_NUMBERS.items()
+        if stats.get(f"unfit_{key}")
     ] + [
         f"{count} {name.removeprefix('_multi_')} value(s) held more than one number; the first was kept"
         for name, count in stats.items()
@@ -550,6 +799,9 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
     # The file's REF goes to `source_ref` only. `ref` is read from the assembly sequence or stays null
     # (charter 10), so polars-bio's `ref` column must not reach the frame under that name.
     rows = records.with_columns(_alts_expr().alias("alts"), pl.col("ref").alias("source_ref")).drop("ref")
+    if stats.get("cnv_windows"):
+        warnings.append(f"{stats['cnv_windows']} {CGI_CNV_WINDOW} record(s) left out: copy-number windows, not genotypes")
+        rows = rows.filter(~(pl.col("alts").list.len().eq(1) & pl.col("alts").list.first().eq(CGI_CNV_WINDOW)))
     rows = rows.with_columns(
         _end_pos(sv_declared="SVLEN" in header.info).alias("end_pos"),
         _is_block_record(pl.col("alts")).alias("_block"),
@@ -567,6 +819,15 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
     # A record is a block only when it asserts reference or nothing: a GT calling `<*>` stays a call.
     reference_or_nothing = pl.col("gt").is_null() | pl.col("gt").list.eval(pl.element().is_null() | (pl.element() == 0)).list.all()
     rows = rows.with_columns((pl.col("_block") & reference_or_nothing).alias("_block"))
+    if CGI_NOCALL.strip("<>") in header.alt_ids:
+        # polars-bio returns a haploid no-call `.` as a null GT (male X and Y), so a null GT on such a
+        # record is a no-call too: CGI writes GT on every record.
+        no_call_span = (
+            pl.col("alts").list.len().eq(0)
+            & pl.col("info_END").is_null()
+            & (pl.col("gt").is_null() | pl.col("gt").list.eval(pl.element().is_null()).list.all())
+        )
+        rows = rows.with_columns((pl.col("_block") | no_call_span.fill_null(False)).alias("_block"))
     # RM270: a marker tags its own row here; the patterns need whole positions, read from the spill.
     rows = rows.with_columns(
         pl.when(_marker_expr(header)).then(pl.lit(SplitSignal.MARKER.value)).alias("split_signal")
@@ -576,9 +837,15 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
     gp, gp_warning = _gp(header, stats)
     if gp_warning:
         warnings.append(gp_warning)
+    # A vector of the wrong length for its row cannot be indexed over the alleles: withheld (counted
+    # in `scan_stats`), never truncated or padded.
+    rows = rows.with_columns(
+        pl.when(_fits(pl.col(f"fmt_{key}"), key, pl.col("alts"))).then(pl.col(f"fmt_{key}")).otherwise(None).alias(f"fmt_{key}")
+        for key in VECTOR_NUMBERS
+    )
     rows = rows.with_columns(
         pl.coalesce(
-            pl.col("fmt_GL").cast(pl.List(pl.Float32), strict=False),
+            pl.col("fmt_GL").cast(pl.List(pl.Float32), strict=False).list.eval(pl.element() / (10.0 if gl_phred else 1.0)),
             pl.col("fmt_PL").cast(pl.List(pl.Float32), strict=False).list.eval(pl.element() / -10.0),
         ).alias("gl"),
         gp.alias("gp"),
@@ -594,7 +861,7 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
         pl.when(pl.col("filter") == "").then(None).otherwise(pl.col("filter").str.split(";")).alias("filters"),
         pl.when(pl.col("fmt_FT").is_in(["", "."])).then(None).otherwise(pl.col("fmt_FT").str.split(";")).alias("sample_filters"),
         pl.col("qual").cast(pl.Float32).alias("qual"),
-        (pl.lit(None, dtype=pl.String) if v44 else gt_text).alias("source_gt"),
+        (pl.lit(None, dtype=pl.String) if v44 or not text_gt else gt_text).alias("source_gt"),
         canonical_chrom_expr("chrom").alias("chrom"),
         pl.col("start").alias("pos"),
     )
@@ -623,10 +890,12 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
 
 def _is_block_record(alts: pl.Expr) -> pl.Expr:
     """A reference-block record, before its GT is looked at: every ALT is `<*>` (GATK, VCF 4.5), or
-    there is no ALT and INFO/END gives an extent (Illumina's gVCF: `ALT .` with `END`)."""
+    there is no ALT and INFO/END gives an extent (Illumina's gVCF: `ALT .` with `END`), or it is
+    Complete Genomics' `<CGA_NOCALL>` span with END."""
     all_star = alts.list.len().gt(0) & alts.list.eval(pl.element() == "<*>").list.all()
     illumina = alts.list.len().eq(0) & pl.col("info_END").is_not_null()
-    return all_star | illumina
+    cgi = alts.list.len().eq(1) & alts.list.first().eq(CGI_NOCALL) & pl.col("info_END").is_not_null()
+    return all_star | illumina | cgi
 
 
 def _dtype(number: str, kind: str) -> pl.DataType:
@@ -654,6 +923,7 @@ def _end_pos(sv_declared: bool) -> pl.Expr:
     return pl.max_horizontal(
         ref_end,
         pl.when(pl.col("alts").list.contains("<*>")).then(block_end).otherwise(None),
+        pl.when(pl.col("alts").list.contains(CGI_NOCALL)).then(pl.col("info_END").cast(pl.UInt32)).otherwise(None),
         pl.when(pl.col("alts").list.len() == 0).then(pl.col("info_END").cast(pl.UInt32)).otherwise(None),
         pl.when(has_sv).then(sv_end).otherwise(None),
     ).cast(pl.UInt32)
@@ -723,11 +993,15 @@ def _bounded(key: str, dtype: pl.DataType) -> pl.Expr:
     return pl.when((value >= 0) & (value <= _BOUNDED[key])).then(value).otherwise(None).cast(dtype)
 
 
-def dropped_fields(header: Header) -> list[str]:
-    """Declared keys the frames do not carry, namespaced."""
-    info = [f"INFO/{key}" for key in header.info if key not in INFO_KEYS and key not in header.split_markers]
-    fmt = [f"FORMAT/{key}" for key in header.format if key not in FORMAT_KEYS]
-    return sorted(info) + sorted(fmt)
+def dropped_fields(header: Header, data: list[bytes] = ()) -> list[str]:
+    """Keys present in the file that the frames do not carry, namespaced: the declared ones, and the
+    ones the rows in `data` use without a declaration (polars-bio drops those unread, P1)."""
+    info, fmt = row_keys(list(data))
+    info |= set(header.info)
+    fmt |= set(header.format)
+    dropped_info = [f"INFO/{key}" for key in info if key not in INFO_KEYS and key not in header.split_markers]
+    dropped_fmt = [f"FORMAT/{key}" for key in fmt if key not in FORMAT_KEYS or key in unfit_keys(header)]
+    return sorted(dropped_info) + sorted(dropped_fmt)
 
 
 def to_frames(calls: pl.LazyFrame, blocks: pl.LazyFrame, facet_id: str) -> tuple[pl.LazyFrame, pl.LazyFrame]:

@@ -20,6 +20,7 @@ import hashlib
 import logging
 import re
 import shutil
+import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -34,8 +35,11 @@ from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKin
 
 logger = logging.getLogger(__name__)
 
-FORMATS: frozenset[str] = frozenset({"vcf"})
+FORMATS: frozenset[str] = frozenset({"vcf", "bcf"})
 """Format ids this loader reads. The dialects with their own ids join as their quirks are handled."""
+
+BCF = "bcf"
+"""Binary VCF: the header is read from the binary layout here, the records by polars-bio."""
 
 FORMAT_KEYS: dict[str, tuple[str, str]] = {
     "GT": ("1", "String"),
@@ -166,6 +170,54 @@ def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:
             raise ValueError("no #CHROM line in the first 64 MiB")
     if not columns:
         raise ValueError("no #CHROM line")
+    return _parse_header(meta, columns), data
+
+
+def read_bcf_header(handle: BinaryIO) -> tuple[Header, bytes | None]:
+    """A BCF's header, and its first record's CHROM and 1-based POS as a `CHROM\tPOS` line.
+
+    `handle` is the decompressed payload (`open_payload` peels the BGZF layer). The layout is BCF 2.x:
+    the magic `BCF` with major version 2 and a minor version byte, a little-endian u32 header length, the VCF header text NUL-terminated, then
+    records whose shared part starts with `l_shared`, `l_indiv`, the contig's dictionary index and the
+    0-based POS. That position is what `read_records` checks polars-bio's coordinates against.
+    """
+    magic = handle.read(5)
+    if magic[:4] != b"BCF\x02":
+        raise ValueError("not a BCF 2 payload")
+    (length,) = struct.unpack("<I", handle.read(4))
+    text = handle.read(length).rstrip(b"\0").decode("utf-8", errors="replace")
+    meta = [line for line in text.splitlines() if line.startswith("##")]
+    columns = next((line[1:].split("\t") for line in text.splitlines() if line.startswith("#") and not line.startswith("##")), [])
+    if not columns:
+        raise ValueError("no #CHROM line in the BCF header")
+    header = _parse_header(meta, columns)
+    shared = handle.read(16)
+    if len(shared) < 16:
+        return header, None
+    _, _, contig, pos = struct.unpack("<IIii", shared)
+    names = _contig_dictionary(meta)
+    if not 0 <= contig < len(names) or names[contig] is None:
+        raise ValueError(f"the first BCF record names contig index {contig}, which the header does not declare")
+    return header, f"{names[contig]}\t{pos + 1}".encode()
+
+
+def _contig_dictionary(meta: list[str]) -> list[str | None]:
+    """BCF's contig dictionary: `##contig` lines in order, or by their `IDX` where the header gives one."""
+    entries = []
+    for line in meta:
+        declared = re.match(r"^##contig=<(.*)>$", line)
+        if declared and "ID" in (attrs := _attrs(declared.group(1))):
+            entries.append((attrs["ID"], int(attrs["IDX"]) if attrs.get("IDX", "").isdigit() else None))
+    if not any(idx is not None for _, idx in entries):
+        return [name for name, _ in entries]
+    names: list[str | None] = [None] * (max(idx for _, idx in entries if idx is not None) + 1)
+    for name, idx in entries:
+        if idx is not None:
+            names[idx] = name
+    return names
+
+
+def _parse_header(meta: list[str], columns: list[str]) -> Header:
     header = Header(
         meta=meta,
         columns=columns,
@@ -192,7 +244,7 @@ def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:
             )
         elif kind in ("SAMPLE", "PEDIGREE"):
             header.sample_meta.append(line)
-    return header, data
+    return header
 
 
 def undeclared_format_keys(header: Header, data: list[bytes]) -> list[str]:
@@ -263,6 +315,27 @@ def readable_path(
                 if not raw.startswith(b"#"):
                     out.write(raw)
                     break
+            shutil.copyfileobj(source, out, 16 << 20)
+    done.touch()
+    return target
+
+
+def readable_bcf_path(path: Path, layers: tuple[str, ...], opener, cache: Path) -> Path:
+    """A path polars-bio reads as BCF: it picks BCF by the `.bcf` name and refuses any other name
+    ("empty input", probed with 0.36). The file itself when it is named so and not wrapped in another
+    layer, else a copy under `cache` named `input.bcf`: the bytes as they are when only BGZF wraps
+    them, else the decompressed payload written as BGZF."""
+    if layers in ((), ("bgzf",)) and path.name.lower().endswith(".bcf"):
+        return path
+    target = cache / "input.bcf"
+    done = cache / "input.bcf.complete"
+    if done.exists():
+        return target
+    cache.mkdir(parents=True, exist_ok=True)
+    if layers in ((), ("bgzf",)):
+        shutil.copyfile(path, target)
+    else:
+        with opener() as source, target.open("wb") as raw, BgzfWriter(raw) as out:
             shutil.copyfileobj(source, out, 16 << 20)
     done.touch()
     return target
@@ -535,8 +608,14 @@ def _alts_expr() -> pl.Expr:
     )
 
 
-def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str]]:
-    """Lazy `calls` and `blocks` rows (without `facet_id`) from `read_records` output, plus warnings."""
+def to_rows(
+    records: pl.LazyFrame, header: Header, stats: dict, text_gt: bool = True
+) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str]]:
+    """Lazy `calls` and `blocks` rows (without `facet_id`) from `read_records` output, plus warnings.
+
+    `text_gt` is False for a BCF: its genotypes are binary, so the GT text polars-bio renders is
+    not something the file wrote, and `source_gt` stays null.
+    """
     warnings = [
         f"{stats[f'out_{key}']} {key} value(s) outside 0..{top} set to null"
         for key, top in _BOUNDED.items()
@@ -594,7 +673,7 @@ def to_rows(records: pl.LazyFrame, header: Header, stats: dict) -> tuple[pl.Lazy
         pl.when(pl.col("filter") == "").then(None).otherwise(pl.col("filter").str.split(";")).alias("filters"),
         pl.when(pl.col("fmt_FT").is_in(["", "."])).then(None).otherwise(pl.col("fmt_FT").str.split(";")).alias("sample_filters"),
         pl.col("qual").cast(pl.Float32).alias("qual"),
-        (pl.lit(None, dtype=pl.String) if v44 else gt_text).alias("source_gt"),
+        (pl.lit(None, dtype=pl.String) if v44 or not text_gt else gt_text).alias("source_gt"),
         canonical_chrom_expr("chrom").alias("chrom"),
         pl.col("start").alias("pos"),
     )

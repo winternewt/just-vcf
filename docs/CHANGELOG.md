@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load` reads BCF (`bcf`, RM2). polars-bio reads the records; just-vcf reads the header out of the
+  binary layout itself, and the first record's contig and position to check polars-bio's coordinates,
+  as it does for text. polars-bio takes BCF only from a path named `.bcf`, so a BCF under another name
+  or inside an archive is read from a copy in `JUST_VCF_CACHE_DIR`. Rows equal those of the same file
+  as text VCF, except `source_gt`, which stays null: a BCF wrote no genotype text. Tested on BCFs
+  written by pysam; no real BCF is on disk.
 - A loaded VCF's facet now says who made it, from its header alone (RM2's `source` detector,
   `just_vcf/source.py`): `vendor` (the party the header names as delivering the file), `caller` and
   `caller_version` (the program that wrote the genotypes: GATK HaplotypeCaller or UnifiedGenotyper,

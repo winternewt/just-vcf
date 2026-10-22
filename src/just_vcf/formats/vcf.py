@@ -245,6 +245,14 @@ BCF = FormatSpec(
     delimiter=None,
     header=HeaderMode.VCF,
     genotype_encoding="FORMAT/GT, binary-encoded",
+    notes=(
+        "polars-bio 0.36 reads BCF only from a path named `.bcf` (any other name fails with 'empty "
+        "input'), so a BCF under another name or inside an archive is read from a copy named `input.bcf`.",
+        "The header is the VCF header text inside the binary layout; the loader reads it itself, and the "
+        "first record's contig index and 0-based POS to check polars-bio's coordinates.",
+        "A BCF wrote no genotype text, so `source_gt` stays null; polars-bio's rendering is not the file's.",
+        "No PGP-HMS file on disk is a BCF (2026-10-22); the tests write theirs with pysam.",
+    ),
 )
 
 _FBVS_KV_COLUMNS: tuple[ColumnSpec, ...] = (

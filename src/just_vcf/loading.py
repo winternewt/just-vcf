@@ -137,13 +137,19 @@ def vcf_samples(source: Path | str | Sniffed) -> list[str]:
     if not sniffed or sniffed.format not in vcf.FORMATS:
         raise UnsupportedFormatError(sniffed)
     with open_payload(sniffed) as handle:
-        header, _ = vcf.read_header(handle)
+        header = vcf.read_bcf_header(handle)[0] if sniffed.format == vcf.BCF else vcf.read_header(handle)[0]
     return header.samples
 
 
 def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
+    binary = sniffed.format == vcf.BCF
     with open_payload(sniffed) as handle:
-        header, data = vcf.read_header(handle)
+        if binary:
+            header, first_record = vcf.read_bcf_header(handle)
+            data: list[bytes] = []
+        else:
+            header, data = vcf.read_header(handle)
+            first_record = data[0] if data else None
     if len(header.samples) > 1 and sample is None:
         raise vcf.MultiSampleError(
             f"{sniffed.path}: {len(header.samples)} samples; pass sample= to load one "
@@ -164,22 +170,15 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         warnings.append("##fileformat was not the first line; the header was reordered for reading")
     source_sha256 = _sha256(sniffed.path)
     cache = cache_dir() / "vcf" / hashlib.sha256(f"{source_sha256}!{sniffed.member}!{vcf.REWRITE_VERSION}".encode()).hexdigest()[:32]
-    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache)
-    try:
-        records = vcf.read_records(path, header, chosen, data[0] if data else None)
+    if binary:
+        # A BCF declares every key it uses, and its header cannot be rewritten without re-encoding
+        # the records, so a refusal from polars-bio is final here.
+        path = vcf.readable_bcf_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), cache)
+        records = vcf.read_records(path, header, chosen, first_record)
         stats = vcf.scan_stats(records)
-    except vcf.HeaderRefused as err:
-        warnings.append(
-            f"polars-bio refused the file ({err}); read again with a header of only the carried INFO and "
-            "FORMAT keys and the FILTER, ALT and contig lines"
-        )
-        path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache, structural_only=True)
-        first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
-        records = vcf.read_records(path, header, chosen, first)
-        stats = vcf.scan_stats(records)
-        if left_out := vcf.pos_zero_left_out(cache):
-            warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
-    calls, blocks, row_warnings = vcf.to_rows(records, header, stats)
+    else:
+        records, stats = _read_text_records(sniffed, header, missing, data, cache, chosen, warnings)
+    calls, blocks, row_warnings = vcf.to_rows(records, header, stats, text_gt=not binary)
     warnings += row_warnings
     if (header.version_tuple or (0, 0)) >= (4, 4):
         warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
@@ -239,6 +238,29 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         blocks=canonical_order_per_contig(pl.scan_parquet(spill / "blocks.parquet"), contigs),
         warnings=tuple(warnings),
     )
+
+
+def _read_text_records(
+    sniffed: Sniffed, header: vcf.Header, missing: list[str], data: list[bytes], cache: Path, chosen: str, warnings: list[str]
+) -> tuple[pl.LazyFrame, dict]:
+    """A text VCF's records and their stats, read once more from a structural copy if polars-bio
+    refuses the first read (P7, P8). The retry is reported in `warnings`."""
+    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache)
+    try:
+        records = vcf.read_records(path, header, chosen, data[0] if data else None)
+        return records, vcf.scan_stats(records)
+    except vcf.HeaderRefused as err:
+        warnings.append(
+            f"polars-bio refused the file ({err}); read again with a header of only the carried INFO and "
+            "FORMAT keys and the FILTER, ALT and contig lines"
+        )
+    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache, structural_only=True)
+    first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
+    records = vcf.read_records(path, header, chosen, first)
+    stats = vcf.scan_stats(records)
+    if left_out := vcf.pos_zero_left_out(cache):
+        warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
+    return records, stats
 
 
 def _sha256(path: Path) -> str:

@@ -180,6 +180,12 @@ The warnings name a header that disagreed. Values that settle neither (within [0
 FORMAT/DP are different quantities with the same name. The loader resolves each key by the header's
 namespace and never by the column name polars-bio gives it.
 
+A vector is carried only where it can be indexed: `ad` needs one value per allele, `gl` and `gp` one
+per genotype of the row's ploidy (checked for haploid and diploid rows). A row whose vector has
+another length gets null there, counted in the warnings. A key declared with a fixed count is a
+different quantity under the same name and is not carried at all (VarScan2's AD, `Number=1`, is the
+ALT depth; CGI's AD, `Number=2`, counts reads per GT slot); it is listed in `dropped_fields`.
+
 A dosage (VCF `DS`, the expected count of the second allele) is one number. It cannot be turned into a
 posterior triple, because two unknowns do not follow from one number, so it gets its own column:
 `dosage: f32`, with `gp` left null unless the source also gave GP.

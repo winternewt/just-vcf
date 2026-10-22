@@ -166,6 +166,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     if missing:
         warnings.append(f"key(s) used but not declared, declared by the loader: {', '.join(missing)}")
         vcf.declare(header, missing)
+    if unfit := vcf.unfit_keys(header):
+        warnings.append(
+            "FORMAT key(s) declared with a Number that is not one value per allele or genotype, not carried: "
+            + ", ".join(f"{key} (Number={number})" for key, number in sorted(unfit.items()))
+        )
     if not header.meta:
         warnings.append(
             "no meta lines: read under a synthesised header (##fileformat=VCFv4.2 and the carried keys the "

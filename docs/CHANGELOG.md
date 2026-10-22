@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF's `ad`, `gl` and `gp` are now withheld where they cannot be indexed over the row's alleles:
+  a row whose AD is not one value per allele, or whose PL, GL, GP or PP is not one per genotype of its
+  ploidy, gets null there, with one warning per key and a count. A key declared with a fixed count
+  (VarScan2's AD, `Number=1`, the ALT depth; CGI's AD, `Number=2`, reads per GT slot) is not carried
+  and is listed in `dropped_fields`. Found loading the PGP-HMS `vcf_no_meta` file, where 141,814
+  VarScan2 rows had put their ALT depth into `ad` as if it were per allele. Files whose vectors fit
+  are unchanged.
 - `load` reads `vcf_no_meta`, a VCF body under a bare `#CHROM` line (RM2). The loader synthesises
   `##fileformat` and declares the carried keys the rows use; `vcf_version` stays null. For every VCF,
   an undeclared INFO `END` or `SVLEN` is now declared too, so a block whose header forgot END keeps

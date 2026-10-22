@@ -58,6 +58,11 @@ FORMAT_KEYS: dict[str, tuple[str, str]] = {
 }
 """FORMAT keys the schema carries, with the Number and Type VCF 4.5 reserves for them."""
 
+VECTOR_NUMBERS: dict[str, str] = {"AD": "R", "PL": "G", "GL": "G", "GP": "G", "PP": "G"}
+"""Carried vectors that are parallel to the alleles (R) or the genotypes (G). A file declaring one of
+them with a fixed count is using the name for something else: VarScan2's AD (Number=1) is the ALT
+depth only, CGI's AD (Number=2) counts reads per GT slot, not per allele. Those are not carried."""
+
 INFO_KEYS: dict[str, tuple[str, str]] = {"END": ("1", "Integer"), "SVLEN": ("A", "Integer")}
 """INFO keys the loader reads, for `end_pos` only, with the Number and Type VCF 4.5 gives them."""
 
@@ -278,6 +283,15 @@ def declare(header: Header, missing: list[str]) -> None:
             header.format[key] = FORMAT_KEYS[key][0]
 
 
+def unfit_keys(header: Header) -> dict[str, str]:
+    """Carried vector keys the header declares with a Number they cannot be read under → that Number."""
+    return {
+        key: header.format[key]
+        for key, number in VECTOR_NUMBERS.items()
+        if key in header.format and header.format[key] not in (number, ".")
+    }
+
+
 def readable_path(
     path: Path, layers: tuple[str, ...], opener, header: Header, missing: list[str], cache: Path, structural_only: bool = False
 ) -> Path:
@@ -434,7 +448,8 @@ def read_records(path: Path, header: Header, sample: str, first_record: bytes | 
     carried key is present, as a typed null when the file does not declare it.
     """
     info = [key for key in INFO_KEYS if key in header.info] + sorted(header.split_markers)
-    fmt = [key for key in FORMAT_KEYS if key in header.format]
+    unfit = unfit_keys(header)
+    fmt = [key for key in FORMAT_KEYS if key in header.format and key not in unfit]
     multi = len(header.samples) > 1
     frame = scan(path, info, fmt, sample if multi else None)
     if first_record is not None:
@@ -511,10 +526,28 @@ def scan_stats(records: pl.LazyFrame) -> dict:
         pl.col("fmt_GT").null_count().alias("gt_missing"),
         (_gt_body().str.count_matches(r"[/|]").max() + 1).alias("ploidy_max"),
         *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith("_multi_")],
+        *[
+            (pl.col(f"fmt_{key}").is_not_null() & ~_fits(pl.col(f"fmt_{key}"), key, alts)).sum().alias(f"unfit_{key}")
+            for key in VECTOR_NUMBERS
+        ],
     )
     row = _collect(plan).row(0, named=True)
     row["chroms"] = sorted(row["chroms"] or [])
     return row
+
+
+def _fits(vector: pl.Expr, key: str, alts: pl.Expr) -> pl.Expr:
+    """True where `vector` has the length its Number requires on this row: one value per allele
+    (R), or one per genotype of the row's ploidy (G; checked for haploid and diploid GT, and diploid
+    when GT is missing, as the spec says to assume)."""
+    alleles = alts.list.len().cast(pl.Int64) + 1
+    if VECTOR_NUMBERS[key] == "R":
+        return vector.list.len() == alleles
+    ploidy = (_gt_body().str.count_matches(r"[/|]") + 1).fill_null(2)
+    genotypes = (
+        pl.when(ploidy == 1).then(alleles).when(ploidy == 2).then(alleles * (alleles + 1) // 2).otherwise(None)
+    )
+    return (vector.list.len() == genotypes).fill_null(True)
 
 
 def _gt_body() -> pl.Expr:
@@ -643,6 +676,10 @@ def to_rows(
         for key, top in _BOUNDED.items()
         if stats[f"out_{key}"]
     ] + [
+        f"{stats[f'unfit_{key}']} {key} value(s) not one per {'allele' if number == 'R' else 'genotype'} set to null"
+        for key, number in VECTOR_NUMBERS.items()
+        if stats.get(f"unfit_{key}")
+    ] + [
         f"{count} {name.removeprefix('_multi_')} value(s) held more than one number; the first was kept"
         for name, count in stats.items()
         if name.startswith("_multi_") and count
@@ -677,6 +714,12 @@ def to_rows(
     gp, gp_warning = _gp(header, stats)
     if gp_warning:
         warnings.append(gp_warning)
+    # A vector of the wrong length for its row cannot be indexed over the alleles: withheld (counted
+    # in `scan_stats`), never truncated or padded.
+    rows = rows.with_columns(
+        pl.when(_fits(pl.col(f"fmt_{key}"), key, pl.col("alts"))).then(pl.col(f"fmt_{key}")).otherwise(None).alias(f"fmt_{key}")
+        for key in VECTOR_NUMBERS
+    )
     rows = rows.with_columns(
         pl.coalesce(
             pl.col("fmt_GL").cast(pl.List(pl.Float32), strict=False),
@@ -831,7 +874,7 @@ def dropped_fields(header: Header, data: list[bytes] = ()) -> list[str]:
     info |= set(header.info)
     fmt |= set(header.format)
     dropped_info = [f"INFO/{key}" for key in info if key not in INFO_KEYS and key not in header.split_markers]
-    dropped_fmt = [f"FORMAT/{key}" for key in fmt if key not in FORMAT_KEYS]
+    dropped_fmt = [f"FORMAT/{key}" for key in fmt if key not in FORMAT_KEYS or key in unfit_keys(header)]
     return sorted(dropped_info) + sorted(dropped_fmt)
 
 

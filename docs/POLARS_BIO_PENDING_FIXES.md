@@ -64,6 +64,7 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P12 multi-allelic ALT joined with `\|` | intended (dbf #252), documented only in the dbf README | polars-bio (docs), low |
 | P13 `write_vcf` drops undeclared columns | write-side twin of P1; answered by recipe in pb #351; related open pb #474 | polars-bio |
 | P14 fork after a polars-bio call hangs the child | inherent to native thread pools (plain Polars hangs too) | polars-bio (docs), low |
+| P15 haploid no-call GT `.` read as null (2026-10-22) | noodles maps `.` to missing before its GT parser; dbf writes null, same as no GT | datafusion-bio-formats |
 
 ## Verdicts by kind (2026-09-30)
 
@@ -82,6 +83,7 @@ another path is named.
 | P6b | `register_vcf` returns 0-based starts; docstring and global setting say 1-based | polars-bio | convert `start` and check the first record (done) |
 | P9 | a spec-legal POS 0 record fails the whole scan | datafusion-bio-formats | re-read without POS 0 rows, count them (done) |
 | P10 | spec-legal FORMAT `Number=LA/LR/LG/M` refuses the whole file | zaeleus/noodles | **none yet**: rewrite to `Number=.` and warn |
+| P15 | a haploid no-call GT `.` reads as null, the same as a sample with no GT | datafusion-bio-formats | a no-call block for CGI VCFs only (`518f796`); elsewhere `gt`, `gt_alleles`, `source_gt` stay null |
 
 ### Feature requests: works as designed, we want more
 
@@ -366,6 +368,33 @@ Mitigation: just-vcf must not use fork-based multiprocessing once polars-bio has
 *Upstream (2026-09-30).* Nothing in any tracker or doc. polars-bio builds Tokio runtimes in its Rust
 entry points (`src/scan.rs:1101`, `:1176`), and neither Tokio nor Rayon survives `fork()`. **Inherent,
 not a bug.** At most a "use spawn" note in polars-bio docs.
+
+## P15 — A haploid no-call GT `.` comes back as null
+
+Found by the lead seat on a PGP-HMS Complete Genomics vcfBeta (merged as `bd5c02e`): on male X and Y the
+no-called records write GT `.`, and 139,310 of them loaded with no genotype at all. VCF says a no-call
+writes `.` for each missing allele, "`./.` for a diploid genotype and `.` for haploid genotype"
+(`VCFv4.5.tex:619`), so `.` is a called-as-unknown haploid genotype, not an absent field. polars-bio
+0.36 returns it as null, the same value as a sample whose FORMAT has no GT, so the ploidy and the fact
+that the caller wrote a no-call are both lost. `./.` and `.|1` survive.
+
+Mitigation: for Complete Genomics VCFs only (a header declaring `CGA_NOCALL`), a record with ALT `.`, no
+`END` and a null GT goes to `blocks` as a no-call span (`518f796`, `loaders/vcf.py`, `to_rows`). In any
+other VCF a haploid `.` loads with `gt`, `gt_alleles` and `source_gt` null. Not filed.
+
+*Upstream (2026-10-22).* Not reported in any of the three trackers (searched live for "haploid"; noodles
+#328, about BCF genotypes, is unrelated). Reproduced on 0.36.0 with a synthetic 4.5 file: GT `.` reads
+as null, exactly as a record whose FORMAT is `DP` alone. The information goes in noodles: the lazy
+record's `parse_value` returns `None` for `.` before it checks for the GT key
+(`noodles-vcf/src/record/samples/series/value.rs:24-29` at the fork's `42a3c01`; zaeleus master has
+the same order), so the genotype parser, which reads `.` as one missing allele, never sees it. datafusion-bio-formats
+then writes null for any GT value that is not a `Genotype` (`physical_exec.rs:1853-1877`, and
+`:2489-2514` for several samples). It can tell the two apart without a noodles change: a sample's
+`iter` zips the FORMAT keys with the values present (`noodles-vcf/src/record/samples/sample.rs:46-51`),
+so a GT key yielded with `None` means the text was `.`, and writing `.` there reproduces the source. A
+sample written as `.` alone would then read as a haploid no-call too. **File at
+datafusion-bio-formats**, citing the noodles ordering; the same one-line reorder in the biodatageeks fork
+or at zaeleus/noodles would fix it at the root.
 
 ## Harvested and closed without an entry (2026-09-30)
 

@@ -252,8 +252,9 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `format_id`, `family` | from `sniff` |
 | `vendor`, `caller`, `caller_version` | the RM2 `source` detector. Null = not identifiable, never guessed |
 | `sample` | the sample column name, verbatim. **Identifying**: PGP uploads carry real names here. Logs, warnings and error messages name the `facet_id`, never the sample |
-| `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` (contig lengths) or null |
-| `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it |
+| `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` (contig lengths) or null. A stated label is kept when the lengths disagree, with a warning (RM4, below) |
+| `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
+| `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4) |
 | `absence_means` | Decision 4 |
 | `phasing_method` | null unless stated |
@@ -266,6 +267,28 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
+
+**Assembly identity from a VCF header (RM4, checked 2026-10-22).**
+
+- `seqcol_digest` cannot be computed from a header. The top-level digest is taken over the `names`
+  and `sequences` attributes (refget 0.12's schema: `inherent: [names, sequences]`), and `sequences`
+  holds each contig's refget sha512t24u digest, which needs the bases. A `##contig` `md5` is another
+  digest of the same bases and does not convert. Filling it from the label, or from a table keyed by
+  names and lengths, would be a lookup standing in for content (charter 3): the public seqcol server
+  holds two different collections for UCSC hg38's names and lengths, and two for hg19's. So it stays
+  null until RM3 reads bases.
+- `sorted_name_length_pairs_digest` is conformant on its own: it is an attribute the seqcol spec
+  defines, computed with refget's own functions (checked against the six compliance vectors refget
+  ships, and against the public server seqcolapi.databio.org, where the digests computed from UCSC
+  hg19's and hg38's `chrom.sizes` equal this attribute of two registered collections each). It gets
+  its own column rather than `seqcol_digest`'s, because it identifies a coordinate system, which
+  several collections share.
+  Names are verbatim, so `chr1` and `1` headers give different digests, as seqcol intends.
+- `assembly_label` is inferred from primary-chromosome lengths against GRCh37, GRCh38 and T2T-CHM13
+  (domain constants, `just_vcf.assembly`): at least three must match one assembly and none may
+  match another or none. The mitochondrion only contradicts (all three share 16,569; hg19's 16,571
+  counts as GRCh37). Fewer, or a mixture, leaves it null. A stated label (sniff's header hints) is
+  never replaced; a disagreement is a warning.
 
 There is no `ref_basis` column. A non-null `ref` always came from the facet's assembly sequence
 (charter 10), so the basis would have one value.
@@ -526,6 +549,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **Unreleased** (2026-10-22, RM4): `facets.sorted_name_length_pairs_digest`, the header's coordinate
+  system as a seqcol attribute digest. Additive. `assembly_label` (basis `inferred`) is now filled
+  for VCF facets whose contig lengths settle it.
 
 - **0.0.4** (2026-10-19, RM270, from S2): `calls.split_signal` and `facets.split_marker` flag rows
   that look like one multi-allelic site written one row per ALT. Both additive; no value changed.

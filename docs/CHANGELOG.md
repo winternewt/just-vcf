@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF facet's `assembly_label` is inferred from its `##contig` lengths when the header states no
+  build (RM4): three or more primary chromosomes must match one of GRCh37, GRCh38 or T2T-CHM13 and
+  none may match another or none, else it stays null. A stated label is never replaced; a header whose
+  lengths disagree with it, or match two assemblies, gets a warning with the counts. New facet column
+  `sorted_name_length_pairs_digest`: the seqcol attribute digest of the header's contig names and
+  lengths, checked against refget's compliance vectors. `seqcol_digest` stays null, because its
+  top-level digest needs per-sequence digests no header carries (docs/SCHEMA.md). Minor: one new
+  nullable column; facet ids do not change.
+
 - A sites-only VCF (no FORMAT column, no sample) is refused by `load` with the new `NoSampleError`
   (exported), instead of failing inside the parquet spill with a polars conversion error (F8). Minor:
   a new exception; nothing that loaded before changes, facet ids included.

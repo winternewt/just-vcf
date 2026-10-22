@@ -31,6 +31,7 @@ from just_vcf.ancestry.pca import (
     load_pca_panel,
     panel_assemblies,
 )
+from just_vcf.ancestry.prive import PRIVE_ASSEMBLY, PriveBuild, build_prive_reference, prive_proportions
 from just_vcf.ancestry.result import ANCESTRY_METHODS, ANCESTRY_REASONS, PROPORTION_METHODS, AncestryEstimate
 
 __all__ = [
@@ -40,16 +41,20 @@ __all__ = [
     "DEFAULT_COVERAGE_FLOOR",
     "DEFAULT_DIM_REF",
     "DEFAULT_KNN_K",
+    "PRIVE_ASSEMBLY",
     "PROPORTION_METHODS",
     "RESOLUTIONS",
     "AncestryEstimate",
     "PanelBuild",
     "PcaPanel",
+    "PriveBuild",
     "build_pca_panel",
+    "build_prive_reference",
     "consensus",
     "continental_of",
     "infer_ancestry",
     "load_pca_panel",
     "panel_assemblies",
+    "prive_proportions",
     "to_continental",
 ]

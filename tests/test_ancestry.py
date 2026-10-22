@@ -5,6 +5,7 @@ well separated. Every person is drawn from one population's frequencies, written
 23andMe file and read through `load`, so the expected answer is known from the fixture itself.
 """
 
+import gzip
 import os
 import subprocess
 import sys
@@ -24,9 +25,11 @@ from just_vcf.ancestry import (  # noqa: E402
     consensus,
     continental_of,
     infer_ancestry,
+    build_prive_reference,
     panel_assemblies,
+    prive_proportions,
 )
-from just_vcf.ancestry._projection import DEFAULT_MISSING  # noqa: E402
+from just_vcf.ancestry._projection import DEFAULT_MISSING, build_reference_pca  # noqa: E402
 from just_vcf.ancestry.sites import facet_of, panel_sites, site_dosages  # noqa: E402
 from just_vcf.assembly import ASSEMBLY_LENGTHS  # noqa: E402
 from just_vcf.schema import BLOCKS, conform  # noqa: E402
@@ -376,3 +379,79 @@ def test_core_imports_without_numpy() -> None:
     )
     done = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True, env=os.environ.copy())
     assert "ancestry" in done.stdout and "just-vcf[ancestry]" in done.stdout
+
+
+PRIVE_NAMES = {"AFR": "Africa (West)", "EAS": "Asia (East)", "EUR": "Europe (North East)"}
+
+
+@pytest.fixture(scope="module")
+def prive(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, pl.DataFrame, dict[str, np.ndarray]]:
+    """A Privé-shaped reference from the synthetic panel: group frequencies and 16 PCA loadings.
+
+    The loadings file is gzip-compressed and the frequency file is not, as both kinds occur.
+    """
+    root = tmp_path_factory.mktemp("prive")
+    sites, freqs, genotypes, _ = synthetic_panel(SEED)
+    loadings = build_reference_pca(genotypes, dim_ref=8).U[:, :16]
+    key = sites.select(
+        pl.col("chrom").cast(pl.Int64).alias("chr"), "pos", pl.col("ref").alias("a0"), pl.col("alt").alias("a1"),
+        rsid=pl.format("rs{}", pl.int_range(1, sites.height + 1)),
+    )
+    key.with_columns(**{PRIVE_NAMES[g]: pl.Series(freqs[g]) for g in POPULATIONS}).write_csv(root / "ref_freqs.csv")
+    projection = key.with_columns(**{f"PC{i + 1}": pl.Series(loadings[:, i]) for i in range(16)})
+    with gzip.open(root / "projection.csv.gz", "wt") as handle:
+        handle.write(projection.write_csv())
+    built = build_prive_reference(root / "ref_freqs.csv", root / "projection.csv.gz", root / "reference")
+    assert built.n_sites == sites.height and built.groups == tuple(PRIVE_NAMES[g] for g in POPULATIONS)
+    return root / "reference", sites, freqs
+
+
+@pytest.mark.parametrize("group", sorted(POPULATIONS))
+def test_prive_proportions_of_each_group(prive, tmp_path: Path, group: str) -> None:
+    reference, sites, freqs = prive
+    loaded = load(write_vcf(tmp_path / "p.vcf", sites, person(freqs, group, seed=11)))
+    result = prive_proportions(loaded, reference)
+    assert result and result.method == "prive_qp" and result.proportion_method == "prive_qp"
+    assert result.estimate == PRIVE_NAMES[group]
+    assert result.proportions[PRIVE_NAMES[group]] >= 0.9
+    assert sum(result.proportions.values()) == pytest.approx(1.0, abs=0.01)
+    assert set(result.proportion_errors) == set(PRIVE_NAMES.values())
+    assert all(0 < e < 0.1 for e in result.proportion_errors.values())
+    assert result.n_sites_used == result.n_sites_observed == sites.height
+    assert result.group_to_continental == {name: g for g, name in PRIVE_NAMES.items()}
+    assert prive_proportions(loaded, reference) == result
+
+
+def test_prive_proportions_recover_a_two_way_mixture(prive, tmp_path: Path) -> None:
+    """Each allele drawn from an even mix of two groups' frequencies: about half each, within the errors."""
+    reference, sites, freqs = prive
+    mixed = 0.5 * freqs["AFR"] + 0.5 * freqs["EUR"]
+    dosage = np.random.default_rng(12).binomial(2, mixed).astype(np.int8)
+    result = prive_proportions(load(write_vcf(tmp_path / "m.vcf", sites, dosage)), reference)
+    for g in ("AFR", "EUR"):
+        name = PRIVE_NAMES[g]
+        assert abs(result.proportions[name] - 0.5) <= max(0.1, 3 * result.proportion_errors[name])
+    assert result.proportions[PRIVE_NAMES["EAS"]] <= 0.1
+    assert result.margin < 0.3
+
+
+def test_prive_gates_and_floor(prive, tmp_path: Path) -> None:
+    reference, sites, freqs = prive
+    dosage = person(freqs, "EAS", seed=13)
+    loaded = load(write_vcf(tmp_path / "p.vcf", sites, dosage))
+    assert prive_proportions(loaded, tmp_path / "nothing").reason == "panel_missing"
+    unlabelled = load(write_vcf(tmp_path / "u.vcf", sites, dosage, contigs=False))
+    assert prive_proportions(unlabelled, reference).reason == "assembly_unknown"
+    few = prive_proportions(loaded, reference, min_sites=sites.height + 1)
+    assert not few and few.reason == "too_few_sites" and few.n_sites_used == sites.height
+    plain = prive_proportions(loaded, reference, n_bootstrap=0)
+    assert plain.proportion_errors is None
+    assert plain.proportions == prive_proportions(loaded, reference).proportions
+
+
+def test_consensus_reads_prive_groups_through_their_continents(panel, prive, tmp_path: Path) -> None:
+    panel_dir, sites, freqs, _ = panel
+    reference, _, _ = prive
+    loaded = load(write_vcf(tmp_path / "p.vcf", sites, person(freqs, "EUR", seed=14)))
+    fused = consensus([infer_ancestry(loaded, panel_dir, "synth"), prive_proportions(loaded, reference)])
+    assert fused.estimate == "EUR" and fused.panel == "prive+synth"

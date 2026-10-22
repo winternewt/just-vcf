@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Privé's worldwide reference (RM5): `just_vcf.ancestry.build_prive_reference` joins the two public
+  figshare files (group frequencies and 16 PC loadings, GRCh37) into one parquet, and
+  `prive_proportions(loaded, reference_dir)` gives a facet's proportions over the 21 groups with
+  block-bootstrap standard errors (200 blocks, 100 resamples, seeded). Ported from just-prs
+  `ancestry/prive.py` (docs/PROVENANCE.md); a facet not on GRCh37 is unknown with a reason rather than
+  lifted. On PGP-HMS data: a DRAGEN GRCh37 genome used 5,814,017 of 5,816,590 sites (3,426,634 of them
+  absences read as reference) in 13 s, a 23andMe build 37 export 888,688; largest standard error 0.016
+  in both. Which panels work, and how they were checked: docs/ANCESTRY_PANELS.md. New opt-in test
+  variable `JUST_VCF_ANCESTRY_DIR` (`.env.template`). No schema change.
+
 - Population inference behind the `[ancestry]` extra (RM5): `just_vcf.ancestry.infer_ancestry(loaded,
   panel_dir, panel)` places a facet on a reference-PCA panel (FRAPOSA's shrinkage-corrected projection,
   then a 20-neighbour vote and PC-centroid proportions), and `consensus` combines estimates over the five

@@ -669,7 +669,9 @@ lifted to GRCh38. How the draft holds up:
   asserted ploidy (Decision 2), so nothing is silently "corrected". **Open:** nothing in the draft can
   *say* the karyotype. It is a fact about the person, measured from evidence (Y depth near 2x, X depth
   near 1x). It is not a fact about any one facet. A person-level finding with its own provenance does
-  not exist yet.
+  not exist yet. Since RM269 each facet's own evidence can be measured (below); it reads this person's
+  X as one copy and Y as present, so `XY`: the Y depth of a variant-call VCF does not
+  separate one Y from two, and XYY stays open until a coverage facet.
 - **The deleted region, absent from the GRCh38 VCF.** The GRCh38 facet is WGS without blocks, so
   `absence_means = weak_reference`, and a question about a site in the deletion gets "weak evidence of
   reference". For a deletion on both Y copies, that is wrong. **Open:** absence has to be conditioned
@@ -686,6 +688,39 @@ lifted to GRCh38. How the draft holds up:
 
 None of this changes a column today. It marks where the person-level layer and the coverage facet have
 to connect.
+
+## Sex-chromosome evidence: computed per facet, not stored (RM269)
+
+`sex_chromosome_evidence(loaded)` returns one `SexChromosomeEvidence` per row of `loaded.facets`. Like
+`vrs_withheld()`, it is a function over the frames, not a column, so it adds nothing to the schema and
+needs no version bump. Rejected: a struct column on `facets`, which would cost a full scan of `calls`
+at every load, orphan every cache spill with its version bump (RM268) and freeze today's thresholds
+into stored data. There is no person in the schema yet, so nothing person-level is stored either;
+weighing facets against each other (liftovers of one callset are one piece of evidence) is for that
+later layer.
+
+What it reads, over `assay` rows no filter failed (`filters` and `sample_filters` null or `["PASS"]`;
+null is VCF's "filters not applied"):
+
+- `ploidy`: rows by the number of haplotypes their genotype was written with, per group (autosomes,
+  non-PAR X, non-PAR Y, PAR, MT). What the source wrote, not a measured ploidy.
+- `x_heterozygosity`: on non-PAR X, the het share of fully called two-allele genotypes with an ALT
+  (rows with a `split_signal` left out), the count of one-allele ALT genotypes (the caller's
+  assertion, never counted as evidence), and the median het allele balance from `ad`.
+  `y_heterozygosity`: the same on the X-degenerate Y, reported only.
+- `depth`: the median `dp` of ALT-carrying rows on non-PAR X and on the X-degenerate Y, each over the
+  same median on chr20.
+- `caller` and `ploidy_statements`, the facet's own columns, carried through unread.
+
+It answers `x_copies` (`one`, `two_or_more`) and `y_present` separately, so a facet whose Y line is
+unusable still says how many X copies it holds, and `inferred_karyotypic_sex`, a GA4GH Phenopackets
+`KaryotypicSex` value (charter invariant 2: the vocabulary is the standard's, the field is
+just-vcf's, since Phenopackets has no place for an inference). Only `XY`, `XXY` and
+`UNKNOWN_KARYOTYPE` are estimated, the last always with a reason: `y_present` is `True` or unknown,
+never `False`, because depth at called sites cannot show a Y absent (a man's GATK genome read below the
+present band, close to the two-X range), so `XX` and `XO` wait for a coverage facet. The PAR bounds and the X-degenerate
+Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
+unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 
 ## Open questions
 

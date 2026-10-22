@@ -47,4 +47,8 @@ status lines say what exists. Schema at 0.0.4.
   Wave 1: RM3 (REF lookup, FASTA tier), RM4 + assembly label and seqcol, RM2 VCF side (source detector,
   dialects), RM2 array loaders. Next waves: RM269 build, RM6 writer, then the rest of Part 1 of
   docs/MVP_READINESS.md. Part 2 waits for the interview.
+  Merged: RM4 (ee4d5d1, schema 0.0.5), RM2 arrays (53600af; 18 of 39 formats load). Wave 2 running: RM6
+  writer, RM5 ancestry, RM269 evidence (handed the depth result: X/auto 0.42–0.50 vs 0.89–1.00, X-degenerate
+  Y ALT DP/auto 0.56–0.82 vs 0.35–0.40). Open from the array builder: `dropped_fields` is `[]` for the new
+  table formats and null for the rsid tables; aligning them changes values on files that already load.
 - **Open, not started**: RM2's next loaders, RM3, RM4, RM6, RM268 (cache eviction).

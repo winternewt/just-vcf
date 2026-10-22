@@ -35,11 +35,21 @@ from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKin
 
 logger = logging.getLogger(__name__)
 
-FORMATS: frozenset[str] = frozenset({"vcf", "bcf", "vcf_no_meta", "vcf_cgi"})
+FORMATS: frozenset[str] = frozenset({"vcf", "bcf", "vcf_no_meta", "vcf_cgi", "vcf_freebayes_varscan2"})
 """Format ids this loader reads. The dialects with their own ids join as their quirks are handled."""
 
 BCF = "bcf"
 """Binary VCF: the header is read from the binary layout here, the records by polars-bio."""
+
+FREEBAYES_VARSCAN2 = "vcf_freebayes_varscan2"
+"""PGP-HMS's vcf-merge of freeBayes and VarScan2: one facet per caller, split on INFO/SF."""
+
+CALLER_SPLIT = "caller_split"
+"""The just-vcf relation of a facet that holds one caller's rows of a file merging several callers."""
+
+_MERGE_CALLERS = {"FB": "freeBayes", "VS": "VarScan2"}
+"""The caller tokens PGP's pipeline puts in the merged inputs' names (`chr1.FB.vcf.gz`), as the
+merge's `##sourceFiles` line records them."""
 
 FORMAT_KEYS: dict[str, tuple[str, str]] = {
     "GT": ("1", "String"),
@@ -293,6 +303,72 @@ def declare(header: Header, missing: list[str]) -> None:
             header.format[key] = FORMAT_KEYS[key][0]
 
 
+@dataclass
+class Part:
+    """One facet's share of a VCF: which sample column, which rows, and what makes its id."""
+
+    sample: str
+    options: dict
+    caller: str | None = None
+    split: bool = False
+    """A caller's share of a merged file (`relation = caller_split`)."""
+    sf: int | None = None
+    """Keep the rows whose INFO/SF lists this source index."""
+    sf_alone: bool = False
+    """Keep them only where SF lists no other index (the merge kept another caller's genotype there)."""
+
+    @property
+    def info(self) -> tuple[str, ...]:
+        return ("SF",) if self.sf is not None else ()
+
+    def select(self, records: pl.LazyFrame) -> pl.LazyFrame:
+        """`records` restricted to this part's rows. An `f` after an index marks the record as
+        filtered in that source; the record is still that source's."""
+        if self.sf is None:
+            return records
+        indices = pl.col("info_SF").list.eval(pl.element().str.strip_chars_end("f"))
+        keep = indices.list.contains(str(self.sf))
+        if self.sf_alone:
+            keep = keep & indices.list.eval(pl.element() != str(self.sf)).list.any().not_()
+        return records.filter(keep.fill_null(False))
+
+
+def caller_parts(header: Header, data: list[bytes]) -> list[Part]:
+    """The parts of a freeBayes+VarScan2 merge: one per source index of its `##sourceFiles` lines.
+
+    The caller of an index is read from the merged input's name on those lines (`.FB.`, `.VS.`);
+    lines that disagree, or a name without a token, leave it null. Two layouts (FORMATS.md): with one
+    data column per caller, each index reads its own column, in `##sourceFiles` order; with one data
+    column, it holds the first index's genotype wherever that caller found the site, so a later index
+    keeps only the rows where it was the sole caller, and says what it lost.
+    """
+    callers: dict[int, set[str | None]] = {}
+    for line in header.meta:
+        if re.match(r"^##sourceFiles_\d{8}\.\d+=", line):
+            for index, name in re.findall(r"(\d+):([^,]+)", line.split("=", 1)[1]):
+                token = next((t for t in _MERGE_CALLERS if re.search(rf"[._]{t}[._]", name)), None)
+                callers.setdefault(int(index), set()).add(_MERGE_CALLERS.get(token) if token else None)
+    indices = sorted(callers) or [0, 1]
+    columns = len(header.samples)
+    per_caller = columns >= len(indices) and bool(data) and all(len(raw.split(b"\t")) >= 9 + columns for raw in data)
+    parts = []
+    for position, index in enumerate(indices):
+        named = callers.get(index, {None})
+        caller = next(iter(named)) if len(named) == 1 else None
+        lone = not per_caller and position > 0
+        parts.append(
+            Part(
+                sample=header.samples[position] if per_caller else header.samples[0],
+                options={"caller_index": index},
+                caller=caller,
+                split=True,
+                sf=index,
+                sf_alone=lone,
+            )
+        )
+    return parts
+
+
 def unfit_keys(header: Header) -> dict[str, str]:
     """Carried vector keys the header declares with a Number they cannot be read under → that Number."""
     return {
@@ -451,13 +527,16 @@ def _register(**kwargs) -> None:
         raise
 
 
-def read_records(path: Path, header: Header, sample: str, first_record: bytes | None) -> pl.LazyFrame:
+def read_records(
+    path: Path, header: Header, sample: str, first_record: bytes | None, extra_info: tuple[str, ...] = ()
+) -> pl.LazyFrame:
     """The records of one sample with flat, namespaced columns.
 
     INFO keys become `info_<KEY>` and FORMAT keys `fmt_<KEY>`, whatever polars-bio names them. Every
-    carried key is present, as a typed null when the file does not declare it.
+    carried key is present, as a typed null when the file does not declare it. `extra_info` are INFO
+    keys read for selecting rows (`SF`), as lists of strings.
     """
-    info = [key for key in INFO_KEYS if key in header.info] + sorted(header.split_markers)
+    info = [key for key in INFO_KEYS if key in header.info] + sorted(header.split_markers) + list(extra_info)
     unfit = unfit_keys(header)
     fmt = [key for key in FORMAT_KEYS if key in header.format and key not in unfit]
     multi = len(header.samples) > 1
@@ -504,6 +583,11 @@ def read_records(path: Path, header: Header, sample: str, first_record: bytes | 
         for name in (f"info_{key}" for key in header.split_markers)
         if name in present
     )
+    frame = frame.with_columns(
+        (pl.col(name).cast(pl.List(pl.String)) if isinstance(schema[name], pl.List) else pl.col(name).cast(pl.String).str.split(",")).alias(name)
+        for name in (f"info_{key}" for key in extra_info)
+        if name in present
+    )
     return frame.with_columns(
         [pl.lit(None, dtype=_dtype(number, kind)).alias(f"fmt_{key}") for key, (number, kind) in FORMAT_KEYS.items() if f"fmt_{key}" not in present]
         + [pl.lit(None, dtype=pl.List(pl.Int32) if key == "SVLEN" else pl.Int32).alias(f"info_{key}") for key in INFO_KEYS if f"info_{key}" not in present]
@@ -541,6 +625,11 @@ def scan_stats(records: pl.LazyFrame) -> dict:
             (pl.col(f"fmt_{key}").is_not_null() & ~_fits(pl.col(f"fmt_{key}"), key, alts)).sum().alias(f"unfit_{key}")
             for key in VECTOR_NUMBERS
         ],
+        *(
+            [pl.col("info_SF").list.eval(pl.element().str.strip_chars_end("f")).list.n_unique().gt(1).sum().alias("shared_sources")]
+            if "info_SF" in records.collect_schema().names()
+            else []
+        ),
     )
     row = _collect(plan).row(0, named=True)
     row["chroms"] = sorted(row["chroms"] or [])

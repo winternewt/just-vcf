@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load` reads PGP-HMS's freeBayes+VarScan2 merges (`vcf_freebayes_varscan2`, RM2) as two facets in
+  one `Loaded`, one per caller (SCHEMA Decision 8), each with `relation = caller_split` and its caller
+  and version. A row goes to a caller when INFO/SF lists its index. In the one-column layout most PGP
+  merges have, the VarScan2 facet holds only the sites VarScan2 alone found, and a warning counts the
+  shared sites whose VarScan2 genotype the merge dropped. A `Loaded` can now hold several facets:
+  `facets` has a row each, and `calls` and `blocks` run facet by facet in `facet_id` order. Not done:
+  reading VarScan2's genotypes back from the `-orig` key=value table, which has no loader.
 - `load` reads Complete Genomics' VCF (`vcf_cgi`, RM2). Its `<CGA_NOCALL>` spans and its ALT `.`
   records with no allele called go to `blocks` as `no_call` (to END, or over REF); its `<CGA_CNVWIN>`
   copy-number windows are left out with a count; half-calls keep their called allele. GL is read in

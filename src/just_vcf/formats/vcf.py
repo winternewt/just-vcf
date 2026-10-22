@@ -135,6 +135,11 @@ VCF_FREEBAYES_VARSCAN2 = FormatSpec(
         "(chr10 before chr1). Some FILTER values are VarScan2's (str10, indelError).",
         "PGP-HMS arvados collections hold one per sequenced genome. A copy stripped of every meta line "
         "detects as `vcf_no_meta`; its rows still carry SF and both callers' keys.",
+        "VarScan2 declares AD as Number=1 (the ALT depth only), so AD is not carried; freeBayes's GL is "
+        "log10 (Number=G) and is.",
+        "The loader returns one facet per caller (SCHEMA Decision 8, `relation = caller_split`): the caller "
+        "of an index comes from the `.FB.`/`.VS.` names on `##sourceFiles`; in the one-column layout the "
+        "VarScan2 facet holds only the sites VarScan2 alone found, and a warning counts the shared ones.",
     ),
     example=(
         "##fileformat=VCFv4.1\n"

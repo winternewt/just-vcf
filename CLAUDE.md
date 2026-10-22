@@ -544,7 +544,10 @@ same applies when the user corrects a preference: it goes below, in their words,
   - `olga/` — a zipped VCF (a GRCh38→37 liftover); `ksuhaster/deepvariant/*.zip` likewise.
   - `sergey/` — a DRAGEN `hard-filtered.vcf.gz` and a GATK HaplotypeCaller VCF.
   - `gennet/` — HapMap CEU lifted VCFs. `prive/`, `aadr/`, `dataverse_66p1/` are ancestry reference data.
-- `/data/genomes/pgp-hms/participants/<hu>/` holds PGP-HMS data per person (`scripts/pgp_participants.py`):
+- PGP-HMS and `angellos/` are no longer under `/data/genomes` (checked 2026-10-22): read them from the
+  Krypton copy, `/mnt/krypton/Genomes/genomes/`. Who's who across every alias, and which people have
+  several facets, is in `docs/LIVE_SAMPLES.md`.
+- `/data/genomes/pgp-hms/participants/<hu>/` (now on Krypton only) holds PGP-HMS data per person (`scripts/pgp_participants.py`):
   `arvados-<collection>/` for PGP's own sequencing (freeBayes+VarScan2 hg19 VCFs; the caller of a row is
   INFO/SF, not a sample column, and most merges keep only one caller's genotype where both called; Complete Genomics `var`/`masterVarBeta`/`vcfBeta`) and `upload-<download id>/` for the
   person's own uploads. `manifest.jsonl` there records every file and every folded duplicate.

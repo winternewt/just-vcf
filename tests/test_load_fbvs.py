@@ -118,3 +118,14 @@ def test_real_merge(pgp_participants: Path) -> None:
     assert set(callers) == {"freeBayes", "VarScan2"}
     assert by_id[callers["freeBayes"]] > by_id[callers["VarScan2"]] > 0
     assert loaded.calls.filter(pl.col("end_pos") < pl.col("pos")).select(pl.len()).collect().item() == 0
+
+
+def test_a_refused_header_is_retried_and_still_split(tmp_path: Path) -> None:
+    """polars-bio refuses a backslash in a quoted header value (P8); the structural copy it is read
+    from again must keep INFO/SF, or neither caller's rows can be selected."""
+    meta = [*META, '##GATKCommandLine.X=<ID=X,Version=1,CommandLineOptions="reference=C:\\Users\\x\\ref.fa">']
+    text = "\n".join([*meta, f"{COLUMNS}\tSample1", FB_SHARED, FB_ONLY, VS_ONLY]) + "\n"
+    loaded, _, by_caller, rows, _ = frames(write(tmp_path, text, "refused.vcf"))
+    assert any("refused the file" in w for w in loaded.warnings)
+    assert rows["freeBayes"]["pos"].to_list() == [752566, 752721]
+    assert rows["VarScan2"]["pos"].to_list() == [776546]

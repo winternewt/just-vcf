@@ -44,6 +44,10 @@ BCF = "bcf"
 FREEBAYES_VARSCAN2 = "vcf_freebayes_varscan2"
 """PGP-HMS's vcf-merge of freeBayes and VarScan2: one facet per caller, split on INFO/SF."""
 
+SELECTION_INFO = ("SF",)
+"""INFO keys read only to select a part's rows. The structural copy made for a refused header keeps
+them, or the retry could not split the file."""
+
 CALLER_SPLIT = "caller_split"
 """The just-vcf relation of a facet that holds one caller's rows of a file merging several callers."""
 
@@ -128,7 +132,7 @@ def _keep_in_structural_copy(line: str) -> bool:
     kind, body = declared.groups()
     attrs = _attrs(body)
     if kind == "INFO":
-        return attrs.get("ID") in INFO_KEYS or _split_marker_kind(attrs) is not None
+        return attrs.get("ID") in INFO_KEYS or attrs.get("ID") in SELECTION_INFO or _split_marker_kind(attrs) is not None
     return attrs.get("ID") in FORMAT_KEYS
 
 
@@ -319,7 +323,7 @@ class Part:
 
     @property
     def info(self) -> tuple[str, ...]:
-        return ("SF",) if self.sf is not None else ()
+        return SELECTION_INFO if self.sf is not None else ()
 
     def select(self, records: pl.LazyFrame) -> pl.LazyFrame:
         """`records` restricted to this part's rows. An `f` after an index marks the record as

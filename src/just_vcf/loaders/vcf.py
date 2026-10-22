@@ -858,9 +858,15 @@ def to_rows(
         for key in VECTOR_NUMBERS
     )
     rows = rows.with_columns(
+        # Divided in Float64 and rounded to Float32 once, so PL 21 gives the Float32 nearest -2.1, the
+        # value a file writing GL -2.1 loads as (F11); a Float32 division lands one step off.
         pl.coalesce(
-            pl.col("fmt_GL").cast(pl.List(pl.Float32), strict=False).list.eval(pl.element() / (10.0 if gl_phred else 1.0)),
-            pl.col("fmt_PL").cast(pl.List(pl.Float32), strict=False).list.eval(pl.element() / -10.0),
+            (
+                pl.col("fmt_GL").cast(pl.List(pl.Float64), strict=False).list.eval(pl.element() / 10.0).cast(pl.List(pl.Float32))
+                if gl_phred
+                else pl.col("fmt_GL").cast(pl.List(pl.Float32), strict=False)
+            ),
+            pl.col("fmt_PL").cast(pl.List(pl.Float64), strict=False).list.eval(pl.element() / -10.0).cast(pl.List(pl.Float32)),
         ).alias("gl"),
         gp.alias("gp"),
         pl.when(allele_list.list.len() == 2)

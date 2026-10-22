@@ -3,6 +3,27 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F11 — PL to `gl` lands one float step off the nearest value
+
+Severity: low · Found 2026-10-22 by comparing `normalize` with `bcftools norm` (RM6).
+
+The loader turns PL into `gl` as `PL / -10` in Float32, and Polars computes that division so that PL 21
+gives -2.1000001, while the nearest Float32 to -2.1 is -2.0999999. A file that writes the same
+likelihood as GL (`-2.1`) therefore loads one step away from one that writes PL 21. Deterministic, so no
+digest or test of ours moves, and the size is far below any PHRED rounding; but two facets of one
+genome, one with PL and one with GL, do not compare equal on `gl`, and a test comparing against an
+outside tool needs a tolerance (`test_agrees_with_bcftools_norm`). Not fixed here: it is the loader's
+PL rule (RM2). The repair is to divide in Float64 and cast the result to Float32 once.
+
+Resolved 2026-10-22 as proposed: PL is divided by -10 in Float64 and rounded to Float32 once, and so is
+Complete Genomics' phred-unit GL (divided by 10). PL `p` now loads as the Float32 nearest `-p/10`, the
+value a GL file's `-p/10` is parsed to; checked for every PL from 0 to 299. Documenting a tolerance
+instead was set aside: the repair costs one cast. This changes `gl` values on files that already load,
+by one Float32 step on some entries. The comparison with bcftools now holds exactly. Code:
+`loaders/vcf.py` `to_rows` (`gl`); tests: `tests/test_load_vcf.py`
+`test_pl_and_the_same_likelihood_as_gl_load_equal`, `tests/test_normalize.py`
+`test_agrees_with_bcftools_norm`.
+
 
 ## F10 — A GP that does not sum to 1 is lost when just-vcf reloads its own export
 

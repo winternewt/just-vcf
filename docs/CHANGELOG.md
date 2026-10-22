@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- PL now loads as the Float32 nearest `-PL/10`, divided in Float64 and rounded once, so a PL file and a
+  GL file stating one likelihood compare equal on `gl` (F11). Complete Genomics' phred-unit GL is
+  divided the same way. This changes `gl` by one Float32 step on some entries of files that already
+  load. No schema version change (a rule change, no column).
+
 - Normalization as a derived facet (RM6, second slice): `normalize(loaded, reference)` splits
   multi-allelic sites one row per ALT (the other ALT written `.`, each row `split_signal = marker`),
   left-aligns and trims indels whose REF matched the reference, drops exact duplicates (counted), keeps

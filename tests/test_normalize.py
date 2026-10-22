@@ -422,9 +422,8 @@ def test_agrees_with_bcftools_norm(tmp_path: Path, store: ReferenceStore) -> Non
     gl = lambda path: {(r["chrom"], r["pos"], tuple(r["alts"])): r["gl"] for r in load(path).calls.collect().iter_rows(named=True)}  # noqa: E731
     their_gl, my_gl = gl(theirs_path), gl(ours.path)
     carried = {key: value for key, value in my_gl.items() if value is not None}
-    # Within one f32 step: the loader's PL -> GL lands one step off the nearest f32 for some values (F11),
-    # and bcftools re-prints the GL it read at its own precision.
-    differ = {key: (value, their_gl[key]) for key, value in carried.items() if their_gl[key] != pytest.approx(value, rel=1e-6, abs=1e-6)}
+    # Exactly: PL -> GL lands on the Float32 nearest the decimal value (F11), the one bcftools' GL reads as.
+    differ = {key: (value, their_gl[key]) for key, value in carried.items() if their_gl[key] != value}
     assert carried and not differ, differ
 
 

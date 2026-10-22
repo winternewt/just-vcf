@@ -1,5 +1,6 @@
 import gzip
 import re
+import struct
 import zipfile
 from pathlib import Path
 
@@ -474,6 +475,21 @@ def test_vectors_not_parallel_to_their_alleles_are_withheld(tmp_path: Path) -> N
         "1 PL value(s) not one per genotype set to null",
         "1 GP value(s) not one per genotype set to null",
     }
+
+
+def test_pl_and_the_same_likelihood_as_gl_load_equal(tmp_path: Path) -> None:
+    """F11: PL `p` and GL `-p/10` are one likelihood, so they load as the same Float32: the one nearest
+    to `-p/10`, as a GL file's own value is parsed."""
+    values = list(range(0, 300))
+    triples = [values[i : i + 3] for i in range(0, len(values), 3)]
+    pl_records = [f"1\t{100 + i}\t.\tA\tG\t.\t.\t.\tGT:PL\t0/1:{','.join(map(str, t))}" for i, t in enumerate(triples)]
+    gl_records = [f"1\t{100 + i}\t.\tA\tG\t.\t.\t.\tGT:GL\t0/1:{','.join(repr(-p / 10) for p in t)}" for i, t in enumerate(triples)]
+    gl_line = '##FORMAT=<ID=GL,Number=G,Type=Float,Description="Log10 likelihoods">'
+    from_pl, _, _ = frames(write(tmp_path, vcf_text(pl_records, fmt=("GT", "PL")), "pl.vcf"))
+    from_gl, _, _ = frames(write(tmp_path, vcf_text(gl_records, fmt=("GT",), extra_meta=(gl_line,)), "gl.vcf"))
+    assert from_pl["gl"].to_list() == from_gl["gl"].to_list()
+    nearest = [[struct.unpack("f", struct.pack("f", -p / 10))[0] for p in t] for t in triples]
+    assert from_pl["gl"].to_list() == nearest
 
 
 def test_a_vector_key_declared_with_a_fixed_count_is_not_carried(tmp_path: Path) -> None:

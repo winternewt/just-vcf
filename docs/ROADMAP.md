@@ -570,6 +570,12 @@ parses it and its index finds a block from inside its span). Decisions, each wit
   to do, and `merge_sorted` over the whole genome, which needs one key across contigs and a REF
   lookup inside the lazy plan.
 
+Dogfooded on a local DeepVariant gVCF (counts only): 6,436,476 calls and 79,329,981 blocks written in
+461 s (947 MB, a 3.2 MB index), none refused. Reloaded, the `blocks` frame is equal to the input's,
+and every `calls` column is equal row by row except `ref` and `ref_check`, which a reload leaves
+unread until `resolve_ref` runs again. htslib's whole-contig fetch through the index returns the
+frames' count of records on all 182 contigs.
+
 **Shipped 2026-10-22: minus-strand indels in a lift** (rules in docs/SCHEMA.md, "Lifting", step 3).
 An indel on a minus-strand block whose alleles share their first base (VCF's padding base) is
 reverse-complemented, that base dropped from every allele (`alts`, `gt_alleles`, `source_alleles`)

@@ -90,5 +90,13 @@ status lines say what exists. Schema at 0.0.4.
   gVCF output, minus-strand lift indels), follow-ups (6ce13b0: lifted rows realigned, DamagedBgzfError,
   F4 split against the reference; F16 resolved, F17 open). Running: F3 second facet + chip by marker
   overlap. Desk waiting: #72, #73, #80, #83. Part 2 of docs/MVP_READINESS.md waits for the interview.
+- **Review of 76b0a2d..main** (2026-10-23, read-only Opus): queued for one fix builder once the consistency
+  bundle merges (it touches the empty allele): (1) CGI native and key=value facets lack `variant_classes` /
+  `content_filter` (merge seam; CGI's unanchored `""` alleles must count as indels first); (2) an fbvs merge
+  record without INFO/SF lands in no facet, uncounted; (3) CHANGELOG still says F3 is open; (4) a non-damage
+  BGZF read failure walks the file twice; (6) the appended-export facet takes the first export's build as
+  stated; (8) CGI native `wgs` only by `#TITLE`, no `classify` fallback. Lead's decision on (5): the stale
+  sweep removes only entries of an older version, never a newer one (two installs share the user cache).
+  (7) REWRITE_VERSION: no stale copy reachable; bump on the next rewrite-rule change.
 - **Open, not started**: CLI (MVP row 18; not decided), the rest of Part 2 of docs/MVP_READINESS.md (the
   interview).

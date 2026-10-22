@@ -57,4 +57,9 @@ status lines say what exists. Schema at 0.0.4.
   the `[reference]` extra's pysam backs nothing since RM3 (removing it is a surface change); UCSC
   `chr*_random`/`chrUn_*` names do not meet Ensembl accessions (1% of GRCh38 rows unread); one PGP
   VCF under 150 MB raised ValueError in `load` (not yet identified).
+- **Desk #72** (who is who in felis, ksuhaster, newton; default: unknown, never paired) and **#73** (may
+  Privé's ancestry files be redistributed; default: local only), filed 2026-10-22 when the person went
+  unattended. `docs/ANCESTRY_PANELS.md` stays out of CLAUDE.md's read-first list (the lead's call: it
+  matters only to ancestry work). Merged since: RM5 (4c6c9c1), RM6 writer (a1f3317), F10 + SV END
+  (ec95596), RM6 normalize (9469c6b).
 - **Open, not started**: RM2's next loaders, RM3, RM4, RM6, RM268 (cache eviction).

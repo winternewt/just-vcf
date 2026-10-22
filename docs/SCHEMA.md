@@ -471,7 +471,9 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    match pass through, counted, and so do rows whose ALT is no VCF allele (a `-` for a deletion).
 3. **Dedup and sort.** Rows equal in every column are kept once, counted. Rows that state the same
    allele at one position and differ in anything else are all kept, with a warning (charter 8). Then
-   canonical order (Decision 11).
+   canonical order (Decision 11). Because a moved row loses `source_ref`, `ref_check` and `source_gt`,
+   one indel written twice by the source, once already left-aligned and once further right, stays as
+   two rows and is reported as a conflict, not dropped as a duplicate.
 
 Rows the loader flagged as one record of a pre-split site (RM270) pass through as written: run
 `rejoin_split`, then `resolve_ref`, then `normalize`. Blocks pass through unchanged.

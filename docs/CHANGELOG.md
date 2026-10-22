@@ -19,9 +19,78 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   and never counted. Computed, not stored: no schema change. Minor: new exports
   (`sex_chromosome_evidence`, `SexChromosomeEvidence`, `KaryotypicSex`, `XCopies`).
 
+- Normalization as a derived facet (RM6, second slice): `normalize(loaded, reference)` splits
+  multi-allelic sites one row per ALT (the other ALT written `.`, each row `split_signal = marker`),
+  left-aligns and trims indels whose REF matched the reference, drops exact duplicates (counted), keeps
+  conflicting rows side by side with a warning, and sorts. `ad` is sliced, `gl` sliced only where the
+  genotype holds no other ALT, `gp` withheld on split rows. Relation `normalized`; rules in
+  docs/SCHEMA.md ("Normalizing"); no schema version change. Agrees with `bcftools norm -m-any
+  --multi-overlaps . -f` on a synthetic file (sites, genotypes, AD, the GL it keeps), except that it
+  drops the exact duplicates bcftools keeps. `rejoin_split` now leaves a group holding a row with no
+  `source_ref` as written instead of failing on it. On six PGP-HMS uploads, chromosome 22: 235,911 of
+  236,425 rows as bcftools writes them, the rest pre-split input left for `rejoin_split`. New opt-in
+  test variable `JUST_VCF_TEST_REFERENCE_DIR` (`.env.template`). Found on the way: F11 (PL to `gl` one
+  float step off) and F12 (uploads writing a deletion as ALT `-`).
+
+- A symbolic SV's `end_pos` now reads INFO END: `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes
+  end at END where the record gives one, else at POS + |SVLEN|, as SCHEMA.md's `end_pos` rule now says.
+  Before, END was ignored there, so an SV with END and no SVLEN (a caller that writes none, and
+  `write_vcf`'s own output) got `end_pos = pos`. An SVLEN declared `Number=1` is read too. This changes
+  values on files that already load. END and SVLEN that disagree, and an END that is not read (`<INS>`,
+  breakends, Delly's `<TRA>`), are counted in warnings. The per-row Python call that read SVLEN is now a
+  Polars expression. No schema version change (a rule change, no column).
+
+- GP within [0, 1] that does not sum to 1 on every row is now read as probabilities under a VCF 4.3+
+  header, which defines GP so, with the rows counted in a warning (F10). Before, it was withheld as
+  ambiguous, so just-vcf lost `gp` reloading its own `write_vcf` output of a phred GP. This changes
+  values on files that already load: such 4.3+ files now get `gp`, and `source_alleles` on those rows.
+  A 4.2 or older header, or none, still withholds it; a header without a version no longer counts as
+  4.3 for the warnings. No schema version change (a rule change, no column).
+
+- Schema 0.0.7 (RM3): `facets.ref_seqcol_digest` is new; `resolve_ref` fills `ref`, `ref_check`, and an
+  array row's `alts` and `gt` from a reference.
+
 - Schema 0.0.6 (RM2's VCF side): `facets.ploidy_statements` is new, and the caller, its version, the
   vendor and the phasing method are filled from VCF headers. `REWRITE_VERSION` 6 and the schema bump
   orphan earlier cache entries (RM268).
+
+- Privé's worldwide reference (RM5): `just_vcf.ancestry.build_prive_reference` joins the two public
+  figshare files (group frequencies and 16 PC loadings, GRCh37) into one parquet, and
+  `prive_proportions(loaded, reference_dir)` gives a facet's proportions over the 21 groups with
+  block-bootstrap standard errors (200 blocks, 100 resamples, seeded). Ported from just-prs
+  `ancestry/prive.py` (docs/PROVENANCE.md); a facet not on GRCh37 is unknown with a reason rather than
+  lifted. On PGP-HMS data: a DRAGEN GRCh37 genome used 5,814,017 of 5,816,590 sites (3,426,634 of them
+  absences read as reference) in 13 s, a 23andMe build 37 export 888,688; largest standard error 0.016
+  in both. Which panels work, and how they were checked: docs/ANCESTRY_PANELS.md. New opt-in test
+  variable `JUST_VCF_ANCESTRY_DIR` (`.env.template`). No schema change.
+
+- Population inference behind the `[ancestry]` extra (RM5): `just_vcf.ancestry.infer_ancestry(loaded,
+  panel_dir, panel)` places a facet on a reference-PCA panel (FRAPOSA's shrinkage-corrected projection,
+  then a 20-neighbour vote and PC-centroid proportions), and `consensus` combines estimates over the five
+  continental groups. Ported from just-prs `ancestry/` without its `PRSCatalog` wrappers or Hugging Face
+  pull; a panel is a local directory, and one just-prs built reads unchanged (docs/PROVENANCE.md). The
+  answer is an `AncestryEstimate`: the leading group, the vote, its margin, proportions and how many
+  panel sites it rests on, split into observed and absent-read-as-reference; or None with a reason
+  (`assembly_unknown`, `assembly_mismatch`, `panel_missing`, `too_few_sites`). The facet's own
+  `assembly_label` picks the panel's assembly, and its `absence_means` decides whether an absent site
+  is homozygous reference (`weak_reference`, or inside a `ref` block) or unknown; a no-call is never 0.
+  `just_vcf` itself does not import it, so the core still imports without numpy. No schema change.
+
+- `write_vcf(loaded, path)` writes a facet back out as a single-sample VCF 4.3, BGZF by default (RM6,
+  first slice; new exports `write_vcf`, `VcfWritten`, `ContigNames`, `UnwritableRowsError`,
+  `UnsortedRowsError`). It keeps GT with its per-haplotype phasing, GQ, DP, AD, GL, GP, DS, FT and PS,
+  listing per row only the keys that row has; declares every FILTER, INFO and FORMAT key it writes;
+  names the facet, its source digest and this package's version in the header, never the source
+  path. REF is `ref`, else what the file wrote, never the genotype: a row with neither (an array before
+  RM3), a REF mismatch, or no ALTs is refused with a count per reason, or skipped and counted with
+  `resolved_only=True`. Rows RM270 flagged as split are written as held, tagged `INFO/JUST_VCF_SPLIT`
+  and counted; blocks are counted and not written (a gVCF block needs a REF base the blocks frame does
+  not hold before RM3). Contigs as stored, `chr`-prefixed (`MT` → `chrM`), or as the source spelled
+  them. Two writes of the same frames give the same bytes. Round trips through `load`: a PGP-HMS VCF
+  upload (956,064 calls) and a local DeepVariant genome (6,436,476 calls) came back with 0 key
+  mismatches; htslib reads both outputs record for record, and the genome's output, reloaded and
+  written again, gives the same body byte for byte. The PGP-HMS file's GP did not come back (F10).
+  Minor: new functions and types only.
 
 - Schema 0.0.5 (RM4): `facets.sorted_name_length_pairs_digest` is new, and VCF facets now fill
   `assembly_label` (basis `inferred`), `callset_type` and `absence_means` where the evidence settles them.
@@ -123,6 +192,18 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   `bcftools call --ploidy GRCh38`), with no vocabulary. Schema change: one new nullable column, minor.
   Checked against the 233 PGP-HMS pipeline VCF headers (CGI and freeBayes+VarScan2): every one names
   its caller, none conflicts.
+
+- `resolve_ref(loaded, reference)` (RM3, charter 10) reads REF from the facet's assembly sequence,
+  held in a gtars refget store (`ReferenceStore`; a FASTA, plain or gzipped, is added to the store at
+  `JUST_VCF_REFERENCE_DIR` once). A VCF row gets `ref` over its `source_ref` span and `ref_check`
+  `match` or `mismatch`; an array row gets `ref` from the reference, `alts` from its genotype's
+  non-REF alleles (sorted) and `gt` into `[ref] + alts`. REF is never taken from the genotype. Before
+  any base is read, each contig is matched with the reference by its stated length and md5, or, for
+  arrays, by assembly label; a primary contig of another length refuses the facet
+  (`ReferenceMismatchError`), and any other unmatched contig (hg19's chrM against GRCh37's MT) is left
+  unread, counted in the warnings. I/D codes, no-calls and spans past a contig's end stay unread too.
+  `chr`-prefixed and plain names meet through `canonical_chrom`. The facet keeps its id and gains
+  `facets.ref_seqcol_digest` (schema: one new nullable column, version bump at merge). Minor.
 
 - A sites-only VCF (no FORMAT column, no sample) is refused by `load` with the new `NoSampleError`
   (exported), instead of failing inside the parquet spill with a polars conversion error (F8). Minor:

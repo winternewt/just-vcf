@@ -14,6 +14,8 @@ def isolated_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest
     """Loader cache under a temporary directory, never the user's real cache."""
     path = tmp_path_factory.mktemp("cache")
     monkeypatch.setenv("JUST_VCF_CACHE_DIR", str(path))
+    # No configured reference store: a test that wants one passes it or sets the variable itself.
+    monkeypatch.setenv("JUST_VCF_REFERENCE_DIR", "")
     return path
 
 
@@ -29,6 +31,40 @@ def samples_dir() -> Path:
         value = dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_SAMPLES_DIR")
     if not value:
         pytest.skip("JUST_VCF_SAMPLES_DIR is not set")
+    path = Path(value)
+    if not path.is_dir():
+        pytest.skip(f"{path} is absent")
+    return path
+
+
+@pytest.fixture(scope="session")
+def ancestry_dir() -> Path:
+    """`JUST_VCF_ANCESTRY_DIR`, the directory of reference panels, read like `samples_dir`."""
+    if "JUST_VCF_ANCESTRY_DIR" in os.environ:
+        value = os.environ["JUST_VCF_ANCESTRY_DIR"]
+    else:
+        value = dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_ANCESTRY_DIR")
+    if not value:
+        pytest.skip("JUST_VCF_ANCESTRY_DIR is not set")
+    path = Path(value)
+    if not path.is_dir():
+        pytest.skip(f"{path} is absent")
+    return path
+
+
+@pytest.fixture(scope="session")
+def test_reference_dir() -> Path:
+    """`JUST_VCF_TEST_REFERENCE_DIR`, a real reference store (GRCh37 and GRCh38), read like `samples_dir`.
+
+    Apart from `JUST_VCF_REFERENCE_DIR`, which every test sees empty: a test that reads a real assembly
+    asks for this fixture, and only reads the store.
+    """
+    if "JUST_VCF_TEST_REFERENCE_DIR" in os.environ:
+        value = os.environ["JUST_VCF_TEST_REFERENCE_DIR"]
+    else:
+        value = dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_TEST_REFERENCE_DIR")
+    if not value:
+        pytest.skip("JUST_VCF_TEST_REFERENCE_DIR is not set")
     path = Path(value)
     if not path.is_dir():
         pytest.skip(f"{path} is absent")

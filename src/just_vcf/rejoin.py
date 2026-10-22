@@ -99,6 +99,8 @@ def _join(rows: list[dict]) -> dict | str:
     """One joined row, or the reason the group stays as written."""
     if any(row["gt"] is None for row in rows):
         return "a row has no genotype"
+    if any(row["source_ref"] is None for row in rows):
+        return "a row has no source REF (normalize moved it)"
     if any(allele.startswith("<") or allele == "*" for row in rows for allele in row["alts"] or []):
         return "a symbolic allele"
     ref = max((row["source_ref"] for row in rows), key=len)

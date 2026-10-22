@@ -96,6 +96,9 @@ CGI_CNV_WINDOW = "<CGA_CNVWIN>"
 _SV_LENGTH_TYPES = ("DEL", "DUP", "INV", "CNV")
 """Symbolic allele types whose extent is `SVLEN` bases after POS. INS and breakends end at POS."""
 
+_SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
+"""An ALT of one of `_SV_LENGTH_TYPES`, subtypes included (`<DUP:TANDEM>`, `<DEL:ME:ALU>`)."""
+
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
@@ -580,6 +583,9 @@ def read_records(
             reshaped += [pl.col(name).list.first().alias(name), (pl.col(name).list.len() > 1).alias(f"_multi_{key}")]
         elif number != "1" and not is_list:
             reshaped.append(pl.concat_list(pl.col(name)).alias(name))
+    if "info_SVLEN" in present and not isinstance(schema["info_SVLEN"], pl.List):
+        # Declared Number=1, as older SV callers do: one value, read as the list of a one-ALT record.
+        reshaped.append(pl.concat_list(pl.col("info_SVLEN")).alias("info_SVLEN"))
     frame = frame.with_columns(reshaped)
     # A marker declared with a Number other than 1 comes back as a list: its first value is enough.
     frame = frame.with_columns(
@@ -615,6 +621,7 @@ def scan_stats(records: pl.LazyFrame) -> dict:
     plan = records.select(
         *out_of_range,
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.max().max().alias("gp_max"),
+        *_end_stats(alts, pl.col("ref")),
         _is_block_record(alts).any().alias("any_block"),
         (alts.list.len().eq(1) & alts.list.first().eq(CGI_CNV_WINDOW)).sum().alias("cnv_windows"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).is_not_null().sum().alias("gp_rows"),
@@ -795,6 +802,13 @@ def to_rows(
         for name, count in stats.items()
         if name.startswith("_multi_") and count
     ]
+    if stats.get("sv_end_disagrees"):
+        warnings.append(f"{stats['sv_end_disagrees']} symbolic SV record(s) whose INFO END disagrees with POS + |SVLEN|: end_pos follows END")
+    if stats.get("end_not_read"):
+        warnings.append(
+            f"{stats['end_not_read']} record(s) carry an INFO END that is not their extent (an <INS>, a breakend, "
+            "a sequence allele or a symbolic allele of no known span): end_pos does not read it"
+        )
     v44 = (header.version_tuple or (0, 0)) >= (4, 4)
     # The file's REF goes to `source_ref` only. `ref` is read from the assembly sequence or stays null
     # (charter 10), so polars-bio's `ref` column must not reach the frame under that name.
@@ -803,7 +817,7 @@ def to_rows(
         warnings.append(f"{stats['cnv_windows']} {CGI_CNV_WINDOW} record(s) left out: copy-number windows, not genotypes")
         rows = rows.filter(~(pl.col("alts").list.len().eq(1) & pl.col("alts").list.first().eq(CGI_CNV_WINDOW)))
     rows = rows.with_columns(
-        _end_pos(sv_declared="SVLEN" in header.info).alias("end_pos"),
+        _end_pos(pl.col("alts"), pl.col("source_ref")).alias("end_pos"),
         _is_block_record(pl.col("alts")).alias("_block"),
     )
 
@@ -903,40 +917,55 @@ def _dtype(number: str, kind: str) -> pl.DataType:
     return scalar if number == "1" else pl.List(scalar)
 
 
-def _end_pos(sv_declared: bool) -> pl.Expr:
-    """VCF 4.5's computed END, per allele, then the largest over the site (SCHEMA.md `end_pos`)."""
-    ref_end = pl.col("start") + pl.col("source_ref").str.len_chars().cast(pl.UInt32) - 1
+def _has_sv(alts: pl.Expr) -> pl.Expr:
+    """True where an ALT is a symbolic SV that spans reference bases (`_SV_LENGTH_TYPES`)."""
+    return alts.list.eval(pl.element().str.contains(_SV_PATTERN)).list.any()
+
+
+def _svlen_end(alts: pl.Expr) -> pl.Expr:
+    """`POS + |SVLEN|`, the largest over the length-type SV alleles that have an SVLEN; null where none
+    has one. An SVLEN that is not one value per ALT cannot be matched to its alleles and is not read."""
+    svlen = pl.col("info_SVLEN").cast(pl.List(pl.Int64), strict=False)
+    fitting = pl.when(svlen.list.len() == alts.list.len()).then(svlen).otherwise(None)
+    is_sv = alts.list.eval(pl.when(pl.element().str.contains(_SV_PATTERN)).then(pl.lit(1, dtype=pl.Int64)).otherwise(None))
+    return pl.col("start").cast(pl.Int64) + (is_sv * fitting.list.eval(pl.element().abs())).list.max()
+
+
+def _end_pos(alts: pl.Expr, ref: pl.Expr) -> pl.Expr:
+    """VCF 4.5's computed END, per allele, then the largest over the site (SCHEMA.md `end_pos`).
+
+    A length-type SV allele ends at the record's INFO END where it gives one, else at POS + |SVLEN|.
+    END is read only there, and for `<*>` blocks (after FORMAT LEN), `<CGA_NOCALL>` spans and ALT `.`
+    blocks: an `<INS>` or a breakend ends at its anchor, and another symbolic allele's END is not known
+    to be on this contig (Delly's `<TRA>` writes the partner's position on CHR2 there).
+    """
+    ref_end = pl.col("start") + ref.str.len_chars().cast(pl.UInt32) - 1
+    end = pl.col("info_END").cast(pl.Int64)
     block_end = (
         pl.when(pl.col("fmt_LEN").is_not_null())
         .then(pl.col("start") + pl.col("fmt_LEN").cast(pl.UInt32) - 1)
-        .otherwise(pl.col("info_END").cast(pl.UInt32))
-    )
-    sv_pattern = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
-    has_sv = pl.col("alts").list.eval(pl.element().str.contains(sv_pattern)).list.any()
-    sv_end = (
-        pl.struct("start", "alts", "info_SVLEN").map_elements(
-            lambda row: _sv_end(row["start"], row["alts"], row["info_SVLEN"], sv_pattern), return_dtype=pl.UInt32
-        )
-        if sv_declared
-        else pl.lit(None, dtype=pl.UInt32)
+        .otherwise(end)
     )
     return pl.max_horizontal(
         ref_end,
-        pl.when(pl.col("alts").list.contains("<*>")).then(block_end).otherwise(None),
-        pl.when(pl.col("alts").list.contains(CGI_NOCALL)).then(pl.col("info_END").cast(pl.UInt32)).otherwise(None),
-        pl.when(pl.col("alts").list.len() == 0).then(pl.col("info_END").cast(pl.UInt32)).otherwise(None),
-        pl.when(has_sv).then(sv_end).otherwise(None),
+        pl.when(alts.list.contains("<*>")).then(block_end).otherwise(None),
+        pl.when(alts.list.contains(CGI_NOCALL)).then(end).otherwise(None),
+        pl.when(alts.list.len() == 0).then(end).otherwise(None),
+        pl.when(_has_sv(alts)).then(pl.coalesce(end, _svlen_end(alts))).otherwise(None),
     ).cast(pl.UInt32)
 
 
-def _sv_end(start: int, alts: list[str] | None, svlen: list[int | None] | None, pattern: str) -> int | None:
-    alts = alts or []
-    ends = [
-        start + abs(length)
-        for allele, length in zip(alts, svlen or [None] * len(alts), strict=False)
-        if length is not None and re.match(pattern, allele)
+def _end_stats(alts: pl.Expr, ref: pl.Expr) -> list[pl.Expr]:
+    """Counts for the warnings: SV records whose END and SVLEN disagree, and records whose END is
+    not read because it is not their extent."""
+    end = pl.col("info_END").cast(pl.Int64)
+    ref_end = pl.col("start").cast(pl.Int64) + ref.str.len_chars().cast(pl.Int64) - 1
+    has_sv = _has_sv(alts)
+    read = has_sv | alts.list.contains("<*>") | alts.list.contains(CGI_NOCALL) | (alts.list.len() == 0)
+    return [
+        (has_sv & (end != _svlen_end(alts))).fill_null(False).sum().alias("sv_end_disagrees"),
+        (~read & (end != ref_end)).fill_null(False).sum().alias("end_not_read"),
     ]
-    return max(ends) if ends else None
 
 
 def _phase_sets(rows: pl.LazyFrame) -> pl.LazyFrame:
@@ -960,30 +989,35 @@ def _phase_sets(rows: pl.LazyFrame) -> pl.LazyFrame:
 
 
 def _gp(header: Header, stats: dict) -> tuple[pl.Expr, str | None]:
-    """`gp` from GP or PP. GP's scale is read from the values when they settle it, else withheld.
+    """`gp` from GP or PP. GP's scale is read from the values where they settle it, else from the
+    header's VCF version where it defines one, else withheld.
 
     VCF before 4.3 wrote GP phred-scaled, and 4.3 made it a probability. Real files do not follow the
     version: imputation tools wrote probabilities under 4.1 and 4.2 headers. So values above 1 mean
     phred, and values that are all within [0, 1] and sum to 1 per row mean probabilities, whatever
-    the header says; the warnings name a header that disagreed. Anything else is ambiguous, and GP
-    is not used.
+    the header says; the warnings name a header that disagreed. Values within [0, 1] that do not sum
+    to 1 (posteriors converted from rounded phred, as just-vcf's own 4.3 export writes them) are
+    probabilities under a 4.3+ header, which defines GP so, with the rows counted in a warning. Under
+    an older header, or one that states no version, they settle nothing, and GP is not used.
     """
     from_pp = pl.col("fmt_PP").cast(pl.List(pl.Float32), strict=False).list.eval(pl.lit(10.0) ** (pl.element() / -10.0))
     largest = stats["gp_max"]
     if largest is None:
         return from_pp, None
     raw = pl.col("fmt_GP").cast(pl.List(pl.Float32), strict=False)
-    header_says = "phred" if (header.version_tuple or (4, 3)) < (4, 3) else "probabilities"
+    version = header.version_tuple
+    defined = None if version is None else ("phred" if version < (4, 3) else "probabilities")
+    off_one = f"{stats['gp_off_one']} of {stats['gp_rows']} rows do not sum to 1"
     if largest > 1.0 + 1e-6:
         found, gp = "phred", raw.list.eval(pl.lit(10.0) ** (pl.element() / -10.0))
     elif stats["gp_off_one"] == 0:
         found, gp = "probabilities", raw
+    elif defined == "probabilities":
+        return pl.coalesce(raw, from_pp), f"GP read as probabilities, as the {header.version} header defines it: {off_one}"
     else:
-        return from_pp, (
-            f"GP is ambiguous: every value is within [0, 1] but {stats['gp_off_one']} of {stats['gp_rows']} "
-            "rows do not sum to 1; GP not used"
-        )
-    note = None if found == header_says else f"GP written as {found} under a {header.version} header; read as {found}"
+        stated = "states no VCF version" if version is None else f"is {header.version}, where GP was phred-scaled"
+        return from_pp, f"GP is ambiguous: every value is within [0, 1] but {off_one}, and the header {stated}; GP not used"
+    note = None if defined in (None, found) else f"GP written as {found} under a {header.version} header; read as {found}"
     return pl.coalesce(gp, from_pp), note
 
 

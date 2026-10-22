@@ -51,4 +51,15 @@ status lines say what exists. Schema at 0.0.4.
   writer, RM5 ancestry, RM269 evidence (handed the depth result: X/auto 0.42–0.50 vs 0.89–1.00, X-degenerate
   Y ALT DP/auto 0.56–0.82 vs 0.35–0.40). Open from the array builder: `dropped_fields` is `[]` for the new
   table formats and null for the rsid tables; aligning them changes values on files that already load.
+  Merged next: RM2 VCF side (bd5c02e, 0.0.6), RM3 (db67f83, 0.0.7). Running: RM6 writer, RM5, RM269
+  evidence, RM2 rest (CGI native, fbvs key=value). Held for the person or later, from RM3: a
+  caller-asserted `assembly=` in `resolve_ref` (a label would stand in for evidence: declined for now);
+  the `[reference]` extra's pysam backs nothing since RM3 (removing it is a surface change); UCSC
+  `chr*_random`/`chrUn_*` names do not meet Ensembl accessions (1% of GRCh38 rows unread); one PGP
+  VCF under 150 MB raised ValueError in `load` (not yet identified).
+- **Desk #72** (who is who in felis, ksuhaster, newton; default: unknown, never paired) and **#73** (may
+  Privé's ancestry files be redistributed; default: local only), filed 2026-10-22 when the person went
+  unattended. `docs/ANCESTRY_PANELS.md` stays out of CLAUDE.md's read-first list (the lead's call: it
+  matters only to ancestry work). Merged since: RM5 (4c6c9c1), RM6 writer (a1f3317), F10 + SV END
+  (ec95596), RM6 normalize (9469c6b).
 - **Open, not started**: RM2's next loaders, RM3, RM4, RM6, RM268 (cache eviction).

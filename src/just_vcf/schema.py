@@ -15,7 +15,7 @@ import polars as pl
 
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.6"
+SCHEMA_VERSION = "0.0.7"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -118,6 +118,7 @@ FACETS = pl.Schema(
         "assembly_label_basis": enum_dtype(AssemblyLabelBasis),
         "seqcol_digest": pl.String,
         "sorted_name_length_pairs_digest": pl.String,
+        "ref_seqcol_digest": pl.String,
         "callset_type": enum_dtype(CallsetType),
         "absence_means": enum_dtype(AbsenceMeans),
         "phasing_method": pl.String,

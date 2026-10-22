@@ -13,6 +13,8 @@ from just_vcf.loading import (
     vcf_samples,
 )
 from just_vcf.loaders.table import TableLayoutError
+from just_vcf.normalize import normalize
+from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
 from just_vcf.schema import (
     BLOCKS,
@@ -29,6 +31,7 @@ from just_vcf.schema import (
     SplitSignal,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
+from just_vcf.writing import ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
 
 __version__ = version("just-vcf")
 
@@ -42,6 +45,7 @@ __all__ = [
     "AssemblyLabelBasis",
     "BlockKind",
     "CallsetType",
+    "ContigNames",
     "Loaded",
     "MultiSampleError",
     "NoSampleError",
@@ -49,18 +53,27 @@ __all__ = [
     "KaryotypicSex",
     "PhaseSetKind",
     "RefCheck",
+    "ReferenceMismatchError",
+    "ReferenceStore",
     "SexChromosomeEvidence",
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
     "TableLayoutError",
+    "UnsortedRowsError",
     "UnsupportedFormatError",
+    "UnwritableRowsError",
+    "VcfWritten",
     "XCopies",
     "__version__",
     "load",
+    "normalize",
     "open_payload",
+    "reference_dir",
     "rejoin_split",
+    "resolve_ref",
     "sex_chromosome_evidence",
     "sniff",
     "vcf_samples",
+    "write_vcf",
 ]

@@ -87,11 +87,58 @@ Header evidence found while declaring the VCF formats:
 Not identifiable from the header: 23andMe's exome VCF, the Dante- and Nebula-named uploads (generic GATK).
 
 ## RM3 — REF lookup and padding
-Severity: high · Status: open (checked 2026-10-18: nothing built; every row's `ref_check` is `not_run`) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the FASTA tier shipped as `resolve_ref` on a gtars refget store, for VCF and array rows; indel anchor bases and reference-supported positions are left) · Owner: lead
 
 Port just-prs `reference_allele.py` (reference-panel tier, FASTA tier, FASTA build check). New work:
 ALT derivation from genotype against REF, indel anchor bases, chr-prefixed FASTA support, emitting
 reference-supported positions.
+
+**Shipped 2026-10-22: `resolve_ref` (`just_vcf.reference`).** The rules are in docs/SCHEMA.md
+(Decision 2, "How RM3 fills these slots"). Choices made, each with the alternative rejected:
+
+- **Same facet, filled, not a derived facet.** Every column it writes is one the schema defines as
+  "not read yet", and the result is fixed by the facet and its assembly's sequence. A derived facet
+  (`relation = ref_checked`) would leave every loaded facet `not_run` for ever beside a checked twin
+  with a second id. The consequence: a resolved and an unresolved frame of one `facet_id` can both
+  exist in a session, so a consumer must not join a resolved `facets` with an unresolved `calls`;
+  `ref_seqcol_digest` (null before) and `ref` tell them apart. The lead may still prefer the derived
+  facet; nothing else depends on the choice.
+- **The reference is a gtars `RefgetStore` on disk** (`JUST_VCF_REFERENCE_DIR`, default
+  `reference/` under the cache dir), over pysam faidx: it is a core dependency, exact, and gives the
+  seqcol digest the facet records. A FASTA is added once; a fingerprint alias (path, size, mtime)
+  keeps it from being digested again.
+- **Assembly matching per contig, by stated length and md5, else by label.** The reference's label
+  comes from its contig 1 length (the just-prs fingerprint idea), or a label the caller asserts when
+  adding a FASTA, which its lengths must not contradict. Rejected: matching by label alone (hg19 and
+  GRCh37 share it and differ on MT), and refusing a facet over any one unmatched contig (an hg19 VCF
+  would lose every autosome over chrM).
+- **Array ALTs sorted by allele string**, not in genotype order, so two exports of one chip agree.
+- **A store holding several collections** picks the one matching the most rows; a tie is refused
+  unless `collection=` names one.
+
+**Dogfooded 2026-10-22** against Ensembl GRCh37 and GRCh38 primary assemblies in one store (built
+from the gzipped FASTAs in 103 s and 25 s, 2.2 GB; each assembly named by its own contig 1 length),
+on PGP-HMS files read from the Krypton share, aggregates only:
+
+- Six plain VCFs (73–142 MB). Five resolved: 34.1M rows read, all but 2 matching their source REF, and
+  both of those against an IUPAC code in the reference. One stated lengths for 194 GRCh38 contigs in
+  UCSC names; its `chr*_random` and `chrUn_*` contigs (44,594 rows, 1%) stayed unread, because
+  Ensembl names them by accession (`KI270721.1`) and `canonical_chrom` does not map the two. One VCF
+  with neither `##contig` lines nor a build hint was refused. A sixth failed to load (not RM3's).
+- Four build-37 23andMe exports (1.0–1.4M rows): 97.5–99.4% of rows read; the rest are I/D codes,
+  no-calls and MT. 14.7–19.4% of the rows read carry no REF allele, the range expected for
+  homozygous non-reference calls on a chip, not for a wrong build or strand. Four build-36 exports
+  were refused: no GRCh36 reference in the store.
+- `resolve_ref` on the 1.4M-row export: 11.4 s (load 1.3 s), of which 1.3 s reading bases.
+
+Order with `rejoin_split`: re-join first, then `resolve_ref`. The other way round, the re-joined rows
+carry no `ref` while the facet keeps `ref_seqcol_digest`, and `resolve_ref` refuses it as already read.
+
+Left: indel anchor bases (no loaded format lacks them: 23andMe I/D codes need the chip manifest, and
+Living DNA's run-together `CCA` cannot be split without the site's alleles); emitting
+reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither
+`##contig` lengths nor a build hint, and an array without a stated build, are refused: nothing can
+show which assembly they are on.
 
 **Measured 2026-09-30: gtars RefgetStore as the sequence source** (gtars 0.10, Ensembl GRCh38
 primary-assembly FASTA, 3.15 GB, 194 sequences):
@@ -144,13 +191,20 @@ inference does not read yet; gVCF `END` expansion; an SNV-only or indel-only spl
 variant class too. Unmarked imputation output with read-evidence keys would read as `wgs`.
 
 ## RM5 — Population inference
-Severity: medium · Status: open · Owner: lead
+Severity: medium · Status: in progress (2026-10-22: PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped as `just_vcf.ancestry`; panels in docs/ANCESTRY_PANELS.md) · Owner: lead
 
 Port the just-prs `ancestry/` package (PCA projection, KNN, proportions, consensus) behind the
 `[ancestry]` extra, without the `PRSCatalog` wrappers or the Hugging Face pull.
 
+Left: no reference-PCA panel exists on this machine, so `infer_ancestry` has run only on synthetic
+panels (a just-prs `1000g`/`hgdp_1kg` build fetched by hand would be the first real one); the AADR
+Human Origins builder (just-prs `aadr.py`, `eigenstrat.py`) is not ported; there is no uncertainty for
+the PCA path beyond the vote and its margin (a site bootstrap does not apply to OADP as it does to
+Privé's sums); the consensus multiplies methods from one panel as if independent; a facet on
+another assembly waits for RM6's liftover.
+
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: open (checked 2026-10-18: no writer yet) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, and normalization, `normalize`: split, left-align, trim, dedup, sort; left: gVCF blocks, splitting `<*>` sites, strand, liftover, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -162,6 +216,105 @@ input, where a split row's `0` can mean another ALT: it writes `.` for the other
 vcflib and `bcftools --multi-overlaps .` do (S2, from just-dna-lite). `rejoin_split` (RM270) re-joins
 such input today.
 
+**Shipped 2026-10-22: the writer** (`just_vcf.writing.write_vcf`; rules in its module docstring).
+One facet's `calls` out as a single-sample VCF 4.3, BGZF by default, through the repo's `BgzfWriter`.
+Round-tripped through `load` on a PGP-HMS upload (956,064 calls) and a local DeepVariant genome
+(6,436,476 calls) with 0 key mismatches, and checked by htslib (pysam, opt-in test). Decisions, each
+with what was rejected:
+
+- Our own text writer, not polars-bio's `sink_vcf`. Rejected: `sink_vcf`, which drops an undeclared
+  column silently (P13), wants polars-bio's genotype shape rather than `gt` + `phased`, and leaves float
+  and GT formatting, so byte determinism, to another library.
+- VCF 4.3. Rejected: 4.2, where GP is phred and `gp` holds probabilities; 4.4+, which our own loader
+  reads with the first haplotype's phase withheld (P4).
+- `gl` is written as GL. Rejected: PL by rounding `-10·gl`, since the frame does not remember whether
+  the source wrote PL, and a GL source would lose precision. `gl`, `gp` and `ad` are written only where
+  `source_alleles` is the written `[REF] + ALTs`; elsewhere they are left out and counted.
+- FORMAT is listed per row, keys with a value only. Rejected: one FORMAT string per file with `.` for
+  missing, which turns a GT the source left out into an uncalled `.` on reload.
+- REF is `ref`, else `source_ref`. Unwritable rows (no REF, a REF mismatch, no ALTs, a genotype not
+  indexed or indexed past its ALTs) raise `UnwritableRowsError` with a count per reason, unless
+  `resolved_only=True`. Rejected: writing them with a placeholder REF, or quietly leaving them out.
+- Split-flagged rows (RM270) are written as held, tagged `INFO/JUST_VCF_SPLIT=<signal>`, with a
+  warning and the count. Rejected: refusing until `rejoin_split` runs, which would block exporting a
+  pre-split file as it came; and writing them untagged, which loses the marker signal (the marker INFO
+  key is not in the frame).
+- Blocks are counted in the result and the warnings, not written. A gVCF block record needs the REF
+  base at its start, and the `blocks` frame has none before RM3 reads the sequence.
+- Contig names: `stored` (canonical), `chr` (a listed map, `MT` → `chrM`, nothing by pattern; other
+  contigs unchanged), or `source` (the facet's `contig_map`, and its `header_contigs` for a declared
+  contig with no rows; refused where the source spelled one contig two ways). `##contig` lines are sorted in the rows' canonical order, so a tool that checks
+  records against the header's order (GATK) accepts the file. Rejected: the source header's order,
+  which can put `chrM` first while the rows put it after `Y`.
+- The header names `facet_id`, `source_sha256`, `format_id`, a derived facet's parent and relation, the
+  assembly label and the package version. It leaves out `source_path` and the source's `##SAMPLE` and
+  `##PEDIGREE` lines, which can carry a real name. The sample column is the facet's `sample`, else
+  the `facet_id` for a source that names none, or the caller's `sample=`.
+- Rows must arrive grouped by contig with positions ascending, as `load` emits them; otherwise
+  `UnsortedRowsError`, and nothing is left at the target path. Rejected: sorting inside the writer,
+  which holds the whole frame in memory on a genome.
+
+**Shipped 2026-10-22: normalization** (`just_vcf.normalize.normalize`; rules in docs/SCHEMA.md,
+"Normalizing"). A derived facet, `relation = normalized`, from a facet `resolve_ref` has read, with
+bases read from the same collection. Checked against `bcftools norm -m-any --multi-overlaps . -f`
+(htslib's, bundled in pysam) on a synthetic file of 64 records: the same rows, genotypes and AD, and
+the same GL wherever we keep one. Dogfooded on six PGP-HMS VCF uploads (GRCh37, 176 thousand to
+7.7 million rows, read from the Krypton share), chromosome 22 against bcftools: 235,911 of 236,425
+rows identical in position, REF, ALT and genotype; all 514 that differ, in two files, are rows the
+loader flagged as one record of a pre-split site, which `normalize` leaves for `rejoin_split`.
+`normalize` took 1–34 s per genome. Splits per genome ranged from 22 to 92,403 sites, trimmed rows
+up to 55,350; one upload holds 9,213 positions with two records of one allele (they
+differ in `ids`), kept side by side. Found on the way: F11, F12. Decisions, each with what was
+rejected:
+
+- Our own Polars pass, not a bcftools subprocess: the frame is the product, bcftools would need the
+  facet written out and read back, and it is not a core dependency. Splitting and rewriting are Polars
+  expressions; only the left-align loop runs in Python, on `(pos, REF, ALT)` scalars of the candidate
+  rows (building rows as Python dicts took 78 s on an 831-thousand-row genome, against 8 s now).
+  Reference bases are fetched in one batch per contig, 100 bases left of each indel, and again 16 times
+  wider for the rows a repeat carried further.
+- The other ALT is written `.`, not `0` (RM270's finding). Rejected: bcftools' default `0`, which reads
+  as a REF haplotype the person does not have.
+- Split rows carry `split_signal = marker`, as vt's output does once loaded, so `rejoin_split` can
+  join them. Rejected: a new `SplitSignal` value (a new Enum category changes the column's dtype, a
+  schema bump), and no flag at all (the row would not say it is one part of a site). In a written file
+  the tag is `write_vcf`'s `JUST_VCF_SPLIT`, which the loader does not read back as a marker yet; vt's
+  `OLD_MULTIALLELIC` and bcftools' `--old-rec-tag` were rejected because their values are the original
+  record, which the frame does not keep per row.
+- `gl` on a split row only where no GT slot holds another ALT. Rejected: bcftools' slice on every row,
+  which on `1/2` leaves a `1/.` row whose likelihoods point at `0/0`. `gp` withheld on split rows.
+  Rejected: bcftools' unrescaled slice (it does not sum to 1, and the loader drops such GP, F10) and a
+  rescaled one (other values than the caller's).
+- On a moved or trimmed row, `source_ref`, `ref_check`, `source_gt` and the VRS ids are null and `ref`
+  carries the new REF. Rejected: `ref_check = match` on the new bases, which would compare the sequence
+  with itself; and keeping the old `source_ref`, which no longer describes the row's span.
+- Sites with a symbolic allele (`<*>`, `<DEL>`, breakends) are left as written. bcftools splits `<*>`
+  off as its own `0/.` row, which our loader would read back as a reference block; a DeepVariant gVCF
+  writes `<*>` on every variant record, so these stay multi-allelic for now.
+- Only `ref_check = match` rows are aligned or trimmed. Rejected: trimming unchecked rows, which needs
+  no bases but rewrites a REF nobody has shown to be right.
+- Pre-split input (RM270 flags) passes through. Rejected: aligning those rows, which would move one
+  row of a site away from the other and keep `rejoin_split` from finding it.
+- Exact duplicates are dropped; rows stating one allele with other values are all kept (charter 8).
+  Rejected: bcftools `-d`, which keeps the first.
+
+**Left in RM6:** writing gVCF blocks (after RM3); a tabix index beside the output; SVLEN for symbolic
+SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
+does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting sites that carry `<*>`;
+reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; liftover.
+
+
+## RM271 — VRS allele ids
+Severity: high · Status: in progress (a builder, 2026-10-22) · Owner: lead
+
+Charter invariant 4: a call's identity is the VRS Allele id of its fully justified allele on a
+refget-addressed sequence, and that id is the join key between facets on the same assembly. Today
+`calls.vrs_allele_ids` is filled nowhere, though gtars (a core dependency) mints VRS ids and normalizes
+alleles. It became possible with RM3: `resolve_ref` reads REF from a refget store and records the
+collection on `facets.ref_seqcol_digest`, so each allele can be placed on a sequence with a refget
+accession. An id that cannot be minted conformantly (an allele that cannot be justified, a contig with
+no refget accession, an unresolved REF, an array I/D code) is withheld with a counted reason in
+`vrs_errors`, never approximated. vrs-python is a test oracle only (CLAUDE.md §5).
 
 ## RM268 — Cache eviction
 Severity: medium · Status: open · Owner: lead

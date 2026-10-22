@@ -7,9 +7,9 @@ for the extended shape, each with the question the interview has to settle befor
 run never has to stop and ask. Nothing in Part 2 is on the roadmap until the interview accepts it; ids
 are claimed then, not before.
 
-**In one line:** the readers exist; the identity layer and the writer do not. A file comes in and
-becomes three frames, but no row carries a VRS id, no facet carries a seqcol digest, no REF has been
-checked against a reference, and nothing can be written back out. just-vcf 0.1.0 is not on PyPI.
+**In one line (updated 2026-10-22, after the first builder waves):** the readers, REF lookup and the
+VCF writer exist; VRS ids, normalization and the sex-chromosome finding are being built. just-vcf 0.1.0
+is not on PyPI.
 
 ## Part 1 — the minimal shape against the code
 
@@ -19,24 +19,24 @@ Status: **shipped**, **partial**, or **not started**.
 |---|---|---|---|---|---|
 | 1 | Recognise a file from its content | minimal shape | shipped | `sniff`, 39 declared formats, compression peeled by magic bytes | none for MVP |
 | 2 | Load VCF and gVCF, one sample | minimal shape | shipped | `load`, `sample=`; gVCF blocks to `blocks`; spill to parquet | dialects `vcf_cgi`, `vcf_freebayes_varscan2`, `vcf_no_meta`, `bcf` do not load (RM2) |
-| 3 | Load consumer arrays | minimal shape | partial | the 9 rsid-table layouts load (23andMe and its kin) | AncestryDNA, FTDNA, vendor CSVs, CGI native files: 29 of 39 formats have no loader (RM2) |
+| 3 | Load consumer arrays | minimal shape | partial | 22 of 39 formats load (RM2, 2026-10-22): the rsid tables, AncestryDNA, FTDNA, MyHeritage-layout, Color, deCODEme, Genos, Illumina Final Report, and the VCF dialects | CGI native files and PGP's key=value table (a builder is on them); Geno 2.0 and Forward/Design-only Final Reports need chip manifests |
 | 4 | Refuse what it cannot hold | inv. 9 | shipped | `UnsupportedFormatError`, `MultiSampleError`, `NoSampleError` (F8) | none |
-| 5 | Assembly identified by content (seqcol digest) | inv. 3 | not started | `seqcol_digest` is filled nowhere outside `schema.py` | refget digest from the header's contigs, or from a FASTA |
-| 6 | Assembly label | inv. 3, 9 | partial | `assembly_label` only where the header states it; none of 16 local WGS VCFs did | inference from contig lengths and names, as `INFERRED` (RM4) |
-| 7 | Allele identity (VRS ids) | inv. 4 | not started | `vrs_allele_ids` filled nowhere; gtars is a dependency but unused | needs REF (row 8) and seqcol (row 5) first |
-| 8 | REF from the reference | inv. 10 | not started | every row's `ref_check` is `not_run` (RM3) | arrays have no REF at all, so they cannot be written as VCF |
-| 9 | Callset type and what absence means | inv. 11 | partial | arrays and imputed tables set `callset_type`; VCF facets are null (RM4) | WGS / WES / panel / gVCF inference |
+| 5 | Assembly identified by content (seqcol digest) | inv. 3 | partial | RM4: `sorted_name_length_pairs_digest` (the header's coordinate system); RM3: `ref_seqcol_digest` names the collection REF was read from | `seqcol_digest` stays null by design: no header carries per-sequence digests (SCHEMA.md) |
+| 6 | Assembly label | inv. 3, 9 | partial | RM4 infers it from `##contig` lengths (basis `inferred`) | arrays that state no build: F9 (a builder infers it from the rows against the reference) |
+| 7 | Allele identity (VRS ids) | inv. 4 | in progress | RM271 (a builder, on gtars after RM3) | — |
+| 8 | REF from the reference | inv. 10 | shipped | `resolve_ref` (RM3) on a gtars refget store; arrays get REF and ALT from the reference; 34.1M PGP VCF rows checked, 2 mismatches (both IUPAC) | arrays without a stated build (F9); UCSC `chrUn`/`_random` names (1% of GRCh38 rows) |
+| 9 | Callset type and what absence means | inv. 11 | shipped | RM4: `wgs`/`wes`/`panel`/`imputed` from the rows, `array`/`imputed` from the header (RM2), `absence_means` follows | SNV-only genome splits read as `wgs` (open question in RM4) |
 | 10 | Graded genotype evidence | inv. 7 | partial | `gl`, `gp`, `gq`, `dp`, `ad`, `evidence_basis` carried as written | no calibrated vector across sources; arrays carry none |
-| 11 | Provenance per facet | inv. 6 | partial | source path, sha, format, vendor; `derived_from` for `rejoin_split` | `caller`, `caller_version`, `phasing_method` never filled (RM2 detector, RM269) |
+| 11 | Provenance per facet | inv. 6 | partial | source path, sha, format, vendor, `caller`, `caller_version`, `phasing_method`, `ploidy_statements` from the header (RM2); `derived_from` for derived facets | aligner and post-processing steps are not recorded |
 | 12 | Pre-split multi-allelic input | inv. 8 | shipped | `split_signal`, `rejoin_split` (RM270) | not run on files split by bcftools itself, Hail or GATK |
 | 13 | Sex chromosomes and caller ploidy | inv. 9 | in progress | RM269, full label chosen (desk #61); paused at step 1 of 5 (f77a324) | the whole build |
-| 14 | Normalize: chrom names, left-align, split, dedup, sort, strand | minimal shape | not started | RM6 | needs row 8 |
-| 15 | Write VCF back out | minimal shape (export) | not started | RM6; polars-bio's `sink_vcf` exists | the export the package name promises |
+| 14 | Normalize: chrom names, left-align, split, dedup, sort, strand | minimal shape | in progress | RM6 second slice (a builder): split, left-align, dedup as a derived facet | strand for arrays; liftover |
+| 15 | Write VCF back out | minimal shape (export) | shipped | `write_vcf` (RM6, a1f3317): VCF 4.3, BGZF, deterministic bytes; 6.4M-call round trip with 0 key mismatches | gVCF blocks, tabix index, SVLEN, PSL phase sets |
 | 16 | Liftover with a `liftover_to` link | inv. 5 | not started | RM6 (port from just-prs) | `bcftools +liftover` per LANDSCAPE |
-| 17 | Deterministic output | inv. 12 | partial | canonical order per contig, tested | no writer yet to hold it to |
+| 17 | Deterministic output | inv. 12 | shipped | canonical order per contig; `write_vcf` gives the same bytes for the same frames (tested) | — |
 | 18 | CLI | (CLAUDE.md §4) | not started | no `[project.scripts]` | Typer |
 | 19 | Cache eviction | — | not started | RM268 | the cache grows without bound |
-| 20 | Population inference | — | not started | RM5, behind `[ancestry]` | port from just-prs |
+| 20 | Population inference | — | partial | `just_vcf.ancestry` (RM5): reference-PCA projection, neighbour vote, proportions, consensus, Privé's 21-group proportions with standard errors; gated on the facet's assembly and `absence_means`; run on PGP-HMS genomes and arrays against Privé | GRCh37 only for Privé; no reference-PCA panel on this machine; no liftover (RM6) |
 | 21 | Charter signed | RM1 | not started | `CHARTER_DRAFT.md`, the person's call | — |
 | 22 | First PyPI release | — | not started | 0.1.0 in `pyproject.toml`, absent from PyPI | a release is the person's |
 

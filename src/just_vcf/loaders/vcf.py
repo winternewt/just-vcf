@@ -34,7 +34,7 @@ from polars_bio.sql import SQL
 
 from just_vcf import cache as cache_index
 from just_vcf.bgzf import BgzfWriter
-from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
+from just_vcf.schema import BLOCKS, CALLS, EMPTY_ALLELE, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +99,9 @@ CGI_NOCALL = "<CGA_NOCALL>"
 
 DASH_DELETION = "-"
 """An ALT some uploads write for a deletion (F12): the REF bases at POS deleted, with no anchor base.
-VCF has no such allele. The loader keeps it verbatim, since anchoring it needs the reference base
-before POS; `normalize` anchors it, and `write_vcf` refuses it until then."""
+VCF has no such allele. The loader reads it as the empty allele (`schema.EMPTY_ALLELE`), the one
+spelling of a zero-length allele, since anchoring it needs the reference base before POS; `normalize`
+anchors it, and `write_vcf` refuses it until then."""
 
 _VCF_ALLELE_OR_DASH = r"^([ACGTNacgtn]+|\*|<[^<>]+>|\.[ACGTNacgtn]+|[ACGTNacgtn]+\.|-)$|\[|\]"
 """An ALT VCF 4.5 allows (bases, `*`, a symbolic allele, a breakend), or the dash deletion F12 counts
@@ -945,8 +946,8 @@ def to_rows(
         )
     if stats.get("dash_alts"):
         warnings.append(
-            f"{stats['dash_alts']} record(s) write a deletion as ALT `-`, which VCF has no allele for (F12): kept as "
-            "written, read as a deletion of the REF bases with no anchor base; normalize anchors it on the base "
+            f"{stats['dash_alts']} record(s) write a deletion as ALT `-`, which VCF has no allele for (F12): read as "
+            'the empty allele "", a deletion of the REF bases with no anchor base; normalize anchors it on the base '
             "before, and write_vcf refuses it until then"
         )
     if stats.get("not_allele_alts"):
@@ -957,7 +958,9 @@ def to_rows(
     v44 = (header.version_tuple or (0, 0)) >= (4, 4)
     # The file's REF goes to `source_ref` only. `ref` is read from the assembly sequence or stays null
     # (charter 10), so polars-bio's `ref` column must not reach the frame under that name.
-    rows = records.with_columns(_alts_expr().alias("alts"), pl.col("ref").alias("source_ref")).drop("ref")
+    # F12's `-` becomes the empty allele here, after the stats counted it as written, and after `.` became [].
+    alts = _alts_expr().list.eval(pl.when(pl.element() == DASH_DELETION).then(pl.lit(EMPTY_ALLELE)).otherwise(pl.element()))
+    rows = records.with_columns(alts.alias("alts"), pl.col("ref").alias("source_ref")).drop("ref")
     if stats.get("cnv_windows"):
         warnings.append(f"{stats['cnv_windows']} {CGI_CNV_WINDOW} record(s) left out: copy-number windows, not genotypes")
         rows = rows.filter(~(pl.col("alts").list.len().eq(1) & pl.col("alts").list.first().eq(CGI_CNV_WINDOW)))

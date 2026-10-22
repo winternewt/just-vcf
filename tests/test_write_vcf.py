@@ -18,6 +18,8 @@ from just_vcf import (
 )
 from just_vcf.bgzf import EOF_BLOCK
 from just_vcf.sniff import sniff
+from test_load_cgi import LOCI, var_text
+from test_load_cgi import write as write_cgi
 
 FORMAT_LINES = {
     "GT": '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
@@ -179,8 +181,8 @@ def test_an_alt_that_is_no_vcf_allele_is_never_written(tmp_path: Path) -> None:
     ]
     loaded = loaded_from(tmp_path, records)
     calls = loaded.calls.collect()
-    dashed = calls.filter(pl.col("alts").list.contains("-")).height
-    assert dashed == 2
+    dashed = calls.filter(pl.col("alts").list.contains("")).height
+    assert dashed == 2, "F12's `-` loads as the empty allele"
     with pytest.raises(UnwritableRowsError) as refused:
         write_vcf(loaded, tmp_path / "out.vcf.gz")
     assert refused.value.counts == {"alt_not_an_allele": dashed}
@@ -189,6 +191,22 @@ def test_an_alt_that_is_no_vcf_allele_is_never_written(tmp_path: Path) -> None:
     body = [line.split("\t") for line in plain_text(written.path).splitlines() if not line.startswith("#")]
     assert [row[1] for row in body] == ["100", "400", "500"], "a breakend, `<DEL>` and `*` are VCF alleles"
     assert not any("-" in row[4].split(",") for row in body)
+
+
+def test_an_unanchored_allele_is_never_written(tmp_path: Path) -> None:
+    """CGI's native files write indels without VCF's anchor base: a deletion's ALT and an insertion
+    point's REF are the empty allele. VCF has none, so neither is written: an empty REF is unresolved
+    until its anchor base is read, an empty ALT is no VCF allele until `normalize` anchors it."""
+    loaded = load(write_cgi(tmp_path, var_text(LOCI), "var-GS000000001-ASM.tsv.bz2"))
+    calls = loaded.calls.collect()
+    empty_ref = calls.filter(pl.col("source_ref") == "").height
+    empty_alt = calls.filter((pl.col("source_ref") != "") & pl.col("alts").list.contains("")).height
+    assert empty_ref == 2 and empty_alt == 1, "an insertion point and an uncalled one; one deletion"
+    written = write_vcf(loaded, tmp_path / "out.vcf.gz", resolved_only=True)
+    assert written.rows_skipped["ref_unresolved"] == empty_ref
+    assert written.rows_skipped["alt_not_an_allele"] >= empty_alt
+    body = [line.split("\t") for line in plain_text(written.path).splitlines() if not line.startswith("#")]
+    assert body and all(row[3] and "" not in row[4].split(",") for row in body)
 
 
 def test_resolved_only_writes_the_rest_and_counts_each_reason(tmp_path: Path) -> None:

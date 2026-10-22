@@ -76,7 +76,8 @@ VCF_CGI = FormatSpec(
         "On male X and Y the no-called spans write a haploid `.`; polars-bio 0.36 returns that GT as null, "
         "the same as a record with no GT, so the loader reads a null GT on such a record as a no-call.",
         "No ALT `.` record is called reference (`0/0`) in the first 400k rows: reference-called positions "
-        "are absent. Whether absence means reference here is not settled, so `absence_means` stays `blocks`.",
+        "are absent. Compared with the same assembly's `var` file, it covers every base `var` does not call "
+        "reference, so on a whole genome `absence_means` is `reference` (SCHEMA Decision 4).",
     ),
     example=(
         "##fileformat=VCFv4.1\n"

@@ -126,7 +126,8 @@ entry says how.
 - **0-based single positions.** Color positions sit one below GRCh37; `Coordinates` has only 1-based
   and 0-based half-open, so the spec says half-open and a note explains. *Closed:* the loader adds 1
   for every 0-based spec. Genos insertion sites (`begin == end`) go to the base before them, where VCF
-  places them, with `end_pos` null until RM3 reads the anchor base.
+  places them, with `end_pos` null until RM3 reads the anchor base. Genos's `-` is read as the empty
+  allele `""` (SCHEMA Decision 2), `source_gt` keeping the `-`.
 - **Build stated elsewhere.** Color states it in a data column; deCODEme states it in a sibling file
   inside the zip, which the archive result does not carry over to the genotype member. *Closed:* Color's
   build is the one every row states (rows that disagree leave it unknown, with a warning), and a

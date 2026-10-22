@@ -170,6 +170,22 @@ def test_absence_means_follows_the_type_and_blocks(callset_type, has_blocks: boo
     assert absence_means(callset_type, has_blocks) is expected
 
 
+@pytest.mark.parametrize(
+    ("callset_type", "has_blocks", "expected"),
+    [
+        # CGAPipeline's VCF: what it omits it called reference, beside its no-call blocks.
+        (CallsetType.WGS, True, AbsenceMeans.REFERENCE),
+        (CallsetType.WGS, False, AbsenceMeans.REFERENCE),
+        # Rows that do not show a whole genome (a region cut, or too few to tell) keep the other rules.
+        (CallsetType.PANEL, True, AbsenceMeans.BLOCKS),
+        (None, True, AbsenceMeans.BLOCKS),
+        (CallsetType.WES, False, AbsenceMeans.UNKNOWN),
+    ],
+)
+def test_absence_is_a_reference_call_where_the_producer_omits_only_reference(callset_type, has_blocks: bool, expected: AbsenceMeans) -> None:
+    assert absence_means(callset_type, has_blocks, omitted_called_reference=True) is expected
+
+
 HEADER = [
     "##fileformat=VCFv4.2",
     *[f"##contig=<ID={chrom},length=200000000>" for chrom in AUTOSOMES],

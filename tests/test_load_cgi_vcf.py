@@ -12,7 +12,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import load, sniff
+from just_vcf import absence_is_reference, load, sniff
+from just_vcf.callset import MIN_WGS_SITES
 from test_load_vcf import assert_gt_consistent, write
 
 HEADER = [
@@ -77,9 +78,48 @@ def test_record_classes(cgi_vcf: Path) -> None:
     assert (facet["format_id"], facet["vendor"], facet["caller"], facet["caller_version"]) == (
         "vcf_cgi", "Complete Genomics", "CGAPipeline", "2.5.0.37",
     )
-    assert facet["absence_means"] == "blocks" and facet["ploidy_statements"] == ["##source_MAX_PLOIDY=10"]
+    assert facet["ploidy_statements"] == ["##source_MAX_PLOIDY=10"]
     assert "FORMAT/AD" in facet["dropped_fields"]
     assert_gt_consistent(calls)
+    # Ten records do not show a whole genome, so CGAPipeline's omissions are not read as reference.
+    assert (facet["callset_type"], facet["absence_means"]) == (None, "blocks")
+    assert any(w.startswith("CGAPipeline leaves out the positions it called reference, but the rows do not show") for w in loaded.warnings)
+
+
+def test_a_whole_cgi_genome_reads_its_omissions_as_reference_calls(tmp_path: Path) -> None:
+    """CGAPipeline writes its variants and no-called spans and leaves out what it called reference:
+    on a whole genome, `absence_means = reference`, and `absence_is_reference` answers True for the
+    classes it wrote. The rows are spread as a whole genome's are (RM4's `wgs` bands)."""
+    autosomes = [str(n) for n in range(1, 23)]
+    header = [line for line in HEADER if not line.startswith("##contig")]
+    header[-1:-1] = [f"##contig=<ID={chrom},length=200000000>" for chrom in autosomes]
+    per = (MIN_WGS_SITES + 22) // len(autosomes)
+    rows = pl.concat(
+        pl.DataFrame({"chrom": pl.repeat(chrom, per, eager=True), "pos": pl.int_range(0, per, eager=True) * (100_000_000 // per) + 10_001})
+        for chrom in autosomes
+    ).with_row_index()
+    path = tmp_path / "vcfBeta-GS000000000-ASM.vcf"
+    path.write_text("\n".join([*header, "1\t1\t.\tN\t<CGA_NOCALL>\t.\t.\tEND=10000;NS=1;AN=0\tGT:PS\t./.:."]) + "\n")
+    with path.open("a") as handle:
+        rows.select(
+            "chrom",
+            "pos",
+            pl.lit(".").alias("id"),
+            pl.lit("A").alias("ref"),
+            pl.when(pl.col("index") % 8 == 0).then(pl.lit("AT")).otherwise(pl.lit("G")).alias("alt"),
+            pl.lit(".").alias("qual"),
+            pl.lit(".").alias("filter"),
+            pl.lit("NS=1;AN=2;AC=1").alias("info"),
+            pl.lit(FMT).alias("format"),
+            pl.lit("0/1:.:PASS:40:-40,0,-40:30:15,15").alias("sample"),
+        ).write_csv(handle, separator="\t", include_header=False)
+    loaded = load(path)
+    facet = loaded.facets.collect().row(0, named=True)
+    assert (facet["format_id"], facet["callset_type"], facet["absence_means"]) == ("vcf_cgi", "wgs", "reference")
+    assert loaded.blocks.select(pl.len()).collect().item() == 1
+    assert absence_is_reference(facet, "snv") is True and absence_is_reference(facet, "indel") is True
+    assert absence_is_reference(facet, "sv") is None, "no SV was written, so its absence says nothing"
+    assert not any("absence is not read as reference" in w for w in loaded.warnings)
 
 
 def test_half_calls_phase_and_filters(cgi_vcf: Path) -> None:
@@ -142,3 +182,5 @@ def test_real_cgi_vcf(pgp_participants: Path) -> None:
     assert set(kinds["kind"].to_list()) == {"no_call"}
     no_genotype = loaded.calls.filter(pl.col("gt").is_null() & (pl.col("alts").list.len() == 0)).select(pl.len()).collect().item()
     assert no_genotype == 0, "every ALT . record without a called allele is a no-call block"
+    facet = loaded.facets.collect().row(0, named=True)
+    assert (facet["callset_type"], facet["absence_means"]) == ("wgs", "reference"), "what CGI omits it called reference"

@@ -58,6 +58,7 @@ def test_every_loadable_example_round_trips(tmp_path: Path, format_id: str) -> N
     assert set(all_null["ids"].list.first().to_list()) == no_calls
     assert calls["ref"].null_count() == calls.height, "an array writes no REF; REF comes from the sequence only"
     assert calls["evidence_basis"].to_list() == ["assay"] * calls.height
+    assert facet["dropped_fields"].to_list() == [[]], "all four fields are read: none dropped, which is not null"
     # A 23andMe export too small for any generation's row band says its chip is unknown (RM4).
     chip_lines = [f"chip unknown: {len(rows)} rows"] if format_id in ("23andme", "23andme_csv") else []
     assert [w.split(",")[0] for w in loaded.warnings] == chip_lines

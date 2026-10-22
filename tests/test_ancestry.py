@@ -287,6 +287,32 @@ def test_site_rules_blocks_read_absence_inside_reference_blocks_only(tmp_path: P
     assert got.n_absent_as_reference == 1
 
 
+def test_site_rules_reference_reads_absence_outside_any_block_as_reference(tmp_path: Path) -> None:
+    """`reference` (CGI's VCF): an omitted autosomal site was called reference; a site a no-call block
+    covers was not omitted. 1:800 lies in a long block that a shorter one starts inside."""
+    loaded = load(_rules_vcf(tmp_path / "rules.vcf"))
+    facet_id = facet_of(loaded).facet_id
+    blocks = conform(
+        pl.LazyFrame(
+            {
+                "facet_id": [facet_id] * 3,
+                "chrom": ["1", "1", "X"],
+                "pos": [700, 750, 50],
+                "end_pos": [900, 760, 150],
+                "kind": ["no_call", "no_call", "no_call"],
+            },
+            schema_overrides={"pos": pl.UInt32, "end_pos": pl.UInt32},
+        ),
+        BLOCKS,
+    )
+    cgi = with_absence(loaded, "reference", blocks)
+    got = site_dosages(cgi, facet_of(cgi), panel_sites(RULE_SITES))
+    expected = list(RULE_DOSAGE)
+    expected[12] = 0.0  # 2:100, omitted; 1:800 is no-called; X:100 is not an autosome
+    assert got.dosage.tolist() == expected
+    assert got.n_absent_as_reference == 1
+
+
 def test_assembly_and_panel_gates(panel, tmp_path: Path) -> None:
     panel_dir, sites, freqs, _ = panel
     dosage = person(freqs, "EAS", seed=6)

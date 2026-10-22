@@ -222,9 +222,15 @@ the five uploads: 40,392 rows anchored; the other 2 are rows the loader flagged 
 pre-split site, which `normalize` leaves for `rejoin_split` and `write_vcf` skips as
 `alt_not_an_allele`. htslib reads every row of the five exports. Code: `loaders/vcf.py`
 `DASH_DELETION`, `normalize.py` `_align`, `writing.py` `_unwritable`; tests:
-`tests/test_load_vcf.py` `test_a_dash_alt_is_kept_verbatim_and_counted`, `tests/test_normalize.py`
+`tests/test_load_vcf.py` `test_a_dash_alt_is_read_as_the_empty_allele_and_counted`, `tests/test_normalize.py`
 `test_a_dash_deletion_is_anchored_on_the_base_before`, `tests/test_write_vcf.py`
 `test_an_alt_that_is_no_vcf_allele_is_never_written`.
+
+Changed 2026-10-23 (the lead's decision: the empty allele has one spelling). The loader no longer keeps
+`-` verbatim: it reads it as `""`, the spelling CGI's native deletions already had, so `alts`,
+`source_alleles` and `gt_alleles` hold `""` and the warning still counts the records. `normalize`
+anchors any empty ALT, CGI's included; `mint_vrs_ids` mints a matched one with its anchored spelling's
+id (`tests/test_vrs.py` `test_a_deletion_without_its_anchor_base_mints_the_anchored_id`).
 
 ## F11 — PL to `gl` lands one float step off the nearest value
 

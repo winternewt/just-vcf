@@ -119,7 +119,8 @@ def spread(calls: pl.LazyFrame, flank_bp: int = FLANK_BP) -> dict:
     Breadth is just-dna-lite's `_coverage_breadth`: each gap between neighbouring sites counts up to
     `2 * flank_bp`, summed (the reach), divided by the span the sites spread over per contig.
     """
-    sequence_allele = pl.col("alts").list.eval(pl.element().str.contains(r"^[ACGTNacgtn]+$")).list.any()
+    # The empty allele is a sequence allele (a deletion written without its anchor base, F12).
+    sequence_allele = pl.col("alts").list.eval(pl.element().str.contains(r"^[ACGTNacgtn]*$")).list.any()
     primary = (
         calls.filter(pl.col("chrom").is_in(_PRIMARY) & ((pl.col("alts").list.len() == 0) | sequence_allele))
         .select("chrom", "pos")
@@ -168,7 +169,7 @@ def classify(calls: pl.LazyFrame, format_keys: list[str], imputed_by: str | None
     return answer(None, "unknown, the spread fits no class with room to spare")
 
 
-NOT_A_VARIANT = frozenset({"<*>", "<NON_REF>", "<CGA_NOCALL>", "<CGA_CNVWIN>", "*", ""})
+NOT_A_VARIANT = frozenset({"<*>", "<NON_REF>", "<CGA_NOCALL>", "<CGA_CNVWIN>", "*"})
 """ALT values that name no variant: the gVCF reference allele, Complete Genomics' no-call and
 copy-number window, the spanning deletion `*` (the variant is another record's)."""
 
@@ -176,16 +177,16 @@ copy-number window, the spanning deletion `*` (the variant is another record's).
 def variant_class_expr(ref: pl.Expr, alt: pl.Expr) -> pl.Expr:
     """The `VariantClass` of one ALT against its REF, as a string, or null for no variant.
 
-    A sequence ALT is VCF's: bases `ACGTN` only. An ALT of other letters is no VCF allele (Veritas's
-    `CNV`, F15) and has no class: counting it as an indel would claim content the file does not hold.
+    A sequence ALT is VCF's: bases `ACGTN` only, or the empty allele (`schema.EMPTY_ALLELE`: a deletion
+    written without its anchor base, beside a REF of the deleted bases; an insertion point's REF). An
+    ALT of other letters is no VCF allele (Veritas's `CNV`, F15) and has no class: counting it as an
+    indel would claim content the file does not hold.
     """
-    sequence = alt.str.contains(r"^[ACGTNacgtn]+$") & ref.str.contains(r"^[A-Za-z]+$")
+    sequence = alt.str.contains(r"^[ACGTNacgtn]*$") & ref.str.contains(r"^[A-Za-z]*$") & ~((alt == "") & (ref == ""))
     symbolic = alt.str.starts_with("<") | alt.str.contains(r"[\[\]]") | alt.str.contains(r"^\.[A-Za-z]+$|^[A-Za-z]+\.$")
     return (
         pl.when(alt.is_in(list(NOT_A_VARIANT)) | alt.is_null())
         .then(None)
-        .when(alt == "-")
-        .then(pl.lit(VariantClass.INDEL.value))
         .when(symbolic)
         .then(pl.lit(VariantClass.SV.value))
         .when(sequence & (alt.str.len_bytes() != ref.str.len_bytes()))
@@ -407,27 +408,43 @@ def infer_content_filter(
     return ContentFilterInference(content_filter=chosen, basis=basis, reason=reason, warnings=tuple(warnings))
 
 
-def absence_means(callset_type: CallsetType | None, has_blocks: bool) -> AbsenceMeans:
+REFERENCE_BY_OMISSION_CALLERS: frozenset[str] = frozenset({"CGAPipeline"})
+"""Callers whose VCF leaves out exactly the positions they called reference, so an omitted position
+is a reference call (`AbsenceMeans.REFERENCE`). Complete Genomics' CGAPipeline: on a PGP-HMS genome
+its vcfBeta covers every base its native `var` file does not call reference (0 of 317.7M missed,
+2026-10-22, `test_real_var_converges_with_its_vcf_beta`)."""
+
+
+def absence_means(callset_type: CallsetType | None, has_blocks: bool, *, omitted_called_reference: bool = False) -> AbsenceMeans:
     """What a position absent from the facet means (SCHEMA.md Decision 4).
 
-    Reference blocks decide it wherever they exist. Without them only a whole-genome callset makes
-    absence weak evidence of reference; an exome, a panel, an array or imputed content says nothing
-    outside what it looked at, and neither does a callset of unknown type.
+    A producer that leaves out exactly what it called reference (`omitted_called_reference`, a caller
+    in `REFERENCE_BY_OMISSION_CALLERS`) makes absence a reference call, but only where the rows show a
+    whole genome: a region cut from it, which RM4 cannot always name, would otherwise claim reference
+    for the regions cut away. Otherwise reference blocks decide it wherever they exist. Without them
+    only a whole-genome callset makes absence weak evidence of reference; an exome, a panel, an array
+    or imputed content says nothing outside what it looked at, and neither does a callset of unknown
+    type.
     """
+    if omitted_called_reference and callset_type is CallsetType.WGS:
+        return AbsenceMeans.REFERENCE
     if has_blocks:
         return AbsenceMeans.BLOCKS
     return AbsenceMeans.WEAK_REFERENCE if callset_type is CallsetType.WGS else AbsenceMeans.UNKNOWN
 
 
 def absence_is_reference(facet: Mapping[str, object], variant_class: VariantClass | str, *, force: bool = False) -> bool | None:
-    """Whether a position absent from `facet` reads as weak evidence of reference for `variant_class`.
+    """Whether a position absent from `facet` reads as evidence of reference for `variant_class`.
 
-    `facet` is one `facets` row (`load(...).facets.collect().row(0, named=True)`). The answer is
-    Kleene with no negative: `True` or `None` (unknown), never `False`, because a facet's silence never
-    shows that a variant is there. `True` needs all of:
+    `facet` is one `facets` row (`load(...).facets.collect().row(0, named=True)`). A position is
+    absent when no `calls` row and no `blocks` row covers it. The answer is Kleene with no negative:
+    `True` or `None` (unknown), never `False`, because a facet's silence never shows that a variant is
+    there. `True` needs all of:
 
-    - `absence_means` is `weak_reference` (a whole-genome callset without blocks). A gVCF's absence
-      is decided per position by its `blocks` frame, which this facet-level answer cannot see: `None`.
+    - `absence_means` is `weak_reference` (a whole-genome callset without blocks) or `reference` (a
+      producer that called every omitted position reference; how strong the evidence is, the member
+      says). A gVCF's absence is decided per position by its `blocks` frame, which this facet-level
+      answer cannot see: `None`.
     - `variant_class` is among the facet's `variant_classes`. A callset that wrote no SVs says
       nothing about SVs, and a facet whose classes were not counted says nothing at all.
     - the facet has no `content_filter`. A whole genome cut to one class (the `.snp.` half of a split
@@ -438,7 +455,7 @@ def absence_is_reference(facet: Mapping[str, object], variant_class: VariantClas
     Hom-ref restoration from absence, in just-vcf or in a consumer, gates on this and refuses a
     position where the answer is not `True` (docs/SCHEMA.md Decision 4).
     """
-    if facet.get("absence_means") != AbsenceMeans.WEAK_REFERENCE.value:
+    if facet.get("absence_means") not in (AbsenceMeans.WEAK_REFERENCE.value, AbsenceMeans.REFERENCE.value):
         return None
     asked = VariantClass(variant_class)
     counted = facet.get("variant_classes")

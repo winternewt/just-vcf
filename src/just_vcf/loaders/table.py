@@ -38,7 +38,7 @@ from just_vcf.loaders.text import (
     two_field_alleles,
 )
 from just_vcf.loaders.vcf import MultiSampleError
-from just_vcf.schema import EvidenceBasis
+from just_vcf.schema import EMPTY_ALLELE, EvidenceBasis
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +96,9 @@ class Table:
     calls: pl.DataFrame
     """`calls` rows without `facet_id`, plus `source_chrom` for the facet's `contig_map`."""
     warnings: list[str] = field(default_factory=list)
-    dropped_columns: list[str] | None = None
-    """The file's column names that no frame column carries, in file order; None where the file
-    names no columns."""
+    dropped_columns: list[str] = field(default_factory=list)
+    """The file's column names that no frame column carries, in file order; for a file that names no
+    columns, the format's names for them. `[]` when every column is carried."""
     sample: str | None = None
     """The sample id the file states, if any. Identifying: never logged."""
     sample_index: int | None = None
@@ -126,9 +126,12 @@ def read_table(data: bytes, spec: FormatSpec, sample: str | None = None) -> Tabl
         raise TableLayoutError(
             f"{spec.id}: no column for {', '.join(missing)}{_strand_hint(spec, columns)}{_manifest_hint(data, spec, missing)}"
         )
+    used = {*_REQUIRED[spec.id], *_CONSUMED.get(spec.id, ())}
     if names is not None:
-        used = {*_REQUIRED[spec.id], *_CONSUMED.get(spec.id, ())}
         table.dropped_columns = [name for name, canonical in zip(names, _canonical_names(names, spec)) if canonical not in used]
+    else:
+        # A file that names no columns has the format's own, in spec order (a Genos file without `##Columns=`).
+        table.dropped_columns = [column["name"] for column in spec.columns if column["name"] not in used]
 
     width = len(names) if names is not None else len(spec.columns)
     if names is not None:
@@ -401,6 +404,9 @@ def _plus_strand(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
 
 _GENOS_ALLELE = r"^([ACGTN]+|-)$"
 
+_GENOS_EMPTY = "-"
+"""Genos's spelling of the empty allele, read as `schema.EMPTY_ALLELE`."""
+
 
 def _genos(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
     """Genos rows: a 0-based half-open span and alleles joined by `/`.
@@ -408,7 +414,8 @@ def _genos(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
     A span of one or more bases is 1-based `pos = begin + 1`, `end_pos = end`. An insertion site has
     `begin == end`: it sits between two bases, and VCF places it at the base before (1-based `begin`),
     which is where `pos` goes. Its REF span is that anchor base, unknown until the reference is read, so
-    `end_pos` is null. Alleles stay as written, `-` the empty allele, until RM3 reads the anchor.
+    `end_pos` is null. Genos's `-` is the empty allele, `""` in `gt_alleles` (`source_gt` keeps `-`);
+    the alleles stay unanchored until RM3 reads the anchor.
     """
     frame = _positions(frame, "begin", 0, table).rename({"_pos": "_begin"})
     frame = _positions(frame, "end", 0, table).rename({"_pos": "_end"})
@@ -422,7 +429,10 @@ def _genos(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
     frame = frame.with_columns(
         pl.when(insertion).then(pl.col("_begin")).otherwise(pl.col("_begin") + 1).cast(pl.UInt32).alias("pos"),
         pl.when(insertion).then(None).otherwise(pl.col("_end")).cast(pl.UInt32).alias("end_pos"),
-        pl.when(readable).then(alleles).otherwise(None).alias("gt_alleles"),
+        pl.when(readable)
+        .then(alleles.list.eval(pl.when(pl.element() == _GENOS_EMPTY).then(pl.lit(EMPTY_ALLELE)).otherwise(pl.element())))
+        .otherwise(None)
+        .alias("gt_alleles"),
         pl.col("genotype").alias("source_gt"),
         *chrom_columns("chromosome"),
         ids_expr("rsid").alias("ids"),
@@ -431,6 +441,6 @@ def _genos(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
     if sites:
         table.warnings.append(
             f"{sites} insertion site(s) (begin == end) placed at the base before them with end_pos null; their "
-            "alleles stay as written (`-` is the empty allele) until the anchor base is read from the reference"
+            'alleles stay unanchored (`-` is read as the empty allele "") until the anchor base is read from the reference'
         )
     return frame

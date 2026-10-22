@@ -4,6 +4,40 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Schema 0.0.11: `absence_means` gains `reference` (a Complete Genomics VCF typed `wgs`). Values change on
+  files that already load: the empty allele is `""` everywhere (Genos and upload `-` included), and
+  `dropped_fields` is `[]` rather than null where nothing was dropped.
+
+- A zero-length allele has one spelling, `""` (VRS's empty literal), in `ref`, `alts`,
+  `source_alleles` and `gt_alleles`. An upload's ALT `-` (F12) and Genos's `-` load as `""`, where they
+  were `"-"`; `source_gt` keeps what the file wrote. Every reader agrees: `""` is an `indel` in
+  `variant_classes` and a site in the callset count; `normalize` anchors CGI's native deletions on the
+  base before, as it does F12's (`NORMALIZE_VERSION` 5); `mint_vrs_ids` mints a resolved unanchored
+  deletion with the id of its anchored spelling, where it withheld it as `not_sequence`
+  (`MINT_VERSION` 2); `write_vcf` refuses an empty REF (a CGI insertion point) as `ref_unresolved`,
+  where it wrote an empty REF field. Values change on files that already load.
+
+- `normalize` aligns and trims the rows `resolve_ref` gave a REF with no source REF to check, in a
+  facet read from a file: a Living DNA genotype split against the reference that spells an MNV or a
+  deletion with extra shared bases (`CTA`/`CGA`) is trimmed (`T>G` one base on). Before, such rows passed
+  through as unchecked. Array SNVs are already minimal and do not change. Normalized facets get new ids
+  (`NORMALIZE_VERSION` 4).
+
+- A Complete Genomics VCF reads its silence as reference calls: `AbsenceMeans` gains `reference`
+  ("every position the file omits was called reference by its producer"), set on a VCF whose caller
+  line names CGAPipeline when its rows show a whole genome, and `absence_is_reference` answers True for
+  it, by the same class and content-filter gates as `weak_reference`. Settled by comparing a PGP-HMS
+  vcfBeta with the same assembly's `var` (0 of 317.7M non-reference bases missed). A smaller CGI VCF
+  keeps `blocks`, with a warning. Ancestry reads an omitted site of such a facet as reference outside
+  its no-call blocks. A value change on files that already load (`blocks` becomes `reference`), and a
+  new member of the `absence_means` enum (schema bump pending at merge). CGI's native files keep
+  `blocks`.
+
+- `facets.dropped_fields` means the same in every loader: `[]` when the loader read the file's fields
+  and dropped none, null only for a format with no notion of fields. The 23andMe-layout tables (all
+  nine) and a Genos file without its `##Columns=` line wrote null; they now write `[]`. A value change
+  on files that already load.
+
 - `resolve_ref` splits Living DNA's run-together indel genotypes (`CCA`) against the reference where
   exactly one split fits (both pieces start with one base, one equals the reference over its span),
   and sets REF and ALT where only one allele is the reference. On the real file: 58 of 83 rows split, 4

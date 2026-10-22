@@ -62,9 +62,22 @@ stronger value would be the change. **Settled by the comparison, the value not y
 (2026-10-22):** on the smallest PGP-HMS assembly, vcfBeta covers every base its `var` does not call
 reference (0 bases missed of 317.7M) and touches 904,739 of the 2.78G bases `var` calls reference,
 the anchor bases of its indels and no-calls. So a position absent from a vcfBeta is one CGI called
-reference, as explicitly as a `var` ref block. Which value says that is the open part:
-`weak_reference` understates it, and a stronger one is a new `AbsenceMeans` member, which changes the
-`pl.Enum` dtype (a schema decision). The test is `test_real_var_converges_with_its_vcf_beta`.
+reference, as explicitly as a `var` ref block. The test is `test_real_var_converges_with_its_vcf_beta`.
+**Value chosen 2026-10-23 (the lead):** a new member, `AbsenceMeans.REFERENCE` (`reference`), just-vcf's
+own (SCHEMA Decision 4); the native files keep `blocks`. Builder's choices, each with what was rejected:
+
+- Keyed on the caller line (`##source=CGAPipeline_*`, `callset.REFERENCE_BY_OMISSION_CALLERS`), not on
+  `format_id = vcf_cgi`: an upload that lost `##center` sniffs as `vcf` and is still CGI's VCF, as the
+  GL-scale rule already reads it. Rejected: the format id alone, which would give the same file two
+  readings of its silence.
+- Only where RM4 types the rows `wgs`. A region cut from a CGI VCF (RM4's `panel`, or nothing it can
+  name) keeps `blocks`, with a warning. Rejected: the caller alone, which would claim reference for the
+  regions a cut took away; RM4's `content_filter` covers only cuts by class.
+- `absence_is_reference` applies the same class and content-filter gates to `reference` as to
+  `weak_reference`. Rejected: True for every class, which would read the absence of SVs, which
+  CGAPipeline's small-variant VCF never writes, as their absence.
+- Ancestry's absent-site rule (`ancestry/sites.py`) reads `reference` as reference outside any block,
+  where it read the member as unknown.
 
 **CGI native files, built 2026-10-22** (`loaders/cgi.py`). Decisions, each with what was rejected:
 
@@ -179,7 +192,10 @@ carry no `ref` while the facet keeps `ref_seqcol_digest`, and `resolve_ref` refu
 
 Left: indel anchor bases (no loaded format lacks them: 23andMe I/D codes need the chip manifest, and
 Living DNA's run-together `CCA` is split against the reference since 2026-10-22, F4, and gets REF on 4
-of 83 rows; the rest need the site's alleles, F17); emitting
+of 83 rows; the rest need the site's alleles, F17. Checked 2026-10-23: CGI's native files and Genos do
+write indels without the anchor base, as the empty allele `""`. A CGI deletion's REF is read and
+`normalize` anchors it; a CGI or Genos insertion point's anchor base is not read, and neither is REF
+for Genos's multi-base rows, whose span the file states, so `normalize` cannot reach them yet); emitting
 reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither
 `##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array
 without a stated build has it inferred from its rows (F9, below).
@@ -575,7 +591,12 @@ it stayed behind. Decisions, each with what was rejected:
   is the facet's relation (`REREADS_REF`). Rejected: a row-level gate (`ref` set and `ref_check` not
   `mismatch`), which would also align array rows and a normalized facet's moved rows; equivalent on
   lifted facets, but wider than the decision, and it would quietly start aligning any future row
-  kind whose `ref_check` is null for another reason.
+  kind whose `ref_check` is null for another reason. Since 2026-10-23 (the lead's decision) array rows
+  are aligned too, by a gate of the same kind: a facet read from a file (`derived_from` null), where
+  `resolve_ref` is the only writer of `ref`, aligns its rows with `ref` set and no `source_ref` (a split
+  Living DNA genotype, F4). Rejected again: the row-level gate, which would also take in a derived
+  facet's rows that another step wrote `ref` on; and `ref_check = match` alone, which left every array
+  indel as written.
 - Indels on minus-strand blocks were unlifted (`indel_minus_strand`) in this slice; since 2026-10-22
   they are re-anchored, below.
 - The derived facet's `absence_means` is `unknown`. Rejected: the parent's `weak_reference`, which

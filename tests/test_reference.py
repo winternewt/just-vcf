@@ -9,7 +9,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, reference_dir, resolve_ref
+from just_vcf import ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, normalize, reference_dir, resolve_ref
 from just_vcf.loading import Loaded
 from just_vcf.reference import _span
 from just_vcf.schema import CALLS, FACETS, StrandCheck
@@ -731,6 +731,36 @@ def test_living_dna_indel_genotypes_split_against_the_reference(tmp_path: Path, 
     # The row with REF and ALT is an indel like any other: VRS ids are minted for both alleles.
     minted = mint_vrs_ids(resolved, grch37_store).calls.filter(pl.col("ids").list.first() == "insertion").collect().row(0, named=True)
     assert len(minted["vrs_allele_ids"]) == 2 and None not in minted["vrs_allele_ids"]
+
+
+def test_normalize_trims_the_living_dna_rows_resolve_ref_gave_a_ref(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """A row of a facet read from a file, whose REF `resolve_ref` read with no source REF to check (an
+    array row, a split Living DNA genotype), is aligned and trimmed like a matched VCF row.
+    `bxy`/`bzy` (an MNV written with its padding) trims to the SNV `x>z` one base on; `bxy`/`by` trims
+    to the deletion `bx>b` in place."""
+    seq = SEQ["1"]
+    p = next(q for q in range(1000, 2900) if seq[q - 1] not in seq[q : q + 2] and seq[q] != seq[q + 1])
+    b, x, y = seq[p - 1 : p + 2]
+    z = next(c for c in "ACGT" if c not in (b, x, y))
+    q = next(r for r in range(p + 10, 2900) if seq[r - 1] not in seq[r : r + 2] and seq[r] != seq[r + 1])
+    d, e, f = seq[q - 1 : q + 2]
+    rows = drawn_rows(SEQ, per_contig=300) + [("mnv", "1", p, b + x + y + b + z + y), ("deletion", "1", q, d + e + f + d + f)]
+    resolved = resolve_ref(bare_array(tmp_path, rows, preamble=LIVING_DNA), grch37_store)
+    before = {r["ids"][0]: r for r in resolved.calls.collect().iter_rows(named=True)}
+    assert (before["mnv"]["ref"], before["mnv"]["alts"], before["mnv"]["gt"]) == (b + x + y, [b + z + y], [0, 1])
+    assert (before["deletion"]["ref"], before["deletion"]["alts"]) == (d + e + f, [d + f])
+
+    normalized = normalize(resolved, grch37_store)
+    after = {r["ids"][0]: r for r in normalized.calls.collect().iter_rows(named=True)}
+    mnv, deletion = after["mnv"], after["deletion"]
+    assert (mnv["pos"], mnv["end_pos"], mnv["ref"], mnv["alts"], mnv["gt"], mnv["gt_alleles"]) == (p + 1, p + 1, x, [z], [0, 1], [x, z])
+    assert (deletion["pos"], deletion["ref"], deletion["alts"], deletion["gt_alleles"]) == (q, d + e, [d], [d + e, d])
+    assert mnv["source_gt"] is None, "the trimmed row is no longer what the file wrote"
+    # The array SNV rows were already as short as they go: unchanged.
+    columns = ["pos", "ref", "alts", "gt", "gt_alleles"]
+    snvs = resolved.calls.filter(~pl.col("ids").list.first().is_in(["mnv", "deletion"])).select(columns).collect()
+    assert normalized.calls.filter(~pl.col("ids").list.first().is_in(["mnv", "deletion"])).select(columns).collect().equals(snvs)
+    assert "1 row(s) left-aligned to another position and 1 trimmed in place, against the reference" in normalized.warnings
 
 
 def test_only_living_dna_texts_are_split(tmp_path: Path, grch37_store: ReferenceStore) -> None:

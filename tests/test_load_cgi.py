@@ -346,7 +346,7 @@ def _bases(intervals: dict[str, pl.LazyFrame]) -> pl.DataFrame:
                 pl.concat_list(pl.col("pos").cast(pl.Int64), pl.col("end_pos").cast(pl.Int64) + 1).alias("at"),
                 pl.lit([1, -1]).alias("delta"),
             )
-            .explode("at", "delta")
+            .explode("at", "delta", empty_as_null=False)  # two entries each, never empty
             .with_columns(pl.lit(name).alias("set"))
             for name, frame in intervals.items()
         ]
@@ -471,6 +471,7 @@ def test_real_var_converges_with_its_vcf_beta(real_assembly: dict[str, Loaded]) 
     covers every base var does not call reference, and 904,739 of var's 2.78G reference bases, the
     anchor bases of its indels and no-calls.
     """
+    assert real_assembly["vcf"].facets.collect()["absence_means"].to_list() == ["reference"]
     counts = compare(real_assembly["var"], real_assembly["vcf"])
     matched = counts["same"] + counts["partial_as_no_call"] + counts["genotype_differs"]
     assert counts["same"] > 0.99 * matched, counts

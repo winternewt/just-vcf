@@ -19,7 +19,7 @@ short:
 3. **Alleles.** On a minus-strand block every allele is reverse-complemented. An indel whose alleles
    all start with one base (VCF's padding base) then has that base at their end instead, so it is
    re-anchored: the base is dropped from every allele and the target's base before the lifted span
-   is put in front, which moves the row one base left (bcftools +liftover and CrossMap do the same).
+   is put in front, which moves the row one base left. The indel is not left-aligned on the target.
    REF is then read from the target sequence over the lifted span (charter 10: never carried over).
    Where it equals the parent's REF the row keeps its alleles; where it equals one of the ALTs, REF
    and that ALT swap and the genotype indices follow (`bcftools +liftover`'s and Picard's swap);

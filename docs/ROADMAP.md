@@ -576,8 +576,19 @@ reverse-complemented, that base dropped from every allele (`alts`, `gt_alleles`,
 and the target's base before the lifted span put in front; REF is read over the span moved one base
 left and compared as for any row, so a swap still works. Tested on a synthetic chain against
 hand-computed alleles (an insertion, a two-base deletion, an indel at a block's edge) and against
-pyliftover's image of the source base after the span. `LIFT_VERSION` 2. Decisions, each with what was
-rejected:
+pyliftover's image of the source base after the span. `LIFT_VERSION` 2.
+
+On anton (the same callset and Ensembl chain as above, counts only): 2,894 indels land on minus-strand
+blocks; 2,855 lift (2,844 re-anchored, 11 with no shared first base complemented in place), 10 now
+fail as `ref_mismatch_after_lift`, 29 stay `target_contig_unmatched`, and none is `indel_minus_strand`
+(before: 2,865 of them). Against the tools' output at the 2,959 rows at those lifted positions:
+Picard with swap recovery has 794 with the same position, REF and ALT, and 2,151 more with an indel
+of the same lengths up to 50 bases to the left, which is what its left-alignment does to a shift
+that is rightmost on the target; CrossMap (variant A) has 105 identical, so it does not write these
+indels this way, and which representation it writes was not worked out. The lift takes 93 s. Not
+checked row by row: that each left-shifted Picard row is the same allele as ours.
+
+Decisions, each with what was rejected:
 
 - The new padding base is the target's base before the lifted span, wherever it lies, past the
   block's edge included. Rejected: requiring it inside the block, which would leave behind indels the
@@ -595,7 +606,7 @@ rejected:
 
 **Left in RM6:** SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
-does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); strand resolution;
+does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL, and no loader reads PSL yet, so no frame holds a `psl` set to write: reading it comes first); strand resolution;
 in a liftover, left-aligning lifted indels (`normalize` skips rows with no `ref_check`), blocks,
 symbolic SVs, anchoring across a small gap of one chain, and T2T (UCSC hs1 chains).
 

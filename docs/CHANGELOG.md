@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The cache sweep removes only entries an older version wrote, comparing version keys numerically
+  (`0.0.9` is behind `0.0.11`). An entry a newer just-vcf wrote is kept, so two installs sharing the
+  platform user cache no longer delete each other's live spills on every load; before, any version
+  other than the running one was swept.
+
 - Schema 0.0.11: `absence_means` gains `reference` (a Complete Genomics VCF typed `wgs`). Values change on
   files that already load: the empty allele is `""` everywhere (Genos and upload `-` included), and
   `dropped_fields` is `[]` rather than null where nothing was dropped.

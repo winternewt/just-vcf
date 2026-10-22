@@ -172,6 +172,46 @@ def test_load_sweeps_the_versions_it_owns_and_nothing_else(tmp_path: Path, caplo
     assert sum(int(r.getMessage().rsplit(", ", 1)[1].split()[0]) for r in freed) == expected_freed
 
 
+def _schema_ahead() -> str:
+    """A SCHEMA_VERSION a newer install writes, whose text sorts before the current one's (`0.0.100`
+    against `0.0.11`): only a numeric comparison puts it ahead."""
+    *head, last = SCHEMA_VERSION.split(".")
+    return ".".join([*head, str(10 ** len(last))])
+
+
+def test_the_sweep_removes_older_versions_and_keeps_a_newer_installs_entries(tmp_path: Path) -> None:
+    """Two installs of different versions share the user cache: the older one's sweep never removes
+    what the newer one wrote, and the newer one's still retires the older one's."""
+    older_copy = write_entry("vcf", "a" * 32, cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION - 1})
+    newer_copy = write_entry("vcf", "b" * 32, cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION + 1})
+    older_layout = write_entry("frames", f"{'c' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT - 1})
+    before_layout = write_entry("frames", f"{'d' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION})
+    newer_schema = write_entry("frames", f"{'e' * 32}-{_schema_ahead()}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": _schema_ahead(), "SPILL_LAYOUT": cache.SPILL_LAYOUT})
+    newer_layout = write_entry("frames", f"{'f' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT + 1})
+    newer_key = write_entry("frames", f"{'9' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT, "FRAMES_VERSION": 1})
+    load(vcf_zip(tmp_path, "one"))
+    assert not older_copy.exists() and not older_layout.exists() and not before_layout.exists()
+    assert newer_copy.exists() and newer_schema.exists() and newer_layout.exists() and newer_key.exists()
+
+
+@pytest.mark.parametrize(
+    ("versions", "current", "older"),
+    [
+        ({"S": "0.0.9"}, {"S": "0.0.11"}, True),
+        ({"S": "0.0.100"}, {"S": "0.0.11"}, False),
+        ({"S": "0.0.11"}, {"S": "0.0.11"}, False),
+        ({"S": "0.1"}, {"S": "0.1.0"}, False),
+        ({"S": "0.0.11", "L": "1"}, {"S": "0.0.11", "L": "2"}, True),
+        ({"S": "0.0.11"}, {"S": "0.0.11", "L": "2"}, True),
+        ({"S": "0.0.10", "L": "3"}, {"S": "0.0.11", "L": "2"}, False),
+        ({"S": "0.0.10", "X": "1"}, {"S": "0.0.11"}, False),
+        ({"S": "0.0.10-dev"}, {"S": "0.0.11"}, False),
+    ],
+)
+def test_versions_are_ordered_numerically_and_only_behind_is_older(versions: dict, current: dict, older: bool) -> None:
+    assert cache._older(versions, current) is older
+
+
 def test_each_derived_step_sweeps_its_own_kind(tmp_path: Path, default_store: ReferenceStore) -> None:
     stale_rejoin = write_entry("frames", f"{'d' * 32}-{SCHEMA_VERSION}", cache.REJOIN_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": 0})
     stale_resolve = legacy_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}-ref-SQ_ab-c-{RESOLVE_VERSION - 1}")

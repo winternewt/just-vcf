@@ -1009,8 +1009,15 @@ frame stops working when its files go.
   `<name>.json`, its manifest, and `<name>.lock`, an OS file lock the writer holds while it writes.
   The manifest names the root source (sha256 and resolved path), which every derived facet carries
   down from its parent, so a genome's derived spills go with its copies.
-- An entry whose version key is not the current one is removed when the step that owns its kind next
-  runs (`load` for copies and load spills). No current frame reads an old version, so this is safe.
+- An entry of an older version is removed when the step that owns its kind next runs (`load` for
+  copies and load spills). Older means no version key ahead of the running version's and at least
+  one behind, compared numerically (`0.0.9` is behind `0.0.11`); a key the running version has and
+  the entry lacks counts as behind (the entry predates the key). An entry with any key ahead, a key
+  the running version does not know, or a value that is not a number is a newer install's, or may
+  be: kept. Two installs of different versions share the platform user cache, and the older one must
+  not remove the newer one's live spills; the newer one retires the older one's. No current frame
+  reads an old version, so this is safe. Rejected: sweeping every version other than the running
+  one, which made two installs delete each other's spills on every load.
   An entry with no manifest predates the index: removed only by that sweep, where its name shows an old
   version or where it must be old (a `vcf/` entry, below `REWRITE_VERSION` 7; a `keyvalue/` or `cgi/`
   one, from before those copies were indexed).

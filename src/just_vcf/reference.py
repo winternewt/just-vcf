@@ -610,7 +610,7 @@ def _split_concatenated(work: pl.DataFrame, store: ReferenceStore, contig: Conti
             fits = [
                 (text[:k], text[k:])
                 for k in range(1, len(text))
-                if text[0] == text[k] and (window.startswith(text[:k]) or window.startswith(text[k:]))
+                if text[0] == text[k] and window.startswith((text[:k], text[k:]))
             ]
             if len(fits) != 1:
                 counts["concat_several" if fits else "concat_no_fit"] += 1

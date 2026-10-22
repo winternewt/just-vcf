@@ -70,6 +70,23 @@ def test_one_data_column(tmp_path: Path) -> None:
     assert_gt_consistent(calls)
 
 
+@pytest.mark.parametrize("columns", ["\tSample1", "\tunknown\tSample1"])
+def test_records_no_caller_takes_are_counted_once(tmp_path: Path, columns: str) -> None:
+    """A record whose SF is absent, or names no `##sourceFiles` index, belongs to no caller: it lands in
+    no facet, and the file's warning says how many, once, whatever the layout."""
+    no_sf = "chr1\t790000\t.\tT\tC\t50\tPASS\tAC=1\tGT\t0/1"
+    other_index = "chr1\t790100\t.\tT\tC\t50\tPASS\tAC=1;SF=2\tGT\t0/1"
+    records = [FB_SHARED, FB_ONLY, no_sf, VS_ONLY, other_index]
+    if columns.count("\t") == 2:
+        records = [line + "\t." if "SF=0,1" not in line else line + "\t0/1" for line in records]
+    text = "\n".join([*META, f"{COLUMNS}{columns}", *records]) + "\n"
+    loaded = load(write(tmp_path, text, "unsourced.vcf"))
+    positions = loaded.calls.select("pos").collect()["pos"].to_list()
+    assert 790000 not in positions and 790100 not in positions
+    counted = [w for w in loaded.warnings if "names no caller of the merge" in w]
+    assert counted == [counted[0]] and counted[0].startswith("2 record(s)"), loaded.warnings
+
+
 def test_two_populated_columns(tmp_path: Path) -> None:
     records = [
         "chr1\t752566\t.\tG\tA\t425.3\tPASS\tAC=2;SF=0,1\tGT:GL:GQ\t0/1:-30.1,0,-25.2:.\t1/1:.:35",

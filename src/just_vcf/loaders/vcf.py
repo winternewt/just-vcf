@@ -436,6 +436,9 @@ class Part:
     """Keep the rows whose INFO/SF lists this source index."""
     sf_alone: bool = False
     """Keep them only where SF lists no other index (the merge kept another caller's genotype there)."""
+    merge_indices: tuple[int, ...] = ()
+    """Every part's source index, set on a merge's first part only: the records none of the parts
+    takes are counted once per file (`unsourced`)."""
 
     @property
     def info(self) -> tuple[str, ...]:
@@ -451,6 +454,16 @@ class Part:
         if self.sf_alone:
             keep = keep & indices.list.eval(pl.element() != str(self.sf)).list.any().not_()
         return records.filter(keep.fill_null(False))
+
+    def unsourced(self, records: pl.LazyFrame) -> pl.LazyFrame | None:
+        """The records of a merge that no part takes, which land in no facet: INFO/SF absent or empty,
+        or naming no `##sourceFiles` index. None on every part but the merge's first, so the file's
+        count is taken once (`scan_stats`)."""
+        if not self.merge_indices:
+            return None
+        indices = pl.col("info_SF").list.eval(pl.element().str.strip_chars_end("f"))
+        claimed = indices.list.eval(pl.element().is_in([str(index) for index in self.merge_indices])).list.any()
+        return records.filter(~claimed.fill_null(False))
 
 
 def caller_parts(header: Header, data: list[bytes]) -> list[Part]:
@@ -484,6 +497,7 @@ def caller_parts(header: Header, data: list[bytes]) -> list[Part]:
                 split=True,
                 sf=index,
                 sf_alone=lone,
+                merge_indices=tuple(indices) if position == 0 else (),
             )
         )
     return parts
@@ -652,9 +666,26 @@ def _collect(plan: pl.LazyFrame) -> pl.DataFrame:
     try:
         return plan.collect(engine="streaming")
     except pl.exceptions.ComputeError as err:
-        if ("Error reading" in str(err) and "field" in str(err)) or "Missing variant start" in str(err):
-            raise HeaderRefused(str(err).splitlines()[-1][-160:]) from err
+        if refused := _refused(err):
+            raise refused from err
         raise
+
+
+def _collect_all(plans: list[pl.LazyFrame]) -> list[pl.DataFrame]:
+    """`plans` collected together, as `_collect` collects one."""
+    try:
+        return pl.collect_all(plans, engine="streaming")
+    except pl.exceptions.ComputeError as err:
+        if refused := _refused(err):
+            raise refused from err
+        raise
+
+
+def _refused(err: pl.exceptions.ComputeError) -> HeaderRefused | None:
+    """polars-bio's failure to parse a field value, as `HeaderRefused`; None for any other failure."""
+    if ("Error reading" in str(err) and "field" in str(err)) or "Missing variant start" in str(err):
+        return HeaderRefused(str(err).splitlines()[-1][-160:])
+    return None
 
 
 def _register(**kwargs) -> None:
@@ -740,10 +771,14 @@ def read_records(
 _BOUNDED = {"GQ": 2**16 - 1, "DP": 2**32 - 1, "MIN_DP": 2**32 - 1}
 
 
-def scan_stats(records: pl.LazyFrame) -> dict:
+def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> dict:
     """One streaming pass for what the warnings and the facet need: out-of-range counts, GP's
     largest value, the source contig names, and whether any record is a reference block. It reads
-    GT, which makes polars-bio parse the sample column, so a field value it cannot parse fails here."""
+    GT, which makes polars-bio parse the sample column, so a field value it cannot parse fails here.
+
+    `unsourced` (`Part.unsourced`, a merge's first part only) is counted in the same collect, as
+    `unsourced`: the merge's records no part takes, which `records`, already one part's, no longer
+    holds. It is a second scan of the file, read beside the first."""
     out_of_range = [
         ((pl.col(f"fmt_{key}").cast(pl.Int64, strict=False) < 0) | (pl.col(f"fmt_{key}").cast(pl.Int64, strict=False) > top))
         .sum()
@@ -777,7 +812,11 @@ def scan_stats(records: pl.LazyFrame) -> dict:
             else []
         ),
     )
-    row = _collect(plan).row(0, named=True)
+    if unsourced is None:
+        row = _collect(plan).row(0, named=True)
+    else:
+        found, left_out = _collect_all([plan, unsourced.select(pl.len().alias("unsourced"))])
+        row = {**found.row(0, named=True), "unsourced": left_out.item()}
     row["chroms"] = sorted(row["chroms"] or [])
     return row
 

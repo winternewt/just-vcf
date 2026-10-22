@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
+  `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
+  was dropped without a word. Counting it reads the file a second time, beside the first part's stats
+  pass. No column changes.
+
 - A Complete Genomics `var` or `masterVarBeta` whose header does not say it is a whole genome (28 of
   250 PGP-HMS files have no `#TITLE`) gets its `callset_type` from its rows, by the rule a VCF's
   follows; it was null. `absence_means` stays `blocks`. A value change on files that already load.

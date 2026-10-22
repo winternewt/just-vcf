@@ -844,7 +844,8 @@ the same collection still has both.
 **Built 2026-10-22, from the merged VCF only.** `load` returns both facets in one `Loaded`, in
 `facet_id` order, each with `relation = caller_split` and its own `caller` (read from the merge's
 `##sourceFiles` names, `.FB.` and `.VS.`; null where they do not say). A row belongs to a caller when
-INFO/SF lists its index. With a column per caller, each facet reads its own column. With one data
+INFO/SF lists its index; a record whose SF lists no caller's index (SF absent, or naming an index no
+`##sourceFiles` line declares) belongs to no facet, and a load warning counts it. With a column per caller, each facet reads its own column. With one data
 column, the column holds the first caller's genotype wherever that caller found the site, so the
 VarScan2 facet holds only the sites VarScan2 alone found, and a warning counts the shared sites it
 lost. `derived_from` stays null: the merged file is not loaded as a facet of its own (that is option

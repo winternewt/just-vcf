@@ -183,7 +183,7 @@ def test_a_read_failure_that_is_not_damage_walks_the_file_once(tmp_path: Path, m
         walks.append(target)
         return find_damage(target, *args, **kwargs)
 
-    def refuse(_records):
+    def refuse(*_):
         raise pl.exceptions.ComputeError("a read failure that is not damage")
 
     monkeypatch.setattr(bgzf, "find_damage", counted)

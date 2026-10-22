@@ -619,8 +619,9 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 # A BCF declares every key it uses, and its header cannot be rewritten without re-encoding
                 # the records, so a refusal from polars-bio is final here.
                 path = vcf.readable_bcf_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), copy, origin)
-                records = part.select(vcf.read_records(path, header, part.sample, first_record, extra_info=part.info))
-                stats = vcf.scan_stats(records)
+                raw = vcf.read_records(path, header, part.sample, first_record, extra_info=part.info)
+                records = part.select(raw)
+                stats = vcf.scan_stats(records, part.unsourced(raw))
             else:
                 records, stats = _read_text_records(sniffed, header, missing, data, copy, origin, part, part_warnings)
             calls, blocks, row_warnings = vcf.to_rows(records, header, stats, text_gt=not binary, gl_phred=gl_phred)
@@ -630,6 +631,12 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
             # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
             calls_path, blocks_path = _spill_files(facet_id, calls_frame, blocks_frame, origin)
+        if stats.get("unsourced"):
+            # The file's, not a caller's: no caller prefix (Decision 8).
+            warnings.append(
+                f"{stats['unsourced']} record(s) whose INFO/SF names no caller of the merge (no SF, or no "
+                "##sourceFiles index) left out: they belong to no caller's facet"
+            )
         contigs = [canonical_chrom(name) for name in stats["chroms"]]
         spilled = pl.scan_parquet(calls_path)
         flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
@@ -750,8 +757,9 @@ def _read_text_records(
     polars-bio refuses the first read (P7, P8). The retry is reported in `warnings`."""
     path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: _vcf_text(sniffed, header.resaved), header, missing, copy, origin)
     try:
-        records = part.select(vcf.read_records(path, header, part.sample, data[0] if data else None, extra_info=part.info))
-        return records, vcf.scan_stats(records)
+        raw = vcf.read_records(path, header, part.sample, data[0] if data else None, extra_info=part.info)
+        records = part.select(raw)
+        return records, vcf.scan_stats(records, part.unsourced(raw))
     except vcf.HeaderRefused as err:
         warnings.append(
             f"polars-bio refused the file ({err}); read again with a header of only the carried INFO and "
@@ -759,8 +767,9 @@ def _read_text_records(
         )
     path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: _vcf_text(sniffed, header.resaved), header, missing, copy, origin, structural_only=True)
     first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
-    records = part.select(vcf.read_records(path, header, part.sample, first, extra_info=part.info))
-    stats = vcf.scan_stats(records)
+    raw = vcf.read_records(path, header, part.sample, first, extra_info=part.info)
+    records = part.select(raw)
+    stats = vcf.scan_stats(records, part.unsourced(raw))
     if left_out := vcf.pos_zero_left_out(copy):
         warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
     return records, stats

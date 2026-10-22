@@ -537,6 +537,12 @@ same applies when the user corrects a preference: it goes below, in their words,
   merged `fix/<n>` branches and worktrees, as the kit's tooling seat does. Triage and
   upstream-liaison still never push.
 
+- 2026-10-22, filtered genome files: "If [the file] is filtered (indirect evidence is file extension) and snv
+  only, indel-only, it can't be treated same as WGS anymore, or it can, but with a caveat that ref
+  restoration is additionally gated (needs force)". A whole-genome file that kept one variant class stays
+  `wgs`; the facet records which classes it carries, absence reads as reference only for those, and any
+  hom-ref restoration refuses a filtered facet without `force=True`.
+
 ## 11. Learned workspace facts
 
 - Real genomes live under `/data/genomes/<person>/`, all private. What is there by kind:

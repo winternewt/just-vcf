@@ -94,6 +94,26 @@ class AssemblyLabelBasis(str, Enum):
     INFERRED = "inferred"
 
 
+class ChipBasis(str, Enum):
+    """How a facet's `chip` was obtained: written in the file's header, or read off its probe set."""
+
+    STATED = "stated"
+    INFERRED = "inferred"
+
+
+class StrandCheck(str, Enum):
+    """What `resolve_ref` found about the strand an array facet's genotypes are written on (F13).
+
+    Null when the check did not run: not an array, REF not read yet, or too few heterozygous rows.
+    """
+
+    FORWARD = "forward"
+    """Heterozygous rows carry the reference base, as forward-strand genotypes must."""
+    MIXED = "mixed"
+    """A share of heterozygous rows carry the complement of the reference base and not the base itself:
+    part of the probes is written on the minus strand."""
+
+
 def enum_dtype(vocabulary: type[Enum]) -> pl.Enum:
     """The `pl.Enum` dtype for a closed vocabulary, categories in declaration order."""
     return pl.Enum([member.value for member in vocabulary])
@@ -130,6 +150,9 @@ FACETS = pl.Schema(
         "sample_meta": pl.List(pl.String),
         "dropped_fields": pl.List(pl.String),
         "split_marker": pl.String,
+        "chip": pl.String,
+        "chip_basis": enum_dtype(ChipBasis),
+        "strand_check": enum_dtype(StrandCheck),
     }
 )
 """One row per facet (SCHEMA.md Decision 5)."""

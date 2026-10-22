@@ -193,7 +193,7 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); left: chip generation, gVCF `END` expansion) · Owner: lead
+Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); chip from the header or, for 23andMe, the rows (`facets.chip`); left: chip by marker overlap for FTDNA and MyHeritage, gVCF `END` expansion) · Owner: lead
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
@@ -216,7 +216,63 @@ every pair of classes. Decisions taken, each with what was rejected:
 - The classifier and the inference stay internal (`just_vcf.callset`, `just_vcf.assembly`, not in
   `__all__`); the facet columns are the contract. Rejected: exporting them before a consumer asks.
 
-**Left:** just-prs chip generation detection (F13 needs it for a strand table); GRCh36 in
+**Shipped 2026-10-22: chip detection** (`just_vcf.chip`; `facets.chip`, `chip_basis`; rules in
+docs/SCHEMA.md Decision 5). Stated where the header names a chip: AncestryDNA's `array version`
+(V1.0, V2.0), a Final Report's `Content` manifest (kept as `illumina:<manifest>`), Living DNA's
+`Genotype chip`. Inferred for 23andMe exports from two features of the rows, each read alone: the row
+count and the internal-id profile (share of rows with an `i…` id, and the share of those numbered
+below `i1000000`). Measured on 341 PGP-HMS 23andMe exports, by generation:
+
+| Generation | Exports | Rows | Internal ids, share of rows | Ids below i1000000 | rsids in GSA-24v3 / OmniExpress-24 v1.2 |
+|---|---|---|---|---|---|
+| v1/v2 | 61 | 571,676–595,526 | 0.30–0.56% | none | 0.20 / 0.55–0.56 |
+| v4 | 77 | 598,897–612,647 | 7.71–9.72% | few | 0.20–0.22 / 0.55–0.56 |
+| v5 | 28 | 631,455–643,535 | 2.69–2.80% | nearly all | 0.92–0.94 / 0.26–0.27 |
+| v3 | 166 (2 read unknown, below) | 960,520–1,003,773 | 1.02–1.37% | few | 0.20 / 0.70–0.72 |
+| none (1.41M rows, v5-style ids; 1,764–2,459-row extracts) | 9 | | | | |
+
+The overlap columns are an independent check, not part of the rule: only the cluster named v5 is on
+the GSA, consistent with 23andMe's v5 being its GSA chip, and the v3 cluster carries the most OmniExpress content.
+The gaps the bands sit in are thin in two places: rows 595,526 (v1/v2) against 598,897 (v4), split at
+597,000; internal-id share 0.56% (v1/v2) against 1.02% (v3), split at 0.8%. Measured on public files
+only; a v1/v2 or v4 export outside them reads unknown, never the neighbour.
+
+Decisions, each with what was rejected:
+
+- Two features must agree. Rejected: the row count alone (just-prs), which cannot tell v1/v2 from v4
+  (just-prs put both in one band and named it v4), and its fallback that names any unknown count
+  "GSA v3 (estimated)".
+- v1 and v2 are one value, `23andme_v1_v2`. Rejected: splitting them on the highest internal id
+  (`i4001526` or `i4990307` in build-36 exports), which reflects the download date as much as the chip.
+- FTDNA and MyHeritage get no rule. Every FTDNA export of 548,000 rows or more in PGP-HMS is either
+  the 2010 Affymetrix layout (548,011 rows, `ftdna_space` and three comma exports) or on OmniExpress
+  (98–99% of sampled rsids in its manifest, 680,544–720,449 rows); none is on a later chip, so nothing
+  here says what one looks like. Rejected: naming them by row count.
+- AncestryDNA is taken as stated. Its V2.0 exports are not on the GSA, where just-prs's chip table puts
+  them: 0.26–0.28 of their sampled rsids are in the GSA-24v3 manifest and 0.64–0.67 in OmniExpress-24's
+  (V1.0: 0.24–0.26 and 0.64–0.99).
+- The chip is a facet column, not a computed function like `vrs_withheld`: it is read once at load,
+  from the header and the rows, and does not change as the facet is processed.
+- An open vocabulary (`CHIPS` + `is_chip`), stored as `str`. Rejected: a `pl.Enum`, whose dtype would
+  change with every vendor release.
+
+Dogfooded through `load` on the 522 PGP-HMS array uploads that sniff as a loadable table (one Final
+Report did not load: `TableLayoutError`, its manifest `HumanOmni2.5-8v1_A` therefore unread):
+
+| Chip | Basis | Exports |
+|---|---|---|
+| `23andme_v3` | inferred | 164 23andMe, 1 rsid table |
+| `23andme_v4` | inferred | 77 23andMe |
+| `23andme_v1_v2` | inferred | 61 23andMe, 1 headerless rsid table |
+| `23andme_v5` | inferred | 28 23andMe, 1 headerless rsid table |
+| `ancestrydna_v1` | stated | 24 AncestryDNA |
+| `ancestrydna_v2` | stated | 16 AncestryDNA |
+| `illumina:GSA-24v2-0_A1` | stated | 1 Final Report |
+| `living_dna_sirius` | stated | 1 Living DNA |
+| unknown | | 12 23andMe-shaped: 4 of 1.41M rows and 5 extracts (no band), 2 v3-sized whose internal ids are a v3/v5 mix (the features disagree), 1 spreadsheet re-save of 70,000 rows; 103 FTDNA, 2 FTDNA space-separated, 4 deCODEme, 15 Genes for Good, 4 Genos, 2 rsid tables without 23andMe ids, and one each of Color, PLINK, SelfDecode and the rsid CSV (no rule) |
+
+**Left:** marker-overlap detection against chip manifests (FTDNA, MyHeritage, unstated Final
+Reports), which needs the manifests at run time or a derived marker list in `assets/`; GRCh36 in
 `ASSEMBLY_LENGTHS`, so a build-36 VCF's `##contig` lengths name it (the reference side knows GRCh36's
 contig 1 since F9; the header side reads those lengths as matching no assembly); contigs named by RefSeq accession (`NC_000001.11`), which the label
 inference does not read yet; gVCF `END` expansion; an SNV-only or indel-only split of a genome

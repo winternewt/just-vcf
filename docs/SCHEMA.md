@@ -352,6 +352,8 @@ No load timestamp: it would break determinism, and the file digest already says 
   defines, computed with refget's own functions (checked against the six compliance vectors refget
   ships, and against the public server seqcolapi.databio.org, where the digests computed from UCSC
   hg19's and hg38's `chrom.sizes` equal this attribute of two registered collections each). It gets
+| `chip`, `chip_basis` | the genotyping chip an array export came from (RM4, `just_vcf.chip`), and how it is known: `stated` (the header names it: AncestryDNA's array version, a Final Report's `Content` manifest, Living DNA's genotype chip) or `inferred` (a 23andMe export's row count and internal-id profile both point at one generation; a preamble-less table in its layout is read so when it carries 23andMe's `i…` ids). An open vocabulary: `23andme_v1_v2` (the two are not told apart), `23andme_v3`, `23andme_v4`, `23andme_v5`, `ancestrydna_v1`, `ancestrydna_v2`, `living_dna_sirius`, and `illumina:<manifest>` as a Final Report names it. Null = unknown (a statement with no entry is quoted in a warning; FTDNA exports state nothing and are not inferred) or not an array. just-vcf's own shape |
+| `strand_check` | `forward` or `mixed`: what `resolve_ref` found about the strand an array's genotypes are written on (F13, Decision 2). Null = not checked: not an array, REF not read yet, or too few heterozygous rows. Never read as forward |
   its own column rather than `seqcol_digest`'s, because it identifies a coordinate system, which
   several collections share.
   Names are verbatim, so `chr1` and `1` headers give different digests, as seqcol intends.

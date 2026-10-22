@@ -58,7 +58,9 @@ def test_every_loadable_example_round_trips(tmp_path: Path, format_id: str) -> N
     assert set(all_null["ids"].list.first().to_list()) == no_calls
     assert calls["ref"].null_count() == calls.height, "an array writes no REF; REF comes from the sequence only"
     assert calls["evidence_basis"].to_list() == ["assay"] * calls.height
-    assert loaded.warnings == ()
+    # A 23andMe export too small for any generation's row band says its chip is unknown (RM4).
+    chip_lines = [f"chip unknown: {len(rows)} rows"] if format_id in ("23andme", "23andme_csv") else []
+    assert [w.split(",")[0] for w in loaded.warnings] == chip_lines
 
 
 def test_genotype_encodings(tmp_path: Path) -> None:
@@ -98,7 +100,8 @@ def test_rows_that_do_not_fit_are_dropped_and_counted(tmp_path: Path) -> None:
     assert set(calls["ids"].list.first().to_list()) == {"rs1", "rs6", "rs7"}
     unreadable = calls.filter(pl.col("gt_alleles").is_null())
     assert sorted(unreadable["source_gt"].to_list()) == ["CCA", "NN"]
-    assert len(loaded.warnings) == 3
+    assert len(loaded.warnings) == 4
+    assert any(w.startswith("chip unknown: 3 rows") for w in loaded.warnings)
     assert any(w.startswith("2 row(s) without exactly 4 fields") and "3, 5" in w for w in loaded.warnings)
     assert any(w.startswith("2 row(s) with a position") for w in loaded.warnings)
     assert any(w.startswith("2 genotype(s) not readable") for w in loaded.warnings)

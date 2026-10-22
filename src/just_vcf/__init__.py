@@ -25,10 +25,12 @@ from just_vcf.schema import (
     AssemblyLabelBasis,
     BlockKind,
     CallsetType,
+    ChipBasis,
     EvidenceBasis,
     PhaseSetKind,
     RefCheck,
     SplitSignal,
+    StrandCheck,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
 from just_vcf.writing import ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
@@ -46,6 +48,7 @@ __all__ = [
     "AssemblyLabelBasis",
     "BlockKind",
     "CallsetType",
+    "ChipBasis",
     "ContigNames",
     "Loaded",
     "MultiSampleError",
@@ -60,6 +63,7 @@ __all__ = [
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
+    "StrandCheck",
     "TableLayoutError",
     "UnsortedRowsError",
     "UnsupportedFormatError",

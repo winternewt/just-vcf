@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- An array facet now says which genotyping chip it came from (RM4): `facets.chip` and
+  `facets.chip_basis`. Stated where the header names it (AncestryDNA's array version, an Illumina
+  Final Report's `Content` manifest as `illumina:<manifest>`, Living DNA's genotype chip); inferred for
+  23andMe exports, and preamble-less tables carrying 23andMe's internal ids, when the row count and the
+  internal-id profile both point at one generation (`23andme_v1_v2`, `_v3`, `_v4`, `_v5`); unknown
+  otherwise, with a warning naming the features. FamilyTreeDNA and MyHeritage exports state nothing
+  and stay unknown. Bands measured on 341 PGP-HMS 23andMe exports and checked against Illumina's GSA
+  and OmniExpress manifests (docs/ROADMAP.md RM4). New columns are additive, nullable; exports
+  `ChipBasis`. A 23andMe export too small for any band now carries one `chip unknown` warning.
+
 - New `sex_chromosome_evidence(loaded)` (RM269): for each facet, what its calls say about X and Y, and
   an estimate of the karyotype. It measures GT ploidy as written per group (autosomes, non-PAR X,
   non-PAR Y, PAR, MT), the het share of non-PAR X calls written diploid with their AD allele balance,

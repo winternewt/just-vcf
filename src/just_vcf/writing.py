@@ -30,11 +30,23 @@ What is written, and the rules it follows:
   with a warning and the tag, so a reader is told that a `0` there may mean another ALT. `load` reads
   the tag back as a marker (`split_signal = marker`), so a written normalized facet keeps its flag.
   `rejoin_split` joins them first, if that is what the caller wants.
-- **Blocks** are not written. A gVCF block record needs the reference base at its start, which the
-  `blocks` frame does not hold until RM3 reads the sequence; the count is reported.
+- **Blocks** are written only with `blocks=True`, as gVCF reference blocks; otherwise they are
+  counted. A block record needs the reference base at its start, which the `blocks` frame does not
+  hold: it is read from the collection `resolve_ref` read the facet's REF from, never made up, and a
+  facet whose REF was not read is refused. Each block is `REF <*>` (or `<NON_REF>`), INFO `END`,
+  FORMAT GT, GQ, MIN_DP and GL where the frame holds them (it holds no block DP). GT is `0/0` for a
+  `ref` block and `./.` for a `no_call` one, at the ploidy the block's own GL implies, else the
+  ploidy of the contig's calls (the frame keeps no block GT; `load` reads only whether it called
+  anything). Blocks and calls are merged one contig at a time, by position, calls first.
 - **Contig names** are written as stored (the canonical `chrom`), with the `chr` prefix (`MT` becomes
   `chrM`), or as the source spelled them (`contig_map`). The header's `##contig` lines follow the same
   names and the rows' order.
+
+- **A tabix index** (`<path>.tbi`) is written beside BGZF output by default, from the byte offsets
+  the writer itself produced (`just_vcf.tabix`), so the file is region-queryable by htslib without a
+  second pass over it. Each record's interval is the one htslib's VCF preset reads back: from `POS`,
+  to INFO `END` where the line writes one, else over REF. A plain-text write has no index, and a
+  write without one removes a stale `<path>.tbi`.
 
 The header names the facet (`facet_id`, `source_sha256`, `format_id`, the parent of a derived facet)
 and this package's version. It never names `source_path` or the source's `##SAMPLE` lines, which can
@@ -48,6 +60,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 from importlib.metadata import version
+from collections.abc import Iterator
 from pathlib import Path
 from typing import BinaryIO
 
@@ -57,7 +70,9 @@ from pydantic import BaseModel, ConfigDict
 from just_vcf.bgzf import BgzfWriter
 from just_vcf.loaders.vcf import FORMAT_KEYS, SPLIT_INFO_KEY
 from just_vcf.loading import Loaded
-from just_vcf.schema import CONTIG_RANK, SCHEMA_VERSION, RefCheck, canonical_chrom
+from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _store_for
+from just_vcf.schema import CONTIG_RANK, SCHEMA_VERSION, BlockKind, RefCheck, canonical_chrom
+from just_vcf.tabix import TabixIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +82,7 @@ _FORMAT_DESCRIPTIONS = {
     "GT": "Genotype",
     "GQ": "Conditional genotype quality",
     "DP": "Read depth of this sample",
+    "MIN_DP": "Minimum read depth over the block",
     "AD": "Read depth for each allele",
     "GL": "Genotype likelihoods, log10",
     "GP": "Genotype posterior probabilities",
@@ -108,6 +124,18 @@ _CHR_NAMES = {**{str(n): f"chr{n}" for n in range(1, 23)}, "X": "chrX", "Y": "ch
 """Canonical → `chr`-prefixed, listed name by name: `MT` is `chrM`, and nothing is prefixed by pattern."""
 
 
+class BlockAllele(str, Enum):
+    """How a gVCF reference block's ALT is spelled. `load` reads both as `<*>`."""
+
+    STAR = "<*>"
+    """VCF 4.3's own symbol for any allele other than REF."""
+    NON_REF = "<NON_REF>"
+    """GATK's spelling, which GATK's own tools (GenotypeGVCFs, CombineGVCFs) expect."""
+
+
+_BLOCK_ALT_DESCRIPTION = "Represents any possible alternative allele not already represented at this location by REF and ALT"
+
+
 class UnwritableRowsError(ValueError):
     """Rows that cannot be written as valid VCF, counted per reason. `resolved_only=True` skips them."""
 
@@ -136,7 +164,11 @@ class VcfWritten(BaseModel):
     rows_skipped: dict[str, int]
     """Rows left out under `resolved_only=True`, per reason. Empty when nothing was left out."""
     blocks_not_written: int
+    """Blocks not written: all of them without `blocks=True`, else the ones counted in `rows_skipped`."""
     warnings: tuple[str, ...] = ()
+    blocks_written: int = 0
+    index_path: Path | None = None
+    """The tabix index written beside a BGZF file (`<path>.tbi`); None when none was written."""
 
 
 class _Hashing:
@@ -159,6 +191,10 @@ def write_vcf(
     sample: str | None = None,
     resolved_only: bool = False,
     compress: bool = True,
+    index: bool | None = None,
+    blocks: bool = False,
+    reference: "ReferenceStore | Path | str | None" = None,
+    block_allele: BlockAllele = BlockAllele.STAR,
 ) -> VcfWritten:
     """Write `loaded`'s one facet to `path` as a VCF 4.3 (BGZF unless `compress=False`).
 
@@ -167,8 +203,24 @@ def write_vcf(
     `UnwritableRowsError` unless `resolved_only=True`. The rows must be in the order `load` emits
     them (grouped by contig, positions ascending); otherwise `UnsortedRowsError`. The same frames and
     options give the same bytes.
+
+    `index` writes a tabix index, `<path>.tbi`, beside the file; the default is to write one whenever
+    the output is BGZF. A plain-text file cannot be indexed (`index=True` with `compress=False` is
+    refused), and a write without an index removes a `<path>.tbi` left from an earlier write, which
+    would no longer describe the file.
+
+    `blocks=True` writes the `blocks` frame too, as gVCF reference blocks interleaved with the calls
+    (ALT `block_allele`, INFO `END`, FORMAT GT, GQ, MIN_DP and GL as the frame holds them). A block
+    record needs the reference base at its start, which the frame does not hold: it is read from
+    `reference` (a store or its directory; default the store at `reference_dir()`), from the
+    collection `resolve_ref` read the facet's REF from. A facet whose REF was not read is refused;
+    a block whose base cannot be read counts as `block_ref_unread`.
     """
     path = Path(path)
+    if index and not compress:
+        raise ValueError("a tabix index needs BGZF output; pass compress=True or leave index unset")
+    indexed = compress if index is None else index
+    index_path = path.with_name(path.name + ".tbi")
     facets = loaded.facets.collect()
     if facets.height != 1:
         raise ValueError(f"write_vcf takes one facet; this Loaded has {facets.height}")
@@ -181,11 +233,15 @@ def write_vcf(
     calls = loaded.calls.with_columns(_unwritable().alias("_unwritable"))
     stats = _scan(calls)
     skipped = {reason: stats[f"n_{reason}"] for reason in _UNWRITABLE_REASONS if stats[f"n_{reason}"]}
+    plan = _block_plan(loaded, facet, calls, reference, block_allele) if blocks else None
+    if plan is not None and plan.unreadable:
+        skipped["block_ref_unread"] = plan.unreadable
     if skipped and not resolved_only:
         raise UnwritableRowsError(facet_id, skipped)
-    blocks = loaded.blocks.select(pl.len()).collect().item()
+    block_count = loaded.blocks.select(pl.len()).collect().item()
+    blocks_written = block_count - plan.unreadable if plan is not None else 0
 
-    names = _contig_names(contig_names, facet, stats["chroms"])
+    names = _contig_names(contig_names, facet, sorted({*stats["chroms"], *(plan.chroms if plan is not None else [])}))
     warnings: list[str] = []
     if skipped:
         warnings.append(f"{sum(skipped.values())} row(s) not written: " + ", ".join(f"{n} {r}" for r, n in skipped.items()))
@@ -204,57 +260,111 @@ def write_vcf(
             f"{stats['n_split']} row(s) look split one row per ALT (RM270) and were written as held, tagged "
             f"INFO/{SPLIT_INFO_KEY}: a `0` there may mean another ALT, not REF; rejoin_split joins them first"
         )
-    if blocks:
+    if block_count and plan is None:
         warnings.append(
-            f"{blocks} reference/no-call block(s) not written: a gVCF block needs the REF base at its start, "
-            "which the blocks frame does not hold before RM3"
+            f"{block_count} reference/no-call block(s) not written: pass blocks=True, with the reference store REF "
+            "was read from, to write them as gVCF reference blocks"
         )
 
-    declared = [key for key in _FORMAT_DESCRIPTIONS if stats[f"has_{key}"]]
-    header = _header(facet, sample_name, names, declared, stats)
+    in_blocks = plan.has if plan is not None and blocks_written else {}
+    declared = [key for key in _FORMAT_DESCRIPTIONS if stats[f"has_{key}"] or in_blocks.get(key, False)]
+    header_stats = {**stats, "has_END": stats["has_END"] or bool(blocks_written)}
+    alt_lines = [f'##ALT=<ID={block_allele.value.strip("<>")},Description="{_BLOCK_ALT_DESCRIPTION}">'] if blocks_written else []
+    header = _header(facet, sample_name, names, declared, header_stats, alt_lines)
     rows = calls.filter(pl.col("_unwritable").is_null()) if skipped else calls
-    lines = rows.select(_line(names.mapping, stats["ploidy"]).alias("line"), "chrom", "pos")
+    lines = rows.select(
+        _line(names.mapping, stats["ploidy"]).alias("line"),
+        "chrom",
+        "pos",
+        *_index_columns(names.mapping),
+    )
+    if plan is None:
+        batches: Iterator[pl.DataFrame] = lines.collect_batches()
+    else:
+        _check_order(rows.select("chrom", "pos"))
+        _check_order(loaded.blocks.select("chrom", "pos"))
+        batches = _interleaved(lines, plan, names.mapping)
 
     # Written beside the target and moved over it at the end, so a refused or failed write leaves no
-    # half-written VCF behind under the requested name.
+    # half-written VCF (or index) behind under the requested name.
     partial = path.with_name(path.name + ".partial")
+    index_partial = index_path.with_name(index_path.name + ".partial")
+    indexer = TabixIndexer() if indexed else None
     try:
         with partial.open("wb") as raw:
             sink = _Hashing(raw)
             if compress:
                 with BgzfWriter(sink, level=6) as out:
-                    written = _write_body(out, header, lines)
+                    written = _write_body(out, header, batches, indexer)
+                if indexer is not None:
+                    with index_partial.open("wb") as raw_index, BgzfWriter(raw_index, level=6) as index_out:
+                        index_out.write(indexer.build(out.virtual_offset))
             else:
-                written = _write_body(sink, header, lines)
+                written = _write_body(sink, header, batches, None)
     except BaseException:
         partial.unlink(missing_ok=True)
+        index_partial.unlink(missing_ok=True)
         raise
     os.replace(partial, path)
+    if indexer is not None:
+        os.replace(index_partial, index_path)
+    else:
+        index_path.unlink(missing_ok=True)
 
     for warning in warnings:
         logger.warning("%s: %s", facet_id, warning)
     return VcfWritten(
         path=path,
         sha256=sink.digest.hexdigest(),
-        rows_written=written,
+        rows_written=written - blocks_written,
         rows_skipped=skipped,
-        blocks_not_written=blocks,
+        blocks_not_written=block_count - blocks_written,
+        blocks_written=blocks_written,
         warnings=tuple(warnings),
+        index_path=index_path if indexer is not None else None,
     )
 
 
-def _write_body(out: BinaryIO | BgzfWriter | _Hashing, header: str, lines: pl.LazyFrame) -> int:
-    """The header, then every line batch by batch, checking the order as it goes. Returns the row count."""
-    out.write(header.encode())
+def _write_body(out: BinaryIO | BgzfWriter | _Hashing, header: str, batches: Iterator[pl.DataFrame], indexer: TabixIndexer | None) -> int:
+    """The header, then every line batch by batch, checking the order as it goes and handing each
+    record's interval and byte offsets to `indexer`. Returns the line count."""
+    head = header.encode()
+    out.write(head)
+    offset = len(head)
     order = _OrderCheck()
     written = 0
-    for batch in lines.collect_batches():
+    for batch in batches:
         order.check(batch)
         buffer = io.BytesIO()
         batch.select("line").write_csv(buffer, include_header=False, quote_style="never", line_terminator="\n")
-        out.write(buffer.getvalue())
+        data = buffer.getvalue()
+        out.write(data)
+        if indexer is not None:
+            size = pl.col("line").str.len_bytes().cast(pl.Int64) + 1
+            located = batch.select(
+                pl.col("_ix_name").alias("name"),
+                pl.col("_ix_beg").alias("beg"),
+                pl.col("_ix_end").alias("end"),
+                (offset + size.cum_sum()).alias("u_end"),
+            ).with_columns((pl.col("u_end") - batch.select(size).to_series()).alias("u_start"))
+            if batch.height and located["u_end"][-1] != offset + len(data):
+                raise RuntimeError("the written lines' sizes do not add up to the bytes written; the index would be wrong")
+            indexer.add(located)
+        offset += len(data)
         written += batch.height
     return written
+
+
+def _index_columns(mapping: dict[str, str]) -> list[pl.Expr]:
+    """Each record's contig as written and its interval as htslib's VCF preset reads it back: 0-based
+    from `POS - 1`, to INFO `END` where the line writes one, else to `POS - 1 + len(REF)`."""
+    ref_span_end = pl.col("pos").cast(pl.Int64) + _written_ref().str.len_chars().cast(pl.Int64) - 1
+    end = pl.col("end_pos").cast(pl.Int64)
+    return [
+        pl.col("chrom").replace(mapping).alias("_ix_name"),
+        (pl.col("pos").cast(pl.Int64) - 1).alias("_ix_beg"),
+        pl.when((end != ref_span_end).fill_null(False)).then(end).otherwise(ref_span_end).alias("_ix_end"),
+    ]
 
 
 def _written_ref() -> pl.Expr:
@@ -328,6 +438,7 @@ def _format_values(ploidy: int) -> dict[str, pl.Expr]:
         "GT": _gt_text(ploidy),
         "GQ": pl.col("gq").cast(pl.String),
         "DP": pl.col("dp").cast(pl.String),
+        "MIN_DP": pl.lit(None, dtype=pl.String),
         "AD": pl.when(vectors).then(_list_text("ad")),
         "GL": pl.when(vectors).then(_list_text("gl")),
         "GP": pl.when(vectors).then(_list_text("gp")),
@@ -408,7 +519,7 @@ def _contig_names(style: ContigNames, facet: dict, chroms: list[str]) -> _Names:
     )
 
 
-def _header(facet: dict, sample: str, names: _Names, declared: list[str], stats: dict) -> str:
+def _header(facet: dict, sample: str, names: _Names, declared: list[str], stats: dict, alt_lines: list[str]) -> str:
     lines = [
         f"##fileformat={VCF_VERSION}",
         f"##source=just-vcf {version('just-vcf')}",
@@ -435,6 +546,7 @@ def _header(facet: dict, sample: str, names: _Names, declared: list[str], stats:
     for key in declared:
         number, kind = FORMAT_KEYS[key]
         lines.append(f'##FORMAT=<ID={key},Number={number},Type={kind},Description="{_FORMAT_DESCRIPTIONS[key]}">')
+    lines += alt_lines
     for contig in names.contigs:
         attrs = f"ID={contig['name']}"
         if contig["length"] is not None:
@@ -503,3 +615,148 @@ class _OrderCheck:
                 raise UnsortedRowsError(f"contig {chrom} comes back after another; the rows are not grouped by contig")
             self._seen.add(chrom)
         self._last = (chroms[-1], positions[-1])
+
+
+def _check_order(rows: pl.LazyFrame) -> None:
+    """`UnsortedRowsError` unless `rows` are grouped by contig with positions ascending, read as a stream."""
+    order = _OrderCheck()
+    for batch in rows.collect_batches():
+        order.check(batch)
+
+
+@dataclass(frozen=True)
+class _BlockPlan:
+    """What writing the `blocks` frame needs: the reference contigs to read a base from, the ploidy a
+    block's GT is written with when its GL does not say, and which FORMAT keys the frame holds."""
+
+    blocks: pl.LazyFrame
+    """The blocks, with `_readable` saying whether the base at `pos` can be read."""
+    store: ReferenceStore
+    contigs: dict[str, Contig]
+    ploidy: dict[str, int]
+    fallback_ploidy: int
+    allele: BlockAllele
+    chroms: list[str]
+    unreadable: int
+    has: dict[str, bool]
+
+
+def _block_plan(loaded: Loaded, facet: dict, calls: pl.LazyFrame, reference: "ReferenceStore | Path | str | None", allele: BlockAllele) -> _BlockPlan:
+    """Check that each block's REF base can be read, contig by contig, before anything is written."""
+    digest = facet["ref_seqcol_digest"]
+    if digest is None:
+        raise ValueError(
+            f"facet {facet['facet_id']}: REF has not been read; a block's REF base comes from the facet's assembly, "
+            "so run resolve_ref first, then write_vcf(blocks=True, reference=…)"
+        )
+    store, _ = _store_for(reference)
+    if digest not in store.collections():
+        raise ReferenceMismatchError(
+            f"facet {facet['facet_id']}: the reference store does not hold collection {digest}, which REF was read "
+            "from; pass reference= with the store resolve_ref read"
+        )
+    # A contig the collection names once, whose length the facet stated the same or not at all: the
+    # check resolve_ref made for the calls' contigs, made again for contigs only blocks use.
+    stated: dict[str, set[int]] = {}
+    for entry in facet["header_contigs"] or []:
+        if entry["length"] is not None:
+            stated.setdefault(canonical_chrom(entry["name"]), set()).add(entry["length"])
+    contigs = {
+        chrom: found[0]
+        for chrom, found in store.contigs_by_chrom(digest).items()
+        if len(found) == 1 and stated.get(chrom, {found[0].length}) == {found[0].length}
+    }
+    lengths = {chrom: contig.length for chrom, contig in contigs.items()}
+    readable = pl.col("pos").cast(pl.Int64) <= pl.col("chrom").replace_strict(lengths, default=0, return_dtype=pl.Int64)
+    blocks = loaded.blocks.with_columns(readable.alias("_readable"))
+    summary = (
+        blocks.select(
+            (~pl.col("_readable")).sum().alias("unreadable"),
+            pl.col("gq").is_not_null().any().alias("GQ"),
+            pl.col("dp_min").is_not_null().any().alias("MIN_DP"),
+            (pl.col("gl").list.len() > 0).any().alias("GL"),
+            pl.col("chrom").unique().sort().implode().alias("chroms"),
+        )
+        .collect()
+        .row(0, named=True)
+    )
+    per_contig = calls.group_by("chrom").agg(pl.col("gt").list.len().max().alias("ploidy")).drop_nulls().collect()
+    ploidy = dict(per_contig.iter_rows())
+    return _BlockPlan(
+        blocks=blocks,
+        store=store,
+        contigs=contigs,
+        ploidy=ploidy,
+        fallback_ploidy=max(ploidy.values(), default=2),
+        allele=allele,
+        chroms=summary["chroms"] or [],
+        unreadable=summary["unreadable"] or 0,
+        has={"GT": True, "GQ": bool(summary["GQ"]), "MIN_DP": bool(summary["MIN_DP"]), "GL": bool(summary["GL"])},
+    )
+
+
+def _interleaved(lines: pl.LazyFrame, plan: _BlockPlan, mapping: dict[str, str]) -> Iterator[pl.DataFrame]:
+    """One contig at a time, in the header's order: its call lines and its block lines merged by
+    position, calls first where both start at one position. One contig is held in memory at a time."""
+    for chrom in mapping:
+        calls = lines.filter(pl.col("chrom") == chrom).collect()
+        blocks = _block_lines(plan, chrom, mapping)
+        if calls.is_empty() and blocks.is_empty():
+            continue
+        merged = pl.concat([calls.with_columns(pl.lit(0).alias("_source")), blocks.with_columns(pl.lit(1).alias("_source"))], how="vertical")
+        yield merged.sort("pos", "_source", maintain_order=True).drop("_source")
+
+
+_LINE_SCHEMA = {"line": pl.String, "chrom": pl.String, "pos": pl.UInt32, "_ix_name": pl.String, "_ix_beg": pl.Int64, "_ix_end": pl.Int64}
+
+
+def _block_lines(plan: _BlockPlan, chrom: str, mapping: dict[str, str]) -> pl.DataFrame:
+    """One contig's writable blocks as VCF lines, with the REF base read at each block's start."""
+    rows = plan.blocks.filter((pl.col("chrom") == chrom) & pl.col("_readable")).collect()
+    if rows.is_empty():
+        return pl.DataFrame(schema=_LINE_SCHEMA)
+    starts = rows["pos"].unique().sort()
+    # `pos` is 1-based; the store takes 0-based half-open ranges (charter 13).
+    bases = plan.store.fetch(plan.contigs[chrom], [(pos - 1, pos) for pos in starts.to_list()])
+    table = pl.DataFrame({"pos": starts, "_ref": [base.upper() for base in bases]})
+    rows = rows.join(table, on="pos", how="left", maintain_order="left")
+    # GT is not in the frame: a `ref` block asserts reference, a `no_call` block nothing. Its ploidy is
+    # the block's own GL's (k + 1 genotypes over [REF, <*>] for ploidy k), else the contig's calls'.
+    ploidy = (
+        pl.when(pl.col("gl").list.len() > 1)
+        .then(pl.col("gl").list.len().cast(pl.Int64) - 1)
+        .otherwise(pl.lit(plan.ploidy.get(chrom, plan.fallback_ploidy), dtype=pl.Int64))
+    )
+    allele = pl.when(pl.col("kind") == BlockKind.REF.value).then(pl.lit("0")).otherwise(pl.lit("."))
+    gt = pl.concat_str(allele, pl.concat_str(pl.lit("/"), allele).repeat_by(ploidy - 1).list.join(""))
+    values = {
+        "GT": gt,
+        "GQ": pl.col("gq").cast(pl.String),
+        "MIN_DP": pl.col("dp_min").cast(pl.String),
+        "GL": _list_text("gl"),
+    }
+    keys = pl.concat_str([pl.when(text.is_not_null()).then(pl.lit(key)) for key, text in values.items()], separator=":", ignore_nulls=True)
+    sample = pl.concat_str(list(values.values()), separator=":", ignore_nulls=True)
+    name = pl.col("chrom").replace(mapping)
+    return rows.select(
+        pl.concat_str(
+            [
+                name,
+                pl.col("pos").cast(pl.String),
+                pl.lit("."),
+                pl.col("_ref"),
+                pl.lit(plan.allele.value),
+                pl.lit("."),
+                pl.lit("."),
+                pl.concat_str(pl.lit("END="), pl.col("end_pos").cast(pl.String)),
+                keys,
+                sample,
+            ],
+            separator="\t",
+        ).alias("line"),
+        "chrom",
+        "pos",
+        name.alias("_ix_name"),
+        (pl.col("pos").cast(pl.Int64) - 1).alias("_ix_beg"),
+        pl.col("end_pos").cast(pl.Int64).alias("_ix_end"),
+    )

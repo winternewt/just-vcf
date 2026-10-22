@@ -367,7 +367,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and plus-strand indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: gVCF blocks, strand, minus-strand indels and blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, with a tabix index and gVCF blocks, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: strand, blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -402,8 +402,8 @@ with what was rejected:
   warning and the count. Rejected: refusing until `rejoin_split` runs, which would block exporting a
   pre-split file as it came; and writing them untagged, which loses the marker signal (the marker INFO
   key is not in the frame).
-- Blocks are counted in the result and the warnings, not written. A gVCF block record needs the REF
-  base at its start, and the `blocks` frame has none before RM3 reads the sequence.
+- Blocks are counted in the result and the warnings, not written, unless `blocks=True` (the gVCF slice
+  below): a gVCF block record needs the REF base at its start, and the `blocks` frame holds none.
 - Contig names: `stored` (canonical), `chr` (a listed map, `MT` → `chrM`, nothing by pattern; other
   contigs unchanged), or `source` (the facet's `contig_map`, and its `header_contigs` for a declared
   contig with no rows; refused where the source spelled one contig two ways). `##contig` lines are sorted in the rows' canonical order, so a tool that checks
@@ -509,8 +509,8 @@ it stayed behind. Decisions, each with what was rejected:
   Rejected: writing the parent's REF, carried across, as `source_ref` with `ref_check = match`; it
   would let `normalize` re-align lifted indels, but no file wrote that REF, which the column means.
   So `normalize` does not re-align a lifted indel today (its rows read `unchecked`).
-- Indels on minus-strand blocks are unlifted (`indel_minus_strand`). Rejected for this slice:
-  re-anchoring them on the base before the span, which bcftools does and which wants its own tests.
+- Indels on minus-strand blocks were unlifted (`indel_minus_strand`) in this slice; since 2026-10-22
+  they are re-anchored, below.
 - The derived facet's `absence_means` is `unknown`. Rejected: the parent's `weak_reference`, which
   would read every dropped row and every uncovered region as reference.
 - Its label is the target collection's, basis `inferred` (from that collection's lengths, which the
@@ -537,11 +537,96 @@ hg38ToHg19 chain it lifts 5,724,577 (UCSC's chain is netted, one target per base
 ambiguous; its chrM is hg19's, so MT is `target_contig_unmatched`). Found on the way: F14 (resolved).
 No bcftools on this machine, so the opt-in bcftools comparison was not run.
 
-**Left in RM6:** writing gVCF blocks (after RM3); a tabix index beside the output; SVLEN for symbolic
+**Shipped 2026-10-22: a tabix index beside the output** (`just_vcf.tabix`, `write_vcf(index=…)`). The
+writer hands each line's contig, interval and byte offsets to an indexer as it writes them, and
+`BgzfWriter` records where each compressed block starts, so the `.tbi` costs no second pass. Checked
+by htslib (pysam, opt-in): region queries through our index return the rows the frame says overlap
+each window (305 windows, every bin level, symbolic deletions found by their END), and htslib's own
+index of the same file has the same linear index and the same per-contig counts. Decisions, each with
+what was rejected:
+
+- Our own indexer, in the core. Rejected: `pysam.tabix_index` after the write, which needs the
+  `[reference]` extra (pysam, not on Windows) and reads the whole file again.
+- An interval runs to INFO `END` where the line writes one, else over REF, which is how htslib's VCF
+  preset reads the line back. Rejected: always the REF span, which would leave a gVCF block or a
+  symbolic deletion out of a query over its middle.
+- A window no record overlaps takes the next window's offset, and the end of a BGZF block is written as
+  the next block's start, both as htslib writes them (found by comparing with its index). Rejected:
+  the previous window's offset, valid but looser and not byte-equal to htslib's.
+- Not done: htslib's folding of small bins into their parents (`compress_binning`), which only makes
+  the index smaller; and CSI, for contigs past 2^29 bases, which the writer refuses to index (pass
+  `index=False`).
+- On by default for BGZF output. Rejected: off by default, which leaves the default export unqueryable
+  by region for a cost of one small file.
+
+**Shipped 2026-10-22: gVCF output** (`write_vcf(…, blocks=True, reference=…)`; rules in docs/SCHEMA.md,
+Decision 4, "Writing blocks back out"). The `blocks` frame goes out as reference blocks interleaved
+with the calls, REF read from the collection `resolve_ref` read, and `load` reads the file back to
+equal `blocks` and `calls` frames (synthetic gVCF with diploid, haploid and no-call blocks; htslib
+parses it and its index finds a block from inside its span). Decisions, each with what was rejected:
+
+- REF from the reference store, never from the frame or the source: the loader keeps no block REF.
+  A facet whose REF was not read is refused, and a block the collection cannot vouch for is counted
+  `block_ref_unread` (refused, or skipped under `resolved_only`). Rejected: `N` as REF, which htslib
+  accepts but which states a base nobody read.
+- ALT `<*>` by default, `<NON_REF>` on request (`BlockAllele`). Rejected: `<NON_REF>` only, GATK's
+  spelling, where VCF 4.3 defines `<*>`; `load` reads both alike.
+- GT `0/0` for a `ref` block and `./.` for `no_call`, at the ploidy the block's GL implies, else the
+  contig's calls'. The frame keeps no block GT and `load` reads only whether one called anything.
+  Rejected: always diploid, which writes a haploid X block of a male sample as `0/0` beside its
+  haploid calls.
+- FORMAT GT, GQ, MIN_DP and GL, the values the frame holds. Rejected: PL by rounding, for the reason
+  calls write GL; and DP, which the frame does not hold for a block (it keeps `MIN_DP`, Decision 4).
+- Blocks and calls merged one contig at a time, by position, calls first at a shared position, after
+  both frames' order is checked as a stream. Rejected: a global sort, which the writer already refuses
+  to do, and `merge_sorted` over the whole genome, which needs one key across contigs and a REF
+  lookup inside the lazy plan.
+
+Dogfooded on a local DeepVariant gVCF (counts only): 6,436,476 calls and 79,329,981 blocks written in
+461 s (947 MB, a 3.2 MB index), none refused. Reloaded, the `blocks` frame is equal to the input's,
+and every `calls` column is equal row by row except `ref` and `ref_check`, which a reload leaves
+unread until `resolve_ref` runs again. htslib's whole-contig fetch through the index returns the
+frames' count of records on all 182 contigs.
+
+**Shipped 2026-10-22: minus-strand indels in a lift** (rules in docs/SCHEMA.md, "Lifting", step 3).
+An indel on a minus-strand block whose alleles share their first base (VCF's padding base) is
+reverse-complemented, that base dropped from every allele (`alts`, `gt_alleles`, `source_alleles`)
+and the target's base before the lifted span put in front; REF is read over the span moved one base
+left and compared as for any row, so a swap still works. Tested on a synthetic chain against
+hand-computed alleles (an insertion, a two-base deletion, an indel at a block's edge) and against
+pyliftover's image of the source base after the span. `LIFT_VERSION` 2.
+
+On anton (the same callset and Ensembl chain as above, counts only): 2,894 indels land on minus-strand
+blocks; 2,855 lift (2,844 re-anchored, 11 with no shared first base complemented in place), 10 now
+fail as `ref_mismatch_after_lift`, 29 stay `target_contig_unmatched`, and none is `indel_minus_strand`
+(before: 2,865 of them). Against the tools' output at the 2,959 rows at those lifted positions:
+Picard with swap recovery has 794 with the same position, REF and ALT, and 2,151 more with an indel
+of the same lengths up to 50 bases to the left, which is what its left-alignment does to a shift
+that is rightmost on the target; CrossMap (variant A) has 105 identical, so it does not write these
+indels this way, and which representation it writes was not worked out. The lift takes 93 s. Not
+checked row by row: that each left-shifted Picard row is the same allele as ours.
+
+Decisions, each with what was rejected:
+
+- The new padding base is the target's base before the lifted span, wherever it lies, past the
+  block's edge included. Rejected: requiring it inside the block, which would leave behind indels the
+  block places exactly; the base is read from the target, so the record states the target's own
+  sequence there.
+- An indel whose alleles share no first base (`A>T,AG`, `AT>G`) lifts complemented in place, as an MNV
+  does: no allele is empty, so it needs no padding base. Rejected: leaving it unlifted, which drops a
+  representable row; and padding it on the left anyway, which changes a span no allele needs changed.
+- An indel that would land at a target contig's first base stays behind as `indel_minus_strand` (the
+  reason's meaning narrows; the name is kept). Rejected: anchoring on the base after the span, as VCF
+  allows at position 1, which no chain in hand needs and no test covers.
+- Not left-aligned on the target: the shift that was leftmost on the source is rightmost there.
+  Rejected: aligning inside `liftover`, which is `normalize`'s job; `normalize` does not realign
+  lifted rows today (`ref_check` is null), which stays open below.
+
+**Left in RM6:** SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
-does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting sites that carry `<*>`;
-reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; in a liftover, indels on minus-strand
-blocks, blocks, symbolic SVs, anchoring across a small gap of one chain, and T2T (UCSC hs1 chains).
+does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL, and no loader reads PSL yet, so no frame holds a `psl` set to write: reading it comes first); strand resolution;
+in a liftover, left-aligning lifted indels (`normalize` skips rows with no `ref_check`), blocks,
+symbolic SVs, anchoring across a small gap of one chain, and T2T (UCSC hs1 chains).
 
 
 ## RM271 — VRS allele ids

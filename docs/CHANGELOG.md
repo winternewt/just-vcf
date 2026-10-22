@@ -25,6 +25,29 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   the empty field and counted in a warning, instead of being dropped (F2). Two 2012–2014 PGP-HMS exports
   gain 35 and 14 rows; an empty field anywhere else still drops the row.
 
+- `liftover` lifts indels on minus-strand chain blocks (RM6): an indel whose alleles share their first
+  base is reverse-complemented, that base dropped from every allele and the target's base before the
+  lifted span put in front, so the row moves one base left; REF is read from the target over the moved
+  span. Positions agree with pyliftover's image of the base after the source span. An indel that would
+  land at a target contig's first base stays behind as `indel_minus_strand` (its meaning narrows); one
+  whose alleles share no first base lifts complemented in place. Re-anchored indels are not
+  left-aligned on the target. `LIFT_VERSION` 2: lifted facets get new ids.
+
+- `write_vcf(…, blocks=True, reference=…)` writes a gVCF (RM6): the `blocks` frame as reference blocks
+  (ALT `<*>`, or `<NON_REF>` with `block_allele=BlockAllele.NON_REF`; INFO `END`; FORMAT GT, GQ,
+  MIN_DP and GL as the frame holds them), merged with the calls by position, contig by contig. A
+  block's REF base is read from the collection `resolve_ref` read; a facet whose REF was not read is
+  refused, and a block the collection cannot vouch for counts as `block_ref_unread`. `load` reads the
+  output back to equal frames. `VcfWritten.blocks_written` is new, `blocks_not_written` counts only
+  blocks left out, and `rows_written` counts calls only. Exports `BlockAllele`.
+
+- `write_vcf` writes a tabix index, `<path>.tbi`, beside BGZF output (RM6), built from the offsets it
+  wrote rather than by a second pass: `index=None` (the default) indexes every BGZF write, `index=False`
+  skips it, and a plain-text write has none. A write without an index removes a `<path>.tbi` left
+  from an earlier one. `VcfWritten.index_path` names it. htslib (pysam, opt-in test) answers region
+  queries through it as the frame does, and builds the same linear index for the same file.
+  `BgzfWriter` records its blocks' compressed offsets (`block_starts`, `virtual_offset`).
+
 - Schema 0.0.10: `facets.chip`, `chip_basis` (array chip, stated or inferred) and `strand_check` (set by
   `resolve_ref`; a `mixed` facet withholds the alleles that read differently on the two strands).
 

@@ -219,6 +219,17 @@ def test_a_fasta_path_goes_into_the_configured_store(tmp_path: Path, monkeypatch
     assert again["ref"].to_list() == [base("1", 10)]
 
 
+def test_a_fasta_path_is_the_collection_used_even_beside_others(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JUST_VCF_REFERENCE_DIR", str(tmp_path / "configured"))
+    other_digest = ReferenceStore.open().add_fasta(write_fasta(tmp_path / "plain.fa", SEQ))
+    prefixed = write_fasta(tmp_path / "prefixed.fa", SEQ, names=UCSC)
+    path = vcf(tmp_path, [("1", 10, base("1", 10), "N", "0/1")], contig_lines({"1": 3000}))
+    facets, calls = frames(resolve_ref(load(path), prefixed))
+    assert facets["ref_seqcol_digest"].to_list() != [other_digest]
+    assert facets["ref_seqcol_digest"].to_list() == [ReferenceStore.open().add_fasta(prefixed)]
+    assert calls["ref"].to_list() == [base("1", 10)]
+
+
 def test_an_empty_store_is_refused(tmp_path: Path) -> None:
     records = [("1", 10, base("1", 10), "N", "0/1")]
     with pytest.raises(ReferenceMismatchError, match="holds no collection"):

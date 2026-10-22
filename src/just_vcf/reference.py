@@ -232,8 +232,9 @@ def resolve_ref(
     """The facet with `ref` read from its assembly sequence, `ref_check` compared, and array alleles derived.
 
     `reference` is a `ReferenceStore`, a store directory, or a FASTA file (added to the store at
-    `reference_dir()` on first use). Without one, the store at `reference_dir()` is used. The store's
-    collection that matches the facet is chosen by the contig checks; `collection` names one instead.
+    `reference_dir()` on first use, and then the only collection considered). Without one, the store
+    at `reference_dir()` is used. The store's collection that matches the facet is chosen by the
+    contig checks; `collection` names one instead.
 
     The result is the same facet (same `facet_id`) with the slots SCHEMA.md leaves open until the
     sequence is read now filled, and `facets.ref_seqcol_digest` naming the collection that was read.
@@ -250,7 +251,8 @@ def resolve_ref(
     facet = facets.row(0, named=True)
     if facet["ref_seqcol_digest"] is not None:
         raise ValueError(f"facet {facet['facet_id']}: REF was already read (from {facet['ref_seqcol_digest']}); resolve the facet as loaded")
-    store = _store_for(reference)
+    store, given = _store_for(reference)
+    collection = collection if collection is not None else given
 
     rows_per_chrom = dict(loaded.calls.group_by("chrom").agg(pl.len()).collect().iter_rows())
     candidates = [collection] if collection is not None else store.collections()
@@ -286,18 +288,18 @@ def resolve_ref(
     )
 
 
-def _store_for(reference: "ReferenceStore | Path | str | None") -> ReferenceStore:
+def _store_for(reference: "ReferenceStore | Path | str | None") -> tuple[ReferenceStore, str | None]:
+    """The store to read, and the collection to use when `reference` was one FASTA file."""
     if isinstance(reference, ReferenceStore):
-        return reference
+        return reference, None
     if reference is None:
-        return ReferenceStore.open()
+        return ReferenceStore.open(), None
     path = Path(reference)
     if RefgetStore.store_exists(str(path)):
-        return ReferenceStore.open(path)
+        return ReferenceStore.open(path), None
     if path.is_file():
         store = ReferenceStore.open()
-        store.add_fasta(path)
-        return store
+        return store, store.add_fasta(path)
     raise FileNotFoundError(f"{path}: neither a reference store nor a FASTA file")
 
 

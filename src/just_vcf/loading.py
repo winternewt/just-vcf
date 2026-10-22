@@ -181,7 +181,9 @@ def _load_rsid_table(sniffed: Sniffed) -> Loaded:
         return _array_loaded(sniffed, first, warnings)
     # F3: the second export is its own facet, read by its own layout's rules; the two are never merged.
     # Its chip is not inferred: the 23andMe rule reads the first layout's rows, and no rule reads this one.
-    second = _array_facet(sniffed, appended.calls, build=sniffed.build, options={"part": 1}, extra={"relation": rsid_table.APPENDED_EXPORT, "dropped_fields": []})
+    # Nor is its build stated: the preamble that states one belongs to the first export, so the label
+    # stays unknown until `resolve_ref` scores this export's own rows (F9).
+    second = _array_facet(sniffed, appended.calls, build=None, options={"part": 1}, extra={"relation": rsid_table.APPENDED_EXPORT, "dropped_fields": []})
     warnings.append(
         f"a second export in another layout (an allele per column) follows the first {appended.after_rows} data "
         f"row(s): its {appended.calls.height} row(s) are their own facet (relation {rsid_table.APPENDED_EXPORT})"

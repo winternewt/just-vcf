@@ -181,6 +181,14 @@ def test_an_appended_export_in_another_layout_is_its_own_facet(tmp_path: Path) -
     assert any("follows the first 400 data row(s)" in w and f"its {len(second)} row(s)" in w for w in loaded.warnings)
 
 
+def test_the_build_a_preamble_states_is_the_first_exports_only(tmp_path: Path) -> None:
+    """The preamble belongs to the first export; the appended one states no build of its own."""
+    text, _, _ = _two_exports()
+    loaded = _load_text(tmp_path, PREAMBLE_23 + text, "two_stated.txt")
+    labels = {row["relation"]: (row["assembly_label"], row["assembly_label_basis"]) for row in loaded.facets.collect().iter_rows(named=True)}
+    assert labels == {None: ("GRCh37", "stated"), "appended_export": (None, None)}
+
+
 def test_appended_exports_keep_their_disagreements(tmp_path: Path) -> None:
     """Charter 8: an id both exports call, with different genotypes, stays in both facets as written."""
     text, first, _ = _two_exports()

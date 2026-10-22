@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- An appended export (F3) no longer takes the build the first export's preamble states: its
+  `assembly_label` is null until `resolve_ref` infers it from its own rows (F9), where it read the
+  first export's label as `stated`. A value change on files that already load. No column changes.
+
 - A read of an intact BGZF input that fails for another reason walks the file's blocks once, where it
   walked them twice (once at the facet, once at the source) before re-raising the reader's error.
 

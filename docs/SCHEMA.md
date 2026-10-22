@@ -872,7 +872,10 @@ layout. A run of any other layout is not read, with a warning. Both facets keep 
   prefers a direct facet over a derived one, which would demote one export below the other for no
   reason in the data;
 - reading the second export's chip with the 23andMe rule: that rule reads 23andMe's internal ids,
-  which the second layout does not number. Its `chip` stays null.
+  which the second layout does not number. Its `chip` stays null;
+- giving the second facet the build the file's preamble states (`assembly_label_basis = stated`): the
+  preamble is the first export's, and nothing in the file states the second's build. Its label stays
+  null until `resolve_ref` scores its own rows against the reference (F9, basis `inferred`).
 
 ## Decision 9: INFO and FORMAT fields the schema does not name
 
@@ -1067,6 +1070,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, the appended export's build): no column changes. Rule changed
+  (Decision 8, "Two exports in one file"): an appended export's facet gets no `assembly_label` from
+  the first export's preamble; null until `resolve_ref` infers it from the rows (F9). Values change on
+  files that already load, where the first export states a build.
 
 - **No version change** (2026-10-23, the empty allele): no column changes. Rule stated: a zero-length
   allele is `""` in every allele column (Decision 2). Values change on files that already load: an

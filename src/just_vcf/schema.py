@@ -15,7 +15,7 @@ import polars as pl
 
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.7"
+SCHEMA_VERSION = "0.0.8"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -130,6 +130,7 @@ FACETS = pl.Schema(
         "sample_meta": pl.List(pl.String),
         "dropped_fields": pl.List(pl.String),
         "split_marker": pl.String,
+        "derivation_inputs": pl.List(pl.Struct({"role": pl.String, "name": pl.String, "sha256": pl.String})),
     }
 )
 """One row per facet (SCHEMA.md Decision 5)."""

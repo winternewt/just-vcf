@@ -4,6 +4,7 @@ from importlib.metadata import version
 
 from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
+from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.loading import (
     LOADABLE_FORMATS,
     Loaded,
@@ -49,7 +50,9 @@ __all__ = [
     "CacheClearReport",
     "CacheEntryInfo",
     "CallsetType",
+    "Chain",
     "ContigNames",
+    "Lifted",
     "Loaded",
     "MultiSampleError",
     "NoSampleError",
@@ -71,10 +74,12 @@ __all__ = [
     "XCopies",
     "__version__",
     "clear_cache",
+    "liftover",
     "load",
     "mint_vrs_ids",
     "normalize",
     "open_payload",
+    "read_chain",
     "reference_dir",
     "rejoin_split",
     "resolve_ref",

@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.7.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.8.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -327,20 +327,21 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `vendor`, `caller`, `caller_version` | the RM2 `source` detector, from header lines only. Null = not identifiable, never guessed. `vendor` is the party the header names as delivering the file (`##center`, `##generatedby`), falling back to the format's own vendor (`vcf_cgi`); a caller's maker is not a vendor. `caller` is the program that wrote the genotypes; tools that only touched the file afterwards (GATK SelectVariants, ApplyVQSR, bcftools view) are not evidence. Two callers in one header leave both fields null, with a warning; so do two versions of one caller for `caller_version` |
 | `ploidy_statements` | the header's ploidy lines verbatim, in header order (RM269 half 1): a meta line whose key names a ploidy or karyotype (DRAGEN `##referenceSexKaryotype=XY`, CGI `##source_MAX_PLOIDY`), and each ploidy option of a recorded command line, prefixed with the line it came from (`GATKCommandLine HaplotypeCaller: --sample-ploidy 2`, `bcftools_callCommand: --ploidy GRCh38`). An option whose value is a path writes `<path>` for it. No vocabulary: reading a model out of these is the karyotype work's job. `[]` = a VCF header with none; null = not a VCF. just-vcf's own shape |
 | `sample` | the sample column name, verbatim. **Identifying**: PGP uploads carry real names here. Logs, warnings and error messages name the `facet_id`, never the sample |
-| `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` or null. A stated label is kept when the lengths disagree, with a warning (RM4, below). `inferred` has two sources: a VCF's contig lengths at load (RM4), and an array's own rows scored against the reference by `resolve_ref` (F9, Decision 2). A consumer tells them apart by `header_contigs`, which only the first has |
+| `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` or null. A stated label is kept when the lengths disagree, with a warning (RM4, below). `inferred` has three sources: a VCF's contig lengths at load (RM4), an array's own rows scored against the reference by `resolve_ref` (F9, Decision 2), and a lifted facet's target collection (`liftover`, "Lifting"). A consumer tells them apart by `relation = liftover_to` for the third, then by `header_contigs`, which only the first has |
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
 | `phasing_method` | null unless stated |
-| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`) |
+| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`) |
 | `contig_map` | `list[struct{source, chrom}]`: how this file's contig names were mapped (Decision 7) |
 | `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
 | `sample_meta` | the file's `##SAMPLE` and `##PEDIGREE` lines for this sample, verbatim. Pedigree becomes GA4GH Pedigree later (charter) |
 | `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9). For a delimited table, the file's own column names that no frame column carries (a Final Report's `GenCall Score`) |
 | `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, `write_vcf`'s `JUST_VCF_SPLIT`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
+| `derivation_inputs` | `list[struct{role, name, sha256}]`: the files a derived facet was made with besides its parent and its reference collection (`ref_seqcol_digest`). A liftover writes its chain (`role = chain`, the file's name, not its path, and the sha256 of its bytes). Null on a facet read from a file. just-vcf's own shape |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
@@ -376,7 +377,7 @@ read-evidence FORMAT key (AD, DP, GQ, PL, GL, MIN_DP) in the header. A site is a
 ALT or none; rows whose ALTs are all symbolic do not count, so a genome-wide SV callset is not `wgs`.
 Anything between the bands is null. A gVCF is not a callset type: its blocks set
 `absence_means = blocks`, whatever its scope. Otherwise `wgs` gives `weak_reference` and every other
-type, null included, `unknown`. Measured on PGP-HMS uploads: four Genos exomes at 44,020–44,796 sites
+type, null included, `unknown`. A lifted facet is `unknown` whatever its type ("Lifting"). Measured on PGP-HMS uploads: four Genos exomes at 44,020–44,796 sites
 and 13.6% breadth, about 400 Mb reached.
 
 There is no `ref_basis` column. A non-null `ref` always came from the facet's assembly sequence
@@ -512,6 +513,56 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
 
 Rows the loader flagged as one record of a pre-split site (RM270) pass through as written: run
 `rejoin_split`, then `resolve_ref`, then `normalize`. Blocks pass through unchanged.
+
+**Lifting: `liftover(loaded, chain, reference)`** (RM6) returns a `Lifted`: a derived facet
+(`relation = liftover_to`, the Cat-VRS term verbatim; `derived_from` the parent, which is never
+changed; its `facet_id` digests the parent's, the chain's sha256, the target collection and the rule's
+version), and a `report` with one row per parent row, in the parent's order: the parent's `calls`
+columns, then `lift_chrom`, `lift_pos` (1-based), `lift_strand`, `lift_swapped` and `lift_reason` (null
+when lifted). The report is CrossMap's `.unmap` and bcftools' `--write-src` in one frame; it is a
+result beside the facet, not a stored column. It takes a facet `resolve_ref` has read and a store
+holding that collection and the target.
+
+1. **The chain is checked against both assemblies.** Each chain header states its contig's size on
+   both sides. Through `canonical_chrom`, the source sizes must equal the collection the parent's REF
+   was read from and the target sizes the target collection. A primary contig (1-22, X, Y) that differs
+   refuses the lift (`ReferenceMismatchError`: the chain is for another assembly); any other contig that
+   differs leaves its rows unlifted. So UCSC's hg38ToHg19 chain lifts no MT row into GRCh37: its chrM is
+   hg19's 16,571-base sequence, not rCRS. Without `target=`, the target is the one collection whose
+   sizes match the chain's target side on every primary contig it shares and on at least one.
+2. **Positions.** A row's REF span (`pos` to `pos + len(ref) - 1`) must lie inside one ungapped block,
+   and inside no block with another target (blocks that send the same bases to the same contig,
+   strand and offset count once: Ensembl's chains list them twice, F14). The span's start then moves by the block's offset; on a
+   minus-strand block the forward start is the image of the span's last base.
+3. **Alleles.** On a minus-strand block every allele (`alts`, `gt_alleles`, `source_alleles`) is
+   reverse-complemented, in place, so the vectors stay indexed. `ref` is read from the target over the
+   lifted span. Where it equals the parent's REF (carried across, complemented on a minus block), the
+   alleles stay; where it equals an ALT, that ALT and the old REF swap places in the allele list and the
+   genotype indices follow (`0/1` becomes `1/0`); where it equals none, the row is not lifted. Array rows
+   (no `source_ref`) take their ALTs from the genotype against the new REF, sorted, as `resolve_ref`
+   derives them.
+4. **What a lifted row carries.** `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and
+   `vrs_errors` are null: they described the source's representation on the source assembly. `gt`
+   indexes `[ref] + alts`. `gl`, `gp`, `ad` and the order of `source_alleles` are the parent's (Decision
+   2: never reordered). A swapped row's `dosage` is null, since it counted the other allele. A row
+   lifted to another contig than its source's has `phased`, `phase_sets` and `phase_set_kinds` null: a
+   PS set is keyed per contig, and two sets would otherwise merge. `ids`, `filters`, `qual`, `gq`, `dp`
+   and `evidence_basis` are kept. Re-mint ids on the target with `mint_vrs_ids`.
+5. **The derived facet.** `ref_seqcol_digest` is the target collection; `assembly_label` is the
+   target's label, basis `inferred` (from the collection's lengths, which the chain's target side
+   matched); `seqcol_digest`, `sorted_name_length_pairs_digest` and `header_contigs` are null (they were
+   the parent's header); `contig_map` maps the target collection's names of the contigs the rows use;
+   `derivation_inputs` names the chain; `absence_means` is `unknown`, because the rows the lift dropped
+   and the regions no chain covers are absent from it without being reference (the XYY stress case
+   below).
+
+Not lifted, each counted in the warnings and named in the report's `lift_reason` (an open vocabulary,
+`UNLIFTED_REASONS`): `ref_unread`, `source_ref_mismatch`, `allele_not_sequence` (symbolic alleles, `*`,
+`<*>`, breakends: an SV's extent is not lifted), `split_flagged` (run `rejoin_split` first),
+`contig_not_in_chain`, `chain_contig_mismatch`, `no_chain_block`, `split_across_blocks`,
+`multiple_targets`, `target_contig_unmatched`, `indel_minus_strand` (re-anchoring an indel on a
+minus-strand block is not built) and `ref_mismatch_after_lift`. The `blocks` frame is not lifted; the
+derived facet has none, and the warnings count the parent's.
 
 **`end_pos`.** It is named apart from polars-bio's `end` because that value is wrong for symbolic SV
 alleles (P3), so the two must not share a name. The rule follows VCF 4.5's computed END:
@@ -788,6 +839,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **0.0.8** (2026-10-22, RM6's third slice): `facets.derivation_inputs`, the files a derived facet
+  was made with (a liftover's chain, by name and sha256). Additive. `liftover` emits the `liftover_to`
+  relation the facets table already listed; rules under "Lifting".
 
 - **0.0.7, continued** (2026-10-22, RM271; no version bump: no column or dtype changed):
   `mint_vrs_ids` fills `vrs_allele_ids` and `vrs_errors`, and `vrs_withheld` computes why an id is

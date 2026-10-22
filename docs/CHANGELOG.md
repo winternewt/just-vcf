@@ -52,6 +52,18 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   orphan of 34.8 MB was swept by the next load; `clear_cache(source)` removed one file's 2 entries,
   10.2 MB. Minor: new exports (`clear_cache`, `CacheClearReport`, `CacheEntryInfo`).
 
+- Liftover as a derived facet (RM6, third slice): `liftover(loaded, chain, reference)` lifts a facet
+  `resolve_ref` has read to another assembly through a UCSC chain file (`read_chain`, plain or gzipped)
+  and returns a `Lifted`: the derived facet (`relation = liftover_to`, the Cat-VRS term) and a report
+  with every parent row's target or its reason for staying behind. The chain's contig sizes are checked
+  against both collections first (a primary contig of another size refuses it). A row's REF span must
+  lie in one ungapped block of one chain; REF is read from the target, never carried over; minus-strand
+  blocks reverse-complement the alleles; a target REF equal to an ALT swaps the two and re-indexes the
+  genotype, one equal to no allele leaves the row unlifted. Indels on minus-strand blocks, symbolic
+  alleles, pre-split rows and blocks are not lifted yet, each counted. Schema 0.0.8:
+  `facets.derivation_inputs` names the chain by file name and sha256 (additive; spills from 0.0.7 are
+  not reused). Minor: new exports (`liftover`, `read_chain`, `Lifted`, `Chain`).
+
 - New `sex_chromosome_evidence(loaded)` (RM269): for each facet, what its calls say about X and Y, and
   an estimate of the karyotype. It measures GT ploidy as written per group (autosomes, non-PAR X,
   non-PAR Y, PAR, MT), the het share of non-PAR X calls written diploid with their AD allele balance,

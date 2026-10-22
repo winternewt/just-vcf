@@ -237,7 +237,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, and normalization, `normalize`: split, left-align, trim, dedup, sort; left: gVCF blocks, strand, liftover, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and plus-strand indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: gVCF blocks, strand, minus-strand indels and blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -355,10 +355,63 @@ rejected:
   `(chrom, pos, ref, alts, gt, phased)` and the vectors alone, which would drop a row whose filters,
   quality or ids differ and so lose what the source said.
 
+**Shipped 2026-10-22: liftover** (`just_vcf.liftover.liftover`, `read_chain`; rules in docs/SCHEMA.md,
+"Lifting"). A derived facet, `relation = liftover_to`, from a facet `resolve_ref` has read, through a
+UCSC chain file, with REF re-read from the target collection of the same store. It returns `Lifted`:
+the facet, and a report of every parent row with its target position, strand and swap, or the reason
+it stayed behind. Decisions, each with what was rejected:
+
+- Our own chain reader and block lookup in Polars (the axis cut at every block edge, two as-of joins
+  per row), in the core, no extra. Rejected: pyliftover per position, as just-prs does: one Python call
+  per row, and it does not say which block it used, so a span crossing a gap is only seen by lifting
+  both ends. pyliftover stays the test oracle.
+- The chain's own contig sizes are the assembly check (charter 3), both sides, against the store's
+  collections; a primary contig of another size refuses the lift, any other contig leaves its rows
+  unlifted. Rejected: trusting the chain's file name or the facet's label.
+- A span in more than one chain's block is unlifted (`multiple_targets`), not given the best-scoring
+  chain's target. Rejected: pyliftover's and just-prs's first hit, which picks a target the data does
+  not choose (charter 8).
+- A target REF equal to an ALT swaps it with the old REF in place and re-indexes `gt`; one equal to no
+  allele leaves the row unlifted (`ref_mismatch_after_lift`). Rejected: bcftools' SWAP=-1, which adds
+  the target REF as a new allele and shifts the genotype: a REF matching none of the alleles is also
+  how a wrong mapping looks, and nothing in the row tells the two apart.
+- A lifted row's `source_ref`, `ref_check` and `source_gt` are null, as on a row `normalize` moved.
+  Rejected: writing the parent's REF, carried across, as `source_ref` with `ref_check = match`; it
+  would let `normalize` re-align lifted indels, but no file wrote that REF, which the column means.
+  So `normalize` does not re-align a lifted indel today (its rows read `unchecked`).
+- Indels on minus-strand blocks are unlifted (`indel_minus_strand`). Rejected for this slice:
+  re-anchoring them on the base before the span, which bcftools does and which wants its own tests.
+- The derived facet's `absence_means` is `unknown`. Rejected: the parent's `weak_reference`, which
+  would read every dropped row and every uncovered region as reference.
+- Its label is the target collection's, basis `inferred` (from that collection's lengths, which the
+  chain's target side matched). Rejected: `stated`, since no header stated it; and a new basis value,
+  a dtype change for one case.
+- The chain is recorded on the facet in a new column, `derivation_inputs` (schema 0.0.8), by file name
+  and sha256. Rejected: only inside the `facet_id` digest, which says a chain was used but not which;
+  and the chain's path, which is a label and can name a person.
+- A row lifted to another contig than its source's loses its phase sets (a PS set is keyed per
+  contig); VRS ids are not carried (re-mint with `mint_vrs_ids`, tested on lifted rows).
+
+Compared on anton (docs/LIVE_SAMPLES.md: one GRCh38 DeepVariant callset, 6,079,744 rows, lifted to
+GRCh37 by CrossMap 0.6.3 in two settings and by Picard with and without swap recovery; counts only).
+With the Ensembl chain CrossMap used, `liftover` lifted 5,578,476 rows in 281 s (plus 175 s for
+`resolve_ref`), swapped 13,098 and lifted 20,424 on minus-strand blocks. Every position it lifted is
+in CrossMap's first output; 5,561,478 rows have the same REF, ALT and genotype there. Against Picard
+with swap recovery, 5,578,457 of its rows are the same in position, REF, ALT and genotype, and 19 are
+ours only. The tools lifted 28,000 to 30,000 positions this did not; the slice withholds 108,776 rows
+under chains with different targets, 2,865 minus-strand indels and 342 REFs matching no allele (which
+rows the tools' extra positions came from cannot be told: their output keeps no source position).
+Unlifted: 271,958 in no block, 90,071 on contigs the chain does not name (unplaced GRCh38 contigs),
+26,244 whose target contig the GRCh37 collection lacks, 1,012 across a block edge. With UCSC's
+hg38ToHg19 chain it lifts 5,724,577 (UCSC's chain is netted, one target per base, so nothing is
+ambiguous; its chrM is hg19's, so MT is `target_contig_unmatched`). Found on the way: F14 (resolved).
+No bcftools on this machine, so the opt-in bcftools comparison was not run.
+
 **Left in RM6:** writing gVCF blocks (after RM3); a tabix index beside the output; SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
 does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting sites that carry `<*>`;
-reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; liftover.
+reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; in a liftover, indels on minus-strand
+blocks, blocks, symbolic SVs, anchoring across a small gap of one chain, and T2T (UCSC hs1 chains).
 
 
 ## RM271 — VRS allele ids

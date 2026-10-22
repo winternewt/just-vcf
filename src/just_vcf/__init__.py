@@ -12,6 +12,7 @@ from just_vcf.loading import (
     load,
     vcf_samples,
 )
+from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
@@ -46,7 +47,9 @@ __all__ = [
     "AssemblyLabelBasis",
     "BlockKind",
     "CallsetType",
+    "Chain",
     "ContigNames",
+    "Lifted",
     "Loaded",
     "MultiSampleError",
     "NoSampleError",
@@ -67,10 +70,12 @@ __all__ = [
     "VcfWritten",
     "XCopies",
     "__version__",
+    "liftover",
     "load",
     "mint_vrs_ids",
     "normalize",
     "open_payload",
+    "read_chain",
     "reference_dir",
     "rejoin_split",
     "resolve_ref",

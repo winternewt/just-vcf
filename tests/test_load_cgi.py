@@ -17,8 +17,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import Loaded, load, sniff
-from just_vcf.schema import BLOCKS, CALLS, canonical_order
+from just_vcf import Loaded, callset, load, sniff
+from just_vcf.schema import BLOCKS, CALLS, CallsetType, canonical_order
 from test_load_vcf import assert_gt_consistent
 
 VAR_COLUMNS = (
@@ -334,9 +334,21 @@ def test_the_fixture_facet_counts_its_classes(var) -> None:
     assert facet["content_filter"] is None, "too few alleles to show a filter, and nothing else says one"
 
 
+def test_without_a_title_the_rows_give_the_callset_type(tmp_path: Path) -> None:
+    """RM4 on a native file whose header is silent: the spread of its calls names the class, as for a
+    VCF. Absence stays the blocks' to say, whatever the class."""
+    loci = _genome_loci(callset.MIN_PANEL_SITES * 2, 0, 0)
+    untitled = frames(write(tmp_path, var_text(loci, title=False), "untitled.tsv.bz2"))[1]
+    expected = callset.classify(pl.LazyFrame({"chrom": ["1"] * len(loci), "pos": [lo.begin + 1 for lo in loci], "alts": [["G"]] * len(loci)}), ["DP"], None)
+    assert expected.callset_type is CallsetType.PANEL, expected.reason
+    assert (untitled["callset_type"], untitled["absence_means"]) == ("panel", "blocks")
+    titled = frames(write(tmp_path, var_text(loci), "titled.tsv.bz2"))[1]
+    assert (titled["callset_type"], titled["absence_means"]) == ("wgs", "blocks"), "a title that says so is kept"
+
+
 def test_format_2_0_and_no_title(tmp_path: Path) -> None:
     loaded, facet, calls, _ = frames(write(tmp_path, var_text(LOCI, version="2.0", title=False), "old.tsv.bz2"))
-    assert facet["callset_type"] is None, "no #TITLE says what the file is"
+    assert facet["callset_type"] is None, "no #TITLE says what the file is, and too few sites for the rows to"
     assert facet["absence_means"] == "blocks"
     assert by_pos(calls)[("1", 752566)]["sample_filters"] == ["VQHIGH"], "varQuality's vocabulary is kept, not mapped"
     assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF", "hapLink"]

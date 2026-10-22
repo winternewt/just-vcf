@@ -303,6 +303,13 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
     # Unanchored alleles (`""`) count as indels; the member's own name is read for its words only.
     classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
     warnings += class_warnings
+    if cgi.states_whole_genome(header):
+        kind: CallsetType | None = CallsetType.WGS
+    else:
+        # The header is silent (28 of 250 PGP-HMS files have no #TITLE): the rows say, as for a VCF (RM4).
+        inference = callset.classify(spilled, list(cgi.READ_EVIDENCE), None)
+        logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
+        kind = inference.callset_type
     facet = {
         "facet_id": facet_id,
         "source_sha256": source_sha256,
@@ -316,7 +323,8 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
         "sample": header.first("ASSEMBLY_ID"),
         "assembly_label": sniffed.build,
         "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
-        "callset_type": CallsetType.WGS.value if cgi.states_whole_genome(header) else None,
+        "callset_type": kind.value if kind else None,
+        # The files tile the genome in ref and no-call blocks, whatever the type (Decision 4).
         "absence_means": AbsenceMeans.BLOCKS.value,
         **classes,
         "contig_map": contig_map(counts[3]["chromosome"].to_list()),

@@ -49,6 +49,14 @@ CALLER = "CGAPipeline"
 """The caller CGI's own VCF names in `##source=CGAPipeline_<version>`; its version is the native
 files' `#SOFTWARE_VERSION`."""
 
+READ_EVIDENCE = ("DP",)
+"""What `callset.classify`'s read-evidence gate is given for a native file, which has no FORMAT keys.
+The gate keeps array and imputed VCFs, whose genotypes come from no reads, from reading as a genome;
+a `var` or `masterVarBeta` file is CGAPipeline's own output from reads by construction (allele
+scores, masterVarBeta's read counts). The key=value loader passes DP for the same reason. Rejected:
+mapping the file's score and count columns onto FORMAT keys, which would name a likelihood the
+scores are not."""
+
 NO_CALL = "?"
 """A haplotype CGI could not call, or a stretch of one inside a partly called sequence."""
 
@@ -92,7 +100,7 @@ class Header:
 
 def states_whole_genome(header: Header) -> bool:
     """Whether the header says the file is a whole-genome callset (`#TITLE Whole Human Genome
-    Sequencing`; 28 of the 250 PGP-HMS files have no `#TITLE`)."""
+    Sequencing`; 28 of the 250 PGP-HMS files have no `#TITLE`, and their rows are classified)."""
     return re.search(r"\bWhole (Human )?Genome\b", header.first("TITLE") or "", flags=re.IGNORECASE) is not None
 
 

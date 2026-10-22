@@ -518,6 +518,12 @@ Anything between the bands is null. A CGAPipeline VCF typed `wgs` gets `absence_
 type, null included, `unknown`. A lifted facet is `unknown` whatever its type ("Lifting"). Measured on PGP-HMS uploads: four Genos exomes at 44,020–44,796 sites
 and 13.6% breadth, about 400 Mb reached.
 
+CGI's native `var` and `masterVarBeta` are typed `wgs` where `#TITLE` says the file is a whole
+genome. Where the header is silent (28 of 250 PGP-HMS files have no `#TITLE`), the same rule reads
+the rows; the read-evidence gate counts as met, since the format is CGAPipeline's own output from
+reads. Either way `absence_means` stays `blocks`: the files state their reference calls. Rejected:
+typing `wgs` from the format alone, which a region cut from a native file would then claim too.
+
 There is no `ref_basis` column. A non-null `ref` always came from the facet's assembly sequence
 (charter 10), so the basis would have one value. Which collection it came from is `ref_seqcol_digest`.
 
@@ -1075,6 +1081,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
+  (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from
+  its rows, where it was null. `absence_means` stays `blocks`. Values change on files that already
+  load.
 
 - **No version change** (2026-10-23, classes of CGI and key=value facets): no column changes. Rule
   stated (Decision 4): CGI's native files and the PGP key=value table fill `variant_classes`,

@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A Complete Genomics `var` or `masterVarBeta` whose header does not say it is a whole genome (28 of
+  250 PGP-HMS files have no `#TITLE`) gets its `callset_type` from its rows, by the rule a VCF's
+  follows; it was null. `absence_means` stays `blocks`. A value change on files that already load.
+
 - Complete Genomics' native `var` and `masterVarBeta` facets and the PGP key=value table's facets fill
   `variant_classes`, `content_filter` and `content_filter_basis` as a VCF facet does, from the rows and
   the file name; they were null. CGI's unanchored deletions and insertions (`""`) count as indels, so

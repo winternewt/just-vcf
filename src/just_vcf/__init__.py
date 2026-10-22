@@ -3,6 +3,7 @@
 from importlib.metadata import version
 
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
+from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.loading import (
     LOADABLE_FORMATS,
     Loaded,
@@ -12,7 +13,6 @@ from just_vcf.loading import (
     load,
     vcf_samples,
 )
-from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref

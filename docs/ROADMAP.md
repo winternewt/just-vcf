@@ -237,7 +237,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and plus-strand indels between GRCh36/37/38 through a chain; left: gVCF blocks, splitting `<*>` sites, strand, minus-strand indels and blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and plus-strand indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: gVCF blocks, splitting `<*>` sites, strand, minus-strand indels and blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -374,8 +374,9 @@ With the Ensembl chain CrossMap used, `liftover` lifted 5,578,476 rows in 281 s 
 `resolve_ref`), swapped 13,098 and lifted 20,424 on minus-strand blocks. Every position it lifted is
 in CrossMap's first output; 5,561,478 rows have the same REF, ALT and genotype there. Against Picard
 with swap recovery, 5,578,457 of its rows are the same in position, REF, ALT and genotype, and 19 are
-ours only. The tools lift 28,000 to 30,000 positions more, from what this slice withholds: 108,776
-rows under chains with different targets, 2,865 minus-strand indels, 342 REFs matching no allele.
+ours only. The tools lifted 28,000 to 30,000 positions this did not; the slice withholds 108,776 rows
+under chains with different targets, 2,865 minus-strand indels and 342 REFs matching no allele (which
+rows the tools' extra positions came from cannot be told: their output keeps no source position).
 Unlifted: 271,958 in no block, 90,071 on contigs the chain does not name (unplaced GRCh38 contigs),
 26,244 whose target contig the GRCh37 collection lacks, 1,012 across a block edge. With UCSC's
 hg38ToHg19 chain it lifts 5,724,577 (UCSC's chain is netted, one target per base, so nothing is

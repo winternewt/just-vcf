@@ -162,8 +162,8 @@ with what was rejected:
 - Blocks are counted in the result and the warnings, not written. A gVCF block record needs the REF
   base at its start, and the `blocks` frame has none before RM3 reads the sequence.
 - Contig names: `stored` (canonical), `chr` (a listed map, `MT` → `chrM`, nothing by pattern; other
-  contigs unchanged), or `source` (the facet's `contig_map`, refused where the source spelled one
-  contig two ways). `##contig` lines are sorted in the rows' canonical order, so a tool that checks
+  contigs unchanged), or `source` (the facet's `contig_map`, and its `header_contigs` for a declared
+  contig with no rows; refused where the source spelled one contig two ways). `##contig` lines are sorted in the rows' canonical order, so a tool that checks
   records against the header's order (GATK) accepts the file. Rejected: the source header's order,
   which can put `chrM` first while the rows put it after `Y`.
 - The header names `facet_id`, `source_sha256`, `format_id`, a derived facet's parent and relation, the

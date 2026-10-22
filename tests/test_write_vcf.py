@@ -211,20 +211,23 @@ def test_vectors_indexed_over_other_alleles_are_left_out(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     ("style", "expected"),
     [
-        (ContigNames.STORED, ["1", "MT"]),
-        (ContigNames.CHR, ["chr1", "chrM"]),
-        (ContigNames.SOURCE, ["chr1", "chrM"]),
+        (ContigNames.STORED, ["1", "2", "MT"]),
+        (ContigNames.CHR, ["chr1", "chr2", "chrM"]),
+        (ContigNames.SOURCE, ["chr1", "chr2", "chrM"]),
     ],
 )
 def test_contig_names(tmp_path: Path, style: ContigNames, expected: list[str]) -> None:
-    contigs = ("##contig=<ID=chr1,length=249250621>", "##contig=<ID=chrM,length=16571>")
+    # chr2 is declared and has no rows, as in an exome or a region extract.
+    contigs = ("##contig=<ID=chr1,length=249250621>", "##contig=<ID=chr2,length=243199373>", "##contig=<ID=chrM,length=16571>")
     records = ["chr1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/1", "chrM\t200\t.\tC\tT\t.\t.\t.\tGT\t1"]
     loaded = loaded_from(tmp_path, records, contigs=contigs)
     assert loaded.calls.collect()["chrom"].to_list() == ["1", "MT"]
     text = plain_text(write_vcf(loaded, tmp_path / "out.vcf.gz", contig_names=style).path)
-    assert [line.split("\t")[0] for line in text.splitlines() if not line.startswith("#")] == expected
+    assert [line.split("\t")[0] for line in text.splitlines() if not line.startswith("#")] == [expected[0], expected[2]]
     assert [line for line in text.splitlines() if line.startswith("##contig=")] == [
-        f"##contig=<ID={expected[0]},length=249250621>", f"##contig=<ID={expected[1]},length=16571>"
+        f"##contig=<ID={expected[0]},length=249250621>",
+        f"##contig=<ID={expected[1]},length=243199373>",
+        f"##contig=<ID={expected[2]},length=16571>",
     ]
     assert load(tmp_path / "out.vcf.gz").calls.collect()["chrom"].to_list() == ["1", "MT"]
 

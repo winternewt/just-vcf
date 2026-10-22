@@ -363,9 +363,12 @@ class _Names:
 def _contig_names(style: ContigNames, facet: dict, chroms: list[str]) -> _Names:
     """The written name of every contig in the rows and in the facet's `##contig` lines."""
     if style is ContigNames.SOURCE:
+        # `contig_map` holds the contigs that have rows; a `##contig` with none is spelled by the header.
         by_chrom: dict[str, set[str]] = {}
         for entry in facet["contig_map"] or []:
             by_chrom.setdefault(entry["chrom"], set()).add(entry["source"])
+        for contig in facet["header_contigs"] or []:
+            by_chrom.setdefault(canonical_chrom(contig["name"]), set()).add(contig["name"])
         clashes = sorted(chrom for chrom, sources in by_chrom.items() if len(sources) > 1)
         if clashes:
             raise ValueError(f"the source spelled {', '.join(clashes)} more than one way; its spelling cannot be restored")

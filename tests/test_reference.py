@@ -3,15 +3,17 @@
 import gzip
 import hashlib
 import random
+from collections import Counter
 from pathlib import Path
 
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceMismatchError, ReferenceStore, load, reference_dir, resolve_ref
+from just_vcf import ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, reference_dir, resolve_ref
 from just_vcf.loading import Loaded
 from just_vcf.reference import _span
-from just_vcf.schema import CALLS, FACETS
+from just_vcf.schema import CALLS, FACETS, StrandCheck
+from just_vcf.strand import MAX_FORWARD_MINUS, MIN_HETS, check_strand
 
 LENGTHS = {"1": 3000, "2": 2000, "X": 1500, "MT": 400}
 """Synthetic contigs. Short, so the assembly is told by stated lengths or an asserted label."""
@@ -556,4 +558,97 @@ def test_a_stated_build_is_not_inferred_again(tmp_path: Path) -> None:
     assert facets["assembly_label_basis"].cast(pl.String).to_list() == ["stated"]
     assert facets["ref_seqcol_digest"].to_list() == [digests["GRCh37"]]
     assert not any(w.startswith("assembly inferred") for w in resolved.warnings)
+
+
+# F13: an array export with part of its probes written on the minus strand.
+
+COMPLEMENT = {"A": "T", "C": "G", "G": "C", "T": "A"}
+
+
+def flipped(rows: list[tuple[str, str, int, str]], every: int = 8) -> tuple[list[tuple[str, str, int, str]], set[str]]:
+    """`rows` with every `every`-th genotype complemented, as a minus-strand probe writes it, and those ids."""
+    out, ids = [], set()
+    for n, (rsid, chrom, pos, gt) in enumerate(rows):
+        if n % every == 0:
+            gt = "".join(COMPLEMENT[b] for b in gt)
+            ids.add(rsid)
+        out.append((rsid, chrom, pos, gt))
+    return out, ids
+
+
+def test_a_mixed_strand_array_keeps_ref_and_withholds_the_alleles_it_cannot_read(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    true_rows = drawn_rows(SEQ)
+    rows, minus = flipped(true_rows)
+    resolved = resolve_ref(bare_array(tmp_path, rows, preamble=PREAMBLE_23), grch37_store)
+    facets, calls = frames(resolved)
+    assert facets["strand_check"].cast(pl.String).to_list() == ["mixed"]
+
+    truth = {rsid: gt for rsid, _, _, gt in true_rows}
+    expected: Counter[str] = Counter()
+    for row in calls.iter_rows(named=True):
+        rsid, ref = row["ids"][0], row["ref"]
+        assert ref == SEQ[row["chrom"]][row["pos"] - 1], "REF is read either way"
+        written = set(row["gt_alleles"])
+        if len(row["gt_alleles"]) == 2 and len(written) == 2 and ref in written:
+            # Strand-safe: a forward het, or an A/T or C/G het that reads the same flipped.
+            assert row["alts"] == sorted(set(truth[rsid]) - {ref}), rsid
+            continue
+        assert row["alts"] is None and row["gt"] is None, rsid
+        kind = "minus" if len(written) == 2 and COMPLEMENT[ref] in written else "neither" if len(written) == 2 else "undecidable"
+        expected[kind] += 1
+    assert minus and expected["minus"] and expected["undecidable"]
+    warnings = "\n".join(resolved.warnings)
+    assert f"{expected['minus']} array row(s) with alts and gt withheld, the facet's strand being mixed: heterozygous rows carrying" in warnings
+    assert f"{expected['undecidable']} array row(s) with alts and gt withheld, the facet's strand being mixed: homozygous rows" in warnings
+    assert "strand checked on " in warnings and ": mixed" in warnings
+
+    # Minting still runs: a withheld row has its REF slot only, and asserts no ALT.
+    minted = mint_vrs_ids(resolved, grch37_store).calls.collect()
+    withheld = minted.filter(pl.col("alts").is_null())
+    assert withheld.height == sum(expected.values())
+    assert withheld["vrs_allele_ids"].list.len().to_list() == [1] * withheld.height
+    assert withheld["vrs_allele_ids"].list.first().null_count() == 0
+
+
+def test_a_forward_array_derives_every_allele_and_says_so(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    resolved = resolve_ref(bare_array(tmp_path, drawn_rows(SEQ), preamble=PREAMBLE_23), grch37_store)
+    facets, calls = frames(resolved)
+    assert facets["strand_check"].cast(pl.String).to_list() == ["forward"]
+    assert calls["alts"].null_count() == 0 and calls["gt"].null_count() == 0
+    assert_gt_indexes_ref(calls)
+    line = next(w for w in resolved.warnings if w.startswith("strand checked on "))
+    assert " 0 (0.00%) carry the complement of the reference base and not the base" in line and line.endswith(": forward")
+
+
+def test_too_few_hets_leave_the_strand_unchecked_not_forward(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """An X-only export of hemizygous calls has no hets to read the strand from: null, derived as before."""
+    rows = [(f"rs{p}", "X", p, base("X", p)) for p in range(1, 1201)]
+    resolved = resolve_ref(bare_array(tmp_path, rows, preamble=PREAMBLE_23), grch37_store)
+    facets, calls = frames(resolved)
+    assert facets["strand_check"].to_list() == [None]
+    assert calls["alts"].null_count() == 0
+    assert any(w.startswith("strand not checked: 0 sampled heterozygous row(s), 200 needed") for w in resolved.warnings)
+
+
+def test_a_vcf_gets_no_strand_check(tmp_path: Path, store: ReferenceStore) -> None:
+    records = [("1", 10, base("1", 10), other(base("1", 10)), "0/1")]
+    resolved = resolve_ref(load(vcf(tmp_path, records, contig_lines(LENGTHS))), store)
+    assert resolved.facets.collect()["strand_check"].to_list() == [None]
+    assert not any(w.startswith("strand ") for w in resolved.warnings)
+
+
+def test_the_strand_threshold_is_a_share_of_hets() -> None:
+    """At `MAX_FORWARD_MINUS` a facet still reads forward; one het more reads mixed."""
+    hets = 1_000
+    at = int(hets * MAX_FORWARD_MINUS)
+
+    def scored(minus: int) -> StrandCheck | None:
+        sample = pl.DataFrame({"alleles": [["C", "T"]] * minus + [["A", "G"]] * (hets - minus)})
+        return check_strand(sample, pl.Series(["A"] * hets)).check
+
+    assert scored(at) is StrandCheck.FORWARD
+    assert scored(at + 1) is StrandCheck.MIXED
+    few = MIN_HETS - 1
+    small = check_strand(pl.DataFrame({"alleles": [["C", "T"]] * few}), pl.Series(["A"] * few))
+    assert small.check is None and small.minus == few
 

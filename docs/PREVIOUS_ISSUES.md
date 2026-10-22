@@ -4,6 +4,68 @@ Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with it
 code pointer. Check here before re-investigating something that looks fixed.
 
 
+## F13 — An FTDNA export reports some probes on the minus strand
+
+Severity: medium · Found 2026-10-22 by F9's row inference on the 103 PGP-HMS FTDNA exports (counts
+only).
+
+One autosomal FTDNA export (about 709,000 rows) fits GRCh36 at 68.2% of sampled SNV rows, against
+80–83% for the other 59 autosomal FTDNA exports. Of its heterozygous rows, only 81% carry the reference
+base (99.96–100% in every other export with autosomes), and 13.0% of all sampled rows carry the complement of
+the reference base (0.0–3.0% elsewhere). So a share of its probes, about one
+in eight, is written on the minus strand. `resolve_ref` reads REF for 99.8% of its rows, and on the
+flipped rows derives `alts` and `gt` against the wrong strand: a flipped hom-ref row reads as hom-alt.
+The existing warning counts them among the rows that "carry no REF allele", which does not single
+them out.
+
+Not fixed. Candidate repairs, each wrong for now: complementing a row whose alleles miss REF (an A/T
+or C/G probe is its own complement, and a true hom-alt call would be flipped into a hom-ref one);
+scoring both strands (a complemented het covers all four bases, so a wrong build would fit as well as
+the right one); a per-chip strand table (the right fix, but FTDNA ships none in the export, and the
+chip is not identified yet: RM4's chip generation detection).
+
+Resolved 2026-10-22 by withholding, not by complementing. `resolve_ref` now checks the strand of every
+array facet it reads, on F9's row sample against the collection it reads, through the heterozygous
+rows: on a two-allele site a het carrying the reference base is safe on either strand, and a het
+carrying the base's complement and not the base is impossible on the forward strand. More than 2% of
+at least 200 such hets makes the facet `strand_check = mixed`; then every row that is not strand-safe
+(homozygous calls, half-calls, hets without the base) keeps `ref` and gets `alts` and `gt` null, each
+reason counted in the warnings, and the safe hets keep their derived alleles. Rule: docs/SCHEMA.md
+Decision 2 ("The strand of an array's genotypes"). Code: `strand.py` `check_strand`,
+`withheld_reason`; `reference.py` `_check_strand`, `_derive_array_alleles`. Tests:
+`tests/test_reference.py` from `test_a_mixed_strand_array_keeps_ref_and_withholds_the_alleles_it_cannot_read`
+(each fails on the code before this change).
+
+On F13's export: `mixed`, 2,351 of about 12,600 sampled hets (18.65%) carry the complement and not the base,
+none carry neither. On the other FTDNA exports of 600,000 rows or more that ran before the scan was
+stopped (10 of them, on OmniExpress like this one): 0.00–0.02%, all `forward`. On 32 more, two of
+each format and detected chip (23andMe v1/v2, v3, v4, v5 and unknown, its CSV re-save, AncestryDNA
+V1.0 and V2.0, deCODEme, FTDNA space-separated, Genes for Good measured and imputed, the GSA Final
+Report, Living DNA, SelfDecode, the rsid CSV and the rsid tables), 1,171–13,794 hets sampled each:
+every one `forward`, 0 or 1 hets carrying the complement and none carrying neither (at most 0.01%).
+The 2% threshold sits between 0.02% and 18.65%.
+
+Why each other repair is wrong:
+
+- **A per-chip strand table.** The chip of this export is not detected (FTDNA states none and RM4 has
+  no rule for it), but its probe set is OmniExpress's: 98–99% of its sampled rsids are in Illumina's
+  Infinium OmniExpress-24 v1.2 manifest, as for every FTDNA export of that size. That manifest's three
+  strand columns do not separate its minus-strand probes. Over all hets of the export (aggregates,
+  matched by rsid): proven-forward or strand-invariant hets split RefStrand `+` 83,306 / `-` 83,552,
+  proven-minus hets 19,337 / 19,467; IlmnStrand TOP 85,247 / BOT 81,611 against 19,821 / 18,983;
+  SourceStrand TOP 83,213 / BOT 83,645 against 19,205 / 19,599. The flipped probes are on every
+  autosome (16–24% of hets each) and not in runs (mean run 1.54 hets in file order). So no public
+  table says which probes FTDNA wrote flipped in this export, and complementing by any of these columns
+  would flip about half of the right rows and half of the wrong ones.
+- **Complementing the hets that prove a minus probe.** It is a deduction for those rows, but the
+  homozygous rows of the same probes cannot be found, so the facet would mix corrected and uncorrected
+  rows with nothing in the row to tell them apart. Withholding is uniform: every non-safe row is null.
+- **Complementing every row whose alleles miss REF, or scoring both strands**: as above (an A/T or
+  C/G probe is its own complement; a complemented het fits any build).
+- **Withholding nothing and warning only**: a flipped hom-ref row would still read as a confident
+  hom-alt call downstream, which is the error F13 is about.
+
+
 ## F10 — A GP that does not sum to 1 is lost when just-vcf reloads its own export
 
 Severity: low · Found 2026-10-22 by round-tripping a PGP-HMS VCF upload through `write_vcf` and `load`

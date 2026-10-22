@@ -74,23 +74,3 @@ file htslib refuses ("Non-ACGTN alternate allele"). Nothing in the frame says th
 Not fixed here. Reading `-` as a deletion needs the anchor base and its REF span, which the row does
 not state, so it is not a spelling to rewrite; the options are for the loader (RM2: flag or refuse
 such rows, counted) and the writer (refuse them as unwritable, as it does a row without REF).
-
-## F13 — An FTDNA export reports some probes on the minus strand
-
-Severity: medium · Found 2026-10-22 by F9's row inference on the 103 PGP-HMS FTDNA exports (counts
-only).
-
-One autosomal FTDNA export (about 709,000 rows) fits GRCh36 at 68.2% of sampled SNV rows, against
-80–83% for the other 59 autosomal FTDNA exports. Of its heterozygous rows, only 81% carry the reference
-base (99.96–100% in every other export with autosomes), and 13.0% of all sampled rows carry the complement of
-the reference base (0.0–3.0% elsewhere). So a share of its probes, about one
-in eight, is written on the minus strand. `resolve_ref` reads REF for 99.8% of its rows, and on the
-flipped rows derives `alts` and `gt` against the wrong strand: a flipped hom-ref row reads as hom-alt.
-The existing warning counts them among the rows that "carry no REF allele", which does not single
-them out.
-
-Not fixed. Candidate repairs, each wrong for now: complementing a row whose alleles miss REF (an A/T
-or C/G probe is its own complement, and a true hom-alt call would be flipped into a hom-ref one);
-scoring both strands (a complemented het covers all four bases, so a wrong build would fit as well as
-the right one); a per-chip strand table (the right fix, but FTDNA ships none in the export, and the
-chip is not identified yet: RM4's chip generation detection).

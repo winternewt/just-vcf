@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref` checks the strand of an array facet's genotypes (F13): `facets.strand_check` is
+  `forward`, `mixed` (more than 2% of sampled hets carry the reference base's complement and not the
+  base: part of the probes is written on the minus strand), or null (not an array, or fewer than 200
+  hets). In a `mixed` facet the rows whose genotype reads differently on the two strands (homozygous
+  calls, half-calls, hets without the reference base) keep `ref` and get `alts` and `gt` null, counted
+  per reason; nothing is complemented. Before, such a facet's flipped hom-ref rows read as hom-alt.
+  Values change on the one PGP-HMS export known to be mixed (an FTDNA file); exports `StrandCheck`.
+
 - An array facet now says which genotyping chip it came from (RM4): `facets.chip` and
   `facets.chip_basis`. Stated where the header names it (AncestryDNA's array version, an Illumina
   Final Report's `Content` manifest as `illumina:<manifest>`, Living DNA's genotype chip); inferred for

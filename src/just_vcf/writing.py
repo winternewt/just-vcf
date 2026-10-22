@@ -11,7 +11,7 @@ What is written, and the rules it follows:
 
 - **REF** is `ref` (read from the assembly sequence) when there is one, else `source_ref` (what the
   file wrote). It is never taken from the genotype (charter 10). A row with neither, a row without
-  `alts` (an array row before RM3), a row whose `ref_check` is `mismatch`, a row with a genotype that
+  `alts` (an array row before RM3, or one RM3 withheld in a mixed-strand facet, F13), a row whose `ref_check` is `mismatch`, a row with a genotype that
   is not indexed (`gt` null beside `gt_alleles`) and a row whose `gt` points past its ALTs cannot be
   written as valid VCF. The writer refuses them with `UnwritableRowsError`, counted per reason, unless
   the caller passes `resolved_only=True`; then the rest is written and the counts are reported.

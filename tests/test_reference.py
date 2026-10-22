@@ -514,6 +514,29 @@ def test_too_few_rows_infer_nothing(tmp_path: Path) -> None:
         resolve_ref(bare_array(tmp_path, drawn_rows(SEQ, per_contig=400)), s)
 
 
+GRCH36_CHR1 = 247_249_719
+"""NCBI36/hg18 chr1's length (UCSC hg18.chrom.sizes), a domain constant."""
+
+
+def test_a_grch36_reference_is_named_by_its_contig_1_and_cannot_vouch_for_mt(tmp_path: Path) -> None:
+    """Contig 1 of GRCh36's length (all N, so the file stays small) names the collection GRCh36."""
+    fasta = tmp_path / "hg18_like.fa.gz"
+    full, rest = divmod(GRCH36_CHR1, 60)
+    with gzip.open(fasta, "wb", compresslevel=1) as handle:
+        handle.write(b">chr1\n" + (b"N" * 60 + b"\n") * full + b"N" * rest + b"\n")
+        handle.write(f">chr2\n{SEQ['2']}\n>chrM\n{SEQ['MT']}\n".encode())
+    s = ReferenceStore.in_memory()
+    digest = s.add_fasta(fasta)
+    assert s.assembly_label(digest) == "GRCh36"
+    preamble = PREAMBLE_23.replace("build 37 (also known as Annotation Release 104)", "build 36")
+    loaded = bare_array(tmp_path, [("rs1", "2", 10, base("2", 10) * 2), ("rs2", "MT", 7, base("MT", 7))], preamble=preamble)
+    assert loaded.facets.collect()["assembly_label"].to_list() == ["GRCh36"]
+    resolved = resolve_ref(loaded, s)
+    _, calls = frames(resolved)
+    assert dict(calls.select("chrom", "ref").iter_rows()) == {"2": base("2", 10), "MT": None}
+    assert any("the GRCh36 label cannot vouch for without a stated length: MT" in w for w in resolved.warnings)
+
+
 def test_a_stated_build_is_not_inferred_again(tmp_path: Path) -> None:
     """A facet that states its build keeps it and its basis, even where the rows point elsewhere."""
     s, digests = labelled_store(tmp_path, "two", {"GRCh37": SEQ, "GRCh38": OTHER_SEQ})

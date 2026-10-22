@@ -103,9 +103,10 @@ both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X):
 - the facet stated the contig's length (`header_contigs`): the reference's length must equal it, and
   its md5 too where the header gives one;
 - it did not (arrays): the facet's `assembly_label` must equal the reference's. The reference's label
-  comes from its contig 1 length (GRCh37, GRCh38, T2T-CHM13), or from one the caller asserted when
-  adding the FASTA. `GRCh37` cannot vouch for MT, since it covers hg19's chrM (16,571 bases) as well
-  as rCRS (16,569), so an array's MT stays unread.
+  comes from its contig 1 length (GRCh36, GRCh37, GRCh38, T2T-CHM13), or from one the caller asserted
+  when adding the FASTA. `GRCh37` cannot vouch for MT, since it covers hg19's chrM (16,571 bases) as
+  well as rCRS (16,569), and `GRCh36` neither (NCBI36 and hg18 carry the 16,571-base chrM), so an
+  array's MT stays unread.
 - it stated neither lengths nor a label (an FTDNA export, a headerless table): the label is inferred
   from the rows (F9), and then matched as above. Per collection in the store, a deterministic sample
   of the facet's array SNV rows (at most 2,000 per chromosome on 1–22, X and Y, every k-th row by

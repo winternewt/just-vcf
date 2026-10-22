@@ -50,15 +50,17 @@ _FASTA_NAMESPACE = "just_vcf_fasta"
 """Collection-alias namespace mapping a FASTA file's fingerprint to its collection, so a FASTA already
 added is not digested again."""
 
-CHR1_LENGTHS: dict[int, str] = {249_250_621: "GRCh37", 248_956_422: "GRCh38", 248_387_328: "T2T-CHM13"}
+CHR1_LENGTHS: dict[int, str] = {247_249_719: "GRCh36", 249_250_621: "GRCh37", 248_956_422: "GRCh38", 248_387_328: "T2T-CHM13"}
 """Contig 1's length per assembly, the fingerprint that names a reference's assembly. Domain constants."""
 
 PRIMARY: frozenset[str] = frozenset([str(n) for n in range(1, 23)] + ["X", "Y"])
 """Contigs whose length differing from the reference means another assembly, not another contig."""
 
-LABEL_UNVERIFIABLE: dict[str, frozenset[str]] = {"GRCh37": frozenset({"MT"})}
+LABEL_UNVERIFIABLE: dict[str, frozenset[str]] = {"GRCh36": frozenset({"MT"}), "GRCh37": frozenset({"MT"})}
 """Contigs a label cannot vouch for: `GRCh37` covers both hg19, whose chrM is the Yoruba sequence
-(16,571 bases), and GRCh37, whose MT is rCRS (16,569). Only a stated length tells them apart."""
+(16,571 bases), and GRCh37, whose MT is rCRS (16,569). Only a stated length tells them apart.
+`GRCh36` likewise: NCBI36 and hg18 carry the Yoruba sequence, and an array labelled build 36 does not
+say whether its MT positions are on it or on rCRS."""
 
 _REF_SPAN_FOR = {"XY": "X"}
 """Canonical names read from another reference contig: array code 25 (`XY`, the X pseudo-autosomal

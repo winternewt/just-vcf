@@ -157,9 +157,20 @@ is in docs/SCHEMA.md Decision 2. Choices, each with the alternative rejected:
   collection, chance is the rival: the mean number of distinct called alleles over four.
 - **Arrays only.** A VCF without lengths or a build hint could be scored by its source REF, and would
   then pass a `ref_check` chosen by that same comparison. It stays refused.
-- **MT is never scored**: the GRCh37 label covers two mitochondrial sequences (hg19 chrM and rCRS).
+- **MT is never scored**: the GRCh37 and GRCh36 labels each cover two mitochondrial sequences (the
+  Yoruba chrM of hg19, hg18 and NCBI36, and rCRS).
 - **A sample, not every row**: at most 2,000 rows per chromosome, every k-th by position, so the
   same file always scores the same rows.
+
+**GRCh36 in the store (2026-10-22).** A reference with contig 1 of 247,249,719 bases is labelled
+`GRCh36`, and that label, like `GRCh37`'s, cannot vouch for MT (NCBI36 and hg18 carry the Yoruba
+chrM, 16,571 bases; an array labelled build 36 does not say which MT it used). Where to get it: UCSC
+`https://hgdownload.soe.ucsc.edu/goldenPath/hg18/bigZips/hg18.fa.gz` (943 MB, md5
+`5cf361b2f92d01691ee7d555ffca721f` per the `md5sum.txt` beside it, checked), then
+`ReferenceStore.open(…).add_fasta("hg18.fa.gz")`: 176 s, 49 sequences (`chr*_random` and the
+haplotypes included). Not Ensembl release 54's `Homo_sapiens.NCBI36.54.dna.chromosome.*.fa.gz`: its
+Y is a sub-range (`chromosome:NCBI36:Y:2709521:57443437`, the PARs cut off), so every Y position in it
+is offset by 2,709,520, and the release publishes no checksums.
 
 **Measured 2026-09-30: gtars RefgetStore as the sequence source** (gtars 0.10, Ensembl GRCh38
 primary-assembly FASTA, 3.15 GB, 194 sequences):

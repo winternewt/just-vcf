@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A reference whose contig 1 is 247,249,719 bases is labelled `GRCh36`, so build-36 exports (23andMe
+  v36, deCODEme) resolve against UCSC hg18 (where to get it: RM3). Like `GRCh37`, the label leaves an
+  array's MT unread.
+
 - `resolve_ref` infers an array's build from its own rows when the facet states none (F9): the share
   of sampled SNV rows whose genotype carries each collection's reference base names the build, with
   basis `inferred` and the scores in a warning, or the facet is refused with the scores. No column

@@ -1,5 +1,10 @@
 """Chip detection for array facets (RM4): stated by a header, or inferred from a 23andMe probe set."""
 
+import hashlib
+import importlib.util
+import json
+import os
+from importlib import resources
 from pathlib import Path
 
 import polars as pl
@@ -9,11 +14,21 @@ from just_vcf import load
 from just_vcf.chip import (
     CHIPS,
     LOW_ID_FLOOR,
+    MARKER_MODULUS,
+    MIN_COVERAGE,
+    MIN_MARGIN,
+    MIN_RECALL,
+    MIN_SAMPLED_MARKERS,
+    OVERLAP_FORMATS,
     ROW_BANDS_23ANDME,
     ChipOutcome,
+    chip_markers,
+    detect_chip,
     id_profile,
     inferred_chip,
     is_chip,
+    marker_overlap,
+    overlap_chip,
     stated_chip,
 )
 from just_vcf.formats import get_spec
@@ -128,7 +143,7 @@ def test_the_bands_leave_no_overlap() -> None:
 
 def test_other_formats_are_not_inferred() -> None:
     rows, internal, low = GENERATIONS["23andme_v5"]
-    found = inferred_chip("ftdna", _rows(rows, internal, low))
+    found = inferred_chip("decodeme", _rows(rows, internal, low))
     assert not found and found.outcome is ChipOutcome.NO_RULE
 
 
@@ -169,3 +184,139 @@ def test_a_vcf_has_no_chip(tmp_path: Path) -> None:
     text = "##fileformat=VCFv4.2\n##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n1\t10\t.\tA\tG\t.\tPASS\t.\tGT\t0/1\n"
     facet = _facet(_write(tmp_path, text, "calls.vcf"))
     assert (facet["chip"], facet["chip_basis"], facet["strand_check"]) == (None, None, None)
+
+
+# Marker overlap with the Illumina manifests (FTDNA, MyHeritage, Final Reports that state no chip).
+# Exports are built from the packaged marker sample itself, so the expected shares follow from it.
+
+
+def _markers(chip: str) -> list[int]:
+    return chip_markers()[chip].to_list()
+
+
+def _only(chip: str) -> list[int]:
+    """Sampled rsids in this chip's manifest and in no other's."""
+    others = set().union(*(set(_markers(c)) for c in chip_markers() if c != chip))
+    return [n for n in _markers(chip) if n not in others]
+
+
+def _off_manifest(count: int) -> list[int]:
+    """Sampled rsid numbers that no manifest holds: multiples of the modulus missing from every sample."""
+    held = set().union(*(set(_markers(c)) for c in chip_markers()))
+    found, n = [], 0
+    while len(found) < count:
+        n += MARKER_MODULUS
+        if n not in held:
+            found.append(n)
+    return found
+
+
+def _export(sampled: list[int], filler: int = 0, prefix: str = "rs") -> pl.DataFrame:
+    """An export's `ids`: the given sampled rsids, plus `filler` rsids outside the sample (never compared)."""
+    unsampled = [n * MARKER_MODULUS + 1 for n in range(filler)]
+    return pl.DataFrame({"ids": [[f"{prefix}{n}"] for n in sampled + unsampled]})
+
+
+def test_the_packaged_sample_holds_only_sampled_rsids() -> None:
+    markers = chip_markers()
+    assert set(markers) == {"illumina_gsa", "illumina_omniexpress"} and set(markers) <= CHIPS
+    for sample in markers.values():
+        assert sample.len() > 5 * MIN_SAMPLED_MARKERS and (sample % MARKER_MODULUS == 0).all()
+        assert sample.is_sorted() and sample.n_unique() == sample.len()
+
+
+@pytest.mark.parametrize("chip", ["illumina_gsa", "illumina_omniexpress"])
+def test_an_export_of_one_manifests_markers_is_that_family(chip: str) -> None:
+    export = _export(_markers(chip), filler=20_000)
+    found = overlap_chip(export)
+    assert (found.chip, found.basis, found.outcome) == (chip, "inferred", ChipOutcome.INFERRED)
+    coverage, recall = marker_overlap(export)[chip]
+    assert (coverage, recall) == (1.0, 1.0), "filler outside the sample is never compared"
+    for fmt in sorted(OVERLAP_FORMATS):
+        assert detect_chip(fmt, [], export).chip == chip
+
+
+def test_gsa_names_in_a_final_report_count_as_their_rsids() -> None:
+    assert overlap_chip(_export(_markers("illumina_gsa"), prefix="GSA-rs")).chip == "illumina_gsa"
+
+
+def test_a_final_report_that_states_its_manifest_is_not_inferred() -> None:
+    header = ["[Header]", "Content\tGSA-24v2-0_A1.bpm", "[Data]"]
+    found = detect_chip("illumina_final_report", header, _export(_markers("illumina_omniexpress")))
+    assert (found.chip, found.basis) == ("illumina:GSA-24v2-0_A1", "stated")
+
+
+def test_the_coverage_floor() -> None:
+    """Coverage is the winning manifest's share of the export's sampled rsids; at the floor it names a chip."""
+    held = _only("illumina_omniexpress")[:9_000]
+    outside = round(len(held) * (1 - MIN_COVERAGE) / MIN_COVERAGE)
+    at_floor = overlap_chip(_export(held + _off_manifest(outside)))
+    assert marker_overlap(_export(held + _off_manifest(outside)))["illumina_omniexpress"][0] >= MIN_COVERAGE
+    assert at_floor.chip == "illumina_omniexpress"
+    below = overlap_chip(_export(held + _off_manifest(outside + 50)))
+    assert (below.chip, below.outcome) == (None, ChipOutcome.NO_CLEAR_OVERLAP)
+
+
+def test_two_families_mixed_name_neither() -> None:
+    """Half of each family's own markers: each manifest holds about half, and neither leads by the margin."""
+    gsa, omni = _only("illumina_gsa"), _only("illumina_omniexpress")
+    export = _export(gsa[: len(gsa) // 2] + omni[: len(gsa) // 2])
+    shares = marker_overlap(export)
+    assert abs(shares["illumina_gsa"][0] - shares["illumina_omniexpress"][0]) < MIN_MARGIN
+    assert overlap_chip(export).outcome is ChipOutcome.NO_CLEAR_OVERLAP
+
+
+def test_an_extract_of_a_chip_is_not_the_chip() -> None:
+    markers = _markers("illumina_omniexpress")
+    extract = markers[: int(len(markers) * (MIN_RECALL - 0.05))]
+    assert len(extract) >= MIN_SAMPLED_MARKERS
+    coverage, recall = marker_overlap(_export(extract))["illumina_omniexpress"]
+    assert coverage == 1.0 and recall < MIN_RECALL
+    assert overlap_chip(_export(extract)).outcome is ChipOutcome.NO_CLEAR_OVERLAP
+
+
+def test_too_few_sampled_rsids_are_not_compared() -> None:
+    found = overlap_chip(_export(_markers("illumina_omniexpress")[: MIN_SAMPLED_MARKERS - 1], filler=50_000))
+    assert (found.chip, found.outcome) == (None, ChipOutcome.TOO_FEW_MARKERS)
+    assert overlap_chip(_export(_markers("illumina_omniexpress")[:MIN_SAMPLED_MARKERS])).outcome is not ChipOutcome.TOO_FEW_MARKERS
+
+
+def test_23andme_keeps_its_own_rule_over_the_overlap() -> None:
+    """A 23andMe v5 export is a custom GSA; its chip is the vendor's generation, never the overlap's family."""
+    assert "23andme" not in OVERLAP_FORMATS
+    found = inferred_chip("23andme", _export(_markers("illumina_gsa")))
+    assert found.chip != "illumina_gsa"
+
+
+def test_a_loaded_ftdna_export_gets_its_family_by_overlap(tmp_path: Path) -> None:
+    body = "".join(f'"rs{n}","1","{1000 + i}","AG"\n' for i, n in enumerate(_markers("illumina_omniexpress")))
+    loaded = load(_write(tmp_path, "RSID,CHROMOSOME,POSITION,RESULT\n" + body, "ftdna.csv"))
+    facet = loaded.facets.collect().row(0, named=True)
+    assert (facet["format_id"], facet["chip"], facet["chip_basis"]) == ("ftdna", "illumina_omniexpress", "inferred")
+    assert any(w.startswith("chip inferred from the rows as illumina_omniexpress: ") for w in loaded.warnings)
+
+
+def test_a_small_ftdna_export_says_why_its_chip_is_unknown(tmp_path: Path) -> None:
+    loaded = load(_write(tmp_path, "RSID,CHROMOSOME,POSITION,RESULT\n" + '"rs3094315","1","752566","AG"\n', "ftdna.csv"))
+    assert loaded.facets.collect()["chip"].to_list() == [None]
+    assert any(w.startswith("chip unknown: 0 of the export's rsids are in the marker sample") for w in loaded.warnings)
+
+
+def test_the_packaged_sample_is_derived_from_the_manifests() -> None:
+    """Opt-in: `JUST_VCF_MANIFESTS_DIR` holds Illumina's manifest zips (docs/PROVENANCE.md names them)."""
+    root = os.environ.get("JUST_VCF_MANIFESTS_DIR")
+    if not root or not Path(root).is_dir():
+        pytest.skip("JUST_VCF_MANIFESTS_DIR is not set")
+    script = Path(__file__).resolve().parent.parent / "scripts" / "chip_markers.py"
+    spec = importlib.util.spec_from_file_location("chip_markers_script", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    packaged = json.loads(resources.files("just_vcf").joinpath("chip_markers.json").read_text())["chips"]
+    for chip, entry in packaged.items():
+        found = sorted(Path(root).rglob(entry["file"]))
+        if not found:
+            pytest.skip(f"{entry['file']} is not under JUST_VCF_MANIFESTS_DIR")
+        assert hashlib.sha256(found[0].read_bytes()).hexdigest() == entry["sha256"]
+        descriptor, numbers = module.manifest_rsids(found[0])
+        assert descriptor == entry["manifest"] and len(numbers) == entry["rsids"]
+        assert [n for n in numbers if n % MARKER_MODULUS == 0] == entry["sample"], chip

@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- An FTDNA or MyHeritage-style export, or a Final Report that names no manifest, gets `facets.chip` by
+  marker overlap with Illumina's manifests (RM4): `illumina_omniexpress` or `illumina_gsa`, basis
+  `inferred`, only when one manifest holds at least 90% of the export's sampled rsids, 30 points above
+  the other, and the export at least 40% of the manifest's; otherwise unknown with the shares in a
+  warning. A sample of each manifest's rsids (1 in 61, 187 KB) ships as `just_vcf/chip_markers.json`,
+  derived by `scripts/chip_markers.py`. On PGP-HMS, 57 of 103 FTDNA exports read `illumina_omniexpress`;
+  the 43 X-chromosome exports, the 2010 Affymetrix exports and the one rsid CSV read unknown. No column
+  changes.
+
 - A 23andMe-layout table that ends in 1,000 or more rows of one allele per column (an AncestryDNA-shaped
   export appended after the first) loads as two facets in one `Loaded`: the first export as before,
   and the appended one read by its own layout (`0` is no call, chromosomes 23-26 are X, Y, XY, MT) with

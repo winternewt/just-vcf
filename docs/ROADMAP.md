@@ -236,7 +236,7 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); a facet says which variant classes it carries and whether it was cut to one (`content_filter`); chip from the header or, for 23andMe, the rows (`facets.chip`); left: chip by marker overlap for FTDNA and MyHeritage, gVCF `END` expansion) · Owner: lead
+Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); a facet says which variant classes it carries and whether it was cut to one (`content_filter`); chip from the header or, for 23andMe, the rows (`facets.chip`), and for FTDNA, MyHeritage and unstated Final Reports by marker overlap with Illumina's manifests; left: gVCF `END` expansion) · Owner: lead
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
@@ -287,10 +287,11 @@ Decisions, each with what was rejected:
   "GSA v3 (estimated)".
 - v1 and v2 are one value, `23andme_v1_v2`. Rejected: splitting them on the highest internal id
   (`i4001526` or `i4990307` in build-36 exports), which reflects the download date as much as the chip.
-- FTDNA and MyHeritage get no rule. Every FTDNA export of 548,000 rows or more in PGP-HMS is either
-  the 2010 Affymetrix layout (548,011 rows, `ftdna_space` and three comma exports) or on OmniExpress
-  (98–99% of sampled rsids in its manifest, 680,544–720,449 rows); none is on a later chip, so nothing
-  here says what one looks like. Rejected: naming them by row count.
+- FTDNA and MyHeritage get no row-count rule. Every FTDNA export of 548,000 rows or more in PGP-HMS is
+  either the 2010 Affymetrix layout (548,011 rows, `ftdna_space` and three comma exports) or on
+  OmniExpress (98–99% of sampled rsids in its manifest, 680,544–720,449 rows); none is on a later chip,
+  so nothing here says what one looks like. Rejected: naming them by row count. *Superseded the same
+  day by marker overlap (below), which reads the probe set rather than its size.*
 - AncestryDNA is taken as stated. Its V2.0 exports are not on the GSA, where just-prs's chip table puts
   them: 0.26–0.28 of their sampled rsids are in the GSA-24v3 manifest and 0.64–0.67 in OmniExpress-24's
   (V1.0: 0.24–0.26 and 0.64–0.99).
@@ -314,8 +315,64 @@ Report did not load: `TableLayoutError`, its manifest `HumanOmni2.5-8v1_A` there
 | `living_dna_sirius` | stated | 1 Living DNA |
 | unknown | | 12 23andMe-shaped: 4 of 1.41M rows and 5 extracts (no band), 2 v3-sized whose internal ids are a v3/v5 mix (the features disagree), 1 spreadsheet re-save of 70,000 rows; 103 FTDNA, 2 FTDNA space-separated, 4 deCODEme, 15 Genes for Good, 4 Genos, 2 rsid tables without 23andMe ids, and one each of Color, PLINK, SelfDecode and the rsid CSV (no rule) |
 
-**Left:** marker-overlap detection against chip manifests (FTDNA, MyHeritage, unstated Final
-Reports), which needs the manifests at run time or a derived marker list in `assets/`; GRCh36 in
+**Shipped 2026-10-22: chip by marker overlap** (`just_vcf.chip.overlap_chip`; SCHEMA.md Decision 5,
+`chip`). For `ftdna`, `ftdna_space`, `rsid_result_csv` and a Final Report whose header names no
+manifest, the export's rsids are compared with a sample of the rsids of Illumina's GSA-24v3-0 A1 and
+OmniExpress-24 v1.2 A1 manifests (every rsid whose number is divisible by 61, applied alike to both
+sides; `just_vcf/chip_markers.json`, 187 KB, derived by `scripts/chip_markers.py`, sources in
+docs/PROVENANCE.md). Per manifest: coverage, the share of the export's sampled rsids in the manifest,
+and recall, the share of the manifest's sampled rsids in the export. A chip family is named, basis
+`inferred`, when the export has at least 1,000 sampled rsids, the best manifest's coverage is at least
+0.90 and 0.30 above the other's, and its recall at least 0.40; otherwise the chip is unknown and a
+warning gives both shares per manifest.
+
+Measured through `load` on every loadable PGP-HMS array export (660 facets; 606 with 61,000 rsids or
+more, where the sampled shares are within 0.011 of the full sets'). Coverage / recall, sampled:
+
+| Exports | GSA-24v3 | OmniExpress-24 v1.2 |
+|---|---|---|
+| 57 FTDNA, 680,544–720,449 rows | 0.24–0.25 / 0.26–0.28 | 0.98–0.99 / 0.94–0.99 |
+| 3 FTDNA + 2 `ftdna_space`, 548,011 rows (2010 Affymetrix) | 0.15 / 0.13 | 0.33 / 0.26 |
+| 43 FTDNA, 15,789–18,091 rows (X chromosome only; 245–270 sampled rsids) | 0.22–0.52 / ≤0.01 | 0.22–0.99 / ≤0.02 |
+| 1 rsid CSV (`rsid_result_csv`), 631,369 rows | 0.84 / 0.84 | 0.36 / 0.32 |
+| 1 Final Report, stated `GSA-24v2-0_A1` (half its probes named by position) | 0.97 / 0.52 | 0.41 / 0.19 |
+| 28 23andMe v5 (a custom GSA) | 0.93 / 0.92 | 0.28 / 0.24 |
+| 271 23andMe v3 | 0.20 / 0.31 | 0.71–0.72 / 0.96–0.98 |
+| 25 AncestryDNA V1; 16 V2 | 0.25–0.26 / 0.28; 0.26–0.28 / 0.27–0.30 | 0.64–0.99 / 0.60–0.97; 0.64–0.67 / 0.59–0.63 |
+| F3's appended export (`appended_export` facet) | 0.28 / 0.30 | 0.66 / 0.63 |
+
+Outcome on the formats in scope, through `load`: 57 FTDNA `illumina_omniexpress` (inferred); 43 FTDNA
+unknown, too few sampled rsids; 3 FTDNA, 2 `ftdna_space` and the rsid CSV unknown, no manifest clearly
+holds them; the Final Report keeps its stated chip, and the Omni2.5 one still does not load. No
+Final Report on disk names no manifest, so that branch is tested on synthetic rows only. No MyHeritage
+export is on disk either.
+
+Decisions, each with what was rejected:
+
+- The value names the family (`illumina_omniexpress`, `illumina_gsa`), not the manifest compared with.
+  Rejected: `illumina:InfiniumOmniExpress-24v1-2_A1`, the Final Report spelling: FTDNA's chip was an
+  OmniExpress-12, and the GSA Final Report above, on GSA v2, reaches 0.97 against the v3 manifest, so
+  the overlap cannot tell versions apart; naming one would be a statement the export never made.
+- Coverage, margin and recall all have to hold. Rejected: coverage alone, which an extract of a chip
+  passes (39 of the 43 FTDNA X exports have 0.96–0.99 of their rsids in OmniExpress's manifest, and
+  hold 2% of it); and a
+  recall floor of 0.8, which would refuse a report like the GSA one that names half its probes by
+  position. The coverage floor sits between 0.72 (23andMe v3 against OmniExpress, a custom chip around
+  it) and 0.98 (the FTDNA exports named); the rsid CSV at 0.84 and SelfDecode at 0.80 against GSA sit
+  in that gap and read unknown.
+- A sampled marker list ships in the package. Rejected: reading the manifests at run time from a
+  configured path (every consumer would have to fetch 150 MB of Illumina files for one column); and
+  the full lists, 1.3M rsids, above what a source tree should carry. 1 in 61 keeps about 10,000 rsids
+  of each manifest; the sampled shares stay within 0.011 of the full ones.
+- 23andMe stays on its own rule. Rejected: the overlap for every array format: 23andMe's v5 would read
+  `illumina_gsa`, hiding the generation the vendor rule names, and AncestryDNA states its version.
+  The F3 appended export is not read either (no vendor stated; its shares match AncestryDNA V2's and no
+  rule names that).
+
+**Left:** chip manifests beyond the two (OmniExpress-12, GSA v1/v2, Affymetrix's for the 2010 FTDNA
+exports, MyHeritage's custom GSA), which would name more of the unknowns above; an FTDNA
+X-chromosome export, which reads like an extract of its chip, could take the chip of the same
+person's autosomal export, but nothing links the two files yet; GRCh36 in
 `ASSEMBLY_LENGTHS`, so a build-36 VCF's `##contig` lengths name it (the reference side knows GRCh36's
 contig 1 since F9; the header side reads those lengths as matching no assembly); contigs named by RefSeq accession (`NC_000001.11`), which the label
 inference does not read yet; gVCF `END` expansion. Unmarked imputation output with read-evidence keys

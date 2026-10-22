@@ -473,8 +473,14 @@ def test_final_report_without_plus_strand_alleles_is_refused(tmp_path: Path) -> 
         "SNP Name\tSample ID\tAllele1 - Forward\tAllele2 - Forward\tGC Score\n"
         "rs1\tS1\tA\tG\t0.9\n"
     )
-    with pytest.raises(TableLayoutError, match="not the genomic plus strand"):
+    with pytest.raises(TableLayoutError, match="not the genomic plus strand") as refused:
         _load_text(tmp_path, text, "forward.txt")
+    message = str(refused.value)
+    assert "no column for chromosome, position, genotype_plus" in message
+    assert "the positions and plus-strand alleles would come from the chip's manifest, GSA-24v2-0_A1.bpm" in message
+    unnamed = text.replace("Content\tGSA-24v2-0_A1.bpm\n", "")
+    with pytest.raises(TableLayoutError, match="which the header does not name"):
+        _load_text(tmp_path, unnamed, "unnamed.txt")
 
 
 # --- Real files (opt-in) -----------------------------------------------------------------------------

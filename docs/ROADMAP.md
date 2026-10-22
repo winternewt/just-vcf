@@ -91,6 +91,18 @@ reference, as explicitly as a `var` ref block. Which value says that is the open
 (`totalScore`, no file on disk); memory (a whole `var` peaks at 8.9 GB, the haplotype sort);
 GET-Evidence copies named `<assembly>.tsv.bz2`, not checked.
 
+**Answered 2026-10-22: the HumanOmni2.5 Final Report that RM4's chip sweep could not load.** Its
+columns are SNP Name, Sample ID, Allele1/Allele2 - Forward, Allele1/Allele2 - Design and GC Score:
+no chromosome, no position, no plus-strand allele (2,379,855 rows of one sample; the header counts
+38). No reading of it is not a guess. A position cannot come from the row, and an rsid lookup would
+be another source standing in for the file's. Forward is dbSNP's orientation of the probe when the
+manifest was built and Design the probe's own strand, so neither is the genomic plus strand. Loading
+them as `gt_alleles` and leaving F13's strand check to catch the minus probes was rejected: a
+consumer that never runs `resolve_ref` reads every minus-strand probe as the complement call, and the
+strand check only withholds rows, it does not place them. The manifest the header names
+(`HumanOmni2.5-8v1_A`) gives both the positions and the strand, which is RM4's manifest work. The
+`TableLayoutError` now names that manifest, from the `Content` line.
+
 Header evidence found while declaring the VCF formats:
 
 | Header line | Caller / vendor |

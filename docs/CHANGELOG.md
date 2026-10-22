@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A Final Report refused for want of positions or plus-strand alleles now names the manifest that
+  would supply them, as its `Content` line states it (`HumanOmni2.5-8v1_A.bpm`); `chip` gains
+  `final_report_content` for that line.
+
 - A VCF re-saved by a spreadsheet (quoted fields with doubled quotes, tab-padded meta lines, bare-CR
   line ends) loads under `vcf`: the re-save is undone with `csv` and polars-bio reads a rewritten copy,
   with a warning (F7, now resolved). `vcf_samples` reads such a file too.

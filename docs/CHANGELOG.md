@@ -10,8 +10,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   for `wgs` without blocks, `blocks` wherever blocks exist, `unknown` otherwise. Before, every VCF
   facet without blocks said `unknown`, so a whole-genome VCF's facet changes value here (minor: no
   column changes). On PGP-HMS uploads: four Genos exome VCFs read `wes` (44,020–44,796 sites, 13.6%
-  breadth, against the 75% a genome needs); a five-sample DELLY SV merge, an array-derived VCF of
-  542,266 sites and an all-sites file of the sex chromosomes stay unknown.
+  breadth, against the 75% a genome needs); DRAGEN genomes split SNV-only read `wgs` (3.46M and
+  3.84M sites, 92–93% breadth) and `weak_reference`; two Gencove files (`##source=loimpute`) and a
+  minimac upload (INFO R2, ER2) read `imputed`; a five-sample DELLY SV merge, an array-derived VCF of
+  542,266 sites, an indel-only DRAGEN split (958,046 sites), a smaller SNV-only upload (831,137
+  sites) and an all-sites file of the sex chromosomes stay unknown.
 
 - A VCF facet's `assembly_label` is inferred from its `##contig` lengths when the header states no
   build (RM4): three or more primary chromosomes must match one of GRCh37, GRCh38 or T2T-CHM13 and

@@ -25,6 +25,24 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   and OmniExpress manifests (docs/ROADMAP.md RM4). New columns are additive, nullable; exports
   `ChipBasis`. A 23andMe export too small for any band now carries one `chip unknown` warning.
 
+- Loading a file again no longer touches the files an earlier `Loaded` of it reads, in this process
+  or another. `load`'s spill (VCF, Complete Genomics, key=value) is a generation per content key under
+  `frames/<facet_id>-<SCHEMA_VERSION>/`, like the derived steps': a reload sinks as before, finds the
+  same bytes and keeps the first files. Before, it sank over `calls.parquet` and `blocks.parquet` in
+  place. The manifest carries `SPILL_LAYOUT` 2, so the next `load` sweeps every load spill written
+  before. The Complete Genomics and key=value loaders' working copy of the decompressed payload
+  (`cgi/`, `keyvalue/`, a whole genome) is now an indexed entry (kind `work_copy`) under a lock: two
+  loads of one file no longer write the copy at once, the copy goes even when a load fails, and
+  `clear_cache(source)` removes a copy a killed load left, with the file's spills. Their spills had
+  no manifest at all before, so `clear_cache(source)` missed them.
+
+- `liftover` run again no longer breaks the `Lifted` an earlier run returned. It spills like the other
+  derived steps: a generation per content key under `frames/<facet_id>-<SCHEMA_VERSION>/` (kind
+  `lift_spill`, with a manifest naming the root source, so `clear_cache(source)` removes it), reused
+  with its warnings and reasons when the same input comes again, a second one for other rows. Before,
+  each run removed and rewrote `frames/<facet_id>-<SCHEMA_VERSION>-lift/`, which the index did not
+  see at all; those old directories are swept by the next `liftover`.
+
 - Schema 0.0.9: `facets.variant_classes`, `content_filter`, `content_filter_basis` (a genome file that
   kept one variant class is still `wgs`, but absence reads as reference only for the classes it carries;
   `absence_is_reference` answers it for consumers).

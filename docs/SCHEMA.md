@@ -511,7 +511,8 @@ holding that collection and the target.
    hg19's 16,571-base sequence, not rCRS. Without `target=`, the target is the one collection whose
    sizes match the chain's target side on every primary contig it shares and on at least one.
 2. **Positions.** A row's REF span (`pos` to `pos + len(ref) - 1`) must lie inside one ungapped block,
-   and inside no block of another chain. The span's start then moves by the block's offset; on a
+   and inside no block with another target (blocks that send the same bases to the same contig,
+   strand and offset count once: Ensembl's chains list them twice, F14). The span's start then moves by the block's offset; on a
    minus-strand block the forward start is the image of the span's last base.
 3. **Alleles.** On a minus-strand block every allele (`alts`, `gt_alleles`, `source_alleles`) is
    reverse-complemented, in place, so the vectors stay indexed. `ref` is read from the target over the

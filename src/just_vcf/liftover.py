@@ -11,8 +11,9 @@ short:
    primary contig (1-22, X, Y) that differs refuses the lift: the chain is for another assembly. Any
    other contig that differs leaves its rows unlifted, counted (UCSC hg19's chrM, 16,571 bases,
    against GRCh37's rCRS MT).
-2. **Positions.** A row's REF span must lie inside one ungapped block of one chain, and inside no
-   other block (chains that overlap on the source side make a position's target ambiguous).
+2. **Positions.** A row's REF span must lie inside one ungapped block, and inside no block with
+   another target (chains that overlap on the source side with different targets make a position's
+   target ambiguous; blocks repeating one mapping count once, F14).
    Otherwise it is unlifted: no block at all, a span that crosses a block edge, or more than one
    target.
 3. **Alleles.** On a minus-strand block every allele is reverse-complemented. REF is then read from
@@ -192,28 +193,45 @@ def read_chain(path: Path | str) -> Chain:
 
 
 def _segments(blocks: pl.DataFrame) -> pl.DataFrame:
-    """One source contig's axis cut at every block edge: `seg_start`, how many blocks cover the
-    segment (`depth`), the block when exactly one does, and running counts of covered and
-    multiply-covered segments, so a span over several segments is judged by two lookups."""
-    events = sorted([(s, 1, b) for b, s in zip(blocks["block"], blocks["t_start"])] + [(e, -1, b) for b, e in zip(blocks["block"], blocks["t_end"])])
+    """One source contig's axis cut where the set of targets changes: `seg_start`, how many distinct
+    targets cover the segment (`depth`), a block giving it when exactly one does, and running counts of
+    covered and multiply-covered segments, so a span over several segments is judged by two lookups.
+
+    A target is a mapping, not a block: blocks with the same target contig, strand and offset
+    (`q_start - t_start`) send every shared base to the same place, so they count once. Ensembl's
+    GRCh38_to_GRCh37 chain lists every block twice, in two chains (F14); counting blocks would make
+    the whole genome ambiguous.
+    """
+    keys = list(zip(blocks["q_chrom"], blocks["q_minus"], (blocks["q_start"] - blocks["t_start"])))
+    ids = blocks["block"].to_list()
+    events = sorted([(s, 1, i) for i, s in enumerate(blocks["t_start"])] + [(e, -1, i) for i, e in enumerate(blocks["t_end"])])
     starts, depths, singles = [0], [0], [None]
-    active: set[int] = set()
+    active: dict[int, tuple] = {}
     index = 0
     while index < len(events):
         at = events[index][0]
         while index < len(events) and events[index][0] == at:
-            _, step, block = events[index]
+            _, step, i = events[index]
             if step == 1:
-                active.add(block)
+                active[i] = keys[i]
             else:
-                active.discard(block)
+                active.pop(i, None)
             index += 1
+        targets = {key: i for i, key in sorted(active.items())}
+        depth = len(targets)
+        single = next(iter(targets.values())) if depth == 1 else None
+        if at == starts[-1]:
+            depths[-1], singles[-1] = depth, single
+            continue
+        # A cut where the one target stays the same (overlapping blocks of one mapping) is no edge.
+        previous = singles[-1]
+        if depth == depths[-1] and (depth == 0 or (depth == 1 and keys[previous] == keys[single])):
+            continue
         starts.append(at)
-        depths.append(len(active))
-        singles.append(next(iter(active)) if len(active) == 1 else None)
-    frame = pl.DataFrame({"seg_start": starts, "depth": depths, "seg_block": singles}, schema={"seg_start": pl.Int64, "depth": pl.Int64, "seg_block": pl.UInt32})
-    # Two edges at one position collapse into the later segment; the first start is 0 or a block start.
-    frame = frame.unique("seg_start", keep="last", maintain_order=True).sort("seg_start")
+        depths.append(depth)
+        singles.append(single)
+    blocks_of = [None if i is None else ids[i] for i in singles]
+    frame = pl.DataFrame({"seg_start": starts, "depth": depths, "seg_block": blocks_of}, schema={"seg_start": pl.Int64, "depth": pl.Int64, "seg_block": pl.UInt32})
     return frame.with_row_index("seg").with_columns(
         (pl.col("depth") >= 1).cast(pl.Int64).cum_sum().alias("covered_cum"),
         (pl.col("depth") >= 2).cast(pl.Int64).cum_sum().alias("multi_cum"),

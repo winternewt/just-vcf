@@ -299,10 +299,38 @@ def test_positions_agree_with_pyliftover(tmp_path: Path, setup) -> None:
     assert plain.blocks.height == 5  # two blocks in the first chain, one in each other
 
 
-def test_segments_count_overlaps() -> None:
-    blocks = pl.DataFrame({"block": [0, 1, 2], "t_start": [0, 10, 30], "t_end": [20, 15, 40]}).with_columns(pl.col("block").cast(pl.UInt32))
+def test_segments_count_targets_not_blocks() -> None:
+    # Block 1 overlaps block 0 with another target; block 3 repeats block 2's mapping over part of it.
+    blocks = pl.DataFrame(
+        {
+            "block": [0, 1, 2, 3],
+            "t_start": [0, 10, 30, 35],
+            "t_end": [20, 15, 40, 38],
+            "q_chrom": ["1", "2", "1", "1"],
+            "q_minus": [False, False, False, False],
+            "q_start": [100, 0, 200, 205],
+        }
+    ).with_columns(pl.col("block").cast(pl.UInt32))
     segments = _segments(blocks)
-    assert segments.select("seg_start", "depth", "seg_block").rows() == [(0, 1, 0), (10, 2, None), (15, 1, 0), (20, 0, None), (30, 1, 2), (40, 0, None)]
+    assert segments.select("seg_start", "depth", "seg_block").rows() == [
+        (0, 1, 0),
+        (10, 2, None),
+        (15, 1, 0),
+        (20, 0, None),
+        (30, 1, 2),
+        (40, 0, None),
+    ]
+
+
+def test_a_chain_listing_its_blocks_twice_lifts_as_once(tmp_path: Path, setup) -> None:
+    """Ensembl's GRCh38_to_GRCh37 chain repeats every chain under a second id (F14)."""
+    store, _, _, chain = setup
+    _, once = lifted_from_cases(tmp_path, store, chain)
+    doubled = tmp_path / "doubled.chain"
+    doubled.write_text(chain_text() + chain_text())
+    _, twice = lifted_from_cases(tmp_path, store, doubled)
+    assert twice.reasons == once.reasons
+    assert twice.loaded.calls.drop("facet_id").collect().equals(once.loaded.calls.drop("facet_id").collect())
 
 
 def test_array_rows_rederive_alts_on_a_minus_block(tmp_path: Path, setup) -> None:

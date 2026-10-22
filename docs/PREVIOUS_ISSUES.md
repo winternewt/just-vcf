@@ -4,6 +4,22 @@ Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with it
 code pointer. Check here before re-investigating something that looks fixed.
 
 
+## F14 — Ensembl's GRCh38_to_GRCh37 chain lists every block twice
+
+Severity: high · Found 2026-10-22 lifting anton's GRCh38 callset with the chain CrossMap had used (RM6).
+
+The Ensembl chain (`GRCh38_to_GRCh37.chain.gz`, from ftp.ensembl.org `assembly_mapping`) holds 22,364
+chains, and every block of the main ones appears twice, under two chain ids, with the same source span,
+target and strand. The first `liftover` counted blocks per base, so 5,717,715 of 6,079,744 rows read as
+lying in more than one block (`multiple_targets`) and none was lifted. UCSC's hg38ToHg19 chain has no
+overlapping block at all, so the synthetic tests, built like it, could not show it.
+
+Resolved the same day in `liftover._segments`: the source axis is cut where the set of *targets*
+changes, a target being a contig, strand and offset, so two blocks sending every shared base to the same
+place count once. A position under blocks with different targets is still `multiple_targets`. With the
+fix the same chain lifts 5,578,476 rows, and 108,776 stay ambiguous. Test:
+`test_a_chain_listing_its_blocks_twice_lifts_as_once` (fails on the first version, checked).
+
 ## F10 — A GP that does not sum to 1 is lost when just-vcf reloads its own export
 
 Severity: low · Found 2026-10-22 by round-tripping a PGP-HMS VCF upload through `write_vcf` and `load`

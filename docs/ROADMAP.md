@@ -368,6 +368,20 @@ it stayed behind. Decisions, each with what was rejected:
 - A row lifted to another contig than its source's loses its phase sets (a PS set is keyed per
   contig); VRS ids are not carried (re-mint with `mint_vrs_ids`, tested on lifted rows).
 
+Compared on anton (docs/LIVE_SAMPLES.md: one GRCh38 DeepVariant callset, 6,079,744 rows, lifted to
+GRCh37 by CrossMap 0.6.3 in two settings and by Picard with and without swap recovery; counts only).
+With the Ensembl chain CrossMap used, `liftover` lifted 5,578,476 rows in 281 s (plus 175 s for
+`resolve_ref`), swapped 13,098 and lifted 20,424 on minus-strand blocks. Every position it lifted is
+in CrossMap's first output; 5,561,478 rows have the same REF, ALT and genotype there. Against Picard
+with swap recovery, 5,578,457 of its rows are the same in position, REF, ALT and genotype, and 19 are
+ours only. The tools lift 28,000 to 30,000 positions more, from what this slice withholds: 108,776
+rows under chains with different targets, 2,865 minus-strand indels, 342 REFs matching no allele.
+Unlifted: 271,958 in no block, 90,071 on contigs the chain does not name (unplaced GRCh38 contigs),
+26,244 whose target contig the GRCh37 collection lacks, 1,012 across a block edge. With UCSC's
+hg38ToHg19 chain it lifts 5,724,577 (UCSC's chain is netted, one target per base, so nothing is
+ambiguous; its chrM is hg19's, so MT is `target_contig_unmatched`). Found on the way: F14 (resolved).
+No bcftools on this machine, so the opt-in bcftools comparison was not run.
+
 **Left in RM6:** writing gVCF blocks (after RM3); a tabix index beside the output; SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
 does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting sites that carry `<*>`;

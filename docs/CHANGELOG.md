@@ -4,6 +4,27 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Schema 0.0.10: `facets.chip`, `chip_basis` (array chip, stated or inferred) and `strand_check` (set by
+  `resolve_ref`; a `mixed` facet withholds the alleles that read differently on the two strands).
+
+- `resolve_ref` checks the strand of an array facet's genotypes (F13): `facets.strand_check` is
+  `forward`, `mixed` (more than 2% of sampled hets carry the reference base's complement and not the
+  base: part of the probes is written on the minus strand), or null (not an array, or fewer than 200
+  hets). In a `mixed` facet the rows whose genotype reads differently on the two strands (homozygous
+  calls, half-calls, hets without the reference base) keep `ref` and get `alts` and `gt` null, counted
+  per reason; nothing is complemented. Before, such a facet's flipped hom-ref rows read as hom-alt.
+  Values change on the one PGP-HMS export known to be mixed (an FTDNA file); exports `StrandCheck`.
+
+- An array facet now says which genotyping chip it came from (RM4): `facets.chip` and
+  `facets.chip_basis`. Stated where the header names it (AncestryDNA's array version, an Illumina
+  Final Report's `Content` manifest as `illumina:<manifest>`, Living DNA's genotype chip); inferred for
+  23andMe exports, and preamble-less tables carrying 23andMe's internal ids, when the row count and the
+  internal-id profile both point at one generation (`23andme_v1_v2`, `_v3`, `_v4`, `_v5`); unknown
+  otherwise, with a warning naming the features. FamilyTreeDNA and MyHeritage exports state nothing
+  and stay unknown. Bands measured on 341 PGP-HMS 23andMe exports and checked against Illumina's GSA
+  and OmniExpress manifests (docs/ROADMAP.md RM4). New columns are additive, nullable; exports
+  `ChipBasis`. A 23andMe export too small for any band now carries one `chip unknown` warning.
+
 - Schema 0.0.9: `facets.variant_classes`, `content_filter`, `content_filter_basis` (a genome file that
   kept one variant class is still `wgs`, but absence reads as reference only for the classes it carries;
   `absence_is_reference` answers it for consumers).

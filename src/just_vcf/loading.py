@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict
 
 from just_vcf import cache, callset
 from just_vcf.assembly import infer_assembly, sorted_name_length_pairs_digest
+from just_vcf.chip import ChipOutcome, detect_chip, header_lines
 from just_vcf.cache import cache_dir, file_sha256
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import Family
@@ -109,7 +110,7 @@ def _load_rsid_table(sniffed: Sniffed) -> Loaded:
     calls, warnings = rsid_table.read_calls(data, spec)
     if spec.columns and rsid_table.column_line_ok(data, spec) is False:
         warnings.append("the column line does not read rsid, chromosome, position, genotype; columns taken by position")
-    return _array_loaded(sniffed, calls, warnings, build=sniffed.build, options={}, extra={})
+    return _array_loaded(sniffed, calls, warnings, build=sniffed.build, options={}, extra=_chip(sniffed.format, data, calls, warnings))
 
 
 def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:
@@ -119,7 +120,7 @@ def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:
     read = table.read_table(data, spec, sample)
     build = read.build if read.rows_state_build else sniffed.build or _sibling_build(sniffed)
     options = {} if read.sample_index is None else {"sample_index": read.sample_index}
-    extra = {"sample": read.sample, "dropped_fields": read.dropped_columns}
+    extra = {"sample": read.sample, "dropped_fields": read.dropped_columns, **_chip(sniffed.format, data, read.calls, read.warnings)}
     return _array_loaded(sniffed, read.calls, read.warnings, build=build, options=options, extra=extra)
 
 
@@ -280,6 +281,19 @@ def _multi_facet_loaded(
         blocks=_concat([blocks[i] for i in order]),
         warnings=tuple(warnings),
     )
+
+
+def _chip(format_id: str, data: bytes, calls: pl.DataFrame, warnings: list[str]) -> dict:
+    """The facet's `chip` and `chip_basis` (RM4), with a warning line for every answer but a statement
+    or a format with no rule."""
+    found = detect_chip(format_id, header_lines(data), calls)
+    if found.outcome is ChipOutcome.INFERRED:
+        warnings.append(f"chip inferred from the rows as {found.chip}: {found.reason}")
+    elif found.outcome not in (ChipOutcome.STATED, ChipOutcome.NO_RULE):
+        warnings.append(f"chip unknown: {found.reason}")
+    if not found:
+        return {}
+    return {"chip": found.chip, "chip_basis": found.basis.value if found.basis else None}
 
 
 def _sibling_build(sniffed: Sniffed) -> str | None:

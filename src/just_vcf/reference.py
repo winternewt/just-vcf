@@ -36,11 +36,12 @@ from gtars.refget import RefgetStore
 from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_snv_rows
 from just_vcf import cache
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
-from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, canonical_chrom, canonical_order, empty
+from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, StrandCheck, canonical_chrom, canonical_order, empty
+from just_vcf.strand import StrandResult, check_strand, withheld_reason
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 2
+RESOLVE_VERSION = 3
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes."""
 
 ASSEMBLY_NAMESPACE = "just_vcf_assembly"
@@ -286,6 +287,10 @@ def resolve_ref(
 
     warnings = [f"assembly inferred from the rows as {inferred.label}: {inferred.summary()}"] if inferred is not None else []
     warnings += _contig_warnings(plan, rows_per_chrom)
+    strand = _check_strand(store, loaded, facet, plan.digest)
+    if strand is not None:
+        warnings.append(strand.summary())
+    withhold = strand is not None and strand.check is StrandCheck.MIXED
     entry = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
     with cache.spilling(entry, cache.RESOLVE_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])) as spill:
         # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each contig
@@ -302,7 +307,7 @@ def resolve_ref(
             for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
                 rows = source.filter(pl.col("chrom") == chrom).collect()
                 contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
-                resolved = _resolve_rows(rows, store, contig, counts) if contig is not None else rows
+                resolved = _resolve_rows(rows, store, contig, counts, withhold) if contig is not None else rows
                 part = spill.stage / f"calls-{index:05d}.parquet"
                 canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
                 parts.append(part)
@@ -319,7 +324,13 @@ def resolve_ref(
         else []
     )
     return Loaded(
-        facets=loaded.facets.with_columns(pl.lit(plan.digest).alias("ref_seqcol_digest"), *labelled),
+        facets=loaded.facets.with_columns(
+            pl.lit(plan.digest).alias("ref_seqcol_digest"),
+            pl.lit(strand.check.value if strand is not None and strand.check is not None else None)
+            .cast(FACETS["strand_check"])
+            .alias("strand_check"),
+            *labelled,
+        ),
         calls=pl.scan_parquet(parts) if parts else empty(CALLS),
         blocks=loaded.blocks,
         warnings=loaded.warnings + tuple(warnings),
@@ -348,6 +359,17 @@ def _infer_from_rows(store: ReferenceStore, loaded: Loaded, facet: dict, candida
             f"settle one ({inference.reason}){scores}"
         )
     return inference
+
+
+def _check_strand(store: ReferenceStore, loaded: Loaded, facet: dict, digest: str) -> StrandResult | None:
+    """The strand an array facet's genotypes are on (F13), from the same row sample F9 scores, against
+    the collection REF is read from. None for a VCF, whose REF the source wrote."""
+    if facet["vcf_version"] is not None:
+        return None
+    sample = sample_snv_rows(loaded.calls)
+    if sample.is_empty():
+        return None
+    return check_strand(sample, _bases_at(store, digest, sample))
 
 
 def _bases_at(store: ReferenceStore, digest: str, sample: pl.DataFrame) -> pl.Series:
@@ -498,8 +520,9 @@ def _read(rows: pl.DataFrame, store: ReferenceStore, contig: Contig) -> pl.Serie
     return rows.select("_start", "_end").join(table, on=["_start", "_end"], how="left", maintain_order="left")["_bases"]
 
 
-def _resolve_rows(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str]) -> pl.DataFrame:
-    """One contig's rows with REF read; `counts` gathers the outcome per reason."""
+def _resolve_rows(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], withhold: bool = False) -> pl.DataFrame:
+    """One contig's rows with REF read; `counts` gathers the outcome per reason. `withhold`: the facet's
+    strand is mixed (F13), so array rows whose genotype is not strand-safe get no `alts` or `gt`."""
     if rows.is_empty():
         return rows
     is_vcf = pl.col("source_ref").is_not_null()
@@ -527,7 +550,7 @@ def _resolve_rows(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, cou
         .cast(CALLS["ref_check"])
         .alias("ref_check"),
     )
-    work = _derive_array_alleles(work, counts)
+    work = _derive_array_alleles(work, counts, withhold)
     return work.select(CALLS.names())
 
 
@@ -566,9 +589,19 @@ def _count_array_unreadable(rows: pl.DataFrame, counts: Counter[str]) -> None:
     counts["array_unreadable"] += int(rest["gt_alleles"].is_null().sum())
 
 
-def _derive_array_alleles(work: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
-    """For array rows whose base was read: `alts` the observed non-REF alleles, sorted; `gt` into `[ref] + alts`."""
+def _derive_array_alleles(work: pl.DataFrame, counts: Counter[str], withhold: bool = False) -> pl.DataFrame:
+    """For array rows whose base was read: `alts` the observed non-REF alleles, sorted; `gt` into `[ref] + alts`.
+
+    With `withhold` (a mixed-strand facet, F13) a row whose genotype is not strand-safe keeps `ref` and
+    gets neither, each reason counted.
+    """
     target = pl.col("_array") & pl.col("ref").is_not_null()
+    if withhold:
+        reason = withheld_reason(pl.col("gt_alleles"), pl.col("ref"))
+        work = work.with_columns(pl.when(target).then(reason).otherwise(None).alias("_withheld"))
+        for name, count in work.filter(pl.col("_withheld").is_not_null()).group_by("_withheld").len().iter_rows():
+            counts[f"strand_{name}"] += count
+        target = target & pl.col("_withheld").is_null()
     if not work.select(target.any()).item():
         return work
     alleles = pl.col("gt_alleles")
@@ -626,6 +659,14 @@ def _row_warnings(counts: Counter[str], digest: str) -> list[str]:
             lines.append(f"{counts[key]} array row(s) {reason}: REF left unread")
     if counts["array_ref_not_acgt"]:
         lines.append(f"{counts['array_ref_not_acgt']} array row(s) where the reference base is not A, C, G or T")
+    withheld = {
+        "strand_minus": "heterozygous rows carrying the reference base's complement and not the base (minus-strand probes)",
+        "strand_neither": "heterozygous rows carrying neither the reference base nor its complement",
+        "strand_undecidable": "homozygous rows and half-calls, which read differently on the two strands",
+    }
+    for key, reason in withheld.items():
+        if counts[key]:
+            lines.append(f"{counts[key]} array row(s) with alts and gt withheld, the facet's strand being mixed: {reason}")
     if counts["array_no_ref_allele"]:
         share = counts["array_no_ref_allele"] / counts["array_read"]
         lines.append(

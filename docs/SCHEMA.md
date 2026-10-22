@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.9.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.10.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -119,6 +119,22 @@ both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X):
   scores go in one warning line. Rows that do not settle it refuse the facet, with the scores in the
   error. Only array rows are scored: for a VCF without lengths or a build hint, `ref_check` would then
   confirm the very comparison that chose its build, so it is still refused.
+
+**The strand of an array's genotypes (F13).** An array derives `alts` and `gt` on the reading that its
+genotypes are on the forward strand, which every export claims. `resolve_ref` checks that claim on the
+same row sample, against the collection it reads, through the heterozygous rows (two distinct called
+bases): on a two-allele site a het carrying the reference base is safe on either strand (its other
+allele is the complement, which reads the same flipped, or another base, which flipped would make three
+alleles), and a het carrying the complement of the reference base and not the base is impossible on the
+forward strand. With at least 200 such hets sampled, the facet's `strand_check` is `mixed` when more
+than 2% of them carry the complement and not the base, else `forward`; with fewer it stays null (not
+checked), the alleles are derived as before, and a warning says so. A VCF is not checked: its REF is
+the source's own. In a `mixed` facet every array row keeps `ref`, and the rows that are not
+strand-safe (homozygous calls, half-calls, and hets without the reference base) get `alts` and `gt`
+null, each reason counted in the warnings: `AA` at a reference `A` is a forward hom-ref call or a
+minus-strand hom-alt call of an A/T probe, and the rows cannot say which. No genotype is complemented,
+not even on a het that proves its probe minus: complementing exactly the minus probes needs the
+vendor's own strand table.
 
 A primary contig (1–22, X, Y) whose stated length or md5 differs refuses the whole facet
 (`ReferenceMismatchError`): it is another assembly. Any other contig that does not match (hg19's chrM
@@ -404,6 +420,8 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9). For a delimited table, the file's own column names that no frame column carries (a Final Report's `GenCall Score`) |
 | `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, `write_vcf`'s `JUST_VCF_SPLIT`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
 | `derivation_inputs` | `list[struct{role, name, sha256}]`: the files a derived facet was made with besides its parent and its reference collection (`ref_seqcol_digest`). A liftover writes its chain (`role = chain`, the file's name, not its path, and the sha256 of its bytes). Null on a facet read from a file. just-vcf's own shape |
+| `chip`, `chip_basis` | the genotyping chip an array export came from (RM4, `just_vcf.chip`), and how it is known: `stated` (the header names it: AncestryDNA's array version, a Final Report's `Content` manifest, Living DNA's genotype chip) or `inferred` (a 23andMe export's row count and internal-id profile both point at one generation; a preamble-less table in its layout is read so when it carries 23andMe's `i…` ids). An open vocabulary: `23andme_v1_v2` (the two are not told apart), `23andme_v3`, `23andme_v4`, `23andme_v5`, `ancestrydna_v1`, `ancestrydna_v2`, `living_dna_sirius`, and `illumina:<manifest>` as a Final Report names it. Null = unknown (a statement with no entry is quoted in a warning; FTDNA exports state nothing and are not inferred) or not an array. just-vcf's own shape |
+| `strand_check` | `forward` or `mixed`: what `resolve_ref` found about the strand an array's genotypes are written on (F13, Decision 2). Null = not checked: not an array, REF not read yet, or too few heterozygous rows. Never read as forward |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
@@ -459,12 +477,12 @@ With Decisions 1–5 as recommended:
 | `ref` | `str` | the assembly sequence has not been read yet (charter 10). Only ever filled from the sequence |
 | `source_ref` | `str` | the source wrote no REF (arrays). What the file wrote, as written |
 | `ref_check` | `Enum` | there is no `source_ref` to compare. `not_run`, `match` or `mismatch` (Decision 2) |
-| `alts` | `list[str]` | the source did not say (a non-VCF row before RM3). `[]` = a stated monomorphic record (ALT `.`). Symbolic alleles and `*` kept verbatim, except `<NON_REF>`, which is written `<*>` |
+| `alts` | `list[str]` | the source did not say (a non-VCF row before RM3), or RM3 withheld it: an array row of a `strand_check = mixed` facet whose genotype reads differently on the two strands keeps `ref` and has `alts` and `gt` null (Decision 2). `[]` = a stated monomorphic record (ALT `.`). Symbolic alleles and `*` kept verbatim, except `<NON_REF>`, which is written `<*>` |
 | `source_alleles` | `list[str]` | the source gave no vector to index (Decision 2) |
 | `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention: the REF slot first, then one per ALT in `alts` order. An element is null when it was withheld (charter 4); the whole list is null when nothing was minted. Minting rule below ("When an id is minted") |
 | `vrs_errors` | `list[str]` | parallel to `vrs_allele_ids`: what minting itself reported for an allele it tried and could not mint (`no_contig`, `refused`). Null where minting succeeded or never ran. Only facts that minting alone learns go here; see "Why an id is missing" below |
 | `gt_alleles` | `list[str]` | the genotype text cannot be split into haplotypes without the site's alleles (Living DNA writes an indel's two allele sequences back to back, `CCA`); `source_gt` keeps the text. Entries null per uncalled haplotype |
-| `gt` | `list[u8]` | there is no allele list to index yet. Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
+| `gt` | `list[u8]` | there is no allele list to index yet, or RM3 withheld it with `alts` (a mixed-strand array, Decision 2). Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
 | `source_gt` | `str` | the source wrote no genotype text (a BCF encodes GT in binary). The file's raw text, not polars-bio's rewrite of it |
 | `phased` | `list[bool]` | the source says nothing about phase for the whole row (every array export). Otherwise parallel to `gt_alleles`, with an element null where the source did not say for that haplotype |
 | `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS or PSL value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. Keyed by kind: PS per chromosome, PSL per file (Decision 2) |
@@ -925,6 +943,16 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **Three facet columns, version bump pending** (2026-10-22, RM4's chip detection and F13):
+  `facets.chip`, `facets.chip_basis` and `facets.strand_check`, all nullable and additive, which by
+  the rule above is a minor bump. `SCHEMA_VERSION` was deliberately left at 0.0.9 on this branch,
+  which runs beside other builders' branches; the lead bumps it at merge. Rule change in `resolve_ref`:
+  in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
+  (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.10** (2026-10-22, RM4's chip detection and F13): `facets.chip`, `chip_basis` and `strand_check`.
+  Additive. In a `mixed` facet an array row may have `ref` set while `alts` and `gt` are null.
 
 - **0.0.9** (2026-10-22, RM4's filtered genomes): `facets.variant_classes`,
   `content_filter` and `content_filter_basis`, and the per-class reading of absence (Decision 4) with

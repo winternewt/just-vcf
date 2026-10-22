@@ -30,6 +30,7 @@ import polars as pl
 import polars_bio as pb
 from polars_bio.sql import SQL
 
+from just_vcf import cache as cache_index
 from just_vcf.bgzf import BgzfWriter
 from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
 
@@ -111,8 +112,9 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 6
-"""Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused."""
+REWRITE_VERSION = 7
+"""Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
+7: every copy has a manifest beside it (RM268), so a copy without one is from an older version."""
 
 _HEADER_READ_CAP = 64 << 20
 _DATA_LINES_CHECKED = 1000
@@ -397,7 +399,14 @@ def unfit_keys(header: Header) -> dict[str, str]:
 
 
 def readable_path(
-    path: Path, layers: tuple[str, ...], opener, header: Header, missing: list[str], cache: Path, structural_only: bool = False
+    path: Path,
+    layers: tuple[str, ...],
+    opener,
+    header: Header,
+    missing: list[str],
+    cache: Path,
+    origin: cache_index.Origin,
+    structural_only: bool = False,
 ) -> Path:
     """A path polars-bio can read: the file itself when possible, else a rewritten copy under `cache`.
 
@@ -407,11 +416,18 @@ def readable_path(
     lines polars-bio needs and the INFO and FORMAT keys the frames carry, for a file it refused (P7, P8):
     polars-bio skips a key its header does not declare (P1), so a malformed value in a key the frames
     do not carry is never parsed.
+
+    `cache` is the entry (`vcf/<key>`); it is written, or reused, under its lock, with `origin` in its
+    manifest (`just_vcf.cache.writing`).
     """
     if layers in ((), ("gzip",), ("bgzf",)) and header.format_first and not missing and not structural_only:
         return path
-    if structural_only:
-        cache = cache / "structural"
+    with cache_index.writing(cache, cache_index.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION}, origin):
+        return _write_copy(opener, header, missing, cache / "structural" if structural_only else cache, structural_only)
+
+
+def _write_copy(opener, header: Header, missing: list[str], cache: Path, structural_only: bool) -> Path:
+    """The copy `readable_path` describes, in the directory `cache`; reused when it is complete."""
     target = cache / "input.vcf.gz"
     done = cache / "input.vcf.gz.complete"
     if done.exists():
@@ -460,13 +476,18 @@ def readable_path(
     return target
 
 
-def readable_bcf_path(path: Path, layers: tuple[str, ...], opener, cache: Path) -> Path:
+def readable_bcf_path(path: Path, layers: tuple[str, ...], opener, cache: Path, origin: cache_index.Origin) -> Path:
     """A path polars-bio reads as BCF: it picks BCF by the `.bcf` name and refuses any other name
     ("empty input", probed with 0.36). The file itself when it is named so and not wrapped in another
     layer, else a copy under `cache` named `input.bcf`: the bytes as they are when only BGZF wraps
-    them, else the decompressed payload written as BGZF."""
+    them, else the decompressed payload written as BGZF. Written under the entry's lock, as `readable_path`."""
     if layers in ((), ("bgzf",)) and path.name.lower().endswith(".bcf"):
         return path
+    with cache_index.writing(cache, cache_index.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION}, origin):
+        return _write_bcf_copy(path, layers, opener, cache)
+
+
+def _write_bcf_copy(path: Path, layers: tuple[str, ...], opener, cache: Path) -> Path:
     target = cache / "input.bcf"
     done = cache / "input.bcf.complete"
     if done.exists():

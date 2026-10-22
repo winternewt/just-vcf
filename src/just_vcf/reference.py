@@ -35,6 +35,7 @@ import polars as pl
 from gtars.refget import RefgetStore
 
 from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_snv_rows
+from just_vcf import cache
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, canonical_chrom, canonical_order, empty
 
@@ -263,6 +264,8 @@ def resolve_ref(
     a primary contig's stated length or md5 disagrees with the reference, or when more than one
     collection fits equally and `collection` does not choose.
     """
+    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "RESOLVE_VERSION": RESOLVE_VERSION}
+    cache.sweep_stale(cache.RESOLVE_SPILL, versions)
     facets = loaded.facets.collect()
     if facets.height != 1:
         raise ValueError(f"resolve_ref takes one facet; this Loaded has {facets.height}")
@@ -286,22 +289,23 @@ def resolve_ref(
     warnings += _contig_warnings(plan, rows_per_chrom)
     counts: Counter[str] = Counter()
     spill = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
-    if spill.exists():
-        shutil.rmtree(spill)
-    spill.mkdir(parents=True)
-    # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each contig
-    # below is a cheap filtered scan rather than a replay of whatever plan built the input.
-    loaded.calls.sink_parquet(spill / "input.parquet", row_group_size=SPILL_ROW_GROUP)
-    source = pl.scan_parquet(spill / "input.parquet")
     parts: list[Path] = []
-    for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-        rows = source.filter(pl.col("chrom") == chrom).collect()
-        contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
-        resolved = _resolve_rows(rows, store, contig, counts) if contig is not None else rows
-        part = spill / f"calls-{index:05d}.parquet"
-        canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
-        parts.append(part)
-    (spill / "input.parquet").unlink()
+    with cache.writing(spill, cache.RESOLVE_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])):
+        if spill.exists():
+            shutil.rmtree(spill)
+        spill.mkdir(parents=True)
+        # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each contig
+        # below is a cheap filtered scan rather than a replay of whatever plan built the input.
+        loaded.calls.sink_parquet(spill / "input.parquet", row_group_size=SPILL_ROW_GROUP)
+        source = pl.scan_parquet(spill / "input.parquet")
+        for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
+            rows = source.filter(pl.col("chrom") == chrom).collect()
+            contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
+            resolved = _resolve_rows(rows, store, contig, counts) if contig is not None else rows
+            part = spill / f"calls-{index:05d}.parquet"
+            canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
+            parts.append(part)
+        (spill / "input.parquet").unlink()
     warnings += _row_warnings(counts, plan.digest)
     for warning in warnings:
         logger.warning("%s: %s", facet["facet_id"], warning)

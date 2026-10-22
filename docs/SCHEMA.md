@@ -757,6 +757,30 @@ present band, close to the two-X range), so `XX` and `XO` wait for a coverage fa
 Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
 unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 
+## The cache under the lazy frames (RM268)
+
+The frames `load` and the derived steps return are lazy scans over files in `cache_dir()`
+(`JUST_VCF_CACHE_DIR`). Not part of the schema, and no version bump; the rules are here because a
+frame stops working when its files go.
+
+- Entries are directories under `vcf/` (rewrite copies, kind `rewrite_copy`) and `frames/` (spills:
+  `frames_spill`, `rejoin_spill`, `resolve_spill`, `vrs_spill`, `normalize_spill`). Beside each is
+  `<name>.json`, its manifest, and `<name>.lock`, an OS file lock the writer holds while it writes.
+  The manifest names the root source (sha256 and resolved path), which every derived facet carries
+  down from its parent, so a genome's derived spills go with its copies.
+- An entry whose version key is not the current one is removed when the step that owns its kind next
+  runs (`load` for copies and load spills). No current frame reads an old version, so this is safe.
+  An entry with no manifest predates the index: removed only by that sweep, where its name shows an old
+  version or (a `vcf/` entry, below `REWRITE_VERSION` 7) where it must be old.
+- A manifest this version cannot read (a newer version's, with a kind or field it does not know) makes
+  its entry unknown origin: kept, never swept, and it does not stop `load`. Kinds are checked where
+  an entry is written.
+- `clear_cache` removes what the caller names, even under a live `Loaded`; that frame's next
+  `collect` then fails. It skips an entry whose lock is held, and touches nothing outside `vcf/` and
+  `frames/`: the reference store under `reference/` is not a cache of a genome.
+- Rejected: a size cap with least-recently-used eviction. `last_used` is when a step wrote or reused an
+  entry, not when a frame last read it, so a cap could evict under a live frame without anyone asking.
+
 ## Open questions
 
 Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5 (`end_pos`) and Q6

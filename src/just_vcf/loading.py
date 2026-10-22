@@ -8,15 +8,14 @@ loader for a look-alike format.
 import hashlib
 import json
 import logging
-import os
 from pathlib import Path
 
 import polars as pl
-from platformdirs import user_cache_dir
 from pydantic import BaseModel, ConfigDict
 
-from just_vcf import callset
+from just_vcf import cache, callset
 from just_vcf.assembly import infer_assembly, sorted_name_length_pairs_digest
+from just_vcf.cache import cache_dir, file_sha256
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import Family
 from just_vcf.loaders import rsid_table, table, vcf
@@ -82,7 +81,13 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
     VCF, which holds no sample, with `NoSampleError`. A table whose columns lack what its format needs (a
     Final Report without positions or plus-strand alleles) is refused with `TableLayoutError`. `sample`
     is ignored for formats that hold one person by construction.
+
+    A VCF's rows are spilled to parquet under `cache_dir()`, and an input polars-bio cannot read as
+    it is is first copied there; the lazy frames read those files. Each run first removes the cache
+    entries an older `REWRITE_VERSION` or `SCHEMA_VERSION` wrote (`just_vcf.cache.sweep_stale`).
     """
+    cache.sweep_stale(cache.REWRITE_COPY, {"REWRITE_VERSION": vcf.REWRITE_VERSION})
+    cache.sweep_stale(cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION})
     sniffed = source if isinstance(source, Sniffed) else sniff(Path(source))
     if not sniffed or sniffed.format not in LOADABLE_FORMATS:
         raise UnsupportedFormatError(sniffed)
@@ -130,7 +135,7 @@ def _array_loaded(
     extra: dict,
 ) -> Loaded:
     """The three frames of a genotype table: an array-like facet, the calls, no blocks."""
-    source_sha256 = _sha256(sniffed.path)
+    source_sha256 = file_sha256(sniffed.path)
     facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options=options)
     callset = (
         CallsetType.IMPUTED
@@ -170,12 +175,6 @@ def _facet_frame(facet: dict) -> pl.LazyFrame:
     return pl.LazyFrame([facet], schema={name: FACETS[name] for name in facet}).select(
         [pl.col(name) if name in facet else pl.lit(None, dtype=dtype).alias(name) for name, dtype in FACETS.items()]
     )
-
-
-def cache_dir() -> Path:
-    """Where rewritten inputs are kept: `JUST_VCF_CACHE_DIR`, else the platform's user cache."""
-    configured = os.environ.get("JUST_VCF_CACHE_DIR")
-    return Path(configured) if configured else Path(user_cache_dir("just-vcf"))
 
 
 def vcf_samples(source: Path | str | Sniffed) -> list[str]:
@@ -230,8 +229,9 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         )
     elif not header.format_first:
         warnings.append("##fileformat was not the first line; the header was reordered for reading")
-    source_sha256 = _sha256(sniffed.path)
-    cache = cache_dir() / "vcf" / hashlib.sha256(f"{source_sha256}!{sniffed.member}!{vcf.REWRITE_VERSION}".encode()).hexdigest()[:32]
+    source_sha256 = file_sha256(sniffed.path)
+    copy = cache_dir() / "vcf" / hashlib.sha256(f"{source_sha256}!{sniffed.member}!{vcf.REWRITE_VERSION}".encode()).hexdigest()[:32]
+    origin = cache.Origin(source_sha256=source_sha256, source_path=str(sniffed.path.resolve()), member=sniffed.member)
     source = detect_source(header.meta, get_spec(sniffed.format).vendor)
     warnings += source.warnings
     gl_phred = source.caller == "CGAPipeline"
@@ -252,11 +252,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         if binary:
             # A BCF declares every key it uses, and its header cannot be rewritten without re-encoding
             # the records, so a refusal from polars-bio is final here.
-            path = vcf.readable_bcf_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), cache)
+            path = vcf.readable_bcf_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), copy, origin)
             records = part.select(vcf.read_records(path, header, part.sample, first_record, extra_info=part.info))
             stats = vcf.scan_stats(records)
         else:
-            records, stats = _read_text_records(sniffed, header, missing, data, cache, part, part_warnings)
+            records, stats = _read_text_records(sniffed, header, missing, data, copy, origin, part, part_warnings)
         calls, blocks, row_warnings = vcf.to_rows(records, header, stats, text_gt=not binary, gl_phred=gl_phred)
         part_warnings += row_warnings
 
@@ -265,13 +265,14 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
         # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
         spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-        spill.mkdir(parents=True, exist_ok=True)
-        pl.collect_all(
-            [
-                calls_frame.sink_parquet(spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
-                blocks_frame.sink_parquet(spill / "blocks.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
-            ]
-        )
+        with cache.writing(spill, cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION}, origin.model_copy(update={"facet_id": facet_id})):
+            spill.mkdir(parents=True, exist_ok=True)
+            pl.collect_all(
+                [
+                    calls_frame.sink_parquet(spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
+                    blocks_frame.sink_parquet(spill / "blocks.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
+                ]
+            )
         contigs = [canonical_chrom(name) for name in stats["chroms"]]
         spilled = pl.scan_parquet(spill / "calls.parquet")
         flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
@@ -345,11 +346,18 @@ def _concat(frames: list[pl.LazyFrame]) -> pl.LazyFrame:
 
 
 def _read_text_records(
-    sniffed: Sniffed, header: vcf.Header, missing: list[str], data: list[bytes], cache: Path, part: "vcf.Part", warnings: list[str]
+    sniffed: Sniffed,
+    header: vcf.Header,
+    missing: list[str],
+    data: list[bytes],
+    copy: Path,
+    origin: cache.Origin,
+    part: "vcf.Part",
+    warnings: list[str],
 ) -> tuple[pl.LazyFrame, dict]:
     """A text VCF's records for one part and their stats, read once more from a structural copy if
     polars-bio refuses the first read (P7, P8). The retry is reported in `warnings`."""
-    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache)
+    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, copy, origin)
     try:
         records = part.select(vcf.read_records(path, header, part.sample, data[0] if data else None, extra_info=part.info))
         return records, vcf.scan_stats(records)
@@ -358,11 +366,11 @@ def _read_text_records(
             f"polars-bio refused the file ({err}); read again with a header of only the carried INFO and "
             "FORMAT keys and the FILTER, ALT and contig lines"
         )
-    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, cache, structural_only=True)
+    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, copy, origin, structural_only=True)
     first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
     records = part.select(vcf.read_records(path, header, part.sample, first, extra_info=part.info))
     stats = vcf.scan_stats(records)
-    if left_out := vcf.pos_zero_left_out(cache):
+    if left_out := vcf.pos_zero_left_out(copy):
         warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
     return records, stats
 
@@ -388,14 +396,6 @@ def _assembly_label(stated: str | None, contigs: list[dict]) -> tuple[str | None
     if inferred:
         return inferred.label, AssemblyLabelBasis.INFERRED, warnings
     return None, None, warnings
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _facet_id(source_sha256: str, member: str | None, format_id: str, options: dict) -> str:

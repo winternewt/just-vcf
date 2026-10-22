@@ -2,6 +2,7 @@
 
 from importlib.metadata import version
 
+from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.loading import (
     LOADABLE_FORMATS,
@@ -45,6 +46,8 @@ __all__ = [
     "AbsenceMeans",
     "AssemblyLabelBasis",
     "BlockKind",
+    "CacheClearReport",
+    "CacheEntryInfo",
     "CallsetType",
     "ContigNames",
     "Loaded",
@@ -67,6 +70,7 @@ __all__ = [
     "VcfWritten",
     "XCopies",
     "__version__",
+    "clear_cache",
     "load",
     "mint_vrs_ids",
     "normalize",

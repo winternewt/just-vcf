@@ -48,6 +48,7 @@ from pathlib import Path
 
 import polars as pl
 
+from just_vcf import cache
 from just_vcf.loaders.vcf import DASH_DELETION
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore
@@ -80,6 +81,8 @@ def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = 
     the collection the facet names in `ref_seqcol_digest`. The input is not changed. What could not
     be normalized is left as written, each reason counted once in the warnings.
     """
+    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "NORMALIZE_VERSION": NORMALIZE_VERSION}
+    cache.sweep_stale(cache.NORMALIZE_SPILL, versions)
     parent = loaded.facets.collect()
     if parent.height != 1:
         raise ValueError(f"normalize takes one facet; this Loaded has {parent.height}")
@@ -94,23 +97,23 @@ def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = 
 
     facet_id = _derived_id(facet["facet_id"], digest)
     spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-    if spill.exists():
-        shutil.rmtree(spill)
-    spill.mkdir(parents=True)
-    # Streamed to parquet once, so each contig below is a filtered scan, not a replay of the input's plan.
-    loaded.calls.sink_parquet(spill / "input.parquet", row_group_size=SPILL_ROW_GROUP)
-    source = pl.scan_parquet(spill / "input.parquet")
-    chroms = source.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
-
     counts: Counter[str] = Counter()
     parts: list[Path] = []
-    for index, chrom in enumerate(sorted(chroms, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-        rows = source.filter(pl.col("chrom") == chrom).collect()
-        normalized = _normalize_contig(rows.with_columns(pl.lit(facet_id).alias("facet_id")), store, contigs.get(chrom), counts)
-        part = spill / f"calls-{index:05d}.parquet"
-        normalized.write_parquet(part, row_group_size=SPILL_ROW_GROUP)
-        parts.append(part)
-    (spill / "input.parquet").unlink()
+    with cache.writing(spill, cache.NORMALIZE_SPILL, versions, cache.derived_origin(facet, facet_id)):
+        if spill.exists():
+            shutil.rmtree(spill)
+        spill.mkdir(parents=True)
+        # Streamed to parquet once, so each contig below is a filtered scan, not a replay of the input's plan.
+        loaded.calls.sink_parquet(spill / "input.parquet", row_group_size=SPILL_ROW_GROUP)
+        source = pl.scan_parquet(spill / "input.parquet")
+        chroms = source.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
+        for index, chrom in enumerate(sorted(chroms, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
+            rows = source.filter(pl.col("chrom") == chrom).collect()
+            normalized = _normalize_contig(rows.with_columns(pl.lit(facet_id).alias("facet_id")), store, contigs.get(chrom), counts)
+            part = spill / f"calls-{index:05d}.parquet"
+            normalized.write_parquet(part, row_group_size=SPILL_ROW_GROUP)
+            parts.append(part)
+        (spill / "input.parquet").unlink()
 
     warnings = _warnings(counts)
     for warning in warnings:

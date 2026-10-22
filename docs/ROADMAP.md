@@ -242,8 +242,16 @@ rejected:
 - The helper answers at facet level and says `None` for `blocks`. Rejected: answering per position
   here, which belongs with the materialising function that does not exist yet.
 
+Dogfooded 2026-10-22 on PGP-HMS (hu1C1368, hu6ABACE, huBE0518) and one local DeepVariant genome:
+each `.snp.` half is `wgs` + `snv_only` (rows), `absence_is_reference` `None` for `snv` until forced
+and `None` for `indel` either way; the unsplit DRAGEN and DeepVariant genomes have no filter and
+answer `True` for `snv` and `indel`, `None` for `sv`; a `.snp.` half reached under a name saying
+`.indel.` keeps `snv_only` from the rows, with one warning quoting the word.
+
 Left from it: an indel-only genome half reads as `callset_type` null, so its absences are unknown
-anyway (four PGP-HMS indel halves of 0.32M–1.05M ALT alleles did); a genotype table's classes are
+anyway. Four PGP-HMS indel halves of 0.32M–1.05M ALT alleles did; the two DRAGEN ones reach 91% of
+the span but hold 953,506 and 958,046 sites, just under `MIN_WGS_SITES`. Whether an indel half
+should read as `wgs` (and so be gated by its filter instead) is open. A genotype table's classes are
 not counted.
 
 ## RM5 — Population inference

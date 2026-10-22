@@ -211,7 +211,11 @@ probability. Real files do not follow the version: imputation tools write probab
 4.2 headers (9 of the 124 PGP-HMS VCFs). So the values decide when they can: any value above 1 means
 phred (`gp = 10^(-GP/10)`), and values all within [0, 1] that sum to 1 on every row mean probabilities.
 The warnings name a header that disagreed. Values that settle neither (within [0, 1] but not summing to
-1) leave `gp` null, with a warning. The loader never guesses the scale.
+1) are left to the header: under VCF 4.3 or later, which defines GP as a probability, they are read as
+probabilities and the rows that do not sum to 1 are counted in a warning (posteriors converted from
+rounded phred, as just-vcf's own 4.3 export writes them, F10). Under 4.2 or earlier, or a header that
+states no version, they leave `gp` null, with a warning. The FORMAT line's Description is not read: it
+is free text, not a declaration. The loader never guesses the scale.
 
 `dp` and `ad` come from FORMAT (this sample), never from INFO (all samples combined). INFO/DP and
 FORMAT/DP are different quantities with the same name. The loader resolves each key by the header's
@@ -475,14 +479,26 @@ Rows the loader flagged as one record of a pre-split site (RM270) pass through a
 **`end_pos`.** It is named apart from polars-bio's `end` because that value is wrong for symbolic SV
 alleles (P3), so the two must not share a name. The rule follows VCF 4.5's computed END:
 
-1. Take `abs(SVLEN)` for each allele (the spec says to read a negative SVLEN as positive).
+1. Take `abs(SVLEN)` for each allele (the spec says to read a negative SVLEN as positive). An SVLEN
+   declared `Number=1` is read as the one-ALT list it is; one that is not one value per ALT cannot be
+   matched to its alleles and is not read.
 2. For each allele compute an end:
-   - `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes: `pos + abs(SVLEN)`. POS is the base before
-     the event, so `<DEL>` at 200 with `SVLEN=30` ends at 230;
-   - `<INS>` and breakend alleles: the anchor, `pos`;
-   - `<*>`: `pos + LEN - 1`, because a block includes POS;
+   - `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes: the record's INFO `END` where it gives one,
+     else `pos + abs(SVLEN)`. POS is the base before the event, so `<DEL>` at 200 with `SVLEN=30` ends
+     at 230. END is the record's stated end (VCF 4.5 deprecates it but defines it as this very
+     maximum, and a missing SVLEN is to be inferred from it); where the two disagree, END is followed
+     and the records are counted in a warning. SVLEN first, as FORMAT `LEN` comes before END for a
+     block, was set aside: END is a coordinate the writer stated, while `pos + abs(SVLEN)` depends on
+     POS being the base before the event, which a caller counting POS as the first base breaks;
+   - `<INS>` and breakend alleles: the anchor, `pos`, whatever END says;
+   - `<*>`: `pos + LEN - 1`, because a block includes POS, else END;
    - a sequence allele: `pos + len(source_ref) - 1`.
 3. `end_pos` is the largest of these over the site.
+
+END is read only for those SV types, `<*>`, `<CGA_NOCALL>` and ALT `.` blocks. Another symbolic
+allele's END is not known to lie on this contig (Delly's `<TRA>` writes the partner's position on CHR2
+there), so it keeps its REF span. A record whose END is not read and differs from the REF span is
+counted in a warning.
 
 Where REF is not known yet (an array `I`/`D` row) `end_pos` is null. A single-position array call has
 `end_pos = pos`.
@@ -666,6 +682,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   the facets table already listed, and no column changes. Rules added: the normalizing rules above;
   on a row `normalize` moved or trimmed, `ref_check` and `source_ref` are null although `ref` is set
   (Decision 6's "null means no `source_ref`" covers it: the derived row has none).
+
+- **Rule changes, still 0.0.7** (2026-10-22, F10 and the SV read side): GP values within [0, 1] that do
+  not sum to 1 are probabilities under a 4.3+ header (Decision 3); a symbolic SV's `end_pos` reads INFO
+  END (the `end_pos` rule). Values change on files that already load; no column changed, so no version
+  bump.
 
 - **0.0.7** (2026-10-22, RM3): `facets.ref_seqcol_digest` names the collection
   `resolve_ref` read REF from. Additive. `resolve_ref` fills `ref`, `ref_check`, and an array row's

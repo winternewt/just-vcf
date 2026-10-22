@@ -6,7 +6,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import MultiSampleError, NoSampleError, load, vcf_samples
+from just_vcf import MultiSampleError, NoSampleError, load, vcf_samples, write_vcf
 from just_vcf.schema import BLOCKS, CALLS
 
 FORMAT_LINES = {
@@ -188,14 +188,43 @@ def test_out_of_range_values_are_counted(tmp_path: Path) -> None:
         ("VCFv4.3", "0,20,30", [1.0, 0.01, 0.001], "GP written as phred under a VCFv4.3 header"),
         ("VCFv4.2", "0.9,0.09,0.01", [0.9, 0.09, 0.01], "GP written as probabilities under a VCFv4.2 header"),
         ("VCFv4.2", "0.5,0.5,0.5", None, "GP is ambiguous"),
+        # F10: values the numbers alone cannot settle are what a 4.3+ header defines GP as.
+        ("VCFv4.3", "0.5,0.5,0.5", [0.5, 0.5, 0.5], "GP read as probabilities, as the VCFv4.3 header defines it: 1 of 1"),
+        ("VCFv4.5", "1,0.1,0.01", [1.0, 0.1, 0.01], "GP read as probabilities, as the VCFv4.5 header defines it"),
+        (None, "0.5,0.5,0.5", None, "GP is ambiguous: every value is within [0, 1] but 1 of 1 rows do not sum to 1, and the header states no VCF version"),
+        (None, "0,20,30", [1.0, 0.01, 0.001], None),
     ],
 )
-def test_gp_scale_is_read_from_decisive_values(tmp_path: Path, version: str, values: str, expected, warning) -> None:
+def test_gp_scale_is_read_from_decisive_values(tmp_path: Path, version: str | None, values: str, expected, warning) -> None:
     records = [f"1\t100\t.\tA\tG\t.\t.\t.\tGT:GP\t0/0:{values}"]
-    calls, _, warnings = frames(write(tmp_path, vcf_text(records, version=version, fmt=("GT", "GP"))))
+    text = vcf_text(records, version=version or "VCFv4.2", fmt=("GT", "GP"))
+    if version is None:
+        text = "\n".join(line for line in text.split("\n") if not line.startswith("##"))
+    calls, _, warnings = frames(write(tmp_path, text))
     got = calls["gp"][0]
     assert (got is None) if expected is None else got.to_list() == pytest.approx(expected, rel=1e-5)
     assert [w for w in warnings if w.startswith("GP")] == ([] if warning is None else [next(w for w in warnings if w.startswith(warning))])
+
+
+def test_gp_from_phred_survives_its_own_export(tmp_path: Path) -> None:
+    """F10: phred GP converted on load does not sum to 1; `write_vcf` writes it as 4.3 probabilities,
+    and the reload keeps it. Tolerance: `rel=1e-6`, since the writer's shortest float text reads back
+    as the same float32."""
+    records = [
+        "1\t100\t.\tA\tG\t.\t.\t.\tGT:GP\t0/0:0,10,20",
+        "1\t200\t.\tC\tT\t.\t.\t.\tGT:GP\t0/1:13,0,7",
+        "1\t300\t.\tG\tA\t.\t.\t.\tGT:GP\t1/1:30,20,0",
+    ]
+    first = load(write(tmp_path, vcf_text(records, fmt=("GT", "GP"))))
+    original = first.calls.collect()
+    assert original["gp"].null_count() == 0
+    assert (original["gp"].list.sum() - 1).abs().max() > 0.02, "the case F10 is about: posteriors that do not sum to 1"
+    again = load(write_vcf(first, tmp_path / "out.vcf.gz").path)
+    back = again.calls.collect()
+    assert back["gp"].null_count() == 0 and not any(w.startswith("GP is ambiguous") for w in again.warnings)
+    for before, after in zip(original["gp"].to_list(), back["gp"].to_list(), strict=True):
+        assert after == pytest.approx(before, rel=1e-6)
+    assert back["source_alleles"].to_list() == original["source_alleles"].to_list()
 
 
 def test_pp_converts_to_gp(tmp_path: Path) -> None:
@@ -456,3 +485,44 @@ def test_a_vector_key_declared_with_a_fixed_count_is_not_carried(tmp_path: Path)
     assert loaded.calls.collect()["ad"].to_list() == [None]
     assert "FORMAT/AD" in loaded.facets.collect()["dropped_fields"][0].to_list()
     assert any("not carried: AD (Number=2)" in w for w in loaded.warnings)
+
+
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.5"])
+def test_symbolic_sv_end_pos_reads_end_then_svlen(tmp_path: Path, version: str) -> None:
+    """SCHEMA.md `end_pos`: a length-type symbolic SV ends at INFO END where the record gives one, else at
+    POS + |SVLEN|; `<INS>`, breakends and other symbolic alleles stay at the anchor, whatever END says."""
+    records = [
+        "1\t200\t.\tT\t<DEL>\t.\t.\tEND=230\tGT\t0/1",  # END only
+        "1\t300\t.\tT\t<DUP:TANDEM>\t.\t.\tSVLEN=12\tGT\t0/1",  # SVLEN only
+        "1\t400\t.\tG\t<DEL>\t.\t.\tEND=450;SVLEN=-50\tGT\t0/1",  # both, agreeing
+        "1\t500\t.\tA\t<CNV>\t.\t.\tEND=600;SVLEN=101\tGT\t0/1",  # both, disagreeing: END wins, counted
+        "1\t700\t.\tC\t<INS>\t.\t.\tEND=760;SVLEN=60\tGT\t0/1",  # an insertion spans no reference
+        "1\t800\t.\tG\t<TRA>\t.\t.\tEND=5000\tGT\t0/1",  # Delly: END is the partner's position on CHR2
+        "1\t900\t.\tA\t<DEL>,<INS>\t.\t.\tSVLEN=10,4\tGT\t1/2",  # the largest end over the site
+        "1\t1000\t.\tC\t<*>\t.\t.\tEND=1050\tGT\t0/0",  # a gVCF block, unchanged
+        "1\t1100\t.\tCTTT\tC\t.\t.\t.\tGT\t0/1",  # a sequence allele: the REF span
+    ]
+    path = write(tmp_path, vcf_text(records, version=version, info=("END", "SVLEN")))
+    calls, blocks, warnings = frames(path)
+    ends = dict(zip(calls["pos"].to_list(), calls["end_pos"].to_list(), strict=True))
+    assert ends == {200: 230, 300: 312, 400: 450, 500: 600, 700: 700, 800: 800, 900: 910, 1100: 1103}
+    assert blocks["end_pos"].to_list() == [1050]
+    assert "1 symbolic SV record(s) whose INFO END disagrees with POS + |SVLEN|: end_pos follows END" in warnings
+    assert any(w.startswith("2 record(s) carry an INFO END that is not their extent") for w in warnings), warnings
+
+
+@pytest.mark.parametrize("number", ["1", "."])
+def test_svlen_declared_with_another_number_still_sets_end_pos(tmp_path: Path, number: str) -> None:
+    """Older SV callers declare SVLEN `Number=1` (polars-bio then returns a scalar) or `Number=.`."""
+    records = ["1\t200\t.\tT\t<DEL>\t.\t.\tSVLEN=-30\tGT\t0/1", "1\t300\t.\tT\t<DUP>\t.\t.\tSVLEN=12\tGT\t0/1"]
+    svlen = f'##INFO=<ID=SVLEN,Number={number},Type=Integer,Description="SV length">'
+    calls, _, _ = frames(write(tmp_path, vcf_text(records, extra_meta=(svlen,))))
+    assert calls["end_pos"].to_list() == [230, 312]
+
+
+def test_symbolic_sv_extent_survives_its_own_export(tmp_path: Path) -> None:
+    """`write_vcf` writes a symbolic SV's extent as END and no SVLEN, so the reload has to read END."""
+    records = ["1\t200\t.\tT\t<DEL>\t.\t.\tSVLEN=-30\tGT\t0/1", "1\t300\t.\tA\tG\t.\t.\t.\tGT\t0/1"]
+    first = load(write(tmp_path, vcf_text(records, info=("SVLEN",))))
+    back = load(write_vcf(first, tmp_path / "out.vcf.gz").path).calls.collect()
+    assert back["end_pos"].to_list() == first.calls.collect()["end_pos"].to_list() == [230, 300]

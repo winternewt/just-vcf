@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Schema 0.0.6 (RM2's VCF side): `facets.ploidy_statements` is new, and the caller, its version, the
+  vendor and the phasing method are filled from VCF headers. `REWRITE_VERSION` 6 and the schema bump
+  orphan earlier cache entries (RM268).
+
 - Schema 0.0.5 (RM4): `facets.sorted_name_length_pairs_digest` is new, and VCF facets now fill
   `assembly_label` (basis `inferred`), `callset_type` and `absence_means` where the evidence settles them.
   Every earlier frame spill in the cache is orphaned by the version bump (RM268).

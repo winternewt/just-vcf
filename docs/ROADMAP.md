@@ -94,7 +94,7 @@ reference-supported positions.
 from the gzipped FASTAs in 103 s and 25 s, 2.2 GB; each assembly named by its own contig 1 length),
 on PGP-HMS files read from the Krypton share, aggregates only:
 
-- Six plain VCFs (73–142 MB). Five resolved: 34.2M rows read, all but 2 matching their source REF, and
+- Six plain VCFs (73–142 MB). Five resolved: 34.1M rows read, all but 2 matching their source REF, and
   both of those against an IUPAC code in the reference. One stated lengths for 194 GRCh38 contigs in
   UCSC names; its `chr*_random` and `chrUn_*` contigs (44,594 rows, 1%) stayed unread, because
   Ensembl names them by accession (`KI270721.1`) and `canonical_chrom` does not map the two. One VCF

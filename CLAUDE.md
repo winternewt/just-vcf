@@ -307,6 +307,8 @@ are read from env vars with sensible defaults, documented in `.env.template`, an
   Distinguish "the source did not say" from "the source said something we cannot represent".
 - **Derive a guard from the model's rule, not beside it.** Test the guard against the model case by
   case rather than asserting a message.
+- **Polars `explode` on a list column that can be empty:** pass `empty_as_null=False` where an empty list
+  must stay empty (the bare call is deprecated and turns `[]` into a null row; met 2026-10-22).
 - **Heed terminal warnings, deprecations especially.** A deprecation in code you touched is a
   **blocker**: find the current upstream API, fix it, and update this file.
 - **Refactor internals aggressively** — no dead code, no old API kept for nostalgia. The contract —

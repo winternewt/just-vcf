@@ -4,6 +4,23 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Schema 0.0.9: `facets.variant_classes`, `content_filter`, `content_filter_basis` (a genome file that
+  kept one variant class is still `wgs`, but absence reads as reference only for the classes it carries;
+  `absence_is_reference` answers it for consumers).
+
+- A VCF facet now says which variant classes its rows carry and whether it was cut down to one:
+  `facets.variant_classes` counts the ALT alleles per class (`snv`, `mnv`, `indel`, `sv`), and
+  `content_filter` (`snv_only`, `indel_only`, `sv_only`) with `content_filter_basis` (`rows`,
+  `stated`, `file_name`) names the cut. The rows decide first, then a bcftools or GATK SelectVariants
+  command line in the header, then the file name's words (`.snp.`, `.indel.`, `.sv.`); a weaker piece
+  that disagrees is a warning. The `.snp.` half of a split genome stays `callset_type = wgs` with
+  `absence_means = weak_reference`, and the new public `absence_is_reference(facet_row, variant_class,
+  force=False)` answers `True` or `None` (never `False`): `None` for a class the facet does not carry
+  or that a filter cut, and for the kept class of a filtered facet unless `force=True`. Consumers that
+  restore hom-ref from absence (just-prs, just-dna-lite) can gate on it; before, an SNV-only genome's
+  absences read as weak reference for indels too. Three additive facet columns; the schema version
+  is left for the merge.
+
 - `normalize` drops `<*>` (and `<NON_REF>`) from the ALTs it splits: DeepVariant's variant records,
   `A>G,<*>`, become plain biallelic rows (no split flag) with `ad` and `gl` sliced exactly, and are
   then left-aligned like any other. Sites with two or more concrete ALTs beside `<*>` split as before,

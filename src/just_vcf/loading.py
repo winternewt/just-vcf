@@ -242,6 +242,9 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     versions = {caller.name: caller.version for caller in source.callers}
     label, basis, label_warnings = _assembly_label(sniffed.build, header.contigs)
     warnings += label_warnings
+    stated_filters = callset.stated_content_filters(header.meta)
+    # The member's own name inside an archive; the name is read for its words and never logged.
+    named_filter = callset.named_content_filter(sniffed.member or sniffed.path.name)
 
     facets: list[dict] = []
     facet_stats: list[dict] = []
@@ -283,6 +286,10 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             inference = callset.classify(spilled, list(header.format), callset.imputation_marker(header.meta, list(header.info)))
             logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
             kind = inference.callset_type if inference else None
+        counts = callset.variant_class_counts(spilled)
+        content = callset.infer_content_filter(counts, stated_filters, named_filter)
+        logger.info("%s: content filter %s (%s)", facet_id, content.content_filter.value if content.content_filter else "none", content.reason)
+        part_warnings += content.warnings
         caller = part.caller if part.split else source.caller
         facets.append(
             {
@@ -306,6 +313,10 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 "sorted_name_length_pairs_digest": sorted_name_length_pairs_digest(header.contigs),
                 # A one-column merge facet holds only the sites its caller alone found: absent there is unknown.
                 "absence_means": (AbsenceMeans.UNKNOWN if part.sf_alone else callset.absence_means(kind, stats["any_block"])).value,
+                # Absence reads as reference only for the classes present and not cut away (Decision 4).
+                "variant_classes": [{"variant_class": cls.value, "alleles": n} for cls, n in counts.items() if n],
+                "content_filter": content.content_filter.value if content.content_filter else None,
+                "content_filter_basis": content.basis.value if content.basis else None,
                 "contig_map": contig_map(stats["chroms"]),
                 "header_contigs": header.contigs,
                 "vcf_version": header.version,

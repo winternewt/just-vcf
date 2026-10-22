@@ -193,7 +193,7 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); left: chip generation, gVCF `END` expansion) · Owner: lead
+Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); a facet says which variant classes it carries and whether it was cut to one (`content_filter`); left: chip generation, gVCF `END` expansion) · Owner: lead
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
@@ -219,9 +219,40 @@ every pair of classes. Decisions taken, each with what was rejected:
 **Left:** just-prs chip generation detection (F13 needs it for a strand table); GRCh36 in
 `ASSEMBLY_LENGTHS`, so a build-36 VCF's `##contig` lengths name it (the reference side knows GRCh36's
 contig 1 since F9; the header side reads those lengths as matching no assembly); contigs named by RefSeq accession (`NC_000001.11`), which the label
-inference does not read yet; gVCF `END` expansion; an SNV-only or indel-only split of a genome
-(`bcftools view -v snps`) reads as `wgs`, so its absences read as weak reference for the other
-variant class too. Unmarked imputation output with read-evidence keys would read as `wgs`.
+inference does not read yet; gVCF `END` expansion. Unmarked imputation output with read-evidence keys
+would read as `wgs`.
+
+**Answered 2026-10-22: an SNV-only or indel-only split of a genome.** The person: "it can [be
+treated as WGS], but with a caveat that ref restoration is additionally gated (needs force)". It
+stays `wgs`; `facets.variant_classes` and `content_filter` say what it carries, and
+`absence_is_reference` holds its absences back (SCHEMA.md Decision 4). Decisions, each with what was
+rejected:
+
+- The assay class stays `wgs` and the cut is its own column. Rejected: a new `callset_type` member
+  (`wgs_snv`), which mixes what was sequenced with what was kept and changes the `pl.Enum` dtype.
+- The rows decide first, with a residue allowed. Rejected: zero tolerance, which `bcftools view -v
+  snps` defeats (it keeps a multi-allelic site with an indel ALT); and the file name first, which a
+  renamed or concatenated file defeats.
+- `##source=DRAGEN_SNV` is not a filter statement. Rejected: reading it as `snv_only`, as first
+  proposed; a PGP-HMS DRAGEN `hard-filtered` upload carries indels under that very line.
+- `variant_classes` counts alleles per class rather than listing the classes, so a residue stays
+  visible. Rejected: a bare list of names, where one stray indel and a million look the same.
+- `sv` is a symbolic ALT or a breakend; a deletion written out base by base is an `indel` at any
+  length. Rejected: a 50 bp cut-off, which would split one caller's indels across two classes.
+- The helper answers at facet level and says `None` for `blocks`. Rejected: answering per position
+  here, which belongs with the materialising function that does not exist yet.
+
+Dogfooded 2026-10-22 on PGP-HMS (hu1C1368, hu6ABACE, huBE0518) and one local DeepVariant genome:
+each `.snp.` half is `wgs` + `snv_only` (rows), `absence_is_reference` `None` for `snv` until forced
+and `None` for `indel` either way; the unsplit DRAGEN and DeepVariant genomes have no filter and
+answer `True` for `snv` and `indel`, `None` for `sv`; a `.snp.` half reached under a name saying
+`.indel.` keeps `snv_only` from the rows, with one warning quoting the word.
+
+Left from it: an indel-only genome half reads as `callset_type` null, so its absences are unknown
+anyway. Four PGP-HMS indel halves of 0.32M–1.05M ALT alleles did; the two DRAGEN ones reach 91% of
+the span but hold 953,506 and 958,046 sites, just under `MIN_WGS_SITES`. Whether an indel half
+should read as `wgs` (and so be gated by its filter instead) is open. A genotype table's classes are
+not counted.
 
 ## RM5 — Population inference
 Severity: medium · Status: in progress (2026-10-22: PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped as `just_vcf.ancestry`; panels in docs/ANCESTRY_PANELS.md) · Owner: lead

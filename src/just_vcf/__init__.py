@@ -3,6 +3,7 @@
 from importlib.metadata import version
 
 from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
+from just_vcf.callset import absence_is_reference
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.loading import (
@@ -27,10 +28,13 @@ from just_vcf.schema import (
     AssemblyLabelBasis,
     BlockKind,
     CallsetType,
+    ContentFilter,
+    ContentFilterBasis,
     EvidenceBasis,
     PhaseSetKind,
     RefCheck,
     SplitSignal,
+    VariantClass,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
 from just_vcf.writing import ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
@@ -51,6 +55,8 @@ __all__ = [
     "CacheEntryInfo",
     "CallsetType",
     "Chain",
+    "ContentFilter",
+    "ContentFilterBasis",
     "ContigNames",
     "Lifted",
     "Loaded",
@@ -70,9 +76,11 @@ __all__ = [
     "UnsortedRowsError",
     "UnsupportedFormatError",
     "UnwritableRowsError",
+    "VariantClass",
     "VcfWritten",
     "XCopies",
     "__version__",
+    "absence_is_reference",
     "clear_cache",
     "liftover",
     "load",

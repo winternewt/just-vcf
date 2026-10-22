@@ -114,6 +114,15 @@ record per file: outcome, path, reason, and what a duplicate duplicates).
 - 2026-09-29 03:20, second run in progress: 632 participants planned, ~1,500 files present, 212 GB.
   Rerunning `uv run python scripts/pgp_participants.py` resumes; present files are skipped offline.
 - Not fetched: files over 2.5 GB (19), BAMs, reports, per-chromosome CGI evidence/coverage.
+- **One damaged upload: huE2F2FC download 2771** (an Illumina starling genome VCF, 886,854,046 bytes,
+  the size the listing states). Walked block by block, one 163,477-byte span at offsets
+  473,789,118–473,952,595 does not inflate ("invalid distance code"), and every block before and after
+  it is intact, so `load` fails in polars-bio with "invalid BGZF ISIZE", which is right. The companion
+  index (download 2772) points at nine block starts inside that span, none of them a valid block in this
+  copy, while 2,000 of 2,000 checked outside it are: the index was built on bytes this copy does not have.
+  So the damage came after indexing, in the upload, at PGP or in the download; a re-fetch to tell which
+  failed on 2026-10-22 (my.pgp-hms.org served a certificate for another host, to httpx and curl alike).
+  The sibling download 2774 (the same genome's variant VCF) is intact and loads, 4,763,188 calls.
 - The by-data-type layout of the first runs was migrated into `participants/`;
   `manifest.legacy-by-type.jsonl` is its old manifest.
 

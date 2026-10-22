@@ -464,7 +464,7 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and `vrs_errors` are null: they described
    the representation the source wrote, at the position it wrote it. A `ref_check = match` here would be
    bases read from the sequence compared with that same sequence. Rows whose REF was not shown to
-   match pass through, counted.
+   match pass through, counted, and so do rows whose ALT is no VCF allele (a `-` for a deletion).
 3. **Dedup and sort.** Rows equal in every column are kept once, counted. Rows that state the same
    allele at one position and differ in anything else are all kept, with a warning (charter 8). Then
    canonical order (Decision 11).

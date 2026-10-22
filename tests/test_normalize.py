@@ -2,15 +2,17 @@
 derived facet. Synthetic FASTA and VCFs under tmp_path; expectations computed from the sequence."""
 
 import random
+from collections import Counter
 from math import comb
 from pathlib import Path
 
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceMismatchError, ReferenceStore, load, normalize, rejoin_split, resolve_ref, write_vcf
+from just_vcf import ReferenceMismatchError, ReferenceStore, load, normalize, rejoin_split, resolve_ref, sniff, write_vcf
+from just_vcf.loading import Loaded
 from just_vcf.normalize import RELATION, _left_align
-from just_vcf.schema import CALLS
+from just_vcf.schema import BLOCKS, CALLS
 
 rng = random.Random(11)
 _LEFT = "".join(rng.choice("ACGT") for _ in range(200))
@@ -265,6 +267,13 @@ def test_unchecked_rows_pass_through_counted(tmp_path: Path, store: ReferenceSto
     assert any("1 row(s) not left-aligned or trimmed: REF differs from the reference" in w for w in out.warnings)
 
 
+def test_a_dash_alt_is_counted_not_passed_over(tmp_path: Path, store: ReferenceStore) -> None:
+    # Some uploads write a deletion as ALT `-` (F12). It is no VCF allele, so nothing aligns it.
+    _, out = normalized(tmp_path, store, [record("1", 30, at("1", 30), "-", "0/1", vectors=False)])
+    assert out.calls.collect()["alts"].to_list() == [["-"]]
+    assert any("1 row(s) not left-aligned or trimmed: an ALT that is not a VCF allele" in w for w in out.warnings)
+
+
 # --- dedup, determinism, the derived facet ------------------------------------------------------
 
 
@@ -427,3 +436,54 @@ def test_rejoin_split_takes_back_what_did_not_move(tmp_path: Path, store: Refere
     site = rejoined.filter((pl.col("chrom") == "1") & (pl.col("pos") == 90))
     assert site.height == 1 and len(site["alts"].item()) == 3
     assert rejoined.filter(pl.col("chrom") == "2")["split_signal"].drop_nulls().len() >= 1
+
+
+def test_real_upload_agrees_with_bcftools_on_one_contig(pgp_participants: Path, test_reference_dir: Path, tmp_path: Path) -> None:
+    """Opt-in: a PGP-HMS VCF upload, chromosome 22, normalized here and by bcftools. Every row where the
+    two differ is one the loader flagged as part of a pre-split site, which normalize leaves for
+    rejoin_split. Aggregates only."""
+    pysam = pytest.importorskip("pysam")
+    bcftools = pytest.importorskip("pysam.bcftools")
+    store = ReferenceStore.open(test_reference_dir)
+    sizes = sorted(pgp_participants.glob("*/upload-*/*.vcf*"), key=lambda p: p.stat().st_size)
+    parent = None
+    for path in [p for p in sizes if p.stat().st_size > 5_000_000][:20]:
+        if sniff(path).format != "vcf":
+            continue
+        try:
+            parent = resolve_ref(load(path), store)
+        except ValueError:  # ReferenceMismatchError included: not an assembly the store holds
+            continue
+        if parent.calls.filter(pl.col("chrom") == "22").select(pl.len()).collect().item() > 1000:
+            break
+        parent = None
+    if parent is None:
+        pytest.skip("no PGP-HMS VCF upload that resolves against the store")
+    # bcftools refuses a file holding an ALT that is no VCF allele (F12's `-`), so those rows stay out of both.
+    allele = r"^([ACGTNacgtn]+|\*|<[^>]+>)$"
+    valid = pl.col("alts").list.eval(pl.element().str.contains(allele)).list.all()
+    one = Loaded(facets=parent.facets, calls=parent.calls.filter((pl.col("chrom") == "22") & valid), blocks=pl.LazyFrame(schema=BLOCKS))
+    digest = one.facets.collect()["ref_seqcol_digest"].item()
+    contig = next(c for c in store.contigs(digest) if c.name in ("22", "chr22"))
+    sequence = store.fetch(contig, [(0, contig.length)])[0]
+    fasta = tmp_path / "22.fa"
+    fasta.write_text(">22\n" + "\n".join(sequence[i : i + 60] for i in range(0, len(sequence), 60)) + "\n")
+    pysam.faidx(str(fasta))
+    exported = write_vcf(one, tmp_path / "parent.vcf", compress=False, resolved_only=True)
+    theirs_path = tmp_path / "theirs.vcf"
+    bcftools.norm("-m-any", "--multi-overlaps", ".", "-f", str(fasta), "--no-version", "-o", str(theirs_path), str(exported.path), catch_stdout=False)
+    result = normalize(one, store)
+    ours = write_vcf(result, tmp_path / "ours.vcf", compress=False, resolved_only=True)
+
+    def key(r: dict) -> tuple:
+        return (r["pos"], (r["ref"] or r["source_ref"]).upper(), tuple(r["alts"]), tuple(a or "." for a in r["gt_alleles"] or ()))
+
+    def sites(path: Path) -> Counter:
+        return Counter(key(r) for r in load(path).calls.collect().iter_rows(named=True))
+
+    theirs, mine = sites(theirs_path), sites(ours.path)
+    held = {key(r) for r in result.calls.filter(pl.col("split_signal").is_not_null()).collect().iter_rows(named=True)}
+    unexplained = [k for k in (mine - theirs) if k not in held]
+    agree = sum((theirs & mine).values())
+    assert agree > 1000
+    assert not unexplained, f"{len(unexplained)} row(s) differ from bcftools outside pre-split sites; {agree} agree"

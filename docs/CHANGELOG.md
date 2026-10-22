@@ -12,7 +12,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   docs/SCHEMA.md ("Normalizing"); no schema version change. Agrees with `bcftools norm -m-any
   --multi-overlaps . -f` on a synthetic file (sites, genotypes, AD, the GL it keeps), except that it
   drops the exact duplicates bcftools keeps. `rejoin_split` now leaves a group holding a row with no
-  `source_ref` as written instead of failing on it. Found on the way: F11 (PL to `gl` one float step off).
+  `source_ref` as written instead of failing on it. On six PGP-HMS uploads, chromosome 22: 235,911 of
+  236,425 rows as bcftools writes them, the rest pre-split input left for `rejoin_split`. New opt-in
+  test variable `JUST_VCF_TEST_REFERENCE_DIR` (`.env.template`). Found on the way: F11 (PL to `gl` one
+  float step off) and F12 (uploads writing a deletion as ALT `-`).
 
 - Schema 0.0.7 (RM3): `facets.ref_seqcol_digest` is new; `resolve_ref` fills `ref`, `ref_check`, and an
   array row's `alts` and `gt` from a reference.

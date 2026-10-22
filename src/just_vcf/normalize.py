@@ -55,8 +55,6 @@ NORMALIZE_VERSION = 1
 RELATION = "normalized"
 """The derived facet's `relation`."""
 
-_SEQUENCE = frozenset("ACGTN")
-
 _FIRST_WINDOW = 100
 """Reference bases read to the left of an indel on the first pass; a row that needs more is read again
 with a window `_WINDOW_GROWTH` times wider, until it reaches the contig's start."""
@@ -145,18 +143,10 @@ def _normalize_contig(rows: pl.DataFrame, store: ReferenceStore, contig: Contig 
     if rows.is_empty():
         return rows
     flagged = pl.col("split_signal").is_not_null()
-    counts["flagged"] += rows.select(flagged.sum()).item()
-    shaped = (pl.col("alts").list.len() >= 2) | _may_change()
-    work_mask = shaped.fill_null(False) & ~flagged
-    work = rows.filter(work_mask)
-    rest = rows.filter(~work_mask)
-
-    pieces: list[dict] = []
-    for row in work.iter_rows(named=True):
-        pieces += _split(row, counts)
-    aligned = _align_all(pieces, store, contig, counts)
-    combined = pl.concat([rest, pl.DataFrame(aligned, schema=CALLS)], how="vertical") if aligned else rest
-    ordered = canonical_order(combined.lazy()).collect()
+    held = rows.filter(flagged)
+    counts["flagged"] += held.height
+    work = _align(_split(rows.filter(~flagged), counts), store, contig, counts)
+    ordered = canonical_order(pl.concat([work, held], how="vertical").lazy()).collect()
     unique = ordered.unique(maintain_order=True)
     counts["duplicates"] += ordered.height - unique.height
     written_ref = pl.coalesce(pl.col("ref"), pl.col("source_ref"))
@@ -170,143 +160,153 @@ def _normalize_contig(rows: pl.DataFrame, store: ReferenceStore, contig: Contig 
     return unique
 
 
-def _may_change() -> pl.Expr:
-    """True on a biallelic row that left-alignment or trimming could change: an allele longer than one base."""
-    ref = pl.coalesce(pl.col("ref"), pl.col("source_ref"))
-    alt = pl.col("alts").list.first()
-    return (pl.col("alts").list.len() == 1) & ((ref.str.len_chars() > 1) | (alt.str.len_chars() > 1))
+_SYMBOLIC = r"^<|\[|\]"
+"""A symbolic allele (`<DEL>`, `<*>`) or a breakend."""
 
 
-def _symbolic(allele: str) -> bool:
-    return allele.startswith("<") or "[" in allele or "]" in allele
+def _slots(ploidy: int) -> list[pl.Expr]:
+    return [pl.col("gt").list.get(slot, null_on_oob=True) for slot in range(ploidy)]
 
 
-def _split(row: dict, counts: Counter[str]) -> list[dict]:
-    """The row as one row per ALT; a row that is already biallelic, or cannot be split, as itself."""
-    alts = row["alts"]
-    if len(alts) < 2:
-        return [row]
-    if any(_symbolic(allele) for allele in alts):
-        counts["unsplit_symbolic"] += 1
-        return [row]
-    if row["gt"] is None and row["gt_alleles"] is not None:
-        counts["unsplit_unindexed"] += 1
-        return [row]
-    counts["split_sites"] += 1
-    gt = row["gt"]
-    ploidy = len(gt) if gt is not None else None
-    ref = row["ref"] if row["ref"] is not None else row["source_ref"]
-    alleles = row["source_alleles"]
-    pieces = []
-    for k, alt in enumerate(alts, start=1):
-        piece = dict(row)
-        other_alt = gt is not None and any(index is not None and index not in (0, k) for index in gt)
-        piece.update(
-            alts=[alt],
-            end_pos=row["pos"] + len(ref) - 1,
-            gt=None if gt is None else [None if index is None else 0 if index == 0 else 1 if index == k else None for index in gt],
-            gt_alleles=None
-            if row["gt_alleles"] is None or gt is None
-            else [allele if index in (0, k) else None for allele, index in zip(row["gt_alleles"], gt)],
-            source_gt=None,
-            vrs_allele_ids=_pair(row["vrs_allele_ids"], k, len(alts)),
-            vrs_errors=_pair(row["vrs_errors"], k, len(alts)),
-            gp=None,
-            dosage=None,
-            split_signal=SplitSignal.MARKER.value,
-        )
-        slot = alleles.index(alt) if alleles is not None and alleles.count(alt) == 1 and alleles.index(alt) > 0 else None
-        ad = _pair(row["ad"], slot, len(alleles) - 1) if slot is not None else None
-        gl = None
-        if slot is not None and row["gl"] is not None:
-            if other_alt:
-                counts["gl_other_alt"] += 1
-            else:
-                gl = _genotype_slice(row["gl"], slot, len(alleles), ploidy)
-                if gl is None:
-                    counts["gl_unsliceable"] += 1
-        elif row["gl"] is not None or row["ad"] is not None:
-            counts["vectors_unindexed"] += 1
-        if row["gp"] is not None:
-            counts["gp_withheld"] += 1
-        piece.update(ad=ad, gl=gl, source_alleles=[alleles[0], alt] if ad is not None or gl is not None else None)
-        pieces.append(piece)
-    counts["split_rows"] += len(pieces)
-    return pieces
+def _per_slot(values: list[pl.Expr]) -> pl.Expr:
+    """A list of one value per GT slot, as long as the row's own `gt`; null where `gt` is null."""
+    return pl.when(pl.col("gt").is_not_null()).then(pl.concat_list(values).list.head(pl.col("gt").list.len()))
 
 
-def _pair(values: list | None, k: int, alt_count: int) -> list | None:
-    """`[values[0], values[k]]` from a list parallel to REF plus `alt_count` ALTs; null when it is not one."""
-    if values is None or len(values) != alt_count + 1:
-        return None
-    return [values[0], values[k]]
-
-
-def _genotype_slice(vector: list, slot: int, allele_count: int, ploidy: int | None) -> list | None:
-    """The entries of a genotype-ordered vector (VCF Number=G) for the genotypes over alleles 0 and `slot`.
-
-    Haploid: genotypes `0`, `slot`. Diploid: `0/0`, `0/slot`, `slot/slot`, at VCF's index
-    `j + k(k+1)/2` for `j <= k`. Null for any other ploidy, or a vector of another length.
-    """
-    if ploidy == 1 and len(vector) == allele_count:
-        return [vector[0], vector[slot]]
-    if ploidy == 2 and len(vector) == allele_count * (allele_count + 1) // 2:
-        het = slot * (slot + 1) // 2
-        return [vector[0], vector[het], vector[het + slot]]
-    return None
-
-
-def _align_all(rows: list[dict], store: ReferenceStore, contig: Contig | None, counts: Counter[str]) -> list[dict]:
-    """Every row that can be left-aligned and trimmed, done; the rest as they are, counted by reason."""
-    pending: list[tuple[int, int, str, str]] = []  # (row index, pos, REF, ALT), uppercase
-    for index, row in enumerate(rows):
-        reason = _unalignable(row)
-        if reason is None:
-            pending.append((index, row["pos"], row["ref"], row["alts"][0].upper()))
-        elif reason != "fixed":
-            counts[f"unaligned_{reason}"] += 1
-    if pending and contig is None:
-        # REF matched, so the contig was read once; a collection naming it twice cannot be read again.
-        counts["unaligned_contig"] += len(pending)
+def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
+    """Every multi-allelic row as one row per ALT; rows that are biallelic, or cannot be split, as they are."""
+    multi = (pl.col("alts").list.len() >= 2).fill_null(False)
+    symbolic = pl.col("alts").list.eval(pl.element().str.contains(_SYMBOLIC)).list.any()
+    unindexed = pl.col("gt").is_null() & pl.col("gt_alleles").is_not_null()
+    n_symbolic, n_unindexed = rows.select((multi & symbolic).sum().alias("a"), (multi & ~symbolic & unindexed).sum().alias("b")).row(0)
+    counts["unsplit_symbolic"] += n_symbolic
+    counts["unsplit_unindexed"] += n_unindexed
+    target = multi & ~symbolic & ~unindexed
+    work = rows.filter(target)
+    if work.is_empty():
         return rows
+    counts["split_sites"] += work.height
+    ploidy = work.select(pl.col("gt").list.len().max()).item() or 0
+    n = pl.col("alts").list.len().cast(pl.Int64)
+    k = pl.col("_k")
+    slots = _slots(ploidy)
+    pieces = work.with_columns(pl.int_ranges(1, n + 1, dtype=pl.Int64).alias("_k")).explode("_k", empty_as_null=False)
+    counts["split_rows"] += pieces.height
+    alt = pl.col("alts").list.get(k - 1)
+    other_alt = pl.any_horizontal([(g.is_not_null() & (g != 0) & (g != k)).fill_null(False) for g in slots]) if slots else pl.lit(False)
+    indexable = (pl.col("source_alleles") == pl.concat_list(pl.col("source_ref"), pl.col("alts"))).fill_null(False)
+    pieces = pieces.with_columns(other_alt.alias("_other"), indexable.alias("_indexable"))
+
+    def pair(name: str) -> pl.Expr:
+        column = pl.col(name)
+        return pl.when(column.list.len() == n + 1).then(pl.concat_list(column.list.get(0), column.list.get(k)))
+
+    het = k * (k + 1) // 2
+    gl = pl.col("gl")
+    usable = pl.col("_indexable") & ~pl.col("_other")
+    sliced_gl = (
+        pl.when(usable & (pl.col("gt").list.len() == 1) & (gl.list.len() == n + 1))
+        .then(pl.concat_list(gl.list.get(0), gl.list.get(k)))
+        .when(usable & (pl.col("gt").list.len() == 2) & (gl.list.len() == (n + 1) * (n + 2) // 2))
+        .then(pl.concat_list(gl.list.get(0), gl.list.get(het), gl.list.get(het + k)))
+    )
+    ref = pl.coalesce(pl.col("ref"), pl.col("source_ref"))
+    gt = _per_slot([pl.when(g == 0).then(0).when(g == k).then(1).cast(pl.UInt8) for g in slots]) if slots else pl.col("gt")
+    gt_alleles = (
+        _per_slot([pl.when((g == 0) | (g == k)).then(pl.col("gt_alleles").list.get(s, null_on_oob=True)) for s, g in enumerate(slots)])
+        if slots
+        else pl.col("gt_alleles")
+    )
+    pieces = pieces.with_columns(
+        pl.concat_list(alt).alias("alts"),
+        (pl.col("pos").cast(pl.Int64) + ref.str.len_chars().cast(pl.Int64) - 1).cast(pl.UInt32).alias("end_pos"),
+        gt.alias("gt"),
+        gt_alleles.alias("gt_alleles"),
+        pair("vrs_allele_ids").alias("vrs_allele_ids"),
+        pair("vrs_errors").alias("vrs_errors"),
+        pl.when(pl.col("_indexable")).then(pair("ad")).alias("ad"),
+        sliced_gl.alias("gl"),
+        pl.lit(None, dtype=CALLS["gp"]).alias("gp"),
+        pl.lit(None, dtype=CALLS["dosage"]).alias("dosage"),
+        pl.lit(None, dtype=CALLS["source_gt"]).alias("source_gt"),
+        pl.lit(SplitSignal.MARKER.value, dtype=CALLS["split_signal"]).alias("split_signal"),
+        pl.col("gl").is_not_null().alias("_had_gl"),
+        (pl.col("gl").is_not_null() | pl.col("ad").is_not_null()).alias("_had_vector"),
+        pl.col("gp").is_not_null().alias("_had_gp"),
+    )
+    pieces = pieces.with_columns(
+        pl.when(pl.col("ad").is_not_null() | pl.col("gl").is_not_null())
+        .then(pl.concat_list(pl.col("source_alleles").list.get(0), pl.col("alts").list.first()))
+        .alias("source_alleles")
+    )
+    tallies = pieces.select(
+        (pl.col("_indexable") & pl.col("_had_gl") & pl.col("_other")).sum().alias("a"),
+        (pl.col("_indexable") & pl.col("_had_gl") & ~pl.col("_other") & pl.col("gl").is_null()).sum().alias("b"),
+        (~pl.col("_indexable") & pl.col("_had_vector")).sum().alias("c"),
+        pl.col("_had_gp").sum().alias("d"),
+    ).row(0)
+    for key, value in zip(("gl_other_alt", "gl_unsliceable", "vectors_unindexed", "gp_withheld"), tallies):
+        counts[key] += value
+    return pl.concat([rows.filter(~target), pieces.select(CALLS.names())], how="vertical")
+
+
+def _align(rows: pl.DataFrame, store: ReferenceStore, contig: Contig | None, counts: Counter[str]) -> pl.DataFrame:
+    """Every biallelic sequence row whose REF matched, left-aligned and trimmed; the rest as they are,
+    counted by why they were not aligned."""
+    alt = pl.col("alts").list.first()
+    written = pl.coalesce(pl.col("ref"), pl.col("source_ref"))
+    shape = (
+        (pl.col("alts").list.len() == 1)
+        & alt.str.to_uppercase().str.contains(r"^[ACGTN]+$")
+        & ((written.str.len_chars() > 1) | (alt.str.len_chars() > 1))
+    ).fill_null(False)
+    reason = (
+        pl.when((pl.col("ref_check") != RefCheck.MATCH.value).fill_null(True) | pl.col("ref").is_null())
+        .then(pl.col("ref_check").cast(pl.String).fill_null("unchecked"))
+        .when(pl.col("gt").is_null() & pl.col("gt_alleles").is_not_null())
+        .then(pl.lit("unindexed"))
+        .when((pl.col("gt").list.max() > 1).fill_null(False))
+        .then(pl.lit("index_past_alts"))
+    )
+    # An ALT that is neither bases, `*`, symbolic nor a breakend (a `-` written for a deletion) is not a
+    # VCF allele; it cannot be aligned, and is counted rather than passed over in silence.
+    not_an_allele = ((pl.col("alts").list.len() == 1) & ~alt.str.to_uppercase().str.contains(r"^([ACGTN]+|\*)$") & ~alt.str.contains(_SYMBOLIC)).fill_null(False)
+    rows = rows.with_row_index("_row").with_columns(
+        pl.when(shape).then(reason).when(not_an_allele).then(pl.lit("not_an_allele")).alias("_reason"), shape.alias("_shape")
+    )
+    for name, count in rows.filter(pl.col("_reason").is_not_null()).group_by("_reason").len().iter_rows():
+        counts[f"unaligned_{name}"] += count
+    candidates = rows.filter(pl.col("_shape") & pl.col("_reason").is_null()).select("_row", "pos", "ref", alt.str.to_uppercase().alias("_alt"))
+    rows = rows.drop("_reason", "_shape")
+    if candidates.is_empty():
+        return rows.drop("_row")
+    if contig is None:
+        # REF matched, so the contig was read once; a collection naming it twice is not read again.
+        counts["unaligned_contig"] += candidates.height
+        return rows.drop("_row")
+
+    changed: dict[str, list] = {"_row": [], "_pos": [], "_ref": [], "_alt": []}
+    pending = list(candidates.iter_rows())
     width = _FIRST_WINDOW
     while pending:
         windows = _windows(store, contig, [(pos, width) for _, pos, _, _ in pending])
         retry = []
-        for (index, pos, ref, alt), (window, start) in zip(pending, windows):
-            result = _left_align(pos, ref, alt, window, start)
+        for (index, pos, ref, alt_text), (window, start) in zip(pending, windows):
+            result = _left_align(pos, ref, alt_text, window, start)
             if result is None:
-                retry.append((index, pos, ref, alt))
+                retry.append((index, pos, ref, alt_text))
                 continue
             new_pos, new_ref, new_alt, at_start = result
             counts["aligned_at_start"] += at_start
-            if (new_pos, new_ref, new_alt) != (pos, ref, alt):
-                rows[index] = _moved(rows[index], new_pos, new_ref, new_alt, counts)
+            if (new_pos, new_ref, new_alt) != (pos, ref, alt_text):
+                for key, value in zip(changed, (index, new_pos, new_ref, new_alt)):
+                    changed[key].append(value)
         pending = retry
         width *= _WINDOW_GROWTH
-    return rows
-
-
-def _unalignable(row: dict) -> str | None:
-    """Why a row is not left-aligned; `fixed` when there is nothing to align; None when it can be."""
-    alts = row["alts"]
-    if len(alts) != 1:
-        return "multiallelic"
-    ref = row["ref"] if row["ref"] is not None else row["source_ref"]
-    alt = alts[0]
-    if ref is None:
-        return "no_ref"
-    if len(ref) == 1 and len(alt) == 1:
-        return "fixed"
-    if alt == "*" or _symbolic(alt) or not set(alt.upper()) <= _SEQUENCE:
-        return "fixed"
-    if row["ref_check"] != RefCheck.MATCH.value or row["ref"] is None:
-        return str(row["ref_check"]) if row["ref_check"] is not None else "unchecked"
-    if row["gt"] is None and row["gt_alleles"] is not None:
-        return "unindexed"
-    if row["gt"] is not None and any(index is not None and index > 1 for index in row["gt"]):
-        return "index_past_alts"
-    return None
+    if not changed["_row"]:
+        return rows.drop("_row")
+    moved = pl.DataFrame(changed, schema={"_row": pl.UInt32, "_pos": pl.UInt32, "_ref": pl.String, "_alt": pl.String})
+    return _moved(rows.join(moved, on="_row", how="left", maintain_order="left"), counts).drop("_row")
 
 
 def _windows(store: ReferenceStore, contig: Contig, requests: list[tuple[int, int]]) -> list[tuple[str, int]]:
@@ -353,28 +353,45 @@ def _left_align(pos: int, ref: str, alt: str, window: str, start: int) -> tuple[
     return p, r, a, at_start
 
 
-def _moved(row: dict, pos: int, ref: str, alt: str, counts: Counter[str]) -> dict:
-    """The row at its new position and representation, positional columns cleared."""
-    counts["aligned_moved" if pos != row["pos"] else "aligned_trimmed"] += 1
-    moved = dict(row)
-    moved.update({name: None for name in _POSITIONAL})
-    gt = row["gt"]
-    old = [row["ref"], row["alts"][0]]
-    alleles = row["source_alleles"]
-    vectors_follow = alleles is not None and [allele.upper() for allele in alleles] == [allele.upper() for allele in old]
-    if alleles is not None and not vectors_follow:
-        counts["vectors_unindexed"] += 1
-    moved.update(
-        pos=pos,
-        end_pos=pos + len(ref) - 1,
-        ref=ref,
-        alts=[alt],
-        gt_alleles=None if gt is None else [None if index is None else (ref, alt)[index] for index in gt],
-        source_alleles=[ref, alt] if vectors_follow else None,
-    )
-    if not vectors_follow:
-        moved.update(gl=None, gp=None, ad=None)
-    return moved
+def _moved(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
+    """Rows with a new position or spelling (`_pos`, `_ref`, `_alt`) rewritten to it, positional columns
+    cleared; the vectors follow when they were indexed over the row's own two alleles."""
+    hit = pl.col("_pos").is_not_null()
+    follow = (
+        pl.col("source_alleles").list.eval(pl.element().str.to_uppercase())
+        == pl.concat_list(pl.col("ref"), pl.col("alts").list.first().str.to_uppercase())
+    ).fill_null(False)
+    rows = rows.with_columns(follow.alias("_follow"))
+    moved, trimmed, unindexed = rows.select(
+        (hit & (pl.col("_pos") != pl.col("pos"))).sum().alias("a"),
+        (hit & (pl.col("_pos") == pl.col("pos"))).sum().alias("b"),
+        (hit & pl.col("source_alleles").is_not_null() & ~pl.col("_follow")).sum().alias("c"),
+    ).row(0)
+    counts["aligned_moved"] += moved
+    counts["aligned_trimmed"] += trimmed
+    counts["vectors_unindexed"] += unindexed
+    ploidy = rows.filter(hit).select(pl.col("gt").list.len().max()).item() or 0
+    slots = _slots(ploidy)
+    gt_alleles = _per_slot([pl.when(g == 0).then(pl.col("_ref")).when(g == 1).then(pl.col("_alt")) for g in slots]) if slots else pl.col("gt_alleles")
+    drop_vectors = hit & ~pl.col("_follow")
+    return rows.with_columns(
+        pl.when(hit).then(pl.col("_pos")).otherwise(pl.col("pos")).alias("pos"),
+        pl.when(hit)
+        .then((pl.col("_pos").cast(pl.Int64) + pl.col("_ref").str.len_chars().cast(pl.Int64) - 1).cast(pl.UInt32))
+        .otherwise(pl.col("end_pos"))
+        .alias("end_pos"),
+        pl.when(hit).then(pl.col("_ref")).otherwise(pl.col("ref")).alias("ref"),
+        pl.when(hit).then(pl.concat_list(pl.col("_alt"))).otherwise(pl.col("alts")).alias("alts"),
+        pl.when(hit).then(gt_alleles).otherwise(pl.col("gt_alleles")).alias("gt_alleles"),
+        pl.when(hit & pl.col("_follow"))
+        .then(pl.concat_list(pl.col("_ref"), pl.col("_alt")))
+        .when(hit)
+        .then(None)
+        .otherwise(pl.col("source_alleles"))
+        .alias("source_alleles"),
+        *[pl.when(drop_vectors).then(None).otherwise(pl.col(name)).alias(name) for name in ("gl", "gp", "ad")],
+        *[pl.when(hit).then(None).otherwise(pl.col(name)).alias(name) for name in _POSITIONAL],
+    ).drop("_pos", "_ref", "_alt", "_follow")
 
 
 def _warnings(counts: Counter[str]) -> list[str]:
@@ -408,6 +425,7 @@ def _warnings(counts: Counter[str]) -> list[str]:
         "unaligned_unindexed": "a genotype that is not indexed",
         "unaligned_index_past_alts": "a genotype index past the row's ALTs",
         "unaligned_contig": "a contig the collection names twice",
+        "unaligned_not_an_allele": "an ALT that is not a VCF allele (such as `-` for a deletion, F12)",
     }
     for key, reason in reasons.items():
         if counts[key]:

@@ -258,13 +258,21 @@ with what was rejected:
 "Normalizing"). A derived facet, `relation = normalized`, from a facet `resolve_ref` has read, with
 bases read from the same collection. Checked against `bcftools norm -m-any --multi-overlaps . -f`
 (htslib's, bundled in pysam) on a synthetic file of 64 records: the same rows, genotypes and AD, and
-the same GL wherever we keep one. Decisions, each with what was rejected:
+the same GL wherever we keep one. Dogfooded on six PGP-HMS VCF uploads (GRCh37, 176 thousand to
+7.7 million rows, read from the Krypton share), chromosome 22 against bcftools: 235,911 of 236,425
+rows identical in position, REF, ALT and genotype; all 514 that differ, in two files, are rows the
+loader flagged as one record of a pre-split site, which `normalize` leaves for `rejoin_split`.
+`normalize` took 1–34 s per genome. Splits per genome ranged from 22 to 92,403 sites, trimmed rows
+up to 55,350; one upload holds 9,213 positions with two records of one allele (they
+differ in `ids`), kept side by side. Found on the way: F11, F12. Decisions, each with what was
+rejected:
 
-- Our own Polars and Python pass, not a bcftools subprocess: the frame is the product, bcftools would
-  need the facet written out and read back, and it is not a core dependency. Only rows that can change
-  (multi-allelic, or an allele longer than one base) go through Python; reference bases are fetched in
-  one batch per contig, 100 bases left of each indel, and again 16 times wider for the rows a repeat
-  carried further.
+- Our own Polars pass, not a bcftools subprocess: the frame is the product, bcftools would need the
+  facet written out and read back, and it is not a core dependency. Splitting and rewriting are Polars
+  expressions; only the left-align loop runs in Python, on `(pos, REF, ALT)` scalars of the candidate
+  rows (building rows as Python dicts took 78 s on an 831-thousand-row genome, against 8 s now).
+  Reference bases are fetched in one batch per contig, 100 bases left of each indel, and again 16 times
+  wider for the rows a repeat carried further.
 - The other ALT is written `.`, not `0` (RM270's finding). Rejected: bcftools' default `0`, which reads
   as a REF haplotype the person does not have.
 - Split rows carry `split_signal = marker`, as vt's output does once loaded, so `rejoin_split` can

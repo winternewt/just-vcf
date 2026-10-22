@@ -97,3 +97,16 @@ digest or test of ours moves, and the size is far below any PHRED rounding; but 
 genome, one with PL and one with GL, do not compare equal on `gl`, and a test comparing against an
 outside tool needs a tolerance (`test_agrees_with_bcftools_norm`). Not fixed here: it is the loader's
 PL rule (RM2). The repair is to divide in Float64 and cast the result to Float32 once.
+
+## F12 — Some VCF uploads write a deletion as ALT `-`
+
+Severity: low · Found 2026-10-22 running `normalize` against `bcftools norm` on PGP-HMS uploads (RM6).
+
+Five of 25 PGP-HMS VCF uploads of 5–60 MB hold about 8,080 rows each whose ALT is `-`, the dash
+notation for a deletion that VCF does not have. The loader keeps it verbatim as an allele, `normalize`
+leaves those rows as they are and counts them, and `write_vcf` writes them back out, so the export is a
+file htslib refuses ("Non-ACGTN alternate allele"). Nothing in the frame says the allele is not one.
+
+Not fixed here. Reading `-` as a deletion needs the anchor base and its REF span, which the row does
+not state, so it is not a spelling to rewrite; the options are for the loader (RM2: flag or refuse
+such rows, counted) and the writer (refuse them as unwritable, as it does a row without REF).

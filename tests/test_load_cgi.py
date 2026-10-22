@@ -346,7 +346,7 @@ def _bases(intervals: dict[str, pl.LazyFrame]) -> pl.DataFrame:
                 pl.concat_list(pl.col("pos").cast(pl.Int64), pl.col("end_pos").cast(pl.Int64) + 1).alias("at"),
                 pl.lit([1, -1]).alias("delta"),
             )
-            .explode("at", "delta")
+            .explode("at", "delta", empty_as_null=False)  # two entries each, never empty
             .with_columns(pl.lit(name).alias("set"))
             for name, frame in intervals.items()
         ]

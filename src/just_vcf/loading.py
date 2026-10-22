@@ -33,6 +33,7 @@ from just_vcf.schema import (
     AbsenceMeans,
     AssemblyLabelBasis,
     CallsetType,
+    ContentFilter,
     canonical_chrom,
     canonical_order,
     canonical_order_per_contig,
@@ -230,6 +231,8 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
         inference = callset.classify(spilled, ["DP"], None)
         logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
         kind = inference.callset_type if inference else None
+        # No header line records a filtering command here; the member's own name is read for its words only.
+        classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
         facets.append(
             {
                 "facet_id": facet_id,
@@ -242,6 +245,7 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
                 "caller": caller,
                 "callset_type": kind.value if kind else None,
                 "absence_means": callset.absence_means(kind, False).value,
+                **classes,
                 "relation": vcf.CALLER_SPLIT,
                 "assembly_label": sniffed.build,
                 "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
@@ -250,7 +254,7 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
             }
         )
         calls_parts.append(canonical_order_per_contig(spilled, contigs))
-        warnings += [f"{caller} facet: {w}" for w in keyvalue.warnings_for(counts, prefix)]
+        warnings += [f"{caller} facet: {w}" for w in [*keyvalue.warnings_for(counts, prefix), *class_warnings]]
     return _multi_facet_loaded(facets, calls_parts, [empty(BLOCKS)] * len(facets), warnings)
 
 
@@ -296,6 +300,9 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
     facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={})
     calls_frame, blocks_frame = cgi.to_frames(calls, blocks, facet_id)
     spilled, spilled_blocks, contigs = _spill(facet_id, calls_frame, blocks_frame, origin)
+    # Unanchored alleles (`""`) count as indels; the member's own name is read for its words only.
+    classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
+    warnings += class_warnings
     facet = {
         "facet_id": facet_id,
         "source_sha256": source_sha256,
@@ -311,6 +318,7 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
         "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
         "callset_type": CallsetType.WGS.value if cgi.states_whole_genome(header) else None,
         "absence_means": AbsenceMeans.BLOCKS.value,
+        **classes,
         "contig_map": contig_map(counts[3]["chromosome"].to_list()),
         "dropped_fields": cgi.dropped_fields(sniffed.format, header),
     }
@@ -629,10 +637,8 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 f"{source.caller} leaves out the positions it called reference, but the rows do not show a whole genome "
                 f"(callset type {kind.value if kind else 'unknown'}): absence is not read as reference"
             )
-        counts = callset.variant_class_counts(spilled)
-        content = callset.infer_content_filter(counts, stated_filters, named_filter)
-        logger.info("%s: content filter %s (%s)", facet_id, content.content_filter.value if content.content_filter else "none", content.reason)
-        part_warnings += content.warnings
+        classes, class_warnings = _variant_classes(facet_id, spilled, stated_filters, named_filter)
+        part_warnings += class_warnings
         caller = part.caller if part.split else source.caller
         facets.append(
             {
@@ -660,10 +666,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                     if part.sf_alone
                     else callset.absence_means(kind, stats["any_block"], omitted_called_reference=omitted_called_reference)
                 ).value,
-                # Absence reads as reference only for the classes present and not cut away (Decision 4).
-                "variant_classes": [{"variant_class": cls.value, "alleles": n} for cls, n in counts.items() if n],
-                "content_filter": content.content_filter.value if content.content_filter else None,
-                "content_filter_basis": content.basis.value if content.basis else None,
+                **classes,
                 "contig_map": contig_map(stats["chroms"]),
                 "header_contigs": header.contigs,
                 "vcf_version": header.version,
@@ -696,6 +699,28 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         blocks=_concat([blocks_parts[i] for i in order]),
         warnings=tuple(warnings),
     )
+
+
+def _variant_classes(
+    facet_id: str,
+    calls: pl.LazyFrame,
+    stated: list[tuple[ContentFilter, str]],
+    named: tuple[ContentFilter, str] | None,
+) -> tuple[dict, list[str]]:
+    """A facet's `variant_classes`, `content_filter` and `content_filter_basis` from its spilled calls
+    (`source_ref`, `alts`), the header's filtering lines and the file name's words, with the warnings.
+
+    Every loader that writes REF and ALT fills them the same way: absence reads as reference only for
+    the classes present and not cut away (Decision 4)."""
+    counts = callset.variant_class_counts(calls)
+    content = callset.infer_content_filter(counts, stated, named)
+    logger.info("%s: content filter %s (%s)", facet_id, content.content_filter.value if content.content_filter else "none", content.reason)
+    columns = {
+        "variant_classes": [{"variant_class": cls.value, "alleles": n} for cls, n in counts.items() if n],
+        "content_filter": content.content_filter.value if content.content_filter else None,
+        "content_filter_basis": content.basis.value if content.basis else None,
+    }
+    return columns, list(content.warnings)
 
 
 def _concat(frames: list[pl.LazyFrame]) -> pl.LazyFrame:

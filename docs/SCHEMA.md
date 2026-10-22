@@ -428,7 +428,12 @@ disagrees is a warning naming both sides; the strongest is kept:
    is quality filtering and names no class. Warnings quote the word, never the name.
 
 A genotype table writes no REF/ALT to count, so its `variant_classes` is null; its absence is
-`unknown` anyway.
+`unknown` anyway. The other loaders that read a REF and ALT count them as the VCF loader does: the
+PGP key=value table, and CGI's native `var` and `masterVarBeta`, whose unanchored alleles (`""`, a
+deletion's ALT or an insertion point's REF) are indels. Their content filter rests on the rows and
+the file name; neither format has a header line that records a filtering command. Counting `""`
+matters there: CGI writes every indel unanchored, so a genome counted without them would read
+`snv_only`.
 
 Measured 2026-10-22 on PGP-HMS uploads: the other classes are 0% of eleven `.snp.`/`.snps.` and
 `.indel.`/`.indels.` halves (five with no header line to say so, Isaac and CASAVA; three cut by GATK
@@ -460,7 +465,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
-| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a VCF with no variant allele; null = not counted (a genotype table). just-vcf's own shape |
+| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele; null = not counted (a genotype table, which writes no REF or ALT). just-vcf's own shape |
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | null unless stated |
@@ -1070,6 +1075,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, classes of CGI and key=value facets): no column changes. Rule
+  stated (Decision 4): CGI's native files and the PGP key=value table fill `variant_classes`,
+  `content_filter` and `content_filter_basis` as a VCF does, from the rows and the file name. They
+  wrote null. Values change on files that already load; `absence_is_reference` is unchanged for them
+  (their absence is `blocks` and `unknown`), but a consumer gating by class now has the classes.
 
 - **No version change** (2026-10-23, the appended export's build): no column changes. Rule changed
   (Decision 8, "Two exports in one file"): an appended export's facet gets no `assembly_label` from

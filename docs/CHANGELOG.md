@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Complete Genomics' native `var` and `masterVarBeta` facets and the PGP key=value table's facets fill
+  `variant_classes`, `content_filter` and `content_filter_basis` as a VCF facet does, from the rows and
+  the file name; they were null. CGI's unanchored deletions and insertions (`""`) count as indels, so
+  a whole CGI genome shows no content filter rather than reading `snv_only`. A value change on files
+  that already load. No column changes.
+
 - An appended export (F3) no longer takes the build the first export's preamble states: its
   `assembly_label` is null until `resolve_ref` infers it from its own rows (F9), where it read the
   first export's label as `stated`. A value change on files that already load. No column changes.

@@ -102,6 +102,28 @@ def test_one_facet_per_caller(tmp_path: Path) -> None:
     assert_gt_consistent(calls)
 
 
+def _classes(prefix: str) -> list[dict]:
+    """The ALT alleles of each class a caller's rows carry, by the test's own reading of REF and ALT:
+    an ALT of another length than its REF is an indel, one as long an SNV (one base) or an MNV."""
+    found = {"snv": 0, "mnv": 0, "indel": 0}
+    for r in expected(prefix):
+        for alt in r["alts"]:
+            found["indel" if len(alt) != len(r["source_ref"]) else "snv" if len(alt) == 1 else "mnv"] += 1
+    return [{"variant_class": cls, "alleles": n} for cls, n in found.items() if n]
+
+
+def test_variant_classes_and_content_filter(tmp_path: Path) -> None:
+    """Decision 4: a key=value facet counts its ALT alleles by class, as a VCF facet does, so absence
+    can be gated per class; too few alleles settle no filter from the rows, and the name's word does."""
+    _, _, by_caller, _, _, _ = frames(write(tmp_path, ROWS))
+    for prefix, caller in (("FB", "freeBayes"), ("VS", "VarScan2")):
+        facet = by_caller[caller]
+        assert facet["variant_classes"] == _classes(prefix), caller
+        assert (facet["content_filter"], facet["content_filter_basis"]) == (None, None)
+    _, _, named, _, _, _ = frames(write(tmp_path, ROWS, "AB12CD-orig.indels.vcf.gz"))
+    assert {(f["content_filter"], f["content_filter_basis"]) for f in named.values()} == {("indel_only", "file_name")}
+
+
 def test_genotype_fields(tmp_path: Path) -> None:
     _, _, _, rows, _, _ = frames(write(tmp_path, ROWS))
     fb = {r["pos"]: r for r in rows["freeBayes"].iter_rows(named=True)}

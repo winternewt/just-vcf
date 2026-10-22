@@ -12,6 +12,8 @@ gtars `RefgetStore`, and returns the same facet with the slots SCHEMA.md leaves 
 Before any base is read the reference has to be shown to be the facet's assembly, contig by contig
 (`ContigCheck`). A facet that stated contig lengths (VCF `##contig`) is checked by length and md5;
 one that did not (arrays) by its assembly label against the label the reference's own lengths give.
+An array that states no label either has one inferred from its rows against each collection first
+(F9, `just_vcf.assembly.infer_assembly_from_rows`), or is refused with the scores.
 A primary contig of another length means another assembly, and the whole facet is refused
 (`ReferenceMismatchError`); any other contig that cannot be shown to match is left unresolved, with
 its rows counted in the warnings. Nothing falls back to an unchecked read.
@@ -32,12 +34,13 @@ from pathlib import Path
 import polars as pl
 from gtars.refget import RefgetStore
 
+from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_snv_rows
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
-from just_vcf.schema import CALLS, CONTIG_RANK, SCHEMA_VERSION, RefCheck, canonical_chrom, canonical_order, empty
+from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, canonical_chrom, canonical_order, empty
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 1
+RESOLVE_VERSION = 2
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes."""
 
 ASSEMBLY_NAMESPACE = "just_vcf_assembly"
@@ -47,15 +50,17 @@ _FASTA_NAMESPACE = "just_vcf_fasta"
 """Collection-alias namespace mapping a FASTA file's fingerprint to its collection, so a FASTA already
 added is not digested again."""
 
-CHR1_LENGTHS: dict[int, str] = {249_250_621: "GRCh37", 248_956_422: "GRCh38", 248_387_328: "T2T-CHM13"}
+CHR1_LENGTHS: dict[int, str] = {247_249_719: "GRCh36", 249_250_621: "GRCh37", 248_956_422: "GRCh38", 248_387_328: "T2T-CHM13"}
 """Contig 1's length per assembly, the fingerprint that names a reference's assembly. Domain constants."""
 
 PRIMARY: frozenset[str] = frozenset([str(n) for n in range(1, 23)] + ["X", "Y"])
 """Contigs whose length differing from the reference means another assembly, not another contig."""
 
-LABEL_UNVERIFIABLE: dict[str, frozenset[str]] = {"GRCh37": frozenset({"MT"})}
+LABEL_UNVERIFIABLE: dict[str, frozenset[str]] = {"GRCh36": frozenset({"MT"}), "GRCh37": frozenset({"MT"})}
 """Contigs a label cannot vouch for: `GRCh37` covers both hg19, whose chrM is the Yoruba sequence
-(16,571 bases), and GRCh37, whose MT is rCRS (16,569). Only a stated length tells them apart."""
+(16,571 bases), and GRCh37, whose MT is rCRS (16,569). Only a stated length tells them apart.
+`GRCh36` likewise: NCBI36 and hg18 carry the Yoruba sequence, and an array labelled build 36 does not
+say whether its MT positions are on it or on rCRS."""
 
 _REF_SPAN_FOR = {"XY": "X"}
 """Canonical names read from another reference contig: array code 25 (`XY`, the X pseudo-autosomal
@@ -258,10 +263,14 @@ def resolve_ref(
     candidates = [collection] if collection is not None else store.collections()
     if not candidates:
         raise ReferenceMismatchError("the reference store holds no collection; add a FASTA with ReferenceStore.add_fasta")
+    inferred = _infer_from_rows(store, loaded, facet, candidates)
+    if inferred is not None:
+        facet = {**facet, "assembly_label": inferred.label, "assembly_label_basis": AssemblyLabelBasis.INFERRED.value}
     plans = [_plan(store, digest, facet, rows_per_chrom) for digest in candidates]
     plan = _choose(plans, facet["facet_id"], explicit=collection is not None)
 
-    warnings = list(_contig_warnings(plan, rows_per_chrom))
+    warnings = [f"assembly inferred from the rows as {inferred.label}: {inferred.summary()}"] if inferred is not None else []
+    warnings += _contig_warnings(plan, rows_per_chrom)
     counts: Counter[str] = Counter()
     spill = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
     if spill.exists():
@@ -284,13 +293,61 @@ def resolve_ref(
     for warning in warnings:
         logger.warning("%s: %s", facet["facet_id"], warning)
 
+    labelled = (
+        [pl.lit(facet["assembly_label"]).alias("assembly_label"), pl.lit(facet["assembly_label_basis"]).cast(FACETS["assembly_label_basis"]).alias("assembly_label_basis")]
+        if inferred is not None
+        else []
+    )
     return Loaded(
-        facets=loaded.facets.with_columns(pl.lit(plan.digest).alias("ref_seqcol_digest")),
+        facets=loaded.facets.with_columns(pl.lit(plan.digest).alias("ref_seqcol_digest"), *labelled),
         calls=pl.scan_parquet(parts) if parts else empty(CALLS),
         blocks=loaded.blocks,
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )
+
+
+def _infer_from_rows(store: ReferenceStore, loaded: Loaded, facet: dict, candidates: list[str]) -> RowsInference | None:
+    """The facet's assembly from its own rows (F9), for a facet that states neither a label nor contig lengths.
+
+    None when the facet needs no inference (it states one or the other). Raises `ReferenceMismatchError`
+    when it needs one and its rows do not settle it, with the scores, rather than reading an unchecked
+    reference. Only array rows (no source REF) are scored: for a VCF, `ref_check` would then confirm
+    the very comparison that chose its build.
+    """
+    stated_lengths = any(entry["length"] is not None for entry in facet["header_contigs"] or [])
+    if facet["assembly_label"] is not None or stated_lengths or facet["vcf_version"] is not None:
+        return None
+    sample = sample_snv_rows(loaded.calls)
+    bases = {digest: _bases_at(store, digest, sample) for digest in candidates}
+    inference = infer_assembly_from_rows(sample, bases, {digest: store.assembly_label(digest) for digest in candidates})
+    if not inference:
+        scores = f": {inference.summary()}" if inference.shares else ""
+        raise ReferenceMismatchError(
+            f"facet {facet['facet_id']}: the facet states neither contig lengths nor an assembly, and its rows do not "
+            f"settle one ({inference.reason}){scores}"
+        )
+    return inference
+
+
+def _bases_at(store: ReferenceStore, digest: str, sample: pl.DataFrame) -> pl.Series:
+    """The collection's base at each sampled row: null on a contig it lacks or names twice, `""` past its end."""
+    by_canonical: dict[str, list[Contig]] = {}
+    for contig in store.contigs(digest):
+        by_canonical.setdefault(canonical_chrom(contig.name), []).append(contig)
+    keyed = sample.select("chrom", "pos").with_row_index("_row")
+    parts = []
+    for chrom in sorted(keyed["chrom"].unique().to_list()):
+        matches = by_canonical.get(chrom, [])
+        if len(matches) != 1:
+            continue
+        rows = keyed.filter(pl.col("chrom") == chrom)
+        start, end = _span(pl.col("pos"), pl.lit(1))
+        spans = rows.with_columns(start.alias("_start"), end.alias("_end"))
+        read = _read(spans, store, matches[0]).fill_null("")
+        parts.append(rows.select("_row").with_columns(read.alias("_base")))
+    found = pl.concat(parts) if parts else pl.DataFrame(schema={"_row": pl.UInt32, "_base": pl.String})
+    return keyed.select("_row").join(found, on="_row", how="left", maintain_order="left")["_base"]
 
 
 def _store_for(reference: "ReferenceStore | Path | str | None") -> tuple[ReferenceStore, str | None]:

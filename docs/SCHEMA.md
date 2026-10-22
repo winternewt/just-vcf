@@ -79,7 +79,9 @@ slots above filled, and leaves the `Loaded` it was given unchanged. That is not 
 charter's sense (invariant 5): every column it writes is one this schema defines as "not read yet"
 until the sequence is read (`ref` null, `ref_check = not_run`, an array row's `alts` and `gt` null),
 nothing the source wrote is touched, and the result is fixed by the facet and its assembly's
-sequence, not by a choice. The alternative, a derived facet (`relation = ref_checked`), was rejected:
+sequence, not by a choice. The same holds for an array's `assembly_label` when the facet stated none
+(null is "unknown", and the rows against the sequence settle it, below); a stated label is never
+replaced. The alternative, a derived facet (`relation = ref_checked`), was rejected:
 every facet would then stay `not_run` for ever and its checked twin would be a second identity for the
 same calls. A facet already read is refused rather than read again.
 
@@ -101,9 +103,22 @@ both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X):
 - the facet stated the contig's length (`header_contigs`): the reference's length must equal it, and
   its md5 too where the header gives one;
 - it did not (arrays): the facet's `assembly_label` must equal the reference's. The reference's label
-  comes from its contig 1 length (GRCh37, GRCh38, T2T-CHM13), or from one the caller asserted when
-  adding the FASTA. `GRCh37` cannot vouch for MT, since it covers hg19's chrM (16,571 bases) as well
-  as rCRS (16,569), so an array's MT stays unread.
+  comes from its contig 1 length (GRCh36, GRCh37, GRCh38, T2T-CHM13), or from one the caller asserted
+  when adding the FASTA. `GRCh37` cannot vouch for MT, since it covers hg19's chrM (16,571 bases) as
+  well as rCRS (16,569), and `GRCh36` neither (NCBI36 and hg18 carry the 16,571-base chrM), so an
+  array's MT stays unread.
+- it stated neither lengths nor a label (an FTDNA export, a headerless table): the label is inferred
+  from the rows (F9), and then matched as above. Per collection in the store, a deterministic sample
+  of the facet's array SNV rows (at most 2,000 per chromosome on 1–22, X and Y, every k-th row by
+  position; MT never) is scored: the share whose called alleles include the collection's base at that
+  position, on the forward strand only. A row on a contig the collection lacks is not scored on it; a
+  row past the contig's end counts against it. The best collection names its label when it was scored
+  on at least 1,000 rows, reaches 60%, and stands 20 points above both the best collection of any
+  other label (an unlabelled collection counts as another) and chance (the mean number of distinct
+  called alleles over four). The facet then gets `assembly_label` with basis `inferred`, and the
+  scores go in one warning line. Rows that do not settle it refuse the facet, with the scores in the
+  error. Only array rows are scored: for a VCF without lengths or a build hint, `ref_check` would then
+  confirm the very comparison that chose its build, so it is still refused.
 
 A primary contig (1–22, X, Y) whose stated length or md5 differs refuses the whole facet
 (`ReferenceMismatchError`): it is another assembly. Any other contig that does not match (hg19's chrM
@@ -307,7 +322,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `vendor`, `caller`, `caller_version` | the RM2 `source` detector, from header lines only. Null = not identifiable, never guessed. `vendor` is the party the header names as delivering the file (`##center`, `##generatedby`), falling back to the format's own vendor (`vcf_cgi`); a caller's maker is not a vendor. `caller` is the program that wrote the genotypes; tools that only touched the file afterwards (GATK SelectVariants, ApplyVQSR, bcftools view) are not evidence. Two callers in one header leave both fields null, with a warning; so do two versions of one caller for `caller_version` |
 | `ploidy_statements` | the header's ploidy lines verbatim, in header order (RM269 half 1): a meta line whose key names a ploidy or karyotype (DRAGEN `##referenceSexKaryotype=XY`, CGI `##source_MAX_PLOIDY`), and each ploidy option of a recorded command line, prefixed with the line it came from (`GATKCommandLine HaplotypeCaller: --sample-ploidy 2`, `bcftools_callCommand: --ploidy GRCh38`). An option whose value is a path writes `<path>` for it. No vocabulary: reading a model out of these is the karyotype work's job. `[]` = a VCF header with none; null = not a VCF. just-vcf's own shape |
 | `sample` | the sample column name, verbatim. **Identifying**: PGP uploads carry real names here. Logs, warnings and error messages name the `facet_id`, never the sample |
-| `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` (contig lengths) or null. A stated label is kept when the lengths disagree, with a warning (RM4, below) |
+| `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` or null. A stated label is kept when the lengths disagree, with a warning (RM4, below). `inferred` has two sources: a VCF's contig lengths at load (RM4), and an array's own rows scored against the reference by `resolve_ref` (F9, Decision 2). A consumer tells them apart by `header_contigs`, which only the first has |
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |

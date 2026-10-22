@@ -59,7 +59,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   as unchecked. Normalized facets get new ids (`NORMALIZE_VERSION` 3).
 
 - A 23andMe-layout table that ends in 1,000 or more rows of one other width gets a warning that it
-  looks like a second export appended, which is not read (F3, still open).
+  looks like a second export appended, which is not read (F3 surfaced). Since resolved: an appended
+  export of one allele per column loads as its own facet (the F3 entry below); a run of any other
+  width keeps this warning.
 
 - An FTDNA or MyHeritage-style export, or a Final Report that names no manifest, gets `facets.chip` by
   marker overlap with Illumina's manifests (RM4): `illumina_omniexpress` or `illumina_gsa`, basis

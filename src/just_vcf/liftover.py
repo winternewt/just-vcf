@@ -38,7 +38,6 @@ import gzip
 import hashlib
 import json
 import logging
-import shutil
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +45,7 @@ from pathlib import Path
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
+from just_vcf import cache
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import PRIMARY, Contig, ReferenceMismatchError, ReferenceStore, _derive_array_alleles, _span, _store_for
 from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceMeans, AssemblyLabelBasis, RefCheck, canonical_chrom, canonical_order, empty
@@ -269,6 +269,7 @@ def liftover(
     target collection's digest; without it, the one collection whose contig sizes match the chain's
     target side on every primary contig is used, and anything else is refused. The input is not changed.
     """
+    cache.sweep_stale(cache.LIFT_SPILL, _VERSIONS)
     parent = loaded.facets.collect()
     if parent.height != 1:
         raise ValueError(f"liftover takes one facet; this Loaded has {parent.height}")
@@ -285,42 +286,26 @@ def liftover(
     target_contigs = _target_contigs(chain, store, target_digest)
 
     facet_id = _derived_id(facet["facet_id"], chain.sha256, target_digest)
-    spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}-lift"
-    if spill.exists():
-        shutil.rmtree(spill)
-    spill.mkdir(parents=True)
-    loaded.calls.sink_parquet(spill / "input.parquet", row_group_size=SPILL_ROW_GROUP)
-    source = pl.scan_parquet(spill / "input.parquet")
-    chroms = source.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
-
-    counts: Counter[str] = Counter()
-    lifted_parts: list[Path] = []
-    report_parts: list[Path] = []
-    for index, chrom in enumerate(sorted(chroms, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-        rows = source.filter(pl.col("chrom") == chrom).collect()
-        report, lifted = _lift_contig(rows, chrom, chain, source_ok.get(chrom), store, target_contigs, facet_id, counts)
-        report.write_parquet(spill / f"report-{index:05d}.parquet", row_group_size=SPILL_ROW_GROUP)
-        report_parts.append(spill / f"report-{index:05d}.parquet")
-        if lifted.height:
-            lifted.write_parquet(spill / f"lifted-{index:05d}.parquet", row_group_size=SPILL_ROW_GROUP)
-            lifted_parts.append(spill / f"lifted-{index:05d}.parquet")
-    (spill / "input.parquet").unlink()
-
-    calls_parts: list[Path] = []
-    if lifted_parts:
-        scan = pl.scan_parquet(lifted_parts)
-        targets = scan.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
-        for index, chrom in enumerate(sorted(targets, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-            part = spill / f"calls-{index:05d}.parquet"
-            canonical_order(scan.filter(pl.col("chrom") == chrom)).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
-            calls_parts.append(part)
-        for part in lifted_parts:
-            part.unlink()
-    calls = pl.scan_parquet(calls_parts) if calls_parts else empty(CALLS)
-
     blocks = loaded.blocks.select(pl.len()).collect().item()
-    reasons = {reason: counts[f"reason:{reason}"] for reason in sorted(UNLIFTED_REASONS) if counts[f"reason:{reason}"]}
-    warnings = _warnings(counts, reasons, blocks, chain, store, source_digest, target_digest)
+    entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
+    with cache.spilling(entry, cache.LIFT_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id)) as spill:
+        # Streamed to parquet once, so each contig below is a filtered scan; its bytes key the result,
+        # with what else the warnings name, so a run on the same input reuses what an earlier one wrote.
+        staged = spill.stage / "input.parquet"
+        loaded.calls.sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
+        named = {"chain_name": chain.name, "blocks": blocks, "labels": [store.assembly_label(source_digest), store.assembly_label(target_digest)]}
+        key = cache.content_key([staged], {**facet, "_lift": named})
+        done = spill.find(key)
+        if done is None:
+            done = _lift_into(spill, key, staged, chain, source_ok, store, target_contigs, facet_id, blocks, source_digest, target_digest)
+    calls_parts = done.files("calls")
+    report_parts = done.files("report")
+    calls = pl.scan_parquet(calls_parts) if calls_parts else empty(CALLS)
+    report = pl.scan_parquet(report_parts) if report_parts else empty(REPORT)
+    # Read back from the report, so a reused generation gives the same counts as the run that wrote it.
+    found = dict(report.filter(pl.col("lift_reason").is_not_null()).group_by("lift_reason").len().collect().iter_rows())
+    reasons = {reason: found[reason] for reason in sorted(found)}
+    warnings = done.warnings
     for warning in warnings:
         logger.warning("%s: %s", facet_id, warning)
 
@@ -351,7 +336,55 @@ def liftover(
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )
-    return Lifted(loaded=derived, report=pl.scan_parquet(report_parts) if report_parts else empty(REPORT), reasons=reasons)
+    return Lifted(loaded=derived, report=report, reasons=reasons)
+
+
+_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "LIFT_VERSION": LIFT_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+"""The version keys of a lift spill, in its cache manifest."""
+
+
+def _lift_into(
+    spill: cache.Spill,
+    key: str,
+    staged: Path,
+    chain: Chain,
+    source_ok: dict[str, bool],
+    store: ReferenceStore,
+    target_contigs: dict[str, Contig],
+    facet_id: str,
+    blocks: int,
+    source_digest: str,
+    target_digest: str,
+) -> cache.Committed:
+    """Lift the staged input contig by contig into the spill's stage, and commit it as the generation `key`."""
+    source = pl.scan_parquet(staged)
+    chroms = source.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
+    counts: Counter[str] = Counter()
+    lifted_parts: list[Path] = []
+    report_parts: list[Path] = []
+    for index, chrom in enumerate(sorted(chroms, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
+        rows = source.filter(pl.col("chrom") == chrom).collect()
+        report, lifted = _lift_contig(rows, chrom, chain, source_ok.get(chrom), store, target_contigs, facet_id, counts)
+        report_parts.append(spill.stage / f"report-{index:05d}.parquet")
+        report.write_parquet(report_parts[-1], row_group_size=SPILL_ROW_GROUP)
+        if lifted.height:
+            lifted_parts.append(spill.stage / f"lifted-{index:05d}.parquet")
+            lifted.write_parquet(lifted_parts[-1], row_group_size=SPILL_ROW_GROUP)
+    staged.unlink()
+
+    calls_parts: list[Path] = []
+    if lifted_parts:
+        scan = pl.scan_parquet(lifted_parts)
+        targets = scan.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
+        for index, chrom in enumerate(sorted(targets, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
+            part = spill.stage / f"calls-{index:05d}.parquet"
+            canonical_order(scan.filter(pl.col("chrom") == chrom)).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
+            calls_parts.append(part)
+        for part in lifted_parts:
+            part.unlink()
+    reasons = {reason: counts[f"reason:{reason}"] for reason in sorted(UNLIFTED_REASONS) if counts[f"reason:{reason}"]}
+    warnings = _warnings(counts, reasons, blocks, chain, store, source_digest, target_digest)
+    return spill.commit(key, {"calls": calls_parts, "report": report_parts}, warnings)
 
 
 def _derived_id(parent_id: str, chain_sha256: str, target: str) -> str:

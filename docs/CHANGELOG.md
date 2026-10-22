@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `liftover` run again no longer breaks the `Lifted` an earlier run returned. It spills like the other
+  derived steps: a generation per content key under `frames/<facet_id>-<SCHEMA_VERSION>/` (kind
+  `lift_spill`, with a manifest naming the root source, so `clear_cache(source)` removes it), reused
+  with its warnings and reasons when the same input comes again, a second one for other rows. Before,
+  each run removed and rewrote `frames/<facet_id>-<SCHEMA_VERSION>-lift/`, which the index did not
+  see at all; those old directories are swept by the next `liftover`.
+
 - Schema 0.0.9: `facets.variant_classes`, `content_filter`, `content_filter_basis` (a genome file that
   kept one variant class is still `wgs`, but absence reads as reference only for the classes it carries;
   `absence_is_reference` answers it for consumers).

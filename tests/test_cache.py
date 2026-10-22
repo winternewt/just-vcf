@@ -96,7 +96,7 @@ def test_every_entry_records_what_it_is_and_its_root_source(tmp_path: Path, defa
     normalized = normalize(resolved, default_store)
 
     found = manifests()
-    assert {m.kind for m in found.values()} == CACHE_KINDS - {cache.VRS_SPILL}
+    assert {m.kind for m in found.values()} == CACHE_KINDS - {cache.VRS_SPILL, cache.LIFT_SPILL}
     assert {m.source_sha256 for m in found.values()} == {sha256(path)}
     assert {m.source_path for m in found.values()} == {str(path.resolve())}
     load_id = loaded.facets.collect()["facet_id"][0]

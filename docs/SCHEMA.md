@@ -888,7 +888,7 @@ The frames `load` and the derived steps return are lazy scans over files in `cac
 frame stops working when its files go.
 
 - Entries are directories under `vcf/` (rewrite copies, kind `rewrite_copy`) and `frames/` (spills:
-  `frames_spill`, `rejoin_spill`, `resolve_spill`, `vrs_spill`, `normalize_spill`). Beside each is
+  `frames_spill`, `rejoin_spill`, `resolve_spill`, `vrs_spill`, `normalize_spill`, `lift_spill`). Beside each is
   `<name>.json`, its manifest, and `<name>.lock`, an OS file lock the writer holds while it writes.
   The manifest names the root source (sha256 and resolved path), which every derived facet carries
   down from its parent, so a genome's derived spills go with its copies.
@@ -899,7 +899,7 @@ frame stops working when its files go.
 - A manifest this version cannot read (a newer version's, with a kind or field it does not know) makes
   its entry unknown origin: kept, never swept, and it does not stop `load`. Kinds are checked where
   an entry is written.
-- A derived step's entry (`rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids`) holds one
+- A derived step's entry (`rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids`, `liftover`) holds one
   directory per generation. A run writes into a staging directory inside the entry, under the entry's
   lock, and renames it to `<key>/` when it is complete, `<key>` being a sha256 of the content the
   result was computed from (the staged input's bytes, or for `rejoin_split` the result's, and the
@@ -911,7 +911,12 @@ frame stops working when its files go.
   are removed by the next run. Rejected: keying reuse on the facet id and versions alone, which would
   hand a filtered `Loaded` the full facet's rows; and replacing the files in place, which broke the
   earlier frame (`Invalid thrift` on its next `collect`). The manifest's `SPILL_LAYOUT` key (2) retires,
-  through the sweep, entries written before generations.
+  through the sweep, entries written before generations. `liftover`'s generation holds two groups,
+  the lifted `calls` and the `report`; its key also takes the chain's file name, the parent's block
+  count and the two collections' labels, which its warnings name, and `Lifted.reasons` is read back
+  from the report, so a reused generation answers as the run that wrote it. Its spill, once
+  `frames/<facet_id>-<SCHEMA_VERSION>-lift/` with no manifest, removed and rewritten on every run, is
+  now `frames/<facet_id>-<SCHEMA_VERSION>/` like the others; the old name is swept by `liftover`.
 - `clear_cache` removes what the caller names, even under a live `Loaded`; that frame's next
   `collect` then fails. It skips an entry whose lock is held, and touches nothing outside `vcf/` and
   `frames/`: the reference store under `reference/` is not a cache of a genome.

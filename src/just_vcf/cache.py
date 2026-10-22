@@ -5,7 +5,8 @@ The cache (`cache_dir()`) holds two directories of entries:
 - `vcf/<key>/`: a rewritten copy of an input polars-bio cannot read as it is (`readable_path`), and a
   `structural/` copy inside it for a file polars-bio refused. Kind `rewrite_copy`.
 - `frames/<name>/`: the parquet spills the lazy frames read. `<facet_id>-<SCHEMA_VERSION>` is a load's
-  spill (`frames_spill`), or a derived facet's under its own id (`rejoin_spill`, `normalize_spill`);
+  spill (`frames_spill`), or a derived facet's under its own id (`rejoin_spill`, `normalize_spill`,
+  `lift_spill`);
   `<facet_id>-<SCHEMA_VERSION>-ref-<digest>-<RESOLVE_VERSION>` is `resolve_ref`'s (`resolve_spill`) and
   `…-vrs-<digest>-<MINT_VERSION>` is `mint_vrs_ids`'s (`vrs_spill`). A derived step's entry holds one
   directory per generation, `<key>/`, named by the content the result was computed from (`Spill`).
@@ -59,12 +60,17 @@ REJOIN_SPILL = "rejoin_spill"
 RESOLVE_SPILL = "resolve_spill"
 VRS_SPILL = "vrs_spill"
 NORMALIZE_SPILL = "normalize_spill"
-CACHE_KINDS: frozenset[str] = frozenset({REWRITE_COPY, FRAMES_SPILL, REJOIN_SPILL, RESOLVE_SPILL, VRS_SPILL, NORMALIZE_SPILL})
+LIFT_SPILL = "lift_spill"
+CACHE_KINDS: frozenset[str] = frozenset({REWRITE_COPY, FRAMES_SPILL, REJOIN_SPILL, RESOLVE_SPILL, VRS_SPILL, NORMALIZE_SPILL, LIFT_SPILL})
 """What a cache entry can be. Grows as derived-facet steps that spill land."""
 
 _DIRS = ("vcf", "frames")
 _VCF_NAME = re.compile(r"[0-9a-f]{32}")
-_FRAMES_NAME = re.compile(r"(?P<facet>[0-9a-f]{32})-(?P<schema>[0-9][0-9.]*)(?:-(?P<op>ref|vrs)-(?P<digest>[A-Za-z0-9_-]+)-(?P<step>[0-9]+))?")
+_FRAMES_NAME = re.compile(
+    r"(?P<facet>[0-9a-f]{32})-(?P<schema>[0-9][0-9.]*)(?:-(?P<op>ref|vrs)-(?P<digest>[A-Za-z0-9_-]+)-(?P<step>[0-9]+)|-(?P<lift>lift))?"
+)
+"""A `frames/` entry's name. `-lift` is only ever a legacy name: `liftover` wrote `<facet_id>-<SCHEMA_VERSION>-lift`
+before the index, and now spills under `<facet_id>-<SCHEMA_VERSION>` like the other derived facets."""
 _LEGACY_STEP_KEY = {"ref": ("RESOLVE_VERSION", RESOLVE_SPILL), "vrs": ("MINT_VERSION", VRS_SPILL)}
 
 
@@ -303,8 +309,10 @@ class Spill:
 
 
 SPILL_LAYOUT = 2
-"""How a derived spill is laid out, a key in its manifest's versions: 2 is one directory per
-generation (`Spill`); 1 wrote the files into the entry itself, so the sweep retires those entries."""
+"""How a derived spill is laid out, a key in its manifest's versions: 2 is one directory per generation
+(`Spill`); 1 wrote the files into the entry itself, so the sweep retires those entries. `liftover`
+took generations after the other derived steps, at the same layout number: its spill had no
+manifest before."""
 
 _STAGING = ".staging-"
 _RESULT = "result.json"
@@ -449,6 +457,9 @@ def _stale(entry: _Entry, kind: str, current: dict[str, str]) -> bool:
     if entry.relative.startswith("vcf/"):
         return kind == REWRITE_COPY
     match = _FRAMES_NAME.fullmatch(entry.path.name)
+    if match["lift"]:
+        # Written before the index and before generations: no run of this version reads it.
+        return kind == LIFT_SPILL
     if match["op"] is None:
         # Shared by load's, rejoin's and normalize's spills: only the schema version is in the name.
         return kind == FRAMES_SPILL and match["schema"] != current.get("SCHEMA_VERSION")

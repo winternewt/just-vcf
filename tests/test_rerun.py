@@ -1,6 +1,6 @@
 """A derived step run again must not break the frame an earlier run returned.
 
-`rejoin_split`, `resolve_ref`, `normalize` and `mint_vrs_ids` each spill under `frames/<entry>/`. A run
+`rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids` and `liftover` each spill under `frames/<entry>/`. A run
 stages its files and commits them as a generation named by the content it was computed from; a later
 run with the same content reuses that generation, a run with other rows under the same facet id adds
 one beside it, and no run rewrites or removes a committed generation. Every test runs on the per-test
@@ -21,12 +21,14 @@ from just_vcf import (
     Loaded,
     ReferenceStore,
     cache,
+    liftover,
     load,
     mint_vrs_ids,
     normalize,
     rejoin_split,
     resolve_ref,
 )
+from just_vcf.liftover import LIFT_VERSION
 from just_vcf.reference import RESOLVE_VERSION
 from just_vcf.schema import SCHEMA_VERSION
 
@@ -217,3 +219,130 @@ def test_two_processes_running_every_step_leave_a_live_frame_working(tmp_path: P
         entry = entry_of(kind)
         assert file_stamps(entry) == before, kind
         assert len(generations(entry)) == 1, kind
+
+
+# liftover: the same rules, over two file groups (the lifted calls and the report). The target is SEQ
+# with two bases in front, a second collection added once REF is read, and the chain maps contig 1 onto
+# it two bases on.
+TARGET_SEQ = "GG" + SEQ
+
+
+@pytest.fixture
+def lift_chain(tmp_path: Path) -> Path:
+    chain = tmp_path / "seq_to_target.chain"
+    chain.write_text(f"chain 1000 1 {len(SEQ)} + 0 {len(SEQ)} 1 {len(TARGET_SEQ)} + 2 {len(TARGET_SEQ)} 1\n{len(SEQ)}\n\n")
+    return chain
+
+
+def add_target(store: ReferenceStore, tmp_path: Path) -> None:
+    fasta = tmp_path / "target.fa"
+    fasta.write_text(">1\n" + "\n".join(TARGET_SEQ[i : i + 60] for i in range(0, len(TARGET_SEQ), 60)) + "\n")
+    store.add_fasta(fasta)
+
+
+def lifted_frames(lifted) -> tuple[pl.DataFrame, pl.DataFrame]:
+    return lifted.loaded.calls.collect(), lifted.report.collect()
+
+
+def test_liftover_again_reuses_its_spill_and_touches_no_file(tmp_path: Path, default_store: ReferenceStore, lift_chain: Path) -> None:
+    path = vcf_zip(tmp_path, "one")
+    resolved = resolve_ref(load(path), default_store)
+    add_target(default_store, tmp_path)
+    first = liftover(resolved, lift_chain, default_store)
+    entry = entry_of(cache.LIFT_SPILL)
+    before = file_stamps(entry)
+    calls, report = lifted_frames(first)
+    manifest = manifests(cache.LIFT_SPILL)[f"frames/{entry.name}"]
+    assert calls.height > 0 and report["lift_reason"].null_count() == calls.height
+
+    second = liftover(resolved, lift_chain, default_store)
+
+    assert file_stamps(entry) == before
+    assert lifted_frames(first)[0].equals(calls) and lifted_frames(first)[1].equals(report)
+    assert lifted_frames(second)[0].equals(calls) and lifted_frames(second)[1].equals(report)
+    assert (second.reasons, second.loaded.warnings) == (first.reasons, first.loaded.warnings)
+    assert len(generations(entry)) == 1
+    again = manifests(cache.LIFT_SPILL)[f"frames/{entry.name}"]
+    assert again.created == manifest.created and again.last_used > manifest.last_used
+    assert again.size_bytes == size_on_disk(entry)
+    assert again.versions == {"SCHEMA_VERSION": SCHEMA_VERSION, "LIFT_VERSION": str(LIFT_VERSION), "SPILL_LAYOUT": str(cache.SPILL_LAYOUT)}
+    assert (again.facet_id, again.parent_facet_id) == (first.loaded.facets.collect()["facet_id"][0], resolved.facets.collect()["facet_id"][0])
+
+
+def test_liftover_on_other_rows_leaves_the_first_frame_as_it_was(tmp_path: Path, default_store: ReferenceStore, lift_chain: Path) -> None:
+    resolved = resolve_ref(load(vcf_zip(tmp_path, "one")), default_store)
+    add_target(default_store, tmp_path)
+    first = liftover(resolved, lift_chain, default_store)
+    calls, report = lifted_frames(first)
+    fewer = Loaded(facets=resolved.facets, calls=resolved.calls.filter(pl.col("pos") != 100), blocks=resolved.blocks)
+
+    second = liftover(fewer, lift_chain, default_store)
+
+    assert lifted_frames(first)[0].equals(calls) and lifted_frames(first)[1].equals(report)
+    assert set(second.report.collect()["pos"]) == set(report["pos"]) - {100}
+    assert len(generations(entry_of(cache.LIFT_SPILL))) == 2
+    assert lifted_frames(liftover(resolved, lift_chain, default_store))[0].equals(calls)
+    assert len(generations(entry_of(cache.LIFT_SPILL))) == 2
+
+
+def test_a_lift_spill_from_before_the_index_is_swept(tmp_path: Path, default_store: ReferenceStore, lift_chain: Path) -> None:
+    """`liftover` wrote `<facet_id>-<SCHEMA_VERSION>-lift` with no manifest; no run of this version reads it."""
+    old = cache.cache_dir() / "frames" / f"{'e' * 32}-{SCHEMA_VERSION}-lift"
+    old.mkdir(parents=True)
+    (old / "calls-00000.parquet").write_bytes(b"x" * 100)
+    resolved = resolve_ref(load(vcf_zip(tmp_path, "one")), default_store)
+    assert old.exists()
+    add_target(default_store, tmp_path)
+    liftover(resolved, lift_chain, default_store)
+    assert not old.exists()
+
+
+def _run_lift(frames: tuple[pl.LazyFrame, pl.LazyFrame, pl.LazyFrame], chain: Path, results: "multiprocessing.Queue") -> None:
+    """In a child process: `liftover` on the facet the parent resolved, reporting its rows and report."""
+    lifted = liftover(Loaded(facets=frames[0], calls=frames[1], blocks=frames[2]), chain, ReferenceStore.open())
+    results.put([frame.write_ipc(None).getvalue() for frame in lifted_frames(lifted)])
+
+
+def run_children(target, args: tuple, check: Callable[[], None], count: int = 2) -> list:
+    """Start `count` spawned children on `target(*args, queue)`, running `check` until each reports."""
+    context = multiprocessing.get_context("spawn")
+    results = context.Queue()
+    children = [context.Process(target=target, args=(*args, results)) for _ in range(count)]
+    for child in children:
+        child.start()
+    reported: list = []
+    reads = 0
+    deadline = time.monotonic() + 120
+    # Results are taken while the children run: a child that has put its result exits only once it is read.
+    while len(reported) < len(children):
+        assert time.monotonic() < deadline, "children did not report in time"
+        assert all(child.exitcode in (None, 0) for child in children), [child.exitcode for child in children]
+        check()
+        reads += 1
+        try:
+            reported.append(results.get(timeout=0.01))
+        except queue.Empty:
+            pass
+    for child in children:
+        child.join(60)
+        assert child.exitcode == 0
+    assert reads > 0
+    return reported
+
+
+def test_two_processes_lifting_leave_a_live_lift_working(tmp_path: Path, default_store: ReferenceStore, lift_chain: Path) -> None:
+    resolved = resolve_ref(load(vcf_zip(tmp_path, "one")), default_store)
+    add_target(default_store, tmp_path)
+    live = liftover(resolved, lift_chain, default_store)
+    calls, report = lifted_frames(live)
+    entry = entry_of(cache.LIFT_SPILL)
+    before = file_stamps(entry)
+
+    def check() -> None:
+        assert lifted_frames(live)[0].equals(calls) and lifted_frames(live)[1].equals(report)
+
+    reported = run_children(_run_lift, ((resolved.facets, resolved.calls, resolved.blocks), lift_chain), check)
+
+    for got_calls, got_report in reported:
+        assert pl.read_ipc(got_calls).equals(calls) and pl.read_ipc(got_report).equals(report)
+    assert file_stamps(entry) == before and len(generations(entry)) == 1

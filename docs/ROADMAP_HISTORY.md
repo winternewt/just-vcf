@@ -3,6 +3,84 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM268 — Cache eviction
+Severity: medium · Status: shipped 2026-10-22: the cache index, the stale-version sweep, `clear_cache`; no size cap · Owner: lead
+
+Nothing ever removes anything from `JUST_VCF_CACHE_DIR`. It holds two kinds of entry:
+
+- `vcf/<key>/`: rewritten copies of inputs polars-bio cannot read as they are
+  (`loaders/vcf.py` `readable_path`), plus a `structural/` copy for a file polars-bio refused. The key
+  hashes the source digest, the archive member and `REWRITE_VERSION`.
+- `frames/<facet_id>-<SCHEMA_VERSION>/`: the calls and blocks parquet spill from `load`, and since
+  RM270 the calls spill of a `rejoin_split` facet, under the derived `facet_id`. Nothing in the cache
+  ties that id to its parent, so an eviction that keys on a source file does not see it.
+
+Because the version is part of each key, every bump of `REWRITE_VERSION` or `SCHEMA_VERSION` orphans
+every earlier entry, and nothing collects them. Measured 2026-10-03: after the 2026-09-30 dogfooding
+runs, the cache under `data/interim/cache` had reached 32 GB in 36 `vcf/` entries. Most of it was
+orphans: the two largest were plain `input.vcf` copies of 14.5 GB and 7.4 GB, from before the rewrite
+switched to BGZF `input.vcf.gz`. The user deleted it by hand.
+
+Constraints on a fix:
+
+- A copy has to outlive the lazy frames that read it, so evicting the entry a live `Loaded` points at
+  breaks a later `collect`. Orphans by version are always safe to remove; current entries need an age
+  or size policy.
+- The copies are whole private genomes. Deleting a source under `/data/genomes` leaves its copy in the
+  cache, so eviction is also how a removed genome actually goes away.
+
+Options, not decided: sweep stale-version entries on each load; an explicit `clear_cache()` in the
+API (and in the CLI once it exists); a size cap with least-recently-used eviction.
+
+
+**Shipped 2026-10-22** (the lead's outline, 2026-10-22). Rules in docs/SCHEMA.md ("The cache under the
+lazy frames"); code in `just_vcf/cache.py`.
+
+1. **The index.** Every entry has `<name>.json` beside it: kind (`rewrite_copy`, `frames_spill`,
+   `rejoin_spill`, `resolve_spill`, `vrs_spill`, `normalize_spill`), version keys, the root source's
+   sha256 and resolved path, `facet_id` and `parent_facet_id`, size, `created` and `last_used`
+   (ISO-8601 UTC). A derived spill takes its root source from the facet row, which every derived step
+   carries down (`source_sha256`, `source_path`), so `rejoin_split`'s spill is no longer cut off from
+   its file.
+2. **Stale versions are swept** by the step that owns the kind, before it writes, with the bytes freed
+   logged. An entry from before the index is judged by its name: a frames name carries
+   `SCHEMA_VERSION` (and the resolve or mint version); a `vcf/` key hashes its version, so
+   `REWRITE_VERSION` went to 7 with the index and a copy without a manifest is stale by construction.
+3. **`clear_cache(source=None, older_than=None, dry_run=False)`** returns a `CacheClearReport`
+   (`removed`, `being_written`, `unknown_origin`, `bytes_removed`; no source paths, so it can be shown).
+   Writers hold an OS file lock (`flock`; `msvcrt` on Windows, unexercised) beside the entry, and
+   `clear_cache` skips an entry whose lock is held. A waiting writer re-checks that the lock file is
+   still the one at its path, since a remover unlinks it.
+4. **No size cap.** Rejected: LRU under a cap. `last_used` records writes and reuses, not reads, so a
+   cap could evict the files a live frame scans with nobody asking.
+
+Decisions taken while building, each with the rejected alternative:
+
+- The manifest sits beside the entry, not inside it: `resolve_ref`, `normalize` and `mint_vrs_ids`
+  remove their spill directory before writing it, which would take a manifest or lock inside with it.
+- Bump `REWRITE_VERSION` rather than keep unindexed copies until someone deletes them by hand: the
+  first load of each file after the upgrade rewrites its copy once, and in exchange no whole-genome
+  copy stays behind unattributed.
+- `source` resolves as: an existing file is hashed and matches by sha256 or by recorded path; a
+  64-character hex string that is no file is the sha256; any other path matches the recorded path (a
+  deleted file). Rejected: sha256 only, since the person who deleted a genome knows its path, not its
+  digest.
+- `older_than` reads `last_used`, not `created`: a copy reused every day is not old.
+- `clear_cache()` with neither filter clears every indexed entry, with `dry_run` as the valve.
+  Rejected: refusing without a filter, which would make clearing the cache take
+  `older_than=timedelta(0)`.
+- The manifest is written when the lock is taken as well as when the write ends, so an entry whose
+  writer died still names its source and can be cleared by it.
+
+Measured 2026-10-22 on three PGP-HMS VCFs (one that needs a rewrite copy) in a scratch cache under the
+builder's worktree: 4 entries, 48,099,333 bytes (3 load spills, 1 copy). A copy of one spill under an
+older schema name, without a manifest, 34,780,557 bytes, was swept by the next `load`.
+`clear_cache(source)` on the file with the copy removed its 2 entries, 10,202,328 bytes, dry run and
+real run agreeing; `older_than=timedelta(days=1)` removed nothing; `clear_cache()` removed the last 2.
+
+Open: the derived steps still remove and rewrite their spill in place, so running one twice on the
+same facet breaks the frame the first run returned. That predates RM268 and is not changed here.
+
 ## RM270 — Pre-split multi-allelic input
 Severity: high · Status: shipped 2026-10-19: B, the flags (schema 0.0.4), and D, `rejoin_split`; C not built, the person chose D (desk #45) · Owner: lead
 

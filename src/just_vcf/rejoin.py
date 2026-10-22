@@ -14,6 +14,7 @@ from itertools import groupby
 
 import polars as pl
 
+from just_vcf import cache
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck, canonical_order_per_contig
 
@@ -37,6 +38,7 @@ def rejoin_split(loaded: Loaded) -> Loaded:
     is null there. A group that cannot be read so (two different ALTs in one slot, rows of different
     ploidy, a symbolic allele, REFs that disagree) keeps its rows as written, counted in the warnings.
     """
+    cache.sweep_stale(cache.REJOIN_SPILL, _VERSIONS)
     parent = loaded.facets.collect()
     if parent.height != 1:
         raise ValueError(f"rejoin_split takes one facet; this Loaded has {parent.height}")
@@ -68,10 +70,11 @@ def rejoin_split(loaded: Loaded) -> Loaded:
         rest = loaded.calls.filter(pl.col("split_signal").is_null())
         rebuilt = pl.DataFrame(kept + joined, schema=CALLS).lazy()
         spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-        spill.mkdir(parents=True, exist_ok=True)
-        pl.concat([rest, rebuilt], how="vertical").with_columns(pl.lit(facet_id).alias("facet_id")).sink_parquet(
-            spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP
-        )
+        with cache.writing(spill, cache.REJOIN_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id)):
+            spill.mkdir(parents=True, exist_ok=True)
+            pl.concat([rest, rebuilt], how="vertical").with_columns(pl.lit(facet_id).alias("facet_id")).sink_parquet(
+                spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP
+            )
         contigs = [entry["chrom"] for entry in facet["contig_map"] or []]
         calls = canonical_order_per_contig(pl.scan_parquet(spill / "calls.parquet"), contigs)
     else:
@@ -88,6 +91,10 @@ def rejoin_split(loaded: Loaded) -> Loaded:
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )
+
+
+_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": REJOIN_VERSION}
+"""The version keys of a rejoin spill, in its cache manifest."""
 
 
 def _derived_id(parent_id: str) -> str:

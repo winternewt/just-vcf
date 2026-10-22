@@ -393,35 +393,6 @@ store:
   the runs (other sessions were writing to it; the workspace note says about 350 MB/s). Peak RSS of the
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
-## RM268 — Cache eviction
-Severity: medium · Status: open · Owner: lead
-
-Nothing ever removes anything from `JUST_VCF_CACHE_DIR`. It holds two kinds of entry:
-
-- `vcf/<key>/`: rewritten copies of inputs polars-bio cannot read as they are
-  (`loaders/vcf.py` `readable_path`), plus a `structural/` copy for a file polars-bio refused. The key
-  hashes the source digest, the archive member and `REWRITE_VERSION`.
-- `frames/<facet_id>-<SCHEMA_VERSION>/`: the calls and blocks parquet spill from `load`, and since
-  RM270 the calls spill of a `rejoin_split` facet, under the derived `facet_id`. Nothing in the cache
-  ties that id to its parent, so an eviction that keys on a source file does not see it.
-
-Because the version is part of each key, every bump of `REWRITE_VERSION` or `SCHEMA_VERSION` orphans
-every earlier entry, and nothing collects them. Measured 2026-10-03: after the 2026-09-30 dogfooding
-runs, the cache under `data/interim/cache` had reached 32 GB in 36 `vcf/` entries. Most of it was
-orphans: the two largest were plain `input.vcf` copies of 14.5 GB and 7.4 GB, from before the rewrite
-switched to BGZF `input.vcf.gz`. The user deleted it by hand.
-
-Constraints on a fix:
-
-- A copy has to outlive the lazy frames that read it, so evicting the entry a live `Loaded` points at
-  breaks a later `collect`. Orphans by version are always safe to remove; current entries need an age
-  or size policy.
-- The copies are whole private genomes. Deleting a source under `/data/genomes` leaves its copy in the
-  cache, so eviction is also how a removed genome actually goes away.
-
-Options, not decided: sweep stale-version entries on each load; an explicit `clear_cache()` in the
-API (and in the CLI once it exists); a size cap with least-recently-used eviction.
-
 ## RM269 — Karyotype finding and the caller's ploidy model
 Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO wait for a coverage facet, as do XXX, XYY and arrays) · Owner: lead
 

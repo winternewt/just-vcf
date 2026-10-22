@@ -4,6 +4,21 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Cache eviction (RM268). Every cache entry now has a manifest beside it (`<name>.json`: kind, version
+  keys, the root source's sha256 and path, the facet it holds and its parent, size, created and last
+  used, ISO-8601 UTC) and a lock file its writer holds while it writes. `load` and each derived step
+  (`rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids`) first remove the entries of their own
+  kind an older version wrote, logging the bytes freed. New `clear_cache(source=None, older_than=None,
+  dry_run=False)` removes every entry derived from a source (named by path, or by sha256 once the file
+  is gone; derived spills included) or unused for longer than a duration, skips an entry being
+  written, never removes an entry older than the index, and never touches the reference store; it
+  returns a `CacheClearReport`. Removing an entry a live `Loaded` reads breaks its next `collect`.
+  `REWRITE_VERSION` 6 → 7, so every copy without a manifest is known stale and swept: the first load
+  of each file after upgrading rewrites its copy once. Rules in docs/SCHEMA.md ("The cache under the
+  lazy frames"). Measured on three PGP-HMS VCFs in a scratch cache: 4 entries, 48.1 MB; an old-version
+  orphan of 34.8 MB was swept by the next load; `clear_cache(source)` removed one file's 2 entries,
+  10.2 MB. Minor: new exports (`clear_cache`, `CacheClearReport`, `CacheEntryInfo`).
+
 - New `sex_chromosome_evidence(loaded)` (RM269): for each facet, what its calls say about X and Y, and
   an estimate of the karyotype. It measures GT ploidy as written per group (autosomes, non-PAR X,
   non-PAR Y, PAR, MT), the het share of non-PAR X calls written diploid with their AD allele balance,

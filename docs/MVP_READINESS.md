@@ -35,7 +35,7 @@ Status: **shipped**, **partial**, or **not started**.
 | 16 | Liftover with a `liftover_to` link | inv. 5 | not started | RM6 (port from just-prs) | `bcftools +liftover` per LANDSCAPE |
 | 17 | Deterministic output | inv. 12 | shipped | canonical order per contig; `write_vcf` gives the same bytes for the same frames (tested) | — |
 | 18 | CLI | (CLAUDE.md §4) | not started | no `[project.scripts]` | Typer |
-| 19 | Cache eviction | — | not started | RM268 | the cache grows without bound |
+| 19 | Cache eviction | — | shipped | RM268: a manifest per entry, the stale-version sweep, `clear_cache(source, older_than, dry_run)` | no size cap (rejected: it can evict under a live frame); no CLI yet |
 | 20 | Population inference | — | partial | `just_vcf.ancestry` (RM5): reference-PCA projection, neighbour vote, proportions, consensus, Privé's 21-group proportions with standard errors; gated on the facet's assembly and `absence_means`; run on PGP-HMS genomes and arrays against Privé | GRCh37 only for Privé; no reference-PCA panel on this machine; no liftover (RM6) |
 | 21 | Charter signed | RM1 | not started | `CHARTER_DRAFT.md`, the person's call | — |
 | 22 | First PyPI release | — | not started | 0.1.0 in `pyproject.toml`, absent from PyPI | a release is the person's |

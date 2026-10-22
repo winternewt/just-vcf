@@ -9,7 +9,8 @@ is proposed and set by the person's merge of the first adoption pull request.
 ## What is worth protecting
 
 - **The private genomes**: `/data/genomes/<person>/`, named people's, and their decompressed copies in
-  the loader's cache (`JUST_VCF_CACHE_DIR`, by default the platform's user cache; RM268). The PGP-HMS downloads beside them are
+  the loader's cache (`JUST_VCF_CACHE_DIR`, by default the platform's user cache). `clear_cache(source)` removes a
+  source's copies and every spill derived from it, by path or, once the file is gone, by sha256 (RM268). The PGP-HMS downloads beside them are
   consented-public (CC0).
 - Nothing else here is secret: no tokens or keys in `.env`; the forge and messenger credentials belong
   to the machine, not this repository.

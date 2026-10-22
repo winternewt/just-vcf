@@ -36,7 +36,7 @@ Status: **shipped**, **partial**, or **not started**.
 | 17 | Deterministic output | inv. 12 | partial | canonical order per contig, tested | no writer yet to hold it to |
 | 18 | CLI | (CLAUDE.md §4) | not started | no `[project.scripts]` | Typer |
 | 19 | Cache eviction | — | not started | RM268 | the cache grows without bound |
-| 20 | Population inference | — | not started | RM5, behind `[ancestry]` | port from just-prs |
+| 20 | Population inference | — | partial | `just_vcf.ancestry` (RM5): reference-PCA projection, neighbour vote, proportions, consensus, Privé's 21-group proportions with standard errors; gated on the facet's assembly and `absence_means`; run on PGP-HMS genomes and arrays against Privé | GRCh37 only for Privé; no reference-PCA panel on this machine; no liftover (RM6) |
 | 21 | Charter signed | RM1 | not started | `CHARTER_DRAFT.md`, the person's call | — |
 | 22 | First PyPI release | — | not started | 0.1.0 in `pyproject.toml`, absent from PyPI | a release is the person's |
 

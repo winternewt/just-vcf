@@ -652,3 +652,105 @@ def test_the_strand_threshold_is_a_share_of_hets() -> None:
     small = check_strand(pl.DataFrame({"alleles": [["C", "T"]] * few}), pl.Series(["A"] * few))
     assert small.check is None and small.minus == few
 
+
+# F4: Living DNA writes an indel genotype as its two allele sequences back to back (`CCA`).
+
+LIVING_DNA = (
+    "# Living DNA customer genotype data download file version: 1.0.2\n"
+    "# Genotype chip: Sirius\n"
+    "# Human Genome Reference Build 37 (GRCh37.p13).\n"
+    "# Genotypes are presented on the forward strand.\n"
+    "#\n"
+    "# rsid\tchromosome\tposition\tgenotype\n"
+)
+
+
+def concatenated_cases() -> dict[str, tuple[int, str]]:
+    """One run-together genotype per outcome, planted on SEQ["1"] after the drawn rows: name -> (pos, text).
+    Each text is built from the sequence at its position, so the expected split is the construction's."""
+    seq = SEQ["1"]
+
+    def at(p: int, n: int = 1) -> str:
+        return seq[p - 1 : p - 1 + n]
+
+    positions = iter(range(1000, 2900, 7))
+    cases = {}
+    p = next(positions)
+    b = at(p)
+    x = next(c for c in "ACGT" if c not in (b, at(p + 1)))
+    cases["insertion"] = (p, b + b + x)  # b / bx: b is the reference, bx not (x is not the next base)
+    p = next(q for q in positions if at(q) not in at(q + 1, 4))
+    cases["deletion"] = (p, at(p, 5) + at(p))  # five reference bases / their first: both equal the reference over their spans
+    p = next(q for q in positions if at(q) != at(q + 1))
+    cases["homozygous"] = (p, at(p, 2) * 2)
+    p = next(q for q in positions if at(q) == at(q + 1))
+    cases["several"] = (p, at(p) * 4)  # c/ccc and cc/cc both fit
+    p = next(positions)
+    y = other(at(p))
+    cases["no_fit"] = (p, y + y + next(c for c in "ACGT" if c != y))
+    return cases
+
+
+def test_living_dna_indel_genotypes_split_against_the_reference(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    cases = concatenated_cases()
+    rows = drawn_rows(SEQ, per_contig=300) + [(name, "1", pos, text) for name, (pos, text) in cases.items()]
+    loaded = bare_array(tmp_path, rows, preamble=LIVING_DNA)
+    assert loaded.facets.collect()["format_id"].to_list() == ["living_dna"]
+    before = {r["ids"][0]: r for r in loaded.calls.collect().iter_rows(named=True) if r["ids"][0] in cases}
+    assert all(r["gt_alleles"] is None for r in before.values())  # the loader cannot split them
+
+    resolved = resolve_ref(loaded, grch37_store)
+    _, calls = frames(resolved)
+    got = {r["ids"][0]: r for r in calls.iter_rows(named=True) if r["ids"][0] in cases}
+    seq = SEQ["1"]
+
+    pos, text = cases["insertion"]
+    ins = got["insertion"]
+    assert (ins["gt_alleles"], ins["ref"], ins["alts"], ins["gt"]) == ([text[0], text[1:]], seq[pos - 1], [text[1:]], [0, 1])
+    assert ins["end_pos"] == pos and ins["ref_check"] is None and ins["source_gt"] == text
+    _, text = cases["deletion"]
+    assert got["deletion"]["gt_alleles"] == [text[:5], text[0]]
+    _, text = cases["homozygous"]
+    assert got["homozygous"]["gt_alleles"] == [text[:2], text[:2]]
+    for name in ("deletion", "homozygous"):
+        assert (got[name]["ref"], got[name]["alts"], got[name]["gt"]) == (None, None, None), name
+    for name in ("several", "no_fit"):
+        assert (got[name]["gt_alleles"], got[name]["ref"]) == (None, None), name
+    # The drawn SNV rows resolve as before, and every row with a REF indexes it.
+    assert_gt_indexes_ref(calls)
+    warnings = "\n".join(resolved.warnings)
+    assert (
+        "3 genotype(s) written as two allele sequences back to back split where exactly one split fits the reference "
+        "(both alleles start with the same base, one equals the reference over its own span): 1 with REF and ALT read; "
+        "REF left unread on 1 homozygous call(s)"
+    ) in warnings
+    assert "on 1 where both alleles equal the reference over their own spans" in warnings
+    assert "1 genotype(s) written as two allele sequences back to back fit the reference at more than one split" in warnings
+    assert "1 genotype(s) written as two allele sequences back to back fit the reference at no split" in warnings
+    assert "2 array row(s) whose genotype could not be split into alleles" in warnings
+    # The row with REF and ALT is an indel like any other: VRS ids are minted for both alleles.
+    minted = mint_vrs_ids(resolved, grch37_store).calls.filter(pl.col("ids").list.first() == "insertion").collect().row(0, named=True)
+    assert len(minted["vrs_allele_ids"]) == 2 and None not in minted["vrs_allele_ids"]
+
+
+def test_only_living_dna_texts_are_split(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """Another format's long genotype text states no encoding: it stays as loaded."""
+    cases = concatenated_cases()
+    rows = drawn_rows(SEQ, per_contig=300) + [(name, "1", pos, text) for name, (pos, text) in cases.items()]
+    resolved = resolve_ref(bare_array(tmp_path, rows, preamble=PREAMBLE_23), grch37_store)
+    _, calls = frames(resolved)
+    assert calls.filter(pl.col("ids").list.first().is_in(list(cases)))["gt_alleles"].null_count() == len(cases)
+    assert not any("back to back" in w for w in resolved.warnings)
+
+
+def test_a_mixed_strand_living_dna_file_splits_nothing(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    cases = concatenated_cases()
+    rows, _ = flipped(drawn_rows(SEQ))
+    rows += [(name, "1", pos, text) for name, (pos, text) in cases.items()]
+    resolved = resolve_ref(bare_array(tmp_path, rows, preamble=LIVING_DNA), grch37_store)
+    facets, calls = frames(resolved)
+    assert facets["strand_check"].cast(pl.String).to_list() == ["mixed"]
+    assert calls.filter(pl.col("ids").list.first().is_in(list(cases)))["gt_alleles"].null_count() == len(cases)
+    warnings = "\n".join(resolved.warnings)
+    assert f"{len(cases)} genotype(s) written as two allele sequences back to back were not split, the facet's strand being mixed" in warnings
+

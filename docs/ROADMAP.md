@@ -178,7 +178,8 @@ Order with `rejoin_split`: re-join first, then `resolve_ref`. The other way roun
 carry no `ref` while the facet keeps `ref_seqcol_digest`, and `resolve_ref` refuses it as already read.
 
 Left: indel anchor bases (no loaded format lacks them: 23andMe I/D codes need the chip manifest, and
-Living DNA's run-together `CCA` cannot be split without the site's alleles); emitting
+Living DNA's run-together `CCA` is split against the reference since 2026-10-22, F4, and gets REF on 4
+of 83 rows; the rest need the site's alleles, F17); emitting
 reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither
 `##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array
 without a stated build has it inferred from its rows (F9, below).

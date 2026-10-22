@@ -53,21 +53,22 @@ returning one facet per layout block of a file (the shape `Loaded` already has f
 Code of the warning: `loaders/rsid_table.py` `_appended_export`; test
 `test_an_appended_export_in_another_layout_is_named_not_read`.
 
-## F4 — Living DNA indel genotypes cannot be split
+## F17 — Living DNA indel calls need the chip's site alleles for REF
 
-Severity: medium · Found 2026-09-30, same sweep.
+Severity: low · Found 2026-10-22 resolving F4 on the one real Living DNA file.
 
-Living DNA writes an indel's two allele sequences back to back (`CCA`, and up to 52 letters in one
-file). 83 rows in the one real file keep the text in `source_gt` with `gt_alleles` null. Splitting needs
-the site's alleles, from a chip manifest or from REF once RM3 reads the sequence.
+`resolve_ref` now splits Living DNA's run-together indel genotypes against the reference (F4, in
+[PREVIOUS_ISSUES.md](PREVIOUS_ISSUES.md)). Of the 83 rows, 4 get REF and ALT. 54 are split with REF
+unread: 38 homozygous calls, where the text shows one of the site's two alleles and so cannot say
+whether the site is `CA>C` (the call is hom-ref) or `C>CA` (hom-alt), and 16 hets whose two alleles
+both equal the reference over their own spans (an insertion and a deletion fit alike; every het
+deletion is one). 25 stay unsplit: 24 fit the reference at several splits (repeats), 1 at none. These
+rows cannot be written to a VCF or minted. What would settle them is the site's own two alleles, from
+the Sirius chip's manifest (LANDSCAPE: chip manifests), which the library does not read. Why each
+repair from the text alone is wrong:
 
-**Anatomy, 2026-10-22.** Of the 83 texts (3 to 52 letters), 59 are a sequence written twice
-(`GTTGTT`), so homozygous if split in half, and 24 are not. If both alleles share their first base,
-as VCF's anchored alleles do, 58 have exactly one split (`CCA` → `C`/`CA`, `GCCTG` → `GCCT`/`G`) and 25
-have several (`AAAAGAAAAG` splits four ways). Splitting at the one anchored point was rejected: the
-shared anchor is VCF's convention, Living DNA states no encoding beyond "both allele sequences
-concatenated", and a quarter of the rows stay ambiguous even under it. The honest path is
-`resolve_ref`: read the sequence at `pos` and keep only the splits in which one allele is the
-reference over its own span. Even that leaves a repeat ambiguous (`C`/`CA` where the base after is
-`A` fits an insertion and a deletion alike), so the split may be known while REF and ALT are not.
-Not built: it needs the reference, which the loader does not read.
+- *Read a homozygous call whose allele equals the reference as hom-ref:* it picks one of two sites the
+  text fits, which is the genotype the row is about.
+- *Take the shortest allele as REF on a het:* it calls every ambiguous het an insertion.
+- *Split a repeat at the anchored point nearest the middle:* it chooses among splits the reference
+  fits equally.

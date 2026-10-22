@@ -7,7 +7,10 @@ gtars `RefgetStore`, and returns the same facet with the slots SCHEMA.md leaves 
   says whether the source agreed (`match`, `mismatch`). `source_ref` is never touched;
 - an array row (no `source_ref`, single-base alleles): `ref` is the reference base, `alts` are the
   observed alleles other than REF, sorted, and `gt` indexes `[ref] + alts`. REF is never taken from
-  the genotype; the genotype only decides which of its alleles are not REF.
+  the genotype; the genotype only decides which of its alleles are not REF;
+- a Living DNA row whose genotype is two allele sequences written back to back (`CCA`, F4): split
+  where exactly one split fits the reference (`_split_concatenated`), and given REF and ALT only where
+  the two alleles say which of them is the reference.
 
 Before any base is read the reference has to be shown to be the facet's assembly, contig by contig
 (`ContigCheck`). A facet that stated contig lengths (VCF `##contig`) is checked by length and md5;
@@ -41,8 +44,16 @@ from just_vcf.strand import StrandResult, check_strand, withheld_reason
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 3
+RESOLVE_VERSION = 4
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes."""
+
+CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
+"""Formats whose multi-letter genotype text is the two allele sequences written back to back, as the
+vendor states it ("both allele sequences concatenated"). Only these are split against the reference:
+another format's long genotype text may mean something else."""
+
+_CONCATENATED = r"^[ACGT]{3,}$"
+"""A genotype text that can be two allele sequences: bases only, at least one of them two long."""
 
 ASSEMBLY_NAMESPACE = "just_vcf_assembly"
 """Collection-alias namespace for an assembly label a caller asserted when adding a FASTA."""
@@ -291,6 +302,7 @@ def resolve_ref(
     if strand is not None:
         warnings.append(strand.summary())
     withhold = strand is not None and strand.check is StrandCheck.MIXED
+    concatenated = facet["format_id"] in CONCATENATED_ALLELES
     entry = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
     with cache.spilling(entry, cache.RESOLVE_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])) as spill:
         # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each contig
@@ -307,7 +319,7 @@ def resolve_ref(
             for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
                 rows = source.filter(pl.col("chrom") == chrom).collect()
                 contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
-                resolved = _resolve_rows(rows, store, contig, counts, withhold) if contig is not None else rows
+                resolved = _resolve_rows(rows, store, contig, counts, withhold, concatenated) if contig is not None else rows
                 part = spill.stage / f"calls-{index:05d}.parquet"
                 canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
                 parts.append(part)
@@ -520,9 +532,12 @@ def _read(rows: pl.DataFrame, store: ReferenceStore, contig: Contig) -> pl.Serie
     return rows.select("_start", "_end").join(table, on=["_start", "_end"], how="left", maintain_order="left")["_bases"]
 
 
-def _resolve_rows(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], withhold: bool = False) -> pl.DataFrame:
+def _resolve_rows(
+    rows: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], withhold: bool = False, concatenated: bool = False
+) -> pl.DataFrame:
     """One contig's rows with REF read; `counts` gathers the outcome per reason. `withhold`: the facet's
-    strand is mixed (F13), so array rows whose genotype is not strand-safe get no `alts` or `gt`."""
+    strand is mixed (F13), so array rows whose genotype is not strand-safe get no `alts` or `gt`.
+    `concatenated`: the format writes an indel genotype as its two allele sequences back to back (F4)."""
     if rows.is_empty():
         return rows
     is_vcf = pl.col("source_ref").is_not_null()
@@ -533,6 +548,9 @@ def _resolve_rows(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, cou
     start, end = _span(pl.col("pos"), length)
     work = rows.with_row_index("_row").with_columns(start.alias("_start"), end.alias("_end"), is_vcf.alias("_vcf"), array_ok.alias("_array"))
     work = work.with_columns(pl.when(pl.col("_start").is_not_null()).then(_read(work, store, contig)).otherwise(None).alias("_bases"))
+    work = _split_concatenated(work, store, contig, counts, withhold) if concatenated else work.with_columns(
+        *[pl.lit(None, dtype=CALLS[name]).alias(f"_split_{name}") for name in ("ref", "alts", "gt", "end_pos")]
+    )
 
     vcf = work.filter(pl.col("_vcf"))
     if vcf.height:
@@ -543,7 +561,7 @@ def _resolve_rows(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, cou
 
     agree = pl.col("source_ref").str.to_uppercase() == pl.col("_bases")
     work = work.with_columns(
-        pl.col("_bases").alias("ref"),
+        pl.coalesce("_bases", "_split_ref").alias("ref"),
         pl.when(pl.col("_vcf") & pl.col("_bases").is_not_null())
         .then(pl.when(agree).then(pl.lit(RefCheck.MATCH.value)).otherwise(pl.lit(RefCheck.MISMATCH.value)))
         .otherwise(pl.col("ref_check").cast(pl.String))
@@ -551,7 +569,82 @@ def _resolve_rows(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, cou
         .alias("ref_check"),
     )
     work = _derive_array_alleles(work, counts, withhold)
+    split = pl.col("_split_ref").is_not_null()
+    work = work.with_columns(
+        *[pl.when(split).then(pl.col(f"_split_{name}")).otherwise(pl.col(name)).alias(name) for name in ("alts", "gt", "end_pos")]
+    )
     return work.select(CALLS.names())
+
+
+def _split_concatenated(work: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], withhold: bool) -> pl.DataFrame:
+    """Living DNA's indel genotypes (F4) split against the reference.
+
+    The text is two allele sequences back to back (`CCA`), split nowhere by the source. A split is
+    taken when it is the only one, of all the points where both pieces start with the same base (VCF's
+    padding base), at which one piece equals the reference over its own span from `pos`. Several such
+    splits (a repeat: `AAAA` over `AAA…` fits `A/AAA`, `AA/AA` and `AAA/A`) or none leave the row as
+    loaded, counted. A split row gets `gt_alleles`, in the order written. It gets `ref`, `alts`, `gt`
+    and `end_pos` only when exactly one of its two alleles equals the reference over its own span: a
+    biallelic site's REF is one of its alleles, so the other is ALT. Where both do (`C/CA` over
+    `CA…`: an insertion of A and a deletion of A fit alike), or the call is homozygous (`CA/CA` shows
+    one of the site's two alleles, so REF's span, and whether the call is reference, is unknown), REF
+    stays unread. In a facet of mixed strand (F13) nothing is split. Returns `work` with `gt_alleles`
+    filled where split, and `_split_ref`, `_split_alts`, `_split_gt`, `_split_end_pos` set where REF is known.
+    """
+    target = (
+        pl.col("source_ref").is_null() & pl.col("gt_alleles").is_null() & pl.col("source_gt").str.contains(_CONCATENATED)
+    ).fill_null(False)
+    rows = work.filter(target).select("_row", "pos", "source_gt")
+    split_columns: dict[str, list] = {"_row": [], "_gt_alleles": [], "_split_ref": [], "_split_alts": [], "_split_gt": [], "_split_end_pos": []}
+    if rows.height and withhold:
+        counts["concat_mixed_strand"] += rows.height
+    elif rows.height:
+        texts = rows["source_gt"].to_list()
+        starts = [pos - 1 for pos in rows["pos"].to_list()]
+        spans = [(start, min(start + len(text), contig.length)) for start, text in zip(starts, texts)]
+        inside = [index for index, (start, stop) in enumerate(spans) if stop > start]
+        windows = [""] * len(texts)
+        for index, bases in zip(inside, store.fetch(contig, [spans[index] for index in inside])):
+            windows[index] = bases.upper()
+        for row, pos, text, window in zip(rows["_row"].to_list(), rows["pos"].to_list(), texts, windows):
+            fits = [
+                (text[:k], text[k:])
+                for k in range(1, len(text))
+                if text[0] == text[k] and (window.startswith(text[:k]) or window.startswith(text[k:]))
+            ]
+            if len(fits) != 1:
+                counts["concat_several" if fits else "concat_no_fit"] += 1
+                continue
+            first, second = fits[0]
+            matches = [allele for allele in (first, second) if window.startswith(allele)]
+            ref = None
+            if first == second:
+                counts["concat_homozygous"] += 1
+            elif len(matches) == 2:
+                counts["concat_repeat"] += 1
+            else:
+                counts["concat_resolved"] += 1
+                ref = matches[0]
+            alt = next((allele for allele in (first, second) if allele != ref), None)
+            for name, value in zip(
+                split_columns,
+                (row, [first, second], ref, None if ref is None else [alt], None if ref is None else [int(a != ref) for a in (first, second)], None if ref is None else pos + len(ref) - 1),
+            ):
+                split_columns[name].append(value)
+    found = pl.DataFrame(
+        split_columns,
+        schema={
+            "_row": pl.UInt32,
+            "_gt_alleles": CALLS["gt_alleles"],
+            "_split_ref": CALLS["ref"],
+            "_split_alts": CALLS["alts"],
+            "_split_gt": CALLS["gt"],
+            "_split_end_pos": CALLS["end_pos"],
+        },
+    )
+    return work.join(found, on="_row", how="left", maintain_order="left").with_columns(
+        pl.coalesce("gt_alleles", "_gt_alleles").alias("gt_alleles")
+    ).drop("_gt_alleles")
 
 
 def _count_vcf(vcf: pl.DataFrame, counts: Counter[str]) -> None:
@@ -657,6 +750,24 @@ def _row_warnings(counts: Counter[str], digest: str) -> list[str]:
     for key, reason in reasons.items():
         if counts[key]:
             lines.append(f"{counts[key]} array row(s) {reason}: REF left unread")
+    split = counts["concat_resolved"] + counts["concat_homozygous"] + counts["concat_repeat"]
+    if split:
+        lines.append(
+            f"{split} genotype(s) written as two allele sequences back to back split where exactly one split fits the "
+            f"reference (both alleles start with the same base, one equals the reference over its own span): "
+            f"{counts['concat_resolved']} with REF and ALT read; REF left unread on {counts['concat_homozygous']} "
+            f"homozygous call(s) (one of the site's two alleles shown, so REF's span is unknown) and on "
+            f"{counts['concat_repeat']} where both alleles equal the reference over their own spans (an insertion and a "
+            "deletion fit alike)"
+        )
+    concat = {
+        "concat_several": "fit the reference at more than one split (a repeat)",
+        "concat_no_fit": "fit the reference at no split",
+        "concat_mixed_strand": "were not split, the facet's strand being mixed",
+    }
+    for key, reason in concat.items():
+        if counts[key]:
+            lines.append(f"{counts[key]} genotype(s) written as two allele sequences back to back {reason}: left unsplit")
     if counts["array_ref_not_acgt"]:
         lines.append(f"{counts['array_ref_not_acgt']} array row(s) where the reference base is not A, C, G or T")
     withheld = {

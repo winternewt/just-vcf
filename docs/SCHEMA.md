@@ -93,6 +93,19 @@ same calls. A facet already read is refused rather than read again.
   `pos`; `alts` are the called alleles other than REF, **sorted by allele string** (an array states
   no ALT order, so two files of one chip agree); `gt` indexes `[ref] + alts`, with null for an
   uncalled haplotype. A hom-ref row gets `alts = []`. `ref_check` stays null: there is no source REF.
+- A Living DNA row whose genotype is two allele sequences written back to back (`CCA`, bases only, F4;
+  the vendor states that encoding, so only `living_dna` facets are split): of every split into two
+  pieces that start with the same base (VCF's padding base), keep those where one piece equals the
+  reference over its own span from `pos`. Exactly one such split gives `gt_alleles`, in the order
+  written; several (a repeat: `AAAA` over `AAA…` fits `A/AAA` and `AA/AA`) or none leave the row as
+  loaded. A split row gets `ref`, `alts = [the other allele]`, `gt` and `end_pos` only when exactly one
+  of its two alleles equals the reference over its own span: a biallelic site's REF is one of its
+  alleles, so the other is ALT (`C/CA` over `CG…`). Where both do (`C/CA` over `CA…`, and every
+  deletion, whose one-base ALT always equals the reference: an insertion and a deletion fit alike), or
+  the call is homozygous (`CA/CA` shows one of the site's two alleles, so it cannot say whether the
+  site is `CA>C`, which makes it hom-ref, or `C>CA`, hom-alt), `ref`, `alts` and `gt` stay null with
+  `gt_alleles` set. Not split at all in a facet whose strand is `mixed` (F13). `ref_check` stays null.
+  `normalize` does not align these rows (their `ref_check` is null, and the facet is not derived).
 - Left unread, each reason counted once: I/D codes, whole no-calls (the probe's REF span is unknown),
   genotypes that could not be split, spans past the contig's end or at POS 0, and every row of a
   contig that could not be matched with the reference (below).
@@ -494,7 +507,7 @@ With Decisions 1–5 as recommended:
 | `source_alleles` | `list[str]` | the source gave no vector to index (Decision 2) |
 | `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention: the REF slot first, then one per ALT in `alts` order. An element is null when it was withheld (charter 4); the whole list is null when nothing was minted. Minting rule below ("When an id is minted") |
 | `vrs_errors` | `list[str]` | parallel to `vrs_allele_ids`: what minting itself reported for an allele it tried and could not mint (`no_contig`, `refused`). Null where minting succeeded or never ran. Only facts that minting alone learns go here; see "Why an id is missing" below |
-| `gt_alleles` | `list[str]` | the genotype text cannot be split into haplotypes without the site's alleles (Living DNA writes an indel's two allele sequences back to back, `CCA`); `source_gt` keeps the text. Entries null per uncalled haplotype |
+| `gt_alleles` | `list[str]` | the genotype text cannot be split into haplotypes without the site's alleles (Living DNA writes an indel's two allele sequences back to back, `CCA`; `resolve_ref` splits those where one split fits the reference, Decision 2); `source_gt` keeps the text. Entries null per uncalled haplotype |
 | `gt` | `list[u8]` | there is no allele list to index yet, or RM3 withheld it with `alts` (a mixed-strand array, Decision 2). Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
 | `source_gt` | `str` | the source wrote no genotype text (a BCF encodes GT in binary). The file's raw text, not polars-bio's rewrite of it |
 | `phased` | `list[bool]` | the source says nothing about phase for the whole row (every array export). Otherwise parallel to `gt_alleles`, with an element null where the source did not say for that haplotype |
@@ -994,6 +1007,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-22, F4): no column changes. Rule added in `resolve_ref` (Decision 2):
+  a Living DNA run-together indel genotype is split against the reference, so `gt_alleles` is set on
+  rows where it was null, and `ref`, `alts`, `gt`, `end_pos` where one allele alone is the reference.
+  A split row with `gt_alleles` set and `ref` null is a new combination for that format (an `I`/`D` row
+  already had it). `RESOLVE_VERSION` 4.
 
 - **No version change** (2026-10-22, RM6: lifted rows normalized): no column changes. Rule changed in
   `normalize` ("Normalizing", step 2): rows of a `liftover_to` facet are left-aligned and trimmed on

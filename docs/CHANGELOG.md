@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref` splits Living DNA's run-together indel genotypes (`CCA`) against the reference where
+  exactly one split fits (both pieces start with one base, one equals the reference over its span),
+  and sets REF and ALT where only one allele is the reference. On the real file: 58 of 83 rows split, 4
+  with REF and ALT; 25 stay unsplit, counted (F4 resolved; the rest is F17). Values change for
+  `living_dna` facets (`gt_alleles`, and on those 4 rows `ref`, `alts`, `gt`, `end_pos`);
+  `RESOLVE_VERSION` 4.
+
 - A damaged BGZF input makes `load` raise `DamagedBgzfError` (exported) with the facet's id, the
   compressed byte offset of the first block that does not read back and what is wrong with it, in
   place of polars-bio's raw `ComputeError`; no path in it (F16). The damaged PGP-HMS starling upload

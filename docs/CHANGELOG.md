@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF facet now gets `callset_type` (RM4): `wgs`, `wes`, `panel` or `imputed` from the spread of
+  its calls and its header, ported from just-dna-lite `detect_callset_scope` (docs/PROVENANCE.md),
+  and null wherever the evidence falls between classes. `absence_means` follows: `weak_reference`
+  for `wgs` without blocks, `blocks` wherever blocks exist, `unknown` otherwise. Before, every VCF
+  facet without blocks said `unknown`, so a whole-genome VCF's facet changes value here (minor: no
+  column changes). On PGP-HMS uploads: four Genos exome VCFs read `wes` (44,020–44,796 sites, 13.6%
+  breadth, against the 75% a genome needs); a five-sample DELLY SV merge, an array-derived VCF of
+  542,266 sites and an all-sites file of the sex chromosomes stay unknown.
+
 - A VCF facet's `assembly_label` is inferred from its `##contig` lengths when the header states no
   build (RM4): three or more primary chromosomes must match one of GRCh37, GRCh38 or T2T-CHM13 and
   none may match another or none, else it stays null. A stated label is never replaced; a header whose

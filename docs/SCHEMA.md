@@ -255,7 +255,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` (contig lengths) or null. A stated label is kept when the lengths disagree, with a warning (RM4, below) |
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
-| `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4) |
+| `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below) |
 | `absence_means` | Decision 4 |
 | `phasing_method` | null unless stated |
 | `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`) |
@@ -289,6 +289,19 @@ No load timestamp: it would break determinism, and the file digest already says 
   match another or none. The mitochondrion only contradicts (all three share 16,569; hg19's 16,571
   counts as GRCh37). Fewer, or a mixture, leaves it null. A stated label (sniff's header hints) is
   never replaced; a disagreement is a warning.
+
+**`callset_type` and `absence_means` for a VCF (RM4).** From the spread of the facet's calls on the
+primary assembly (`just_vcf.callset`, ported from just-dna-lite `detect_callset_scope`): `wgs` needs
+at least 1,000,000 sites and 75% of the span within 10 kb of a call; `wes` 10,000–400,000 sites on
+all 22 autosomes with at most 60% breadth; `panel` 50–5,000 sites reaching at most 50 Mb. A region
+extract of a larger callset reads as `panel`, which is what its absences then mean. `imputed` when the
+header names an imputation tool or declares an imputation INFO key. Every sequencing class needs a
+read-evidence FORMAT key (AD, DP, GQ, PL, GL, MIN_DP) in the header. A site is a row with a sequence
+ALT or none; rows whose ALTs are all symbolic do not count, so a genome-wide SV callset is not `wgs`.
+Anything between the bands is null. A gVCF is not a callset type: its blocks set
+`absence_means = blocks`, whatever its scope. Otherwise `wgs` gives `weak_reference` and every other
+type, null included, `unknown`. Measured on PGP-HMS uploads: four Genos exomes at 44,020–44,796 sites
+and 13.6% breadth, about 400 Mb reached.
 
 There is no `ref_basis` column. A non-null `ref` always came from the facet's assembly sequence
 (charter 10), so the basis would have one value.
@@ -551,8 +564,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 ## Changes since sign-off
 
 - **Unreleased** (2026-10-22, RM4): `facets.sorted_name_length_pairs_digest`, the header's coordinate
-  system as a seqcol attribute digest. Additive. `assembly_label` (basis `inferred`) is now filled
-  for VCF facets whose contig lengths settle it.
+  system as a seqcol attribute digest. Additive. `assembly_label` (basis `inferred`), `callset_type`
+  and `absence_means = weak_reference` are now filled for VCF facets where the evidence settles them.
 
 - **0.0.4** (2026-10-19, RM270, from S2): `calls.split_signal` and `facets.split_marker` flag rows
   that look like one multi-allelic site written one row per ALT. Both additive; no value changed.

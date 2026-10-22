@@ -15,6 +15,7 @@ import polars as pl
 from platformdirs import user_cache_dir
 from pydantic import BaseModel, ConfigDict
 
+from just_vcf import callset
 from just_vcf.assembly import infer_assembly, sorted_name_length_pairs_digest
 from just_vcf.loaders import rsid_table, vcf
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
@@ -201,6 +202,8 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     warnings += vcf.split_warnings(flagged, marker_rows, header)
     label, basis, label_warnings = _assembly_label(sniffed.build, header.contigs)
     warnings += label_warnings
+    kind = callset.classify(spilled, list(header.format), callset.imputation_marker(header.meta, list(header.info)))
+    logger.info("%s: callset type %s (%s)", facet_id, kind.callset_type.value if kind else "unknown", kind.reason)
     facet = {
         "facet_id": facet_id,
         "source_sha256": source_sha256,
@@ -212,7 +215,8 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         "assembly_label": label,
         "assembly_label_basis": basis.value if basis else None,
         "sorted_name_length_pairs_digest": sorted_name_length_pairs_digest(header.contigs),
-        "absence_means": (AbsenceMeans.BLOCKS if stats["any_block"] else AbsenceMeans.UNKNOWN).value,
+        "callset_type": kind.callset_type.value if kind else None,
+        "absence_means": callset.absence_means(kind.callset_type, stats["any_block"]).value,
         "contig_map": contig_map(stats["chroms"]),
         "header_contigs": header.contigs,
         "vcf_version": header.version,

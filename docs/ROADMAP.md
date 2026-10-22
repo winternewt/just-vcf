@@ -88,10 +88,34 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-Severity: medium · Status: open (checked 2026-10-18: array and imputed tables set `callset_type`, and Illumina gVCF blocks go to `blocks`; a VCF facet's `callset_type` is still null, and WGS/WES/panel is not inferred) · Owner: lead
+Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; left: chip generation, array build, gVCF `END` expansion) · Owner: lead
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
+
+**Shipped 2026-10-22** (`just_vcf.callset`, `just_vcf.assembly`; rules in docs/SCHEMA.md Decision 5):
+the WGS rule is just-dna-lite's, unchanged; exome and panel bands were added with unknown between
+every pair of classes. Decisions taken, each with what was rejected:
+
+- gVCF stays out of `callset_type`: a gVCF can be a genome or an exome, so its blocks set
+  `absence_means = blocks` and its calls set the type. Rejected: a `gvcf` member, which would change
+  the `pl.Enum` dtype and answer a question the blocks frame already answers.
+- A region extract reads as `panel`. Rejected: a separate "extract" outcome, which the calls cannot
+  tell from a panel; either way absence outside the regions means nothing was looked at.
+- Sequencing classes need a read-evidence FORMAT key, and rows whose ALTs are all symbolic do not
+  count as sites. Rejected: reading GP/DS as imputation (DRAGEN writes GP), and counting SV records
+  (a 5-sample DELLY merge in PGP-HMS had 1.04M SV sites at 93.5% breadth and read as `wgs`).
+- `sorted_name_length_pairs_digest` is its own column; `seqcol_digest` stays null without bases.
+  Rejected: filling `seqcol_digest` from a names-and-lengths lookup (the public seqcol server holds
+  two collections for each of UCSC hg19's and hg38's coordinate systems).
+- The classifier and the inference stay internal (`just_vcf.callset`, `just_vcf.assembly`, not in
+  `__all__`); the facet columns are the contract. Rejected: exporting them before a consumer asks.
+
+**Left:** just-prs chip generation detection; array build inference (just-prs has none, it defaults
+to GRCh37, which is not ported); contigs named by RefSeq accession (`NC_000001.11`), which the label
+inference does not read yet; gVCF `END` expansion; an SNV-only or indel-only split of a genome
+(`bcftools view -v snps`) reads as `wgs`, so its absences read as weak reference for the other
+variant class too. Unmarked imputation output with read-evidence keys would read as `wgs`.
 
 ## RM5 — Population inference
 Severity: medium · Status: open · Owner: lead

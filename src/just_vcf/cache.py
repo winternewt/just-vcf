@@ -7,7 +7,8 @@ The cache (`cache_dir()`) holds two directories of entries:
 - `frames/<name>/`: the parquet spills the lazy frames read. `<facet_id>-<SCHEMA_VERSION>` is a load's
   spill (`frames_spill`), or a derived facet's under its own id (`rejoin_spill`, `normalize_spill`);
   `<facet_id>-<SCHEMA_VERSION>-ref-<digest>-<RESOLVE_VERSION>` is `resolve_ref`'s (`resolve_spill`) and
-  `…-vrs-<digest>-<MINT_VERSION>` is `mint_vrs_ids`'s (`vrs_spill`).
+  `…-vrs-<digest>-<MINT_VERSION>` is `mint_vrs_ids`'s (`vrs_spill`). A derived step's entry holds one
+  directory per generation, `<key>/`, named by the content the result was computed from (`Spill`).
 
 Each entry has two files beside it: `<name>.json`, its manifest (`CacheEntry`: kind, version keys,
 the root source's sha256, the facet it holds and the facet it came from, size, created and last
@@ -22,10 +23,12 @@ so it is stale by construction.
 
 Removing an entry a live `Loaded` reads breaks that frame's next `collect`. The stale-version sweep
 cannot hit one (no current frame reads an old version); `clear_cache` can, and that is the caller's
-call.
+call. A derived step run again never can: it reuses the generation an earlier run committed for the
+same content, or commits another beside it, and never rewrites or removes a complete one.
 """
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -93,8 +96,8 @@ class CacheEntry(BaseModel):
     """Bytes on disk when the last write finished; null while it is written, or when it never finished."""
     created: datetime
     last_used: datetime
-    """When the entry was last written or reused. A spill is written again on every run, so for those
-    it is the last run; a rewrite copy is also used when a later load reuses it."""
+    """When the entry was last written or reused: for a spill, the last run of its step, whether it
+    wrote a generation or reused one; for a rewrite copy, also a later load that reused it."""
     # `kind` is checked against CACHE_KINDS where it is written (`writing`), not where it is read: a
     # manifest a newer version wrote, with a kind this one does not know, is read as data and owned by
     # no sweep here.
@@ -223,6 +226,128 @@ def writing(entry: Path, kind: str, versions: dict[str, object], origin: Origin)
         _write_manifest(manifest_path, manifest.model_copy(update={"size_bytes": _size(entry), "last_used": _now()}))
     finally:
         _release(handle)
+
+
+class Generation(BaseModel):
+    """`result.json` in one generation of a derived spill: the files its frames read, and the step's
+    own warnings, so a reused generation gives back what the run that wrote it gave."""
+
+    model_config = ConfigDict(frozen=True)
+
+    files: dict[str, tuple[str, ...]]
+    """Named groups of file names in the generation, each in the order a frame reads them."""
+    warnings: tuple[str, ...] = ()
+
+
+class Committed:
+    """A complete generation on disk: where it is and what `result.json` says it holds."""
+
+    def __init__(self, path: Path, record: Generation) -> None:
+        self.path = path
+        self.record = record
+
+    def files(self, group: str) -> list[Path]:
+        return [self.path / name for name in self.record.files[group]]
+
+    @property
+    def warnings(self) -> list[str]:
+        return list(self.record.warnings)
+
+
+class Spill:
+    """One run of a derived step writing into its entry, under the entry's lock (`spilling`).
+
+    The run writes into `stage`, a directory of its own inside the entry, and `commit`s it by renaming
+    it to `<entry>/<key>`, the key being the content the result was computed from. A generation is
+    never written into or removed once committed, so a frame an earlier run returned keeps reading its
+    files whatever later runs do; a later run with the same content `find`s it and reuses it instead.
+    """
+
+    def __init__(self, entry: Path) -> None:
+        self.entry = entry
+        entry.mkdir(parents=True, exist_ok=True)
+        for leftover in entry.glob(f"{_STAGING}*"):
+            # The entry's lock is held, so a staging directory here is a writer's that died: no frame reads it.
+            logger.info("cache: removing %s/%s, left by a writer that did not finish", entry.name, leftover.name)
+            shutil.rmtree(leftover, ignore_errors=True)
+        self.stage = entry / f"{_STAGING}{os.getpid()}-{os.urandom(4).hex()}"
+        self.stage.mkdir()
+
+    def find(self, key: str) -> Committed | None:
+        """The complete generation under `key`, or None. One that cannot be read whole is removed: a
+        frame over it fails already, and the run then writes it again."""
+        path = self.entry / key
+        if not path.is_dir():
+            return None
+        record = _read_generation(path / _RESULT)
+        if record is not None and all((path / name).is_file() for names in record.files.values() for name in names):
+            return Committed(path, record)
+        logger.warning("cache: %s/%s is incomplete; written again", self.entry.name, key)
+        shutil.rmtree(path)
+        return None
+
+    def commit(self, key: str, files: dict[str, list[Path]], warnings: list[str]) -> Committed:
+        """Record what `stage` holds and move it into place as the generation `key`."""
+        record = Generation(
+            files={group: tuple(path.relative_to(self.stage).as_posix() for path in paths) for group, paths in files.items()},
+            warnings=tuple(warnings),
+        )
+        (self.stage / _RESULT).write_text(record.model_dump_json(indent=1) + "\n")
+        target = self.entry / key
+        os.rename(self.stage, target)
+        return Committed(target, record)
+
+    def discard(self) -> None:
+        if self.stage.exists():
+            shutil.rmtree(self.stage)
+
+
+SPILL_LAYOUT = 2
+"""How a derived spill is laid out, a key in its manifest's versions: 2 is one directory per
+generation (`Spill`); 1 wrote the files into the entry itself, so the sweep retires those entries."""
+
+_STAGING = ".staging-"
+_RESULT = "result.json"
+
+
+@contextmanager
+def spilling(entry: Path, kind: str, versions: dict[str, object], origin: Origin) -> Iterator[Spill]:
+    """`writing` for a derived step: hold the entry's lock, and give the run a `Spill` to stage into.
+
+    The manifest is updated whether the run commits a new generation or reuses one (`last_used`, size).
+    The staging directory goes when the block ends, committed or not.
+    """
+    with writing(entry, kind, versions, origin):
+        spill = Spill(entry)
+        try:
+            yield spill
+        finally:
+            spill.discard()
+
+
+def content_key(files: list[Path], facet: dict) -> str:
+    """What a derived result is computed from: the bytes of the staged files and the facet row.
+
+    Under one polars release the same rows sink to the same bytes (measured 2026-10-22: 300,000 rows,
+    two processes, two caches), so a run on the same input finds the generation an earlier one wrote.
+    After a polars upgrade a run may write a second one beside it, which costs disk, never correctness.
+    A run on other rows under the same facet id (a filtered `Loaded`) gets a key of its own: a reuse
+    never crosses inputs.
+    """
+    digest = hashlib.sha256()
+    for path in files:
+        _digest_file(digest, path)
+    digest.update(json.dumps(facet, sort_keys=True, default=str).encode())
+    return digest.hexdigest()[:32]
+
+
+def _read_generation(path: Path) -> Generation | None:
+    if not path.is_file():
+        return None
+    try:
+        return Generation.model_validate_json(path.read_bytes())
+    except ValidationError:
+        return None
 
 
 def sweep_stale(kind: str, current: dict[str, object]) -> CacheClearReport:
@@ -487,7 +612,11 @@ def _now() -> datetime:
 def file_sha256(path: Path) -> str:
     """The sha256 of a file's bytes, hex."""
     digest = hashlib.sha256()
+    _digest_file(digest, path)
+    return digest.hexdigest()
+
+
+def _digest_file(digest: "hashlib._Hash", path: Path) -> None:
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
-    return digest.hexdigest()

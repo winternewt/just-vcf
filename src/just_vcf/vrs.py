@@ -28,7 +28,6 @@ that converts between them (charter 13), for the store and for VRS alike.
 
 import logging
 import re
-import shutil
 from collections import Counter
 from pathlib import Path
 
@@ -178,7 +177,7 @@ def mint_vrs_ids(loaded: Loaded, reference: "ReferenceStore | Path | str | None"
     Raises `ValueError` when REF was never read, and `ReferenceMismatchError` when the store does not
     hold the facet's collection.
     """
-    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "MINT_VERSION": MINT_VERSION}
+    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "MINT_VERSION": MINT_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
     cache.sweep_stale(cache.VRS_SPILL, versions)
     facets = loaded.facets.collect()
     if facets.height != 1:
@@ -194,34 +193,40 @@ def mint_vrs_ids(loaded: Loaded, reference: "ReferenceStore | Path | str | None"
         raise ReferenceMismatchError(f"facet {facet['facet_id']}: the reference store does not hold collection {digest}, which REF was read from")
     by_chrom = store.contigs_by_chrom(digest)
 
-    spill = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-vrs-{digest}-{MINT_VERSION}"
-    tally = _Tally()
-    parts: list[Path] = []
-    with cache.writing(spill, cache.VRS_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])):
-        if spill.exists():
-            shutil.rmtree(spill)
-        spill.mkdir(parents=True)
+    entry = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-vrs-{digest}-{MINT_VERSION}"
+    with cache.spilling(entry, cache.VRS_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])) as spill:
         # The input is spilled once as it is: the result reads its rows from this file, so they are the
-        # rows the ids were minted from, in the same order, whatever plan built the input.
-        loaded.calls.drop("vrs_allele_ids", "vrs_errors").sink_parquet(spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP)
-        calls_spill = pl.scan_parquet(spill / "calls.parquet")
-        # Walked run by run of one contig, in row order: a loader groups rows by contig (Decision 11),
-        # so a run is a contig, and the ids come out in the input's order with nothing to sort.
-        runs = calls_spill.select(pl.col("chrom").rle()).collect().unnest("chrom")
-        batch: list[pl.DataFrame] = []
-        offset = 0
-        for length, chrom in runs.select("len", "value").iter_rows():
-            rows = calls_spill.slice(offset, length).select(_READ).collect().with_row_index("_row", offset=offset)
-            matches = by_chrom.get(chrom, [])
-            batch.append(_mint_rows(rows, store, matches[0] if len(matches) == 1 else None, tally))
-            offset += length
-            if sum(frame.height for frame in batch) >= _IDS_PER_PART:
-                parts.append(_write_part(batch, spill, len(parts)))
-                batch = []
-        if batch:
-            parts.append(_write_part(batch, spill, len(parts)))
+        # rows the ids were minted from, in the same order, whatever plan built the input. Its bytes
+        # key the result: a run on the same input reuses what an earlier one wrote.
+        staged = spill.stage / "calls.parquet"
+        loaded.calls.drop("vrs_allele_ids", "vrs_errors").sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
+        key = cache.content_key([staged], facet)
+        done = spill.find(key)
+        if done is None:
+            tally = _Tally()
+            parts: list[Path] = []
+            calls_spill = pl.scan_parquet(staged)
+            # Walked run by run of one contig, in row order: a loader groups rows by contig (Decision 11),
+            # so a run is a contig, and the ids come out in the input's order with nothing to sort.
+            runs = calls_spill.select(pl.col("chrom").rle()).collect().unnest("chrom")
+            batch: list[pl.DataFrame] = []
+            offset = 0
+            for length, chrom in runs.select("len", "value").iter_rows():
+                rows = calls_spill.slice(offset, length).select(_READ).collect().with_row_index("_row", offset=offset)
+                matches = by_chrom.get(chrom, [])
+                batch.append(_mint_rows(rows, store, matches[0] if len(matches) == 1 else None, tally))
+                offset += length
+                if sum(frame.height for frame in batch) >= _IDS_PER_PART:
+                    parts.append(_write_part(batch, spill.stage, len(parts)))
+                    batch = []
+            if batch:
+                parts.append(_write_part(batch, spill.stage, len(parts)))
+            done = spill.commit(key, {"calls": [staged], "ids": parts}, tally.warnings(digest))
+    # Read from where the generation was committed, never from the staging directory.
+    calls_spill = pl.scan_parquet(done.files("calls")[0])
+    parts = done.files("ids")
 
-    warnings = tally.warnings(digest)
+    warnings = done.warnings
     for warning in warnings:
         logger.warning("%s: %s", facet["facet_id"], warning)
     calls = (

@@ -80,6 +80,8 @@ real run agreeing; `older_than=timedelta(days=1)` removed nothing; `clear_cache(
 
 Open: the derived steps still remove and rewrite their spill in place, so running one twice on the
 same facet breaks the frame the first run returned. That predates RM268 and is not changed here.
+Closed later the same day: a derived spill is now one generation per content key (docs/SCHEMA.md,
+"The cache under the lazy frames").
 
 ## RM270 — Pre-split multi-allelic input
 Severity: high · Status: shipped 2026-10-19: B, the flags (schema 0.0.4), and D, `rejoin_split`; C not built, the person chose D (desk #45) · Owner: lead

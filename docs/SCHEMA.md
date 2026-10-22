@@ -872,6 +872,19 @@ frame stops working when its files go.
 - A manifest this version cannot read (a newer version's, with a kind or field it does not know) makes
   its entry unknown origin: kept, never swept, and it does not stop `load`. Kinds are checked where
   an entry is written.
+- A derived step's entry (`rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids`) holds one
+  directory per generation. A run writes into a staging directory inside the entry, under the entry's
+  lock, and renames it to `<key>/` when it is complete, `<key>` being a sha256 of the content the
+  result was computed from (the staged input's bytes, or for `rejoin_split` the result's, and the
+  facet row) and `result.json` in it listing its files and the step's row warnings. A run whose key is
+  already there reuses that generation and writes nothing; a run on other rows under the same
+  `facet_id` (a filtered `Loaded`) commits a second generation beside the first. No run rewrites or
+  removes a complete generation, so a frame an earlier run returned, in this process or another,
+  keeps working. A staging directory left by a writer that died, and a generation missing a file,
+  are removed by the next run. Rejected: keying reuse on the facet id and versions alone, which would
+  hand a filtered `Loaded` the full facet's rows; and replacing the files in place, which broke the
+  earlier frame (`Invalid thrift` on its next `collect`). The manifest's `SPILL_LAYOUT` key (2) retires,
+  through the sweep, entries written before generations.
 - `clear_cache` removes what the caller names, even under a live `Loaded`; that frame's next
   `collect` then fails. It skips an entry whose lock is held, and touches nothing outside `vcf/` and
   `frames/`: the reference store under `reference/` is not a cache of a genome.

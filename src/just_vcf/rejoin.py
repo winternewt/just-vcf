@@ -69,14 +69,17 @@ def rejoin_split(loaded: Loaded) -> Loaded:
         # The rows are spilled once instead, as `load` does, and read back one contig at a time.
         rest = loaded.calls.filter(pl.col("split_signal").is_null())
         rebuilt = pl.DataFrame(kept + joined, schema=CALLS).lazy()
-        spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-        with cache.writing(spill, cache.REJOIN_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id)):
-            spill.mkdir(parents=True, exist_ok=True)
+        entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
+        with cache.spilling(entry, cache.REJOIN_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id)) as spill:
+            staged = spill.stage / "calls.parquet"
             pl.concat([rest, rebuilt], how="vertical").with_columns(pl.lit(facet_id).alias("facet_id")).sink_parquet(
-                spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP
+                staged, row_group_size=SPILL_ROW_GROUP
             )
-        contigs = [entry["chrom"] for entry in facet["contig_map"] or []]
-        calls = canonical_order_per_contig(pl.scan_parquet(spill / "calls.parquet"), contigs)
+            # Keyed by what it holds: the join is cheap next to the sink, so the result itself is the key.
+            key = cache.content_key([staged], facet)
+            done = spill.find(key) or spill.commit(key, {"calls": [staged]}, warnings)
+        contigs = [item["chrom"] for item in facet["contig_map"] or []]
+        calls = canonical_order_per_contig(pl.scan_parquet(done.files("calls")[0]), contigs)
     else:
         calls = loaded.calls.with_columns(pl.lit(facet_id).alias("facet_id"))
     facets = parent.lazy().with_columns(
@@ -93,7 +96,7 @@ def rejoin_split(loaded: Loaded) -> Loaded:
     )
 
 
-_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": REJOIN_VERSION}
+_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": REJOIN_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
 """The version keys of a rejoin spill, in its cache manifest."""
 
 

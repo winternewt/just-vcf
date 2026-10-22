@@ -1,5 +1,10 @@
 """Vendor genotype tables that are not 23andMe-shaped.
 
+`just_vcf.loaders.table` loads every format here that places its rows: AncestryDNA, FTDNA (both
+exports), the RSID/RESULT table, Color, deCODEme and Genos. Geno 2.0 names markers without positions,
+so its rows cannot become `calls` rows until a chip manifest places them; the deCODEme info member
+holds no calls.
+
 AncestryDNA, FamilyTreeDNA Family Finder, deCODEme, National Geographic Geno 2.0, Genos and Color.
 Each was specified from real PGP-HMS exports (heads only); notes record what those files showed.
 Every table here covers predefined sites, so an absent site is unknown, never hom-ref.
@@ -52,8 +57,9 @@ ANCESTRYDNA = FormatSpec(
     ),
     genotype_encoding=(
         "two columns, one allele letter each, forward (+) strand per the preamble; I/D on indel probes, "
-        "which the loader resolves against the probe's alleles; haploid sites (male 23/24, 26) are written "
-        "as the same letter twice, never as one letter"
+        "which the loader keeps verbatim: resolving them needs the chip manifest's alleles and a REF "
+        "(RM3); haploid sites (male 23/24, 26) are written as the same letter twice, never as one letter, "
+        "and the loader keeps both letters: the vendor's convention, not a homozygous call"
     ),
     no_call=("0",),
     build_hints=(BuildHint(r"human reference build 37\.1 coordinates", "GRCh37"),),
@@ -97,11 +103,14 @@ GENOS = FormatSpec(
     delimiter="\t",
     header=HeaderMode.NONE,
     columns=(
-        {"name": "chromosome", "dtype": pl.String, "description": "chr-prefixed: chr1-chr22, chrX, chrY"},
-        {"name": "begin", "dtype": pl.Int64, "description": "0-based start of the reference span"},
-        {"name": "end", "dtype": pl.Int64, "description": "exclusive end; equals begin at an insertion site"},
-        {"name": "rsid", "dtype": pl.String, "description": "rsid of the requested site"},
-        {"name": "genotype", "dtype": pl.String, "description": "alleles joined by `/`, or one allele"},
+        {"name": "chromosome", "dtype": pl.String, "description": "chr-prefixed: chr1-chr22, chrX, chrY",
+         "aliases": ("CHROM",)},
+        {"name": "begin", "dtype": pl.Int64, "description": "0-based start of the reference span", "aliases": ("BEGIN",)},
+        {"name": "end", "dtype": pl.Int64, "description": "exclusive end; equals begin at an insertion site",
+         "aliases": ("END",)},
+        {"name": "rsid", "dtype": pl.String, "description": "rsid of the requested site", "aliases": ("ID",)},
+        {"name": "genotype", "dtype": pl.String, "description": "alleles joined by `/`, or one allele",
+         "aliases": ("GENOTYPE",)},
     ),
     coordinates=Coordinates.ZERO_BASED_HALF_OPEN,
     genotype_encoding=(

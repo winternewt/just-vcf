@@ -51,9 +51,33 @@ The ordering test (`tests/formats/test_registry.py`) sniffs every spec's `exampl
 come back as that spec, so no earlier entry may capture a later one's example. A new spec that breaks
 it is registered too late or detects too loosely.
 
+## Which formats load
+
+`just_vcf.LOADABLE_FORMATS` lists them. `load` refuses any other format with `UnsupportedFormatError`.
+
+| Loader | Formats |
+|---|---|
+| `loaders.vcf` | `vcf` |
+| `loaders.rsid_table` | `23andme`, `23andme_csv`, `living_dna`, `selfdecode`, `plink_23`, `genes_for_good`, `genes_for_good_imputed`, `rsid_table`, `rsid_table_headerless` |
+| `loaders.table` | `ancestrydna`, `ftdna`, `ftdna_space`, `rsid_result_csv`, `color_genotypes`, `decodeme`, `genos`, `illumina_final_report` |
+
+`loaders.table` reads each file through its spec: the column names from the file (matched against the
+spec's names and aliases, case-insensitively), the delimiter, the coordinate convention and the no-call
+spellings. Columns the frames do not carry are listed by their file names in `facets.dropped_fields`
+(deCODEme's `Variation`, a Final Report's GenCall score and intensities). A file whose columns lack what
+its format needs is refused with `TableLayoutError`. MyHeritage exports load as `rsid_result_csv`
+(the `ftdna` spec excludes them), with the vendor left unclaimed; no MyHeritage file was available to
+check that against.
+
+Not loadable yet: the CGI native files (`cgi_var`, `cgi_master_var`), the VCF dialects (`vcf_cgi`,
+`vcf_freebayes_varscan2`, `vcf_no_meta`, `bcf`), the key=value table and the other tables. Geno 2.0
+(`genographic_geno2`, its headerless variant) and the headerless Final Report name markers without
+positions, so their rows cannot be `calls` rows until a chip manifest places them.
+
 ## Contract gaps the loader step starts from
 
-Found while declaring formats; none changes what `sniff` reports.
+Found while declaring formats; none changes what `sniff` reports. Where a loader has closed one, the
+entry says how.
 
 - **Columns differ by format version.** A spec declares one layout (CGI declares 2.5). Earlier
   versions drop, add or rename columns; CGI 1.x has `totalScore` where 2.x has three score columns.
@@ -65,20 +89,28 @@ Found while declaring formats; none changes what `sniff` reports.
 - **`no_call` is a flat tuple of spellings.** It cannot express a partial no-call inside an allele
   (CGI `GC?`), `half` zygosity, or 1.x `no-call-rc`. These live in `genotype_encoding` and `notes`.
 - **Column names outside the table.** Genos names its columns in a `##Columns=` meta line; the spec
-  uses `HeaderMode.NONE` with the columns in order.
+  uses `HeaderMode.NONE` with the columns in order. *Closed:* the loader reads the names from that line
+  when it is there (the spec's aliases match them) and falls back to the spec's order when it is not.
 - **One delimiter per spec.** 2010-era FTDNA Affymetrix exports have a comma header, space-separated
-  rows, and quoted comma rows at the end. Quoting has no field either.
+  rows, and quoted comma rows at the end. Quoting has no field either. *Closed in the loader:* an
+  `ftdna_space` row is read by its own shape, and every field is stripped of surrounding double quotes.
+  Seven PGP-HMS FTDNA uploads are two exports joined, the column line repeated inside; the repeat is
+  skipped and counted.
 - **0-based single positions.** Color positions sit one below GRCh37; `Coordinates` has only 1-based
-  and 0-based half-open, so the spec says half-open and a note explains.
+  and 0-based half-open, so the spec says half-open and a note explains. *Closed:* the loader adds 1
+  for every 0-based spec. Genos insertion sites (`begin == end`) go to the base before them, where VCF
+  places them, with `end_pos` null until RM3 reads the anchor base.
 - **Build stated elsewhere.** Color states it in a data column; deCODEme states it in a sibling file
-  inside the zip, which the archive result does not carry over to the genotype member.
+  inside the zip, which the archive result does not carry over to the genotype member. *Closed:* Color's
+  build is the one every row states (rows that disagree leave it unknown, with a warning), and a
+  deCODEme facet takes the build its zip's `decodeme_info` member states, from `Sniffed.members`.
 - **Optional columns.** `ColumnSpec` cannot say a column appears only in some versions (Promethease
   `Repute`).
 - **A section line before the columns.** Illumina Final Reports put `[Data]` on its own line, and the
-  Geno 2.0 export has no column line after it. `header_prefix` does not fit; a `HeaderMode.SECTION`
-  with the section name would.
+  Geno 2.0 export has no column line after it. *Closed for the Final Report:* `HeaderMode.SECTION` with
+  `FormatSpec.section = "Data"`. The headerless export keeps `HeaderMode.NONE`.
 - **Tab or comma.** Final Reports use either, by export; the spec says `delimiter=None` and the loader
-  reads it off the line after `[Data]`.
+  reads it off the line after `[Data]`. *Closed* that way.
 - **Chromosome outside the row.** Oxford `.gen` imputed rows carry it only in the zip member name; Big Y
   is always chrY.
 - **Text kinds look at one line.** A headerless BED cannot be named `not_variant_data` without a
@@ -86,5 +118,9 @@ Found while declaring formats; none changes what `sniff` reports.
 - **Array or imputed content inside a VCF.** Illumina GenotypingToVCF, 23andMe conversions, Genes for
   Good and Gencove VCFs parse as `vcf`, but an absent site means unknown. `Family` has no axis for it;
   a header-based `source` detector (the VCF agent's table is in the RM2 entry) would supply it.
-- **Half-calls** (`1|.`, `0/.`) are not expressible in `no_call`.
+- **Half-calls** (`1|.`, `0/.`) are not expressible in `no_call`. In the array tables a half-call
+  is a `-` (FTDNA `-A`) or a `0` (AncestryDNA) beside a letter, and the loader keeps the called allele
+  in its slot: `[null, "A"]`. A whole no-call spelling (`spec.no_call`) is a token: in formats that
+  write two letters on every called row (FTDNA's `---`, a Final Report's single `-`) it gives two
+  nulls.
 - **Variable-width rows.** The key=value table has 12 fixed fields and an annotation tail of any length.

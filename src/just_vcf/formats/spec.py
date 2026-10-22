@@ -53,6 +53,9 @@ class HeaderMode(str, Enum):
     """The last comment line before the data (23andMe `# rsid\\tchromosome…`)."""
     VCF = "vcf"
     """VCF meta lines and a `#CHROM` line; read through polars-bio."""
+    SECTION = "section"
+    """The first line after a `[<section>]` line (Illumina Final Report `[Data]`); `FormatSpec.section`
+    names the section."""
 
 
 class ColumnSpec(TypedDict):
@@ -110,6 +113,8 @@ class FormatSpec:
     header: HeaderMode = HeaderMode.LINE
     header_prefix: str | None = None
     """A marker the column-name line starts with, stripped from the first name (CGI's `>locus`)."""
+    section: str | None = None
+    """For `HeaderMode.SECTION`: the name of the section whose next line holds the column names."""
     columns: tuple[ColumnSpec, ...] = ()
     coordinates: Coordinates | None = Coordinates.ONE_BASED
     genotype_encoding: str | None = None
@@ -129,3 +134,5 @@ class FormatSpec:
             raise ValueError(f"format id {self.id!r} must be lowercase snake_case")
         if self.header is HeaderMode.NONE and not self.columns:
             raise ValueError(f"{self.id}: a headerless format must list its columns")
+        if (self.header is HeaderMode.SECTION) != (self.section is not None):
+            raise ValueError(f"{self.id}: a section is named exactly when the header mode is SECTION")

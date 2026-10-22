@@ -18,7 +18,8 @@ import polars as pl
 
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import FormatSpec
-from just_vcf.schema import CALLS, EvidenceBasis, canonical_chrom_expr, conform
+from just_vcf.loaders.text import chrom_columns, ids_expr, lines, one_field_alleles, single_position_end
+from just_vcf.schema import CALLS, EvidenceBasis, conform
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,6 @@ _COMMENT = r"^.?\"?#"
 the `#` (a real Genes for Good file opens `I# Genes for Good`). No data line starts this way: ids
 start with `rs`, `i`, `AX-` or a chromosome number."""
 
-_ALLELE_LETTERS = "ACGTDI"
-"""Letters an allele may be written with: bases, and 23andMe's D/I codes for indel probes."""
-
 
 def read_calls(data: bytes, spec: FormatSpec) -> tuple[pl.DataFrame, list[str]]:
     """Parse a decompressed payload of `spec`'s format into `calls` rows without `facet_id`.
@@ -55,12 +53,11 @@ def read_calls(data: bytes, spec: FormatSpec) -> tuple[pl.DataFrame, list[str]]:
     """
     if spec.id not in FORMATS:
         raise ValueError(f"{spec.id} is not a 23andMe-layout table")
-    lines = _lines(data)
     delimiter = spec.delimiter or "\t"
     warnings: list[str] = []
 
     rows = (
-        lines.filter(pl.col("line").str.strip_chars() != "")
+        lines(data).filter(pl.col("line").str.strip_chars() != "")
         .filter(~pl.col("line").str.contains(_COMMENT))
         .with_columns(pl.col("line").str.split(delimiter).alias("fields"))
     )
@@ -81,7 +78,7 @@ def read_calls(data: bytes, spec: FormatSpec) -> tuple[pl.DataFrame, list[str]]:
         warnings.append(f"{bad_position.height} row(s) with a position that is not a 32-bit count dropped")
     rows = rows.filter(pl.col("pos").is_not_null())
 
-    rows = rows.with_columns(_gt_alleles(spec).alias("gt_alleles"))
+    rows = rows.with_columns(one_field_alleles("genotype", spec.no_call).alias("gt_alleles"))
     unreadable = rows.filter(pl.col("gt_alleles").is_null())
     if unreadable.height:
         spellings = sorted(set(unreadable["genotype"].str.len_chars().to_list()))
@@ -90,17 +87,14 @@ def read_calls(data: bytes, spec: FormatSpec) -> tuple[pl.DataFrame, list[str]]:
             f"gt_alleles null and the text in source_gt (lengths seen: {', '.join(map(str, spellings))})"
         )
 
-    single_bases = pl.col("gt_alleles").list.eval(pl.element().is_null() | pl.element().is_in(list("ACGT"))).list.all()
-    any_called = pl.col("gt_alleles").list.eval(pl.element().is_not_null()).list.any()
     calls = rows.select(
-        canonical_chrom_expr("chromosome").alias("chrom"),
+        *chrom_columns("chromosome"),
         pl.col("pos"),
-        pl.when(single_bases & any_called).then(pl.col("pos")).otherwise(None).alias("end_pos"),
-        pl.when(pl.col("rsid").is_in(["", "."])).then(None).otherwise(pl.concat_list("rsid")).alias("ids"),
+        single_position_end("gt_alleles", "pos").alias("end_pos"),
+        ids_expr("rsid").alias("ids"),
         pl.col("gt_alleles"),
         pl.col("genotype").alias("source_gt"),
         pl.lit(EvidenceBasis.ASSAY.value).alias("evidence_basis"),
-        pl.col("chromosome").alias("source_chrom"),
     )
     return calls, warnings
 
@@ -111,42 +105,6 @@ def to_calls_frame(calls: pl.DataFrame, facet_id: str) -> pl.LazyFrame:
         calls.lazy().drop("source_chrom").with_columns(pl.lit(facet_id).alias("facet_id")),
         CALLS,
     )
-
-
-def _lines(data: bytes) -> pl.DataFrame:
-    """The payload's lines as one string column. BOM-aware; CRLF and bare CR become LF."""
-    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        data = data.decode("utf-16").encode("utf-8")
-    elif data.startswith(b"\xef\xbb\xbf"):
-        data = data[3:]
-    data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-    if not data.strip():
-        return pl.DataFrame({"line": []}, schema={"line": pl.String})
-    return pl.read_csv(
-        data,
-        has_header=False,
-        separator="\x1f",
-        quote_char=None,
-        new_columns=["line"],
-        schema={"line": pl.String},
-        encoding="utf8-lossy",
-    ).with_columns(pl.col("line").fill_null(""))
-
-
-def _gt_alleles(spec: FormatSpec) -> pl.Expr:
-    """One entry per written allele; null entries for missing alleles; null when unreadable.
-
-    `--` is two missing alleles and `-` one, because the list length is what the file wrote. A `-`
-    beside a letter (`T-`) is a half-call. A genotype longer than two letters (Living DNA writes an
-    indel's two allele sequences back to back) cannot be split without the site's alleles, so it is
-    unreadable here and stays in `source_gt`.
-    """
-    genotype = pl.col("genotype")
-    readable = genotype.str.contains(rf"^[{_ALLELE_LETTERS}-]{{1,2}}$")
-    if spec.no_call:
-        readable = readable | genotype.is_in(list(spec.no_call))
-    letters = genotype.str.split("").list.eval(pl.when(pl.element() == "-").then(None).otherwise(pl.element()))
-    return pl.when(readable).then(letters).otherwise(None)
 
 
 def column_line_ok(data: bytes, spec: FormatSpec) -> bool | None:

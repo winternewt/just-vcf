@@ -471,6 +471,7 @@ def test_real_var_converges_with_its_vcf_beta(real_assembly: dict[str, Loaded]) 
     covers every base var does not call reference, and 904,739 of var's 2.78G reference bases, the
     anchor bases of its indels and no-calls.
     """
+    assert real_assembly["vcf"].facets.collect()["absence_means"].to_list() == ["reference"]
     counts = compare(real_assembly["var"], real_assembly["vcf"])
     matched = counts["same"] + counts["partial_as_no_call"] + counts["genotype_differs"]
     assert counts["same"] > 0.99 * matched, counts

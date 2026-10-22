@@ -227,6 +227,11 @@ WGS_SNP_HALF = facet("weak_reference", [("snv", 4_000_000), ("indel", 12)], "snv
         (WGS_SNP_HALF, "snv", True, True),
         (WGS_SNP_HALF, "indel", False, None),
         (WGS_SNP_HALF, "indel", True, None),
+        # A producer that called every omitted position reference: the same gates by class and cut.
+        (facet("reference", [("snv", 3_000_000), ("indel", 400_000)]), "indel", False, True),
+        (facet("reference", [("snv", 3_000_000), ("indel", 400_000)]), "sv", False, None),
+        (facet("reference", [("snv", 3_000_000), ("indel", 12)], "snv_only"), "snv", False, None),
+        (facet("reference", [("snv", 3_000_000), ("indel", 12)], "snv_only"), "snv", True, True),
         # Blocks decide per position, which a facet-level answer cannot see.
         (facet("blocks", [("snv", 10)]), "snv", True, None),
         (facet("unknown", [("snv", 10)]), "snv", True, None),

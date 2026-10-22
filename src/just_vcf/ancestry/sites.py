@@ -17,7 +17,9 @@ Per panel site, in this order:
    0. A no-call is the source saying it looked and could not tell.
 2. **No row.** What that means is the facet's `absence_means`: `weak_reference` (a whole-genome callset
    without blocks) reads it as homozygous for the panel's reference allele, dosage 0; `blocks` (a
-   gVCF) does so only inside a `ref` block; `unknown`, or null, leaves it missing. Absence is read as
+   gVCF) does so only inside a `ref` block; `reference` (CGI's VCF, whose producer called what it
+   omits reference) does so outside every block, a no-call block being no omission; `unknown`, or
+   null, leaves it missing. Absence is read as
    reference only on the autosomes, where homozygous means two copies.
 
 The panel's first allele is taken as the reference allele; a panel whose first allele is not the
@@ -156,21 +158,27 @@ def _absent_as_reference(loaded: Loaded, facet: Facet, sites: pl.DataFrame, pres
     if facet.absence_means == AbsenceMeans.WEAK_REFERENCE.value:
         return candidates
     if facet.absence_means == AbsenceMeans.BLOCKS.value:
-        return candidates & _inside_reference_block(loaded, facet, sites)
+        return candidates & _inside_block(loaded, facet, sites, BlockKind.REF)
+    if facet.absence_means == AbsenceMeans.REFERENCE.value:
+        # What the file omits was called reference; a site a block covers was not omitted (a no-call).
+        return candidates & ~_inside_block(loaded, facet, sites, None)
     return np.zeros(sites.height, dtype=bool)
 
 
-def _inside_reference_block(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> np.ndarray:
-    """Which sites a `ref` block of the facet covers (blocks are 1-based and inclusive)."""
+def _inside_block(loaded: Loaded, facet: Facet, sites: pl.DataFrame, kind: BlockKind | None) -> np.ndarray:
+    """Which sites a block of the facet covers, of `kind` or of any kind (blocks are 1-based and
+    inclusive). Each block start carries the furthest end of the blocks up to it, so a site inside a
+    long block that a shorter one starts within is still covered."""
     chroms = sites["chrom"].unique().to_list()
     blocks = (
         loaded.blocks.filter(
             (pl.col("facet_id") == facet.facet_id)
-            & (pl.col("kind") == BlockKind.REF.value)
+            & (pl.lit(True) if kind is None else pl.col("kind") == kind.value)
             & pl.col("chrom").is_in(chroms)
         )
         .select("chrom", pl.col("pos").alias("_block_start"), pl.col("end_pos").alias("_block_end"))
         .sort("chrom", "_block_start")
+        .with_columns(pl.col("_block_end").cum_max().over("chrom"))
     )
     probe = sites.lazy().select("_site", "chrom", "pos").sort("chrom", "pos")
     covered = (

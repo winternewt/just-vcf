@@ -342,6 +342,15 @@ which polars-bio 0.36 returns as a null GT) spans its REF. Its
 `<CGA_CNVWIN>` records are 2 kb copy-number windows, not genotypes, and are left out with a count. A
 half-called reference span (`0|.`, ALT `.`) stays a call.
 
+What a CGI VCF leaves out, CGI called reference: on a PGP-HMS genome its vcfBeta covers every base the
+same assembly's `var` file does not call reference (0 bases missed of 317.7M, 2026-10-22), and it
+writes no reference-called record. So a VCF whose caller line names CGAPipeline (`vcf_cgi`, and an
+upload that lost its `##center` line) gets `absence_means = reference` when its rows show a whole
+genome (`callset_type = wgs`, RM4). Otherwise (a region cut from one, or too few rows to tell) it keeps
+`blocks`, with a warning: claiming reference for the regions a cut took away would read a deletion of
+data as a reference call. The native `var` and `masterVarBeta` files keep `blocks`: they state their
+reference calls as `ref` blocks, so nothing they omit was called.
+
 A 4.5 block states its length per sample in FORMAT `LEN`. INFO `END` is deprecated and only a fallback
 when `LEN` is missing. Blocks keep the source's `MIN_DP` as `dp_min`, and not the block's average `DP`.
 A block with an average depth of 25 can still hold an uncovered base.
@@ -364,12 +373,16 @@ calls, blocks): a gVCF cannot fit in one calls frame. Every format lands in the 
 a format that has blocks also fills `blocks`.
 
 **Absence is a facet property, not rows.** The facet carries `absence_means`: `unknown` (arrays,
-imputed content, VCFs of array data), `weak_reference` (whole-genome callsets without blocks), or
-`blocks` (gVCF, CGI: only positions inside a `ref` block are reference). Nothing is materialised
+imputed content, VCFs of array data), `weak_reference` (whole-genome callsets without blocks),
+`blocks` (gVCF, CGI's native files: only positions inside a `ref` block are reference), or `reference`
+(CGI's VCF, above: every position the file omits was called reference by its producer). A position a
+block covers is not omitted; its block says what it is. `reference` is just-vcf's own term (charter
+2), and it is stronger than `weak_reference`, whose silence is only a caller not reporting a variant
+there. Nothing is materialised
 until a consumer asks for a position. When it does, the answer comes out as a `calls`-shaped row with
 `evidence_basis = absence` or `ref_block`.
 
-**Absence is per variant class.** `weak_reference` holds only for the classes in the facet's
+**Absence is per variant class.** `weak_reference` and `reference` hold only for the classes in the facet's
 `variant_classes`; for any other class, absence is unknown. A small-variant caller that wrote no
 symbolic ALT says nothing about SVs. And a whole genome cut down to one class keeps
 `callset_type = wgs` (the assay did not change) but gets a `content_filter` (`snv_only`, `indel_only`,
@@ -378,8 +391,9 @@ present (`bcftools view -v snps` keeps a multi-allelic site whose other ALT is a
 holds them back for the kept class too.
 
 `absence_is_reference(facet_row, variant_class, force=False)` is the rule in code, for just-vcf and
-for consumers that restore hom-ref themselves (just-prs, just-dna-lite). It returns `True` only when
-`absence_means` is `weak_reference`, the class is present in `variant_classes`, and the facet has no
+for consumers that restore hom-ref themselves (just-prs, just-dna-lite). A position is absent when no
+`calls` row and no `blocks` row covers it. It returns `True` only when
+`absence_means` is `weak_reference` or `reference`, the class is present in `variant_classes`, and the facet has no
 `content_filter`. `force=True` lifts the hold for the filter's kept class only. Every other case is
 `None`, never `False`, including `blocks` (a gVCF decides per position, in its `blocks` frame). Any
 hom-ref restoration from absence that just-vcf grows must ask it, and refuse a facet with a
@@ -481,7 +495,8 @@ extract of a larger callset reads as `panel`, which is what its absences then me
 header names an imputation tool or declares an imputation INFO key. Every sequencing class needs a
 read-evidence FORMAT key (AD, DP, GQ, PL, GL, MIN_DP) in the header. A site is a row with a sequence
 ALT (bases `ACGTN`) or none; rows whose ALTs are all symbolic do not count, so a genome-wide SV callset is not `wgs`.
-Anything between the bands is null. A gVCF is not a callset type: its blocks set
+Anything between the bands is null. A CGAPipeline VCF typed `wgs` gets `absence_means = reference`
+(Decision 4). A gVCF is not a callset type: its blocks set
 `absence_means = blocks`, whatever its scope. Otherwise `wgs` gives `weak_reference` and every other
 type, null included, `unknown`. A lifted facet is `unknown` whatever its type ("Lifting"). Measured on PGP-HMS uploads: four Genos exomes at 44,020–44,796 sites
 and 13.6% breadth, about 400 Mb reached.
@@ -1007,6 +1022,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **An enum member, version bump pending** (2026-10-23, RM2's CGI question): `AbsenceMeans.REFERENCE`
+  (`reference`), "every position the file omits was called reference by its producer", just-vcf's own
+  term. Adding a member changes the `pl.Enum` dtype of `facets.absence_means`, which is a schema
+  change; `SCHEMA_VERSION` was deliberately left at 0.0.10 on this builder branch, and the lead bumps it
+  at merge. Rule change: a CGAPipeline VCF typed `wgs` gets `reference` where it got `blocks`, and
+  `absence_is_reference` answers True for it (Decision 4). Values change on files that already load.
 
 - **No version change** (2026-10-23, `dropped_fields`): no column changes. Rule stated: `[]` means the
   loader read the file's fields and dropped none, null that the format has no notion of fields

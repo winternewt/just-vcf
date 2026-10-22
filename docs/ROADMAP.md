@@ -62,9 +62,22 @@ stronger value would be the change. **Settled by the comparison, the value not y
 (2026-10-22):** on the smallest PGP-HMS assembly, vcfBeta covers every base its `var` does not call
 reference (0 bases missed of 317.7M) and touches 904,739 of the 2.78G bases `var` calls reference,
 the anchor bases of its indels and no-calls. So a position absent from a vcfBeta is one CGI called
-reference, as explicitly as a `var` ref block. Which value says that is the open part:
-`weak_reference` understates it, and a stronger one is a new `AbsenceMeans` member, which changes the
-`pl.Enum` dtype (a schema decision). The test is `test_real_var_converges_with_its_vcf_beta`.
+reference, as explicitly as a `var` ref block. The test is `test_real_var_converges_with_its_vcf_beta`.
+**Value chosen 2026-10-23 (the lead):** a new member, `AbsenceMeans.REFERENCE` (`reference`), just-vcf's
+own (SCHEMA Decision 4); the native files keep `blocks`. Builder's choices, each with what was rejected:
+
+- Keyed on the caller line (`##source=CGAPipeline_*`, `callset.REFERENCE_BY_OMISSION_CALLERS`), not on
+  `format_id = vcf_cgi`: an upload that lost `##center` sniffs as `vcf` and is still CGI's VCF, as the
+  GL-scale rule already reads it. Rejected: the format id alone, which would give the same file two
+  readings of its silence.
+- Only where RM4 types the rows `wgs`. A region cut from a CGI VCF (RM4's `panel`, or nothing it can
+  name) keeps `blocks`, with a warning. Rejected: the caller alone, which would claim reference for the
+  regions a cut took away; RM4's `content_filter` covers only cuts by class.
+- `absence_is_reference` applies the same class and content-filter gates to `reference` as to
+  `weak_reference`. Rejected: True for every class, which would read the absence of SVs, which
+  CGAPipeline's small-variant VCF never writes, as their absence.
+- Ancestry's absent-site rule (`ancestry/sites.py`) reads `reference` as reference outside any block,
+  where it read the member as unknown.
 
 **CGI native files, built 2026-10-22** (`loaders/cgi.py`). Decisions, each with what was rejected:
 

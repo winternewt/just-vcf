@@ -60,6 +60,11 @@ class AbsenceMeans(str, Enum):
     UNKNOWN = "unknown"
     WEAK_REFERENCE = "weak_reference"
     BLOCKS = "blocks"
+    REFERENCE = "reference"
+    """Every position the file omits was called reference by its producer: Complete Genomics' VCF,
+    which writes its variants and its no-called spans and leaves out what it called reference. Stronger
+    than `weak_reference`, whose silence is only the caller not reporting a variant. A position a block
+    covers is not omitted: the block says what it is. just-vcf's own term; GA4GH has none."""
 
 
 class CallsetType(str, Enum):

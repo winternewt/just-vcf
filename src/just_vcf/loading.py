@@ -556,6 +556,9 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     source = detect_source(header.meta, get_spec(sniffed.format).vendor)
     warnings += source.warnings
     gl_phred = source.caller == "CGAPipeline"
+    # The caller line, not the format id: an upload that lost `##center` sniffs as `vcf` and is still
+    # CGAPipeline's VCF, as the GL rule above reads it.
+    omitted_called_reference = source.caller in callset.REFERENCE_BY_OMISSION_CALLERS
     if gl_phred:
         warnings.append("CGAPipeline writes GL in phred units (GQ is the gap between the two best): read as GL / 10")
     if (header.version_tuple or (0, 0)) >= (4, 4):
@@ -602,6 +605,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             inference = callset.classify(spilled, list(header.format), callset.imputation_marker(header.meta, list(header.info)))
             logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
             kind = inference.callset_type if inference else None
+        if omitted_called_reference and kind is not CallsetType.WGS:
+            part_warnings.append(
+                f"{source.caller} leaves out the positions it called reference, but the rows do not show a whole genome "
+                f"(callset type {kind.value if kind else 'unknown'}): absence is not read as reference"
+            )
         counts = callset.variant_class_counts(spilled)
         content = callset.infer_content_filter(counts, stated_filters, named_filter)
         logger.info("%s: content filter %s (%s)", facet_id, content.content_filter.value if content.content_filter else "none", content.reason)
@@ -628,7 +636,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 "assembly_label_basis": basis.value if basis else None,
                 "sorted_name_length_pairs_digest": sorted_name_length_pairs_digest(header.contigs),
                 # A one-column merge facet holds only the sites its caller alone found: absent there is unknown.
-                "absence_means": (AbsenceMeans.UNKNOWN if part.sf_alone else callset.absence_means(kind, stats["any_block"])).value,
+                "absence_means": (
+                    AbsenceMeans.UNKNOWN
+                    if part.sf_alone
+                    else callset.absence_means(kind, stats["any_block"], omitted_called_reference=omitted_called_reference)
+                ).value,
                 # Absence reads as reference only for the classes present and not cut away (Decision 4).
                 "variant_classes": [{"variant_class": cls.value, "alleles": n} for cls, n in counts.items() if n],
                 "content_filter": content.content_filter.value if content.content_filter else None,

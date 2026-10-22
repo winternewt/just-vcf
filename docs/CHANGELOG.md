@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A Complete Genomics VCF reads its silence as reference calls: `AbsenceMeans` gains `reference`
+  ("every position the file omits was called reference by its producer"), set on a VCF whose caller
+  line names CGAPipeline when its rows show a whole genome, and `absence_is_reference` answers True for
+  it, by the same class and content-filter gates as `weak_reference`. Settled by comparing a PGP-HMS
+  vcfBeta with the same assembly's `var` (0 of 317.7M non-reference bases missed). A smaller CGI VCF
+  keeps `blocks`, with a warning. Ancestry reads an omitted site of such a facet as reference outside
+  its no-call blocks. A value change on files that already load (`blocks` becomes `reference`), and a
+  new member of the `absence_means` enum (schema bump pending at merge). CGI's native files keep
+  `blocks`.
+
 - `facets.dropped_fields` means the same in every loader: `[]` when the loader read the file's fields
   and dropped none, null only for a format with no notion of fields. The 23andMe-layout tables (all
   nine) and a Genos file without its `##Columns=` line wrote null; they now write `[]`. A value change

@@ -25,9 +25,10 @@ The rules are in docs/SCHEMA.md ("Normalizing"); in short:
    described the representation the source wrote, at the position it wrote it, and keeping
    `ref_check = match` on bases read from the very sequence it checks would be a check agreeing with
    itself. `ref` holds the new REF, read from the reference. Rows whose REF was not shown to match
-   pass through unchanged, counted. A deletion written as ALT `-` (F12: the REF bases at POS
-   deleted, no anchor base) is read as the empty allele and anchored on the base before, then aligned
-   like any deletion; at a contig's first base there is none, and it stays as written, counted.
+   pass through unchanged, counted. A deletion written without its anchor base, as the empty ALT
+   `""` (F12's `-`, which the loader reads so; CGI's native deletions: the REF bases at POS deleted),
+   is anchored on the base before, then aligned like any deletion; at a contig's first base there is
+   none, and it stays as written, counted.
 3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
    but the ones a move clears (`_POSITIONAL`), so a moved indel and its unmoved twin with the same
    genotype and evidence are one row, the unmoved one. Rows for the same allele at the same position
@@ -51,14 +52,13 @@ import polars as pl
 
 from just_vcf import cache
 from just_vcf.liftover import RELATION as LIFT_RELATION
-from just_vcf.loaders.vcf import DASH_DELETION
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore
-from just_vcf.schema import CALLS, CONTIG_RANK, SCHEMA_VERSION, RefCheck, SplitSignal, canonical_chrom, canonical_order, empty
+from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, RefCheck, SplitSignal, canonical_chrom, canonical_order, empty
 
 logger = logging.getLogger(__name__)
 
-NORMALIZE_VERSION = 4
+NORMALIZE_VERSION = 5
 """Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits."""
 
 RELATION = "normalized"
@@ -320,14 +320,14 @@ def _align(
     against (an array row, a split Living DNA genotype)."""
     alt = pl.col("alts").list.first()
     written = pl.coalesce(pl.col("ref"), pl.col("source_ref"))
-    # F12: ALT `-` deletes the REF bases at POS. As the empty allele it is anchored on the base before
-    # by the same loop that left-aligns any deletion, once REF has been shown to match.
-    dash = ((pl.col("alts").list.len() == 1) & (alt == DASH_DELETION)).fill_null(False)
+    # The empty ALT (F12's `-`, CGI's unpadded deletions) deletes the REF bases at POS. It is anchored on
+    # the base before by the same loop that left-aligns any deletion, once REF has been shown to match.
+    empty_alt = ((pl.col("alts").list.len() == 1) & (alt == EMPTY_ALLELE) & (written.str.len_chars() > 0)).fill_null(False)
     shape = (
         (pl.col("alts").list.len() == 1)
         & (
             (alt.str.to_uppercase().str.contains(r"^[ACGTN]+$") & ((written.str.len_chars() > 1) | (alt.str.len_chars() > 1)))
-            | dash
+            | empty_alt
         )
     ).fill_null(False)
     unchecked_read = pl.col("source_ref").is_null() & pl.col("ref_check").is_null() & pl.lit(from_file)
@@ -340,16 +340,16 @@ def _align(
         .when((pl.col("gt").list.max() > 1).fill_null(False))
         .then(pl.lit("index_past_alts"))
     )
-    # An ALT that is neither bases, `*`, symbolic, a breakend nor F12's `-` is not a VCF allele; it
-    # cannot be aligned, and is counted rather than passed over in silence.
-    not_an_allele = ((pl.col("alts").list.len() == 1) & ~alt.str.to_uppercase().str.contains(r"^([ACGTN]+|\*)$") & ~alt.str.contains(_SYMBOLIC)).fill_null(False)
+    # An ALT that is neither bases, the empty allele, `*`, symbolic nor a breakend is not a VCF allele;
+    # it cannot be aligned, and is counted rather than passed over in silence.
+    not_an_allele = ((pl.col("alts").list.len() == 1) & ~alt.str.to_uppercase().str.contains(r"^([ACGTN]*|\*)$") & ~alt.str.contains(_SYMBOLIC)).fill_null(False)
     rows = rows.with_row_index("_row").with_columns(
         pl.when(shape).then(reason).when(not_an_allele).then(pl.lit("not_an_allele")).alias("_reason"), shape.alias("_shape")
     )
     for name, count in rows.filter(pl.col("_reason").is_not_null()).group_by("_reason").len().iter_rows():
         counts[f"unaligned_{name}"] += count
     candidates = rows.filter(pl.col("_shape") & pl.col("_reason").is_null()).select(
-        "_row", "pos", "ref", pl.when(dash).then(pl.lit("")).otherwise(alt.str.to_uppercase()).alias("_alt")
+        "_row", "pos", "ref", alt.str.to_uppercase().alias("_alt")
     )
     rows = rows.drop("_reason", "_shape")
     if candidates.is_empty():
@@ -369,15 +369,15 @@ def _align(
             result = _left_align(pos, ref, alt_text, window, start)
             if result is None:
                 if start == 1:
-                    # The window already reaches the contig's first base: an allele empty at POS 1 (a `-`
-                    # deletion there) has no base before it to anchor on, and a wider read cannot help.
+                    # The window already reaches the contig's first base: an allele empty at POS 1 (an
+                    # unanchored deletion there) has no base before it to anchor on, and a wider read cannot help.
                     counts["unaligned_no_anchor"] += 1
                 else:
                     retry.append((index, pos, ref, alt_text))
                 continue
             new_pos, new_ref, new_alt, at_start = result
             counts["aligned_at_start"] += at_start
-            counts["dash_anchored"] += alt_text == ""
+            counts["empty_anchored"] += alt_text == EMPTY_ALLELE
             if (new_pos, new_ref, new_alt) != (pos, ref, alt_text):
                 for key, value in zip(changed, (index, new_pos, new_ref, new_alt)):
                     changed[key].append(value)
@@ -500,8 +500,11 @@ def _warnings(counts: Counter[str]) -> list[str]:
     moved, trimmed = counts["aligned_moved"], counts["aligned_trimmed"]
     if moved or trimmed:
         lines.append(f"{moved} row(s) left-aligned to another position and {trimmed} trimmed in place, against the reference")
-    if counts["dash_anchored"]:
-        lines.append(f"{counts['dash_anchored']} deletion(s) written as ALT `-` anchored on the base before, as VCF writes them (F12)")
+    if counts["empty_anchored"]:
+        lines.append(
+            f'{counts["empty_anchored"]} deletion(s) written without their anchor base (the empty ALT "": an ALT `-`, F12, '
+            "or CGI's unpadded deletions) anchored on the base before, as VCF writes them"
+        )
     if counts["aligned_at_start"]:
         lines.append(f"{counts['aligned_at_start']} row(s) reached their contig's start and stay anchored on the base after")
     reasons = {
@@ -512,7 +515,7 @@ def _warnings(counts: Counter[str]) -> list[str]:
         "unaligned_unindexed": "a genotype that is not indexed",
         "unaligned_index_past_alts": "a genotype index past the row's ALTs",
         "unaligned_contig": "a contig the collection names twice",
-        "unaligned_no_anchor": "a `-` deletion at a contig's first base, with no base before it to anchor on (F12)",
+        "unaligned_no_anchor": "a deletion without its anchor base at a contig's first base, with no base before it to anchor on (F12)",
         "unaligned_not_an_allele": "an ALT that is not a VCF allele",
     }
     for key, reason in reasons.items():

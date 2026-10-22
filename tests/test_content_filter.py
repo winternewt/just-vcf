@@ -37,7 +37,8 @@ def test_each_alt_is_counted_in_its_class() -> None:
         ("A", ["G", "AT"]),  # snv + insertion
         ("AC", ["GT"]),  # mnv
         ("ACGT", ["A"]),  # deletion
-        ("A", ["-"]),  # an unanchored deletion (F12)
+        ("A", [""]),  # an unanchored deletion (F12's `-`, read as the empty allele)
+        ("", ["T"]),  # an insertion point with no anchor base (CGI's native files)
         ("A" * 400, ["A"]),  # a 399 bp deletion written out base by base is still an indel
         ("N", ["<DEL>"]),  # symbolic
         ("G", ["G]17:198982]"]),  # breakend
@@ -51,7 +52,7 @@ def test_each_alt_is_counted_in_its_class() -> None:
         {"source_ref": [r for r, _ in rows], "alts": [a for _, a in rows]},
         schema={"source_ref": pl.String, "alts": pl.List(pl.String)},
     )
-    assert variant_class_counts(frame) == counts(snv=3, mnv=1, indel=4, sv=3)
+    assert variant_class_counts(frame) == counts(snv=3, mnv=1, indel=5, sv=3)
 
 
 # --- what the rows show -----------------------------------------------------------------------

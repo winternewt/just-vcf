@@ -384,8 +384,8 @@ def test_genos_spans_insertions_and_hemizygous_calls(tmp_path: Path) -> None:
     assert {k: (v["chrom"], v["pos"], v["end_pos"], v["gt_alleles"]) for k, v in by_id.items()} == {
         "rs1": ("1", 100, 100, ["C", "T"]),
         "rs2": ("1", 200, 201, ["AT", "GC"]),
-        "rs3": ("1", 300, 300, ["T", "-"]),
-        "rs4": ("1", 400, None, ["-", "A"]),
+        "rs3": ("1", 300, 300, ["T", ""]),  # Genos's `-` is the empty allele, spelt "" as everywhere
+        "rs4": ("1", 400, None, ["", "A"]),
         "rs5": ("X", 500, 500, ["G"]),
         "rs6": ("MT", 600, 600, ["A", "A"]),
         "rs7": ("1", 700, 700, None),

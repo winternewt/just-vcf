@@ -13,6 +13,8 @@ from just_vcf import ReferenceMismatchError, ReferenceStore, load, normalize, re
 from just_vcf.loading import Loaded
 from just_vcf.normalize import RELATION, _left_align
 from just_vcf.schema import BLOCKS, CALLS
+from test_load_cgi import Locus, Seg, var_text
+from test_load_cgi import write as write_cgi
 
 rng = random.Random(11)
 _LEFT = "".join(rng.choice("ACGT") for _ in range(200))
@@ -212,6 +214,25 @@ def is_normalized(pos: int, ref: str, alt: str) -> bool:
     return parsimonious and left
 
 
+def test_a_cgi_deletion_without_its_anchor_base_is_anchored(tmp_path: Path) -> None:
+    """CGI's native `var` writes a deletion over its own span, ALT the empty allele, as an upload's ALT
+    `-` loads (F12): `normalize` anchors both alike, on the base before."""
+    p = next(q for q in range(100, 500) if at("2", q - 1) != at("2", q + 1))  # no left shift past the anchor
+    loci = [
+        Locus("chr2", 0, p - 1, uniform="ref"),
+        Locus("chr2", p - 1, p + 1, haps=((Seg(p - 1, p + 1, "ref", at("2", p, 2), at("2", p, 2)),), (Seg(p - 1, p + 1, "del", at("2", p, 2), ""),))),
+        Locus("chr2", p + 1, 600, uniform="ref"),
+    ]
+    labelled = ReferenceStore.open(tmp_path / "grch37")
+    labelled.add_fasta(write_fasta(tmp_path / "grch37.fa"), assembly_label="GRCh37")
+    parent = resolve_ref(load(write_cgi(tmp_path, var_text(loci), "var-GS000000001-ASM.tsv.bz2")), labelled)
+    row = parent.calls.collect().row(0, named=True)
+    assert (row["pos"], row["source_ref"], row["alts"], row["ref_check"]) == (p, at("2", p, 2), [""], "match")
+    out = normalize(parent, labelled).calls.collect().row(0, named=True)
+    assert (out["pos"], out["ref"], out["alts"], out["gt"], out["gt_alleles"]) == (p - 1, at("2", p - 1, 3), [at("2", p - 1)], [0, 1], [at("2", p - 1, 3), at("2", p - 1)])
+    assert is_normalized(out["pos"], out["ref"], out["alts"][0])
+
+
 def test_indels_move_left_through_repeats(tmp_path: Path, store: ReferenceStore) -> None:
     end_t = HOMOPOLYMER + 7
     end_ca = TANDEM + 11
@@ -325,7 +346,7 @@ def test_a_dash_deletion_is_anchored_on_the_base_before(tmp_path: Path, store: R
     got = {(row["pos"], row["source_ref"] or row["ref"], row["alts"][0]) for row in calls.iter_rows(named=True)}
     assert (29, at("1", 29, 3), at("1", 29)) in got
     assert (HOMOPOLYMER - 1, "CT", "C") in got
-    assert (1, at("1", 1), "-") in got and (60, wrong, "-") in got
+    assert (1, at("1", 1), "") in got and (60, wrong, "") in got, "an unanchored deletion's ALT is the empty allele"
     for pos, ref, alt in [(29, at("1", 29, 3), at("1", 29)), (HOMOPOLYMER - 1, "CT", "C")]:
         assert is_normalized(pos, ref, alt)
     # The haplotype is the one the source stated: its REF bases removed.
@@ -336,8 +357,9 @@ def test_a_dash_deletion_is_anchored_on_the_base_before(tmp_path: Path, store: R
     assert anchored["gl"] == source["gl"] and anchored["ad"] == source["ad"]
     assert anchored["source_alleles"] == [at("1", 29, 3), at("1", 29)]
     assert anchored["source_ref"] is None and anchored["ref_check"] is None
-    assert any(w.startswith("2 deletion(s) written as ALT `-` anchored on the base before") for w in out.warnings), out.warnings
-    assert any("1 row(s) not left-aligned or trimmed: a `-` deletion at a contig's first base" in w for w in out.warnings)
+    assert any(w.startswith("2 deletion(s) written without their anchor base") for w in out.warnings), out.warnings
+    assert out.calls.filter(pl.col("alts").list.contains("") & (pl.col("pos") == 29)).select(pl.len()).collect().item() == 0
+    assert any("1 row(s) not left-aligned or trimmed: a deletion without its anchor base at a contig's first base" in w for w in out.warnings)
     assert any("1 row(s) not left-aligned or trimmed: REF differs from the reference" in w for w in out.warnings)
     # What could not be anchored is still no VCF allele: write_vcf leaves it out, counted.
     written = write_vcf(out, tmp_path / "out.vcf.gz", resolved_only=True)
@@ -563,7 +585,7 @@ def test_real_upload_agrees_with_bcftools_on_one_contig(pgp_participants: Path, 
         parent = None
     if parent is None:
         pytest.skip("no PGP-HMS VCF upload that resolves against the store")
-    # bcftools refuses a file holding an ALT that is no VCF allele (F12's `-`), so those rows stay out of both.
+    # bcftools refuses a file holding an ALT that is no VCF allele (F12's `-`, loaded as ""), so those rows stay out of both.
     allele = r"^([ACGTNacgtn]+|\*|<[^>]+>)$"
     valid = pl.col("alts").list.eval(pl.element().str.contains(allele)).list.all()
     one = Loaded(facets=parent.facets, calls=parent.calls.filter((pl.col("chrom") == "22") & valid), blocks=pl.LazyFrame(schema=BLOCKS))

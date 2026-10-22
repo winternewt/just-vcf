@@ -10,10 +10,11 @@ silently on write, P13).
 What is written, and the rules it follows:
 
 - **REF** is `ref` (read from the assembly sequence) when there is one, else `source_ref` (what the
-  file wrote). It is never taken from the genotype (charter 10). A row with neither, a row without
+  file wrote). It is never taken from the genotype (charter 10). A row with neither, or with the
+  empty REF `""` (an insertion point whose anchor base was not read), a row without
   `alts` (an array row before RM3, or one RM3 withheld in a mixed-strand facet, F13), a row whose
-  `ref_check` is `mismatch`, a row with an ALT that is no VCF allele (a `-` written for a deletion,
-  F12, until `normalize` anchors it), a row with a genotype that
+  `ref_check` is `mismatch`, a row with an ALT that is no VCF allele (the empty allele `""` of a
+  deletion written without its anchor base, F12's `-` among them, until `normalize` anchors it), a row with a genotype that
   is not indexed (`gt` null beside `gt_alleles`) and a row whose `gt` points past its ALTs cannot be
   written as valid VCF. The writer refuses them with `UnwritableRowsError`, counted per reason, unless
   the caller passes `resolved_only=True`; then the rest is written and the counts are reported.
@@ -71,7 +72,7 @@ from just_vcf.bgzf import BgzfWriter
 from just_vcf.loaders.vcf import FORMAT_KEYS, SPLIT_INFO_KEY
 from just_vcf.loading import Loaded
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _store_for
-from just_vcf.schema import CONTIG_RANK, SCHEMA_VERSION, BlockKind, RefCheck, canonical_chrom
+from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, BlockKind, RefCheck, canonical_chrom
 from just_vcf.tabix import TabixIndexer
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,8 @@ _UNWRITABLE_REASONS = (
 
 _VCF_ALLELE = r"^([ACGTNacgtn]+|\*|<[^<>]+>|\.[ACGTNacgtn]+|[ACGTNacgtn]+\.)$|\[|\]"
 """An ALT VCF can write: bases, `*`, a symbolic allele, a single breakend (`.A`, `A.`) or a breakend
-(`A[2:500[`). Anything else (F12's `-` for a deletion) is not one, and htslib refuses the file."""
+(`A[2:500[`). Anything else is not one, the empty allele `""` of an unanchored deletion included
+(F12's `-` loads as it), and htslib refuses the file."""
 
 
 class ContigNames(str, Enum):
@@ -375,7 +377,9 @@ def _written_ref() -> pl.Expr:
 def _unwritable() -> pl.Expr:
     """Why a row cannot be written as valid VCF, first reason first; null when it can."""
     return (
-        pl.when(_written_ref().is_null())
+        # An empty REF is an insertion point whose anchor base was not read (CGI's native files): VCF's
+        # REF is at least one base, and that base is the reference's, so the row's REF is unresolved.
+        pl.when(_written_ref().is_null() | (_written_ref() == EMPTY_ALLELE))
         .then(pl.lit("ref_unresolved"))
         .when(pl.col("ref_check") == RefCheck.MISMATCH.value)
         .then(pl.lit("ref_mismatch"))

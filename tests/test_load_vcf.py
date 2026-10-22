@@ -455,13 +455,23 @@ def test_an_undeclared_end_is_declared_so_a_block_keeps_its_extent(tmp_path: Pat
     assert any("INFO/END" in w and "not declared" in w for w in loaded.warnings)
 
 
-def test_a_dash_alt_is_kept_verbatim_and_counted(tmp_path: Path) -> None:
+def test_a_dash_alt_is_read_as_the_empty_allele_and_counted(tmp_path: Path) -> None:
     # F12: ALT `-` is an unanchored deletion of the REF bases; the loader has no reference to anchor it.
-    records = ["1\t100\t.\tCT\t-\t.\t.\t.\tGT\t0/1", "1\t200\t.\tA\tG\t.\t.\t.\tGT\t0/1", "1\t300\t.\tG\t-\t.\t.\t.\tGT\t0/0"]
+    # A zero-length allele has one spelling, "" (as CGI's native deletions and VRS's empty literal).
+    records = [
+        "1\t100\t.\tCT\t-\t.\t.\t.\tGT\t0/1",
+        "1\t200\t.\tA\tG\t.\t.\t.\tGT\t0/1",
+        "1\t300\t.\tG\t-\t.\t.\t.\tGT\t0/0",
+        "1\t400\t.\tTA\tT,-\t.\t.\t.\tGT\t1/2",
+    ]
     calls, _, warnings = frames(write(tmp_path, vcf_text(records)))
-    assert calls.filter(pl.col("pos") == 100).select("source_ref", "alts", "end_pos").row(0) == ("CT", ["-"], 101)
+    rows = {row["pos"]: row for row in calls.iter_rows(named=True)}
+    assert (rows[100]["source_ref"], rows[100]["alts"], rows[100]["end_pos"]) == ("CT", [""], 101)
+    assert (rows[100]["gt_alleles"], rows[100]["source_gt"]) == (["CT", ""], "0/1"), "source_gt keeps the file's text"
+    assert (rows[400]["alts"], rows[400]["gt_alleles"]) == (["T", ""], ["T", ""])
+    assert not any("-" in (row["alts"] or []) for row in rows.values())
     assert_gt_consistent(calls)
-    assert any(w.startswith("2 record(s) write a deletion as ALT `-`") for w in warnings), warnings
+    assert any(w.startswith("3 record(s) write a deletion as ALT `-`") for w in warnings), warnings
 
 
 def test_vectors_not_parallel_to_their_alleles_are_withheld(tmp_path: Path) -> None:

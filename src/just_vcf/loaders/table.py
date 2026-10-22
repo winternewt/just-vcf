@@ -38,7 +38,7 @@ from just_vcf.loaders.text import (
     single_position_end,
 )
 from just_vcf.loaders.vcf import MultiSampleError
-from just_vcf.schema import EvidenceBasis
+from just_vcf.schema import EMPTY_ALLELE, EvidenceBasis
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +420,9 @@ def _plus_strand(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
 
 _GENOS_ALLELE = r"^([ACGTN]+|-)$"
 
+_GENOS_EMPTY = "-"
+"""Genos's spelling of the empty allele, read as `schema.EMPTY_ALLELE`."""
+
 
 def _genos(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
     """Genos rows: a 0-based half-open span and alleles joined by `/`.
@@ -427,7 +430,8 @@ def _genos(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
     A span of one or more bases is 1-based `pos = begin + 1`, `end_pos = end`. An insertion site has
     `begin == end`: it sits between two bases, and VCF places it at the base before (1-based `begin`),
     which is where `pos` goes. Its REF span is that anchor base, unknown until the reference is read, so
-    `end_pos` is null. Alleles stay as written, `-` the empty allele, until RM3 reads the anchor.
+    `end_pos` is null. Genos's `-` is the empty allele, `""` in `gt_alleles` (`source_gt` keeps `-`);
+    the alleles stay unanchored until RM3 reads the anchor.
     """
     frame = _positions(frame, "begin", 0, table).rename({"_pos": "_begin"})
     frame = _positions(frame, "end", 0, table).rename({"_pos": "_end"})
@@ -441,7 +445,10 @@ def _genos(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
     frame = frame.with_columns(
         pl.when(insertion).then(pl.col("_begin")).otherwise(pl.col("_begin") + 1).cast(pl.UInt32).alias("pos"),
         pl.when(insertion).then(None).otherwise(pl.col("_end")).cast(pl.UInt32).alias("end_pos"),
-        pl.when(readable).then(alleles).otherwise(None).alias("gt_alleles"),
+        pl.when(readable)
+        .then(alleles.list.eval(pl.when(pl.element() == _GENOS_EMPTY).then(pl.lit(EMPTY_ALLELE)).otherwise(pl.element())))
+        .otherwise(None)
+        .alias("gt_alleles"),
         pl.col("genotype").alias("source_gt"),
         *chrom_columns("chromosome"),
         ids_expr("rsid").alias("ids"),
@@ -450,6 +457,6 @@ def _genos(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
     if sites:
         table.warnings.append(
             f"{sites} insertion site(s) (begin == end) placed at the base before them with end_pos null; their "
-            "alleles stay as written (`-` is the empty allele) until the anchor base is read from the reference"
+            'alleles stay unanchored (`-` is read as the empty allele "") until the anchor base is read from the reference'
         )
     return frame

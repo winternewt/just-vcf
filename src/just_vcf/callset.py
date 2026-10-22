@@ -119,7 +119,8 @@ def spread(calls: pl.LazyFrame, flank_bp: int = FLANK_BP) -> dict:
     Breadth is just-dna-lite's `_coverage_breadth`: each gap between neighbouring sites counts up to
     `2 * flank_bp`, summed (the reach), divided by the span the sites spread over per contig.
     """
-    sequence_allele = pl.col("alts").list.eval(pl.element().str.contains(r"^[ACGTNacgtn]+$")).list.any()
+    # The empty allele is a sequence allele (a deletion written without its anchor base, F12).
+    sequence_allele = pl.col("alts").list.eval(pl.element().str.contains(r"^[ACGTNacgtn]*$")).list.any()
     primary = (
         calls.filter(pl.col("chrom").is_in(_PRIMARY) & ((pl.col("alts").list.len() == 0) | sequence_allele))
         .select("chrom", "pos")
@@ -168,7 +169,7 @@ def classify(calls: pl.LazyFrame, format_keys: list[str], imputed_by: str | None
     return answer(None, "unknown, the spread fits no class with room to spare")
 
 
-NOT_A_VARIANT = frozenset({"<*>", "<NON_REF>", "<CGA_NOCALL>", "<CGA_CNVWIN>", "*", ""})
+NOT_A_VARIANT = frozenset({"<*>", "<NON_REF>", "<CGA_NOCALL>", "<CGA_CNVWIN>", "*"})
 """ALT values that name no variant: the gVCF reference allele, Complete Genomics' no-call and
 copy-number window, the spanning deletion `*` (the variant is another record's)."""
 
@@ -176,16 +177,16 @@ copy-number window, the spanning deletion `*` (the variant is another record's).
 def variant_class_expr(ref: pl.Expr, alt: pl.Expr) -> pl.Expr:
     """The `VariantClass` of one ALT against its REF, as a string, or null for no variant.
 
-    A sequence ALT is VCF's: bases `ACGTN` only. An ALT of other letters is no VCF allele (Veritas's
-    `CNV`, F15) and has no class: counting it as an indel would claim content the file does not hold.
+    A sequence ALT is VCF's: bases `ACGTN` only, or the empty allele (`schema.EMPTY_ALLELE`: a deletion
+    written without its anchor base, beside a REF of the deleted bases; an insertion point's REF). An
+    ALT of other letters is no VCF allele (Veritas's `CNV`, F15) and has no class: counting it as an
+    indel would claim content the file does not hold.
     """
-    sequence = alt.str.contains(r"^[ACGTNacgtn]+$") & ref.str.contains(r"^[A-Za-z]+$")
+    sequence = alt.str.contains(r"^[ACGTNacgtn]*$") & ref.str.contains(r"^[A-Za-z]*$") & ~((alt == "") & (ref == ""))
     symbolic = alt.str.starts_with("<") | alt.str.contains(r"[\[\]]") | alt.str.contains(r"^\.[A-Za-z]+$|^[A-Za-z]+\.$")
     return (
         pl.when(alt.is_in(list(NOT_A_VARIANT)) | alt.is_null())
         .then(None)
-        .when(alt == "-")
-        .then(pl.lit(VariantClass.INDEL.value))
         .when(symbolic)
         .then(pl.lit(VariantClass.SV.value))
         .when(sequence & (alt.str.len_bytes() != ref.str.len_bytes()))

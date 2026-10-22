@@ -20,6 +20,14 @@ SCHEMA_VERSION = "0.0.10"
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
 
+EMPTY_ALLELE = ""
+"""The one spelling of a zero-length allele in `ref`, `source_ref`, `alts`, `source_alleles` and
+`gt_alleles`, as VRS writes a zero-length literal: an insertion point's REF (CGI's native files), a
+deletion written without its anchor base (CGI's native files, an upload's ALT `-`, F12), and Genos's
+`-`. `source_gt` keeps what the file wrote. Such a row is unanchored: `normalize` anchors a deletion
+once `resolve_ref` has matched its REF (an insertion point's anchor base is not read yet, RM3), and
+`write_vcf` refuses the row until then (VCF has no empty allele)."""
+
 
 class RefCheck(str, Enum):
     """The outcome of comparing `source_ref` with `ref` read from the assembly sequence."""

@@ -203,18 +203,27 @@ How the awkward cases land under C:
   whole span is `""` (`source_ref = "T"`, `alts = [""]` at `pos = begin + 1`). A locus of zero length
   (an insertion point) has `source_ref = ""`, sits at the base before it (`pos = begin`, where VCF puts
   the anchor) and has `end_pos` null until RM3 reads that base, as Genos insertion sites do. An empty
-  string in `source_ref`, `alts` or `gt_alleles` occurs only in such rows, which is how RM3 finds the
-  rows it has to pad. An insertion point CGI could not call stays a row with every haplotype null: it
-  covers no base, so it cannot be a block.
+  string in `source_ref`, `alts`, `source_alleles` or `gt_alleles` occurs only in such unanchored rows,
+  which is how RM3 finds the rows it has to pad. An insertion point CGI could not call stays a row with
+  every haplotype null: it covers no base, so it cannot be a block.
+- **The empty allele has one spelling: `""`** (`schema.EMPTY_ALLELE`), VRS's zero-length literal, in
+  every loader: CGI's unpadded indels above, an upload's ALT `-` (below), and Genos's `-` (an insertion
+  site's empty REF allele, or a deletion's ALT; `source_gt` keeps the `-/A` the file wrote). Every reader
+  takes `""` as a sequence allele of length zero: it is an `indel` in `variant_classes`, a site in RM4's
+  count, the deletion `normalize` anchors, and the allele `mint_vrs_ids` justifies (a resolved `CT>""` at
+  31 gets the id of `GCT>G` at 30). `write_vcf` refuses it, REF or ALT, until it is anchored (VCF has
+  no empty allele), and `liftover` leaves it unlifted (`allele_not_sequence`): run `normalize` first.
+  A `-` that a format uses for a no-call (FTDNA's `-A`, a Final Report's `-`) is no allele and stays
+  a null haplotype.
 - **The `*` allele** (VCF: "allele missing due to overlapping deletion") is kept as `"*"` in `alts` and
   `gt_alleles`. It says the haplotype is covered by a deletion called at another record. It is not
   a reference call, and it gets no VRS id. `0/2` over `ALT=C,*` must never be read as a het with a
   reference haplotype and nothing else.
 - **A deletion written as ALT `-`** (some uploads, F12: REF holds the deleted bases at POS, with no
-  anchor base) is kept as `"-"` in `alts` and `gt_alleles`, counted in a load warning. It is an
-  unanchored deletion, which VCF has no allele for, and the anchor needs the reference base before
-  POS, so the loader cannot rewrite it. `normalize` anchors it once `resolve_ref` has matched its REF;
-  until then `write_vcf` refuses it.
+  anchor base) is read as the empty allele `""` in `alts`, `source_alleles` and `gt_alleles`, counted
+  in a load warning. It is an unanchored deletion, which VCF has no allele for, and the anchor needs
+  the reference base before POS, so the loader cannot anchor it. `normalize` anchors it once
+  `resolve_ref` has matched its REF; until then `write_vcf` refuses it.
 - **A monomorphic record** (ALT `.`) has `alts = []`, which is a stated "no alternate allele". A null
   `alts` means the source did not say, which only happens for non-VCF sources (an array row before
   RM3). ALT is a required VCF column, so polars-bio's `""` always means `.` and becomes `[]`.
@@ -451,7 +460,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
-| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (or `-`, F12), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a VCF with no variant allele; null = not counted (a genotype table). just-vcf's own shape |
+| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a VCF with no variant allele; null = not counted (a genotype table). just-vcf's own shape |
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | null unless stated |
@@ -629,10 +638,10 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and `vrs_errors` are null: they described
    the representation the source wrote, at the position it wrote it. A `ref_check = match` here would be
    bases read from the sequence compared with that same sequence. Rows whose REF was not shown to
-   match pass through, counted, and so do rows whose ALT is no VCF allele. A deletion written as
-   ALT `-` (F12) is the empty allele here: a matched row is anchored on the base before (`CT>-` at 30
-   becomes `GCT>G` at 29) and then aligned like any deletion. At a contig's first base there is no
-   base before, and the row stays as written, counted.
+   match pass through, counted, and so do rows whose ALT is no VCF allele. A deletion written without
+   its anchor base, ALT the empty allele (an upload's `-`, F12; CGI's native deletions), is anchored on
+   the base before when matched (`CT>""` at 30 becomes `GCT>G` at 29) and then aligned like any
+   deletion. At a contig's first base there is no base before, and the row stays as written, counted.
 3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
    except the ones a move clears (`source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids`,
    `vrs_errors`), which say how the source wrote a row, not what it states. So one indel written twice
@@ -702,7 +711,7 @@ holding that collection and the target.
    below).
 
 Not lifted, each counted in the warnings and named in the report's `lift_reason` (an open vocabulary,
-`UNLIFTED_REASONS`): `ref_unread`, `source_ref_mismatch`, `allele_not_sequence` (symbolic alleles, `*`,
+`UNLIFTED_REASONS`): `ref_unread`, `source_ref_mismatch`, `allele_not_sequence` (the empty allele of an unanchored deletion, which `normalize` anchors first; symbolic alleles, `*`,
 `<*>`, breakends: an SV's extent is not lifted), `split_flagged` (run `rejoin_split` first),
 `contig_not_in_chain`, `chain_contig_mismatch`, `no_chain_block`, `split_across_blocks`,
 `multiple_targets`, `target_contig_unmatched`, `indel_minus_strand` (a minus-strand indel lifted to
@@ -1028,6 +1037,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, the empty allele): no column changes. Rule stated: a zero-length
+  allele is `""` in every allele column (Decision 2). Values change on files that already load: an
+  upload's ALT `-` (F12) and Genos's `-` were `"-"` and are now `""` (`source_gt` keeps the text);
+  `""` is an `indel` in `variant_classes` and a site in RM4's count; `normalize` anchors CGI's native
+  deletions as it anchored F12's (`NORMALIZE_VERSION` 5); `mint_vrs_ids` mints a resolved `""` ALT,
+  which it withheld as `not_sequence` (`MINT_VERSION` 2); `write_vcf` refuses an empty REF as
+  `ref_unresolved`, where it wrote it.
 
 - **No version change** (2026-10-23, `normalize` on resolved array rows): no column changes. Rule
   changed in `normalize` ("Normalizing", step 2): in a facet read from a file, a row with `ref` set and

@@ -42,7 +42,7 @@ from just_vcf.schema import CALLS, SCHEMA_VERSION, RefCheck, empty
 
 logger = logging.getLogger(__name__)
 
-MINT_VERSION = 1
+MINT_VERSION = 2
 """Part of the spill key: bumped whenever the rule changes what `mint_vrs_ids` writes."""
 
 MINT_ERRORS: frozenset[str] = frozenset({"no_contig", "refused"})
@@ -69,7 +69,9 @@ WITHHELD_REASONS: frozenset[str] = frozenset(
 ) | MINT_ERRORS
 """Every reason `vrs_withheld` can give. An open vocabulary: a new kind of facet may add one."""
 
-_SEQUENCE = r"^[ACGTN]+$"
+_SEQUENCE = r"^[ACGTN]*$"
+"""A sequence allele. The empty allele (`schema.EMPTY_ALLELE`) is one: VRS's zero-length literal, the
+ALT of a deletion written without its anchor base, minted like the anchored spelling of the same event."""
 _ID_LIST = pl.List(pl.String)
 _READ = ["chrom", "pos", "ref", "source_ref", "ref_check", "alts", "gt_alleles"]
 """The `calls` columns minting reads."""

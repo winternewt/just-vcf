@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A zero-length allele has one spelling, `""` (VRS's empty literal), in `ref`, `alts`,
+  `source_alleles` and `gt_alleles`. An upload's ALT `-` (F12) and Genos's `-` load as `""`, where they
+  were `"-"`; `source_gt` keeps what the file wrote. Every reader agrees: `""` is an `indel` in
+  `variant_classes` and a site in the callset count; `normalize` anchors CGI's native deletions on the
+  base before, as it does F12's (`NORMALIZE_VERSION` 5); `mint_vrs_ids` mints a resolved unanchored
+  deletion with the id of its anchored spelling, where it withheld it as `not_sequence`
+  (`MINT_VERSION` 2); `write_vcf` refuses an empty REF (a CGI insertion point) as `ref_unresolved`,
+  where it wrote an empty REF field. Values change on files that already load.
+
 - `normalize` aligns and trims the rows `resolve_ref` gave a REF with no source REF to check, in a
   facet read from a file: a Living DNA genotype split against the reference that spells an MNV or a
   deletion with extra shared bases (`CTA`/`CGA`) is trimmed (`T>G` one base on). Before, such rows passed

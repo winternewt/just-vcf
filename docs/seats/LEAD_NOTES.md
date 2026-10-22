@@ -62,4 +62,11 @@ status lines say what exists. Schema at 0.0.4.
   unattended. `docs/ANCESTRY_PANELS.md` stays out of CLAUDE.md's read-first list (the lead's call: it
   matters only to ancestry work). Merged since: RM5 (4c6c9c1), RM6 writer (a1f3317), F10 + SV END
   (ec95596), RM6 normalize (9469c6b).
+- **Wave 3** (2026-10-22): merged F9 (2ff9b00; strand finding renumbered F13), RM269 evidence layer
+  (7384428: XY/XXY or unknown; XX and XO wait for a coverage facet), RM271 VRS ids (b41bda5; 19,000
+  alleles equal vrs-python; `vrs_allele_ids` follows SCHEMA's `[ref] + alts` layout, not one per ALT).
+  The lead decided RM268's outline (cache index, stale-version sweep, `clear_cache`, no LRU). Running:
+  RM2 CGI loaders, RM6 follow-ups, RM268, RM6 liftover, RM4 chip detection + F13. Open from RM269:
+  freeBayes males read an X het share of 0.38–0.40 (inside the unknown band; depth says one X);
+  two Helix exomes read `wgs` (RM4); a starling upload fails in polars-bio ("invalid BGZF ISIZE").
 - **Open, not started**: RM2's next loaders, RM3, RM4, RM6, RM268 (cache eviction).

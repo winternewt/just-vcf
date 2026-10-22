@@ -780,6 +780,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   not sum to 1 are probabilities under a 4.3+ header (Decision 3); a symbolic SV's `end_pos` reads INFO
   END (the `end_pos` rule). Values change on files that already load; no column changed, so no version
   bump.
+- **Rule changes, still 0.0.7** (2026-10-22, RM6 follow-ups): PL becomes `gl` as `-PL/10` in Float64,
+  rounded to Float32 once (F11); `JUST_VCF_SPLIT` is a split marker (`split_signal`); ALT `-` is an
+  unanchored deletion that `normalize` anchors (F12); `normalize` drops `<*>` from split rows and
+  judges a duplicate without the columns a move clears. Values change; no column changed, so no
+  version bump (`NORMALIZE_VERSION` is 2).
 
 - **0.0.7** (2026-10-22, RM3): `facets.ref_seqcol_digest` names the collection
   `resolve_ref` read REF from. Additive. `resolve_ref` fills `ref`, `ref_check`, and an array row's

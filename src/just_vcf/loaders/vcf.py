@@ -16,7 +16,6 @@ here from VCF 4.5's END rule, not taken from polars-bio, whose `end` is one shor
 haplotype's `phased` entry is withheld rather than reported from the rewritten text.
 """
 
-import csv
 import hashlib
 import io
 import logging
@@ -283,20 +282,37 @@ def undo_resave(handle: BinaryIO) -> BinaryIO:
 
     The re-save is CSV quoting applied to a tab file: a field holding a comma or a quote is wrapped in
     quotes with its own quotes doubled (an INFO with `EFF=…,…`, a sample field whose AD is `12,0`), meta
-    lines are padded with empty fields to the widest row, and lines may end in a bare CR. `csv` undoes the
-    quoting, universal newlines the CRs, and trailing empty fields are dropped from `##` lines only. What
-    the spreadsheet did to a value's text (a QUAL written `6980.9` for `6980.90`) cannot be undone or seen.
+    lines are padded with empty fields to the widest row, and lines may end in a bare CR. Universal
+    newlines undo the CRs; each line is cut at its tabs and a field wrapped in quotes is unwrapped, its
+    doubled quotes made single (`_unquote`); trailing empty fields are dropped from `##` lines only.
+    What the spreadsheet did to a value's text (a QUAL written `6980.9` for `6980.90`) cannot be undone
+    or seen.
+
+    Not `csv`: its reader refuses a field over `csv.field_size_limit()` (128 KiB by default), and a VCF
+    field (SnpEff's EFF on a busy site) has no limit. The limit is process-wide, so raising it would
+    change every other reader in the process, and a set-and-restore cannot be scoped to a reader that
+    is consumed lazily. A VCF field holds no tab and no line break, so the quoting needs no state
+    across fields or lines.
     """
     text = io.TextIOWrapper(handle, encoding="utf-8", errors="replace", newline=None)
 
     def lines() -> Iterator[bytes]:
-        for row in csv.reader(text, delimiter="\t", quotechar='"'):
-            if row and row[0].startswith("##"):
+        for line in text:
+            row = [_unquote(field) for field in line.rstrip("\n").split("\t")]
+            if row[0].startswith("##"):
                 while len(row) > 1 and row[-1] == "":
                     row.pop()
             yield ("\t".join(row) + "\n").encode()
 
     return io.BufferedReader(_Lines(lines()), 1 << 20)
+
+
+def _unquote(field: str) -> str:
+    """A spreadsheet's CSV quoting taken off one field (outer quotes dropped, doubled quotes made
+    single); a field not wrapped in quotes as it is."""
+    if len(field) >= 2 and field[0] == '"' and field[-1] == '"':
+        return field[1:-1].replace('""', '"')
+    return field
 
 
 def read_bcf_header(handle: BinaryIO) -> tuple[Header, bytes | None]:

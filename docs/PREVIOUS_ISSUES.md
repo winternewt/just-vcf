@@ -39,6 +39,18 @@ text's. Code: `loaders/vcf.py` `is_resaved`, `undo_resave`; `loading.py` `_vcf_t
 
 The third failure in the sweep, a corrupt upload (`gzip -t` fails too), keeps its correct error.
 
+**Follow-up 2026-10-22: a field over 128 KiB.** The re-save was undone with Python's `csv`, whose
+reader refuses a field over `csv.field_size_limit()` (131,072 bytes by default) with `csv.Error`, and
+a VCF field has no such limit (SnpEff's EFF on a busy site, quoted for its commas). The limit is
+process-wide, and the reader is consumed lazily while the copy is written, so it cannot be raised for
+this reader alone. The re-save is now undone without `csv`: lines by universal newlines, cut at tabs,
+a field wrapped in quotes unwrapped with its doubled quotes made single. A VCF field holds no tab and
+no line break, so nothing carries across fields or lines. Rejected: raising the process-wide limit,
+which widens every other `csv` reader in the caller's process and removes the guard against an
+unclosed quote swallowing the rest of a file. Code: `loaders/vcf.py` `undo_resave`, `_unquote`; tests
+`test_a_resaved_vcf_with_a_field_past_the_csv_limit_loads` (about 200 KiB of EFF) and
+`test_undo_resave_reads_quotes_as_csv_does` (the same output as `csv` on the shapes it reads).
+
 ## F15 — An ALT that is no VCF allele counted as an indel
 
 Severity: low · Found 2026-10-22 loading the Veritas CNV upload F7's fix made readable.

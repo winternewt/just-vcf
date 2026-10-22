@@ -1,4 +1,6 @@
+import csv
 import gzip
+import io
 import re
 import struct
 import zipfile
@@ -8,6 +10,7 @@ import polars as pl
 import pytest
 
 from just_vcf import MultiSampleError, NoSampleError, load, vcf_samples, write_vcf
+from just_vcf.loaders.vcf import undo_resave
 from just_vcf.schema import BLOCKS, CALLS
 
 FORMAT_LINES = {
@@ -638,6 +641,48 @@ def test_a_vcf_resaved_by_a_spreadsheet_loads_as_the_text_it_was_saved_from(tmp_
     assert "INFO/EFF" in facet["dropped_fields"] and "INFO/NOTE" in facet["dropped_fields"]
     assert vcf_samples(resaved) == ["S1"]
     assert any(w.startswith("the file was re-saved by a spreadsheet") for w in loaded.warnings)
+
+
+def test_a_resaved_vcf_with_a_field_past_the_csv_limit_loads(tmp_path: Path) -> None:
+    """F7's re-save with one INFO field of about 200 KiB, quoted for its commas: Python's `csv` stops at
+    131,072 bytes a field, a VCF field has no such limit."""
+    effects = ",".join(f"EFFECT_{i:06d}(MODIFIER|gene{i})" for i in range(7000))
+    assert len(effects) > 200_000 > csv.field_size_limit()
+    records = [
+        f"1\t100\trs1\tA\tG\t50\tPASS\tEFF={effects}\tGT:AD\t0/1:10,12",
+        "1\t200\t.\tC\tT\t60\tPASS\tEFF=F\tGT:AD\t1/1:0,9",
+    ]
+    meta = ('##INFO=<ID=EFF,Number=.,Type=String,Description="Effects, as \'A(B|C)\'">',)
+    plain = vcf_text(records, fmt=("GT", "AD"), extra_meta=meta)
+    resaved = write(tmp_path, "", "resaved.vcf")
+    resaved.write_bytes(_spreadsheet_resave(plain))
+    assert f'"EFF={effects}"'.encode() in resaved.read_bytes()
+
+    expected, _, _ = frames(write(tmp_path, plain, "plain.vcf"))
+    loaded = load(resaved)
+    columns = ["chrom", "pos", "ids", "source_ref", "alts", "gt_alleles", "ad", "qual", "filters"]
+    assert loaded.calls.collect().select(columns).rows() == expected.select(columns).rows()
+    assert any(w.startswith("the file was re-saved by a spreadsheet") for w in loaded.warnings)
+
+
+def test_undo_resave_reads_quotes_as_csv_does(tmp_path: Path) -> None:
+    """The unquoting against `csv` itself, on the shapes a spreadsheet writes (fields under its limit)."""
+    lines = [
+        '"##INFO=<ID=EFF,Number=.,Type=String,Description=""Effects, as \'A(B|C)\'"">"\t\t\t',
+        "#CHROM\tPOS\tID",
+        '1\t"NOTE=""x"";EFF=A,B"\t""\t"a""""b"\tplain',
+        '2\t"""quoted"""\t.',
+    ]
+    text = "\r".join(lines) + "\r"
+    ours = undo_resave(io.BytesIO(text.encode())).read().decode().split("\n")[:-1]
+    theirs = []
+    for row in csv.reader(io.StringIO(text, newline=None), delimiter="\t", quotechar='"'):
+        if row and row[0].startswith("##"):
+            while len(row) > 1 and row[-1] == "":
+                row.pop()
+        theirs.append("\t".join(row))
+    assert ours == theirs
+    assert ours[2] == '1\tNOTE="x";EFF=A,B\t\ta""b\tplain'
 
 
 def test_crlf_and_plain_vcfs_are_not_taken_for_a_resave(tmp_path: Path) -> None:

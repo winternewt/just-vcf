@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF re-saved by a spreadsheet loads when a field is longer than 128 KiB: the re-save is undone
+  without Python's `csv`, whose reader refused such a field with `csv.Error` (F7 follow-up).
+
 - `normalize` left-aligns and trims the rows of a lifted facet (`relation = liftover_to`), whose REF
   `liftover` read from the target: an indel that a minus-strand block left at a repeat's right end
   moves to its left end, as `bcftools norm -f` on the target puts it. Before, lifted rows passed through

@@ -267,11 +267,40 @@ def test_unchecked_rows_pass_through_counted(tmp_path: Path, store: ReferenceSto
     assert any("1 row(s) not left-aligned or trimmed: REF differs from the reference" in w for w in out.warnings)
 
 
-def test_a_dash_alt_is_counted_not_passed_over(tmp_path: Path, store: ReferenceStore) -> None:
-    # Some uploads write a deletion as ALT `-` (F12). It is no VCF allele, so nothing aligns it.
-    _, out = normalized(tmp_path, store, [record("1", 30, at("1", 30), "-", "0/1", vectors=False)])
-    assert out.calls.collect()["alts"].to_list() == [["-"]]
-    assert any("1 row(s) not left-aligned or trimmed: an ALT that is not a VCF allele" in w for w in out.warnings)
+def test_a_dash_deletion_is_anchored_on_the_base_before(tmp_path: Path, store: ReferenceStore) -> None:
+    # F12: ALT `-` deletes the REF bases at POS. Anchored on the base before, it is a VCF deletion, and
+    # then left-aligned like any other: the last T of the run lands on the C before the run.
+    end_t = HOMOPOLYMER + 7
+    wrong = other(at("1", 60))
+    records = [
+        record("1", 1, at("1", 1), "-", "0/1", vectors=False),  # nothing before position 1 to anchor on
+        record("1", 30, at("1", 30, 2), "-", "0/1"),
+        record("1", 60, wrong, "-", "0/1", vectors=False),  # REF does not match: not anchored
+        record("1", end_t, at("1", end_t), "-", "1/1"),
+    ]
+    parent, out = normalized(tmp_path, store, records)
+    calls = out.calls.collect()
+    # What each row states: the source's REF where it kept it, else the new REF from the reference.
+    got = {(row["pos"], row["source_ref"] or row["ref"], row["alts"][0]) for row in calls.iter_rows(named=True)}
+    assert (29, at("1", 29, 3), at("1", 29)) in got
+    assert (HOMOPOLYMER - 1, "CT", "C") in got
+    assert (1, at("1", 1), "-") in got and (60, wrong, "-") in got
+    for pos, ref, alt in [(29, at("1", 29, 3), at("1", 29)), (HOMOPOLYMER - 1, "CT", "C")]:
+        assert is_normalized(pos, ref, alt)
+    # The haplotype is the one the source stated: its REF bases removed.
+    assert apply("1", 29, at("1", 29, 3), at("1", 29)) == SEQ1[:29] + SEQ1[31:]
+    anchored = calls.filter(pl.col("pos") == 29).row(0, named=True)
+    source = parent.calls.filter(pl.col("pos") == 30).collect().row(0, named=True)
+    assert anchored["gt"] == [0, 1] and anchored["gt_alleles"] == [at("1", 29, 3), at("1", 29)]
+    assert anchored["gl"] == source["gl"] and anchored["ad"] == source["ad"]
+    assert anchored["source_alleles"] == [at("1", 29, 3), at("1", 29)]
+    assert anchored["source_ref"] is None and anchored["ref_check"] is None
+    assert any(w.startswith("2 deletion(s) written as ALT `-` anchored on the base before") for w in out.warnings), out.warnings
+    assert any("1 row(s) not left-aligned or trimmed: a `-` deletion at a contig's first base" in w for w in out.warnings)
+    assert any("1 row(s) not left-aligned or trimmed: REF differs from the reference" in w for w in out.warnings)
+    # What could not be anchored is still no VCF allele: write_vcf leaves it out, counted.
+    written = write_vcf(out, tmp_path / "out.vcf.gz", resolved_only=True)
+    assert written.rows_skipped == {"alt_not_an_allele": 1, "ref_mismatch": 1}
 
 
 # --- dedup, determinism, the derived facet ------------------------------------------------------

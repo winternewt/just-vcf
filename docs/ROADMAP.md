@@ -232,8 +232,8 @@ with what was rejected:
   `source_alleles` is the written `[REF] + ALTs`; elsewhere they are left out and counted.
 - FORMAT is listed per row, keys with a value only. Rejected: one FORMAT string per file with `.` for
   missing, which turns a GT the source left out into an uncalled `.` on reload.
-- REF is `ref`, else `source_ref`. Unwritable rows (no REF, a REF mismatch, no ALTs, a genotype not
-  indexed or indexed past its ALTs) raise `UnwritableRowsError` with a count per reason, unless
+- REF is `ref`, else `source_ref`. Unwritable rows (no REF, a REF mismatch, no ALTs, an ALT that is
+  no VCF allele such as F12's `-`, a genotype not indexed or indexed past its ALTs) raise `UnwritableRowsError` with a count per reason, unless
   `resolved_only=True`. Rejected: writing them with a placeholder REF, or quietly leaving them out.
 - Split-flagged rows (RM270) are written as held, tagged `INFO/JUST_VCF_SPLIT=<signal>`, with a
   warning and the count. Rejected: refusing until `rejoin_split` runs, which would block exporting a
@@ -296,6 +296,12 @@ rejected:
   writes `<*>` on every variant record, so these stay multi-allelic for now.
 - Only `ref_check = match` rows are aligned or trimmed. Rejected: trimming unchecked rows, which needs
   no bases but rewrites a REF nobody has shown to be right.
+- A deletion written as ALT `-` (F12) is anchored by `normalize`, on the base before, once REF has
+  matched; the loader keeps it verbatim and counts it, and `write_vcf` refuses it as
+  `alt_not_an_allele`. Rejected: anchoring in `resolve_ref`, which fills slots of the same facet and
+  touches nothing the source wrote, while anchoring moves `pos` and rewrites REF and ALT; rewriting
+  it in the loader, which has no reference base to anchor on; and the loader refusing such rows,
+  which would drop calls whose REF matches the reference everywhere it was checked.
 - Pre-split input (RM270 flags) passes through. Rejected: aligning those rows, which would move one
   row of a site away from the other and keep `rejoin_split` from finding it.
 - Exact duplicates are dropped; rows stating one allele with other values are all kept (charter 8).

@@ -168,6 +168,29 @@ def test_unresolved_ref_is_refused_with_its_count(tmp_path: Path) -> None:
     assert header[-1].split("\t")[9] == loaded.facets.collect()["facet_id"][0], "an array names no sample: the facet id stands in"
 
 
+def test_an_alt_that_is_no_vcf_allele_is_never_written(tmp_path: Path) -> None:
+    # F12: some uploads write a deletion as ALT `-`; VCF has no such allele, and htslib refuses it.
+    records = [
+        "1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/1",
+        "1\t200\t.\tCT\t-\t.\t.\t.\tGT\t0/1",
+        "1\t300\t.\tG\tA,-\t.\t.\t.\tGT\t1/2",
+        "1\t400\t.\tA\tA[2:500[\t.\t.\t.\tGT\t0/1",
+        "1\t500\t.\tC\t<DEL>,*\t.\t.\t.\tGT\t0/1",
+    ]
+    loaded = loaded_from(tmp_path, records)
+    calls = loaded.calls.collect()
+    dashed = calls.filter(pl.col("alts").list.contains("-")).height
+    assert dashed == 2
+    with pytest.raises(UnwritableRowsError) as refused:
+        write_vcf(loaded, tmp_path / "out.vcf.gz")
+    assert refused.value.counts == {"alt_not_an_allele": dashed}
+    written = write_vcf(loaded, tmp_path / "out.vcf.gz", resolved_only=True)
+    assert written.rows_skipped == {"alt_not_an_allele": dashed}
+    body = [line.split("\t") for line in plain_text(written.path).splitlines() if not line.startswith("#")]
+    assert [row[1] for row in body] == ["100", "400", "500"], "a breakend, `<DEL>` and `*` are VCF alleles"
+    assert not any("-" in row[4].split(",") for row in body)
+
+
 def test_resolved_only_writes_the_rest_and_counts_each_reason(tmp_path: Path) -> None:
     loaded = loaded_from(tmp_path, RICH, fmt=RICH_FORMAT)
     calls = loaded.calls.collect()

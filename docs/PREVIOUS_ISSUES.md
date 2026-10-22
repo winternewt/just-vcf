@@ -3,6 +3,43 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F12 — Some VCF uploads write a deletion as ALT `-`
+
+Severity: low · Found 2026-10-22 running `normalize` against `bcftools norm` on PGP-HMS uploads (RM6).
+
+Five of 25 PGP-HMS VCF uploads of 5–60 MB hold about 8,080 rows each whose ALT is `-`, the dash
+notation for a deletion that VCF does not have. The loader keeps it verbatim as an allele, `normalize`
+leaves those rows as they are and counts them, and `write_vcf` writes them back out, so the export is a
+file htslib refuses ("Non-ACGTN alternate allele"). Nothing in the frame says the allele is not one.
+
+Not fixed here. Reading `-` as a deletion needs the anchor base and its REF span, which the row does
+not state, so it is not a spelling to rewrite; the options are for the loader (RM2: flag or refuse
+such rows, counted) and the writer (refuse them as unwritable, as it does a row without REF).
+
+Resolved 2026-10-22 (RM6). A survey of the five uploads settled the reading: every such row has one
+ALT, `-`, and a REF of one to eight or more bases (about 4,680 of one base, 1,800 of two), and REF
+matches the GRCh37 reference at POS on all 40,394 of them, so REF is the deleted span and only the
+anchor base is missing. Almost all are `0/0`. Now:
+
+- the loader keeps `-` verbatim and counts the rows in one warning that names them unanchored
+  deletions;
+- `normalize` reads `-` as the empty allele once `resolve_ref` has matched REF, and the left-align loop
+  anchors it on the base before (`CT>-` at 30 becomes `GCT>G` at 29), then aligns it like any
+  deletion. At a contig's first base there is no base before; such a row stays as written, counted
+  (and the retry loop now stops there instead of widening its window for ever);
+- `write_vcf` refuses any ALT that is no VCF allele as `alt_not_an_allele`, counted, or skips it under
+  `resolved_only=True`.
+
+Anchoring in `resolve_ref` was set aside, since it fills slots of the same facet and moves nothing;
+refusing the rows in the loader was set aside, since their REF matches everywhere it was checked. On
+the five uploads: 40,392 rows anchored; the other 2 are rows the loader flagged as one record of a
+pre-split site, which `normalize` leaves for `rejoin_split` and `write_vcf` skips as
+`alt_not_an_allele`. htslib reads every row of the five exports. Code: `loaders/vcf.py`
+`DASH_DELETION`, `normalize.py` `_align`, `writing.py` `_unwritable`; tests:
+`tests/test_load_vcf.py` `test_a_dash_alt_is_kept_verbatim_and_counted`, `tests/test_normalize.py`
+`test_a_dash_deletion_is_anchored_on_the_base_before`, `tests/test_write_vcf.py`
+`test_an_alt_that_is_no_vcf_allele_is_never_written`.
+
 ## F11 — PL to `gl` lands one float step off the nearest value
 
 Severity: low · Found 2026-10-22 by comparing `normalize` with `bcftools norm` (RM6).

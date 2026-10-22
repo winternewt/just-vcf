@@ -11,7 +11,8 @@ What is written, and the rules it follows:
 
 - **REF** is `ref` (read from the assembly sequence) when there is one, else `source_ref` (what the
   file wrote). It is never taken from the genotype (charter 10). A row with neither, a row without
-  `alts` (an array row before RM3), a row whose `ref_check` is `mismatch`, a row with a genotype that
+  `alts` (an array row before RM3), a row whose `ref_check` is `mismatch`, a row with an ALT that is
+  no VCF allele (a `-` written for a deletion, F12, until `normalize` anchors it), a row with a genotype that
   is not indexed (`gt` null beside `gt_alleles`) and a row whose `gt` points past its ALTs cannot be
   written as valid VCF. The writer refuses them with `UnwritableRowsError`, counted per reason, unless
   the caller passes `resolved_only=True`; then the rest is written and the counts are reported.
@@ -77,7 +78,18 @@ loader's `FORMAT_KEYS`, so a written file declares each key the way the loader r
 
 _NO_STRINGS = pl.lit([], dtype=pl.List(pl.String))
 
-_UNWRITABLE_REASONS = ("ref_unresolved", "ref_mismatch", "alts_unresolved", "genotype_unindexed", "genotype_index_past_alts")
+_UNWRITABLE_REASONS = (
+    "ref_unresolved",
+    "ref_mismatch",
+    "alts_unresolved",
+    "alt_not_an_allele",
+    "genotype_unindexed",
+    "genotype_index_past_alts",
+)
+
+_VCF_ALLELE = r"^([ACGTNacgtn]+|\*|<[^<>]+>|\.[ACGTNacgtn]+|[ACGTNacgtn]+\.)$|\[|\]"
+"""An ALT VCF can write: bases, `*`, a symbolic allele, a single breakend (`.A`, `A.`) or a breakend
+(`A[2:500[`). Anything else (F12's `-` for a deletion) is not one, and htslib refuses the file."""
 
 
 class ContigNames(str, Enum):
@@ -258,6 +270,8 @@ def _unwritable() -> pl.Expr:
         .then(pl.lit("ref_mismatch"))
         .when(pl.col("alts").is_null())
         .then(pl.lit("alts_unresolved"))
+        .when(~pl.col("alts").list.eval(pl.element().str.contains(_VCF_ALLELE)).list.all())
+        .then(pl.lit("alt_not_an_allele"))
         .when(pl.col("gt").is_null() & pl.col("gt_alleles").is_not_null())
         .then(pl.lit("genotype_unindexed"))
         .when(pl.col("gt").list.max().cast(pl.Int64) > pl.col("alts").list.len().cast(pl.Int64))

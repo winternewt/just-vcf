@@ -153,6 +153,11 @@ How the awkward cases land under C:
   `gt_alleles`. It says the haplotype is covered by a deletion called at another record. It is not
   a reference call, and it gets no VRS id. `0/2` over `ALT=C,*` must never be read as a het with a
   reference haplotype and nothing else.
+- **A deletion written as ALT `-`** (some uploads, F12: REF holds the deleted bases at POS, with no
+  anchor base) is kept as `"-"` in `alts` and `gt_alleles`, counted in a load warning. It is an
+  unanchored deletion, which VCF has no allele for, and the anchor needs the reference base before
+  POS, so the loader cannot rewrite it. `normalize` anchors it once `resolve_ref` has matched its REF;
+  until then `write_vcf` refuses it.
 - **A monomorphic record** (ALT `.`) has `alts = []`, which is a stated "no alternate allele". A null
   `alts` means the source did not say, which only happens for non-VCF sources (an array row before
   RM3). ALT is a required VCF column, so polars-bio's `""` always means `.` and becomes `[]`.
@@ -470,7 +475,10 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and `vrs_errors` are null: they described
    the representation the source wrote, at the position it wrote it. A `ref_check = match` here would be
    bases read from the sequence compared with that same sequence. Rows whose REF was not shown to
-   match pass through, counted, and so do rows whose ALT is no VCF allele (a `-` for a deletion).
+   match pass through, counted, and so do rows whose ALT is no VCF allele. A deletion written as
+   ALT `-` (F12) is the empty allele here: a matched row is anchored on the base before (`CT>-` at 30
+   becomes `GCT>G` at 29) and then aligned like any deletion. At a contig's first base there is no
+   base before, and the row stays as written, counted.
 3. **Dedup and sort.** Rows equal in every column are kept once, counted. Rows that state the same
    allele at one position and differ in anything else are all kept, with a warning (charter 8). Then
    canonical order (Decision 11). Because a moved row loses `source_ref`, `ref_check` and `source_gt`,

@@ -68,15 +68,3 @@ the store, as the share of SNV rows whose called alleles include the reference b
 add NCBI36 to the reference store for the GRCh36 exports. A caller-asserted `assembly=` argument was
 considered and set aside: it lets a label stand in for evidence.
 
-## F12 — Some VCF uploads write a deletion as ALT `-`
-
-Severity: low · Found 2026-10-22 running `normalize` against `bcftools norm` on PGP-HMS uploads (RM6).
-
-Five of 25 PGP-HMS VCF uploads of 5–60 MB hold about 8,080 rows each whose ALT is `-`, the dash
-notation for a deletion that VCF does not have. The loader keeps it verbatim as an allele, `normalize`
-leaves those rows as they are and counts them, and `write_vcf` writes them back out, so the export is a
-file htslib refuses ("Non-ACGTN alternate allele"). Nothing in the frame says the allele is not one.
-
-Not fixed here. Reading `-` as a deletion needs the anchor base and its REF span, which the row does
-not state, so it is not a spelling to rewrite; the options are for the loader (RM2: flag or refuse
-such rows, counted) and the writer (refuse them as unwritable, as it does a row without REF).

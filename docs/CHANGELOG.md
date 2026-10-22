@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A deletion written as ALT `-` (F12, about 8,080 rows in each of five PGP-HMS uploads) is now read as
+  an unanchored deletion of the REF bases: the loader keeps it verbatim and counts it, `normalize`
+  anchors it on the base before once REF has matched and then left-aligns it, and `write_vcf` refuses
+  any ALT that is no VCF allele as `alt_not_an_allele` (a new `UnwritableRowsError` reason). Before,
+  `write_vcf` wrote `-` and htslib refused the file. `NORMALIZE_VERSION` is now 2, which changes every
+  normalized `facet_id`; the one bump also covers the dedup and `<*>` changes of the same day. No
+  schema version change.
+
 - `load` reads `write_vcf`'s own `INFO/JUST_VCF_SPLIT` back as a split marker: those rows get
   `split_signal = marker` and the facet's `split_marker` names the key, so a normalized facet written
   and reloaded keeps its split rows flagged and `rejoin_split` joins them again. Before, the tag was

@@ -94,6 +94,11 @@ BCFTOOLS_OLD_REC = "Original variant. Format: CHR|POS|REF|ALT|USED_ALT_IDX"
 CGI_NOCALL = "<CGA_NOCALL>"
 """Complete Genomics' no-called span: INFO END gives its extent. It goes to `blocks` as `no_call`."""
 
+DASH_DELETION = "-"
+"""An ALT some uploads write for a deletion (F12): the REF bases at POS deleted, with no anchor base.
+VCF has no such allele. The loader keeps it verbatim, since anchoring it needs the reference base
+before POS; `normalize` anchors it, and `write_vcf` refuses it until then."""
+
 CGI_CNV_WINDOW = "<CGA_CNVWIN>"
 """Complete Genomics' 2 kb copy-number window: coverage, not a genotype. Left out of the frames."""
 
@@ -630,6 +635,7 @@ def scan_stats(records: pl.LazyFrame) -> dict:
         *_end_stats(alts, pl.col("ref")),
         _is_block_record(alts).any().alias("any_block"),
         (alts.list.len().eq(1) & alts.list.first().eq(CGI_CNV_WINDOW)).sum().alias("cnv_windows"),
+        alts.list.contains(DASH_DELETION).sum().alias("dash_alts"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).is_not_null().sum().alias("gp_rows"),
         (pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.sum() - 1.0).abs().gt(0.02).sum().alias("gp_off_one"),
         pl.col("chrom").unique().implode().alias("chroms"),
@@ -814,6 +820,12 @@ def to_rows(
         warnings.append(
             f"{stats['end_not_read']} record(s) carry an INFO END that is not their extent (an <INS>, a breakend, "
             "a sequence allele or a symbolic allele of no known span): end_pos does not read it"
+        )
+    if stats.get("dash_alts"):
+        warnings.append(
+            f"{stats['dash_alts']} record(s) write a deletion as ALT `-`, which VCF has no allele for (F12): kept as "
+            "written, read as a deletion of the REF bases with no anchor base; normalize anchors it on the base "
+            "before, and write_vcf refuses it until then"
         )
     v44 = (header.version_tuple or (0, 0)) >= (4, 4)
     # The file's REF goes to `source_ref` only. `ref` is read from the assembly sequence or stays null

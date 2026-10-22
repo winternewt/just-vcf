@@ -85,5 +85,10 @@ status lines say what exists. Schema at 0.0.4.
   member is a schema change); the empty allele is `""` in CGI and `-` in Genos; just-prs lists AncestryDNA v2
   as GSA v3, but the 16 stated V2.0 exports overlap OmniExpress (0.64–0.67) far more than GSA (0.26–0.28):
   a FEEDBACK item for just-prs once checked.
+- **Wave 5** (2026-10-22/23): merged cache safety for load/liftover/CGI (6a68c5b), loader findings (602f27c:
+  F2, F7, F15 fixed; F1 needs a dependency, desk #83; F3 and F4 surfaced), RM6 remainder (8ca6f40: tabix,
+  gVCF output, minus-strand lift indels), follow-ups (6ce13b0: lifted rows realigned, DamagedBgzfError,
+  F4 split against the reference; F16 resolved, F17 open). Running: F3 second facet + chip by marker
+  overlap. Desk waiting: #72, #73, #80, #83. Part 2 of docs/MVP_READINESS.md waits for the interview.
 - **Open, not started**: CLI (MVP row 18; not decided), the rest of Part 2 of docs/MVP_READINESS.md (the
   interview).

@@ -145,6 +145,11 @@ entry says how.
   in its slot: `[null, "A"]`. A whole no-call spelling (`spec.no_call`) is a token: in formats that
   write two letters on every called row (FTDNA's `---`, a Final Report's single `-`) it gives two
   nulls.
+- **A column line with two `#`.** Two Veritas SV and CNV uploads write `##CHROM` and a third `#` on
+  most meta lines (`###contig`, `###FORMAT`). *Closed in the loader:* where no `#CHROM` line exists, a
+  meta line that is VCF's fixed column line with one `#` too many is read as the column line, and the
+  file is read through a rewritten copy. A `###` line stays what VCF makes of it, a meta line whose key
+  starts with `#`: no contig or FORMAT is declared from it (the build hints still read its text).
 - **Variable-width rows.** The key=value table has 12 fixed fields and an annotation tail of any length.
   *Closed in the loader:* only the twelve fixed fields are read, each checked for its key; the tail's
   keys, read from the first 1,000 rows, are listed in `facets.dropped_fields`.

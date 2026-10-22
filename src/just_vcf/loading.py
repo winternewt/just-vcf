@@ -418,6 +418,13 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         )
     elif not header.format_first:
         warnings.append("##fileformat was not the first line; the header was reordered for reading")
+    if header.hashed_column_line:
+        hashed_meta = sum(1 for line in header.meta if line.startswith("###"))
+        warnings.append(
+            "the column line is written ##CHROM (one # too many); read as the column line. "
+            f"{hashed_meta} meta line(s) starting ### are meta lines with a key starting #, kept as written "
+            "and not read as declarations (no ##contig or ##FORMAT is taken from them)"
+        )
     source_sha256 = file_sha256(sniffed.path)
     copy = cache_dir() / "vcf" / hashlib.sha256(f"{source_sha256}!{sniffed.member}!{vcf.REWRITE_VERSION}".encode()).hexdigest()[:32]
     origin = cache.Origin(source_sha256=source_sha256, source_path=str(sniffed.path.resolve()), member=sniffed.member)

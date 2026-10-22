@@ -551,3 +551,48 @@ def test_symbolic_sv_extent_survives_its_own_export(tmp_path: Path) -> None:
     first = load(write(tmp_path, vcf_text(records, info=("SVLEN",))))
     back = load(write_vcf(first, tmp_path / "out.vcf.gz").path).calls.collect()
     assert back["end_pos"].to_list() == first.calls.collect()["end_pos"].to_list() == [230, 300]
+
+
+def test_a_column_line_written_with_two_hashes_is_read(tmp_path: Path) -> None:
+    """F7: Veritas SV and CNV uploads write `##CHROM` and put a third `#` on most meta lines. The
+    column line is read; a `###` line is a meta line whose key starts with `#` and declares nothing."""
+    text = "\n".join(
+        [
+            "##fileformat=VCFv4.1",
+            '###FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+            "###contig=<ID=chr1,length=249250621,assembly=hg19>",
+            "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1",
+            "chr1\t100\t.\tC\t<DEL>\t.\tPASS\tSVTYPE=DEL;END=150\tGT\t0/1",
+            "chr1\t300\t.\tA\tG\t.\tPASS\t.\tGT\t1/1",
+        ]
+    ) + "\n"
+    loaded = load(write(tmp_path, text, "sv.vcf"))
+    calls = loaded.calls.collect()
+    facet = loaded.facets.collect().row(0, named=True)
+    assert calls.select("chrom", "pos", "end_pos", "alts", "gt_alleles").rows() == [
+        ("1", 100, 150, ["<DEL>"], ["C", "<DEL>"]),
+        ("1", 300, 300, ["G"], ["G", "G"]),
+    ]
+    assert facet["header_contigs"] == [], "a ###contig line is not a contig declaration"
+    assert facet["sample"] == "S1"
+    assert any(w.startswith("the column line is written ##CHROM") and "2 meta line(s) starting ###" in w for w in loaded.warnings)
+    assert any("FORMAT/GT" in w for w in loaded.warnings), "GT is undeclared, so the loader declares it"
+
+
+def test_a_column_line_after_the_real_one_is_not_reread(tmp_path: Path) -> None:
+    text = vcf_text(["1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/1"]).replace(
+        "#CHROM", "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tOTHER\n#CHROM", 1
+    )
+    loaded = load(write(tmp_path, text))
+    assert loaded.facets.collect()["sample"].to_list() == ["S1"]
+    assert not any("##CHROM" in w for w in loaded.warnings)
+
+
+def test_an_alt_that_is_no_vcf_allele_has_no_variant_class(tmp_path: Path) -> None:
+    """F15: a Veritas CNV upload writes ALT `CNV`. It is kept verbatim and counted, never an indel."""
+    records = ["1\t100\t.\tG\tCNV\t.\t.\t.\tGT\t0/1", "1\t200\t.\tA\tAT\t.\t.\t.\tGT\t0/1", "1\t300\t.\tA\tR\t.\t.\t.\tGT\t0/1"]
+    loaded = load(write(tmp_path, vcf_text(records)))
+    calls = loaded.calls.collect()
+    assert calls["alts"].to_list() == [["CNV"], ["AT"], ["R"]]
+    assert loaded.facets.collect()["variant_classes"].to_list() == [[{"variant_class": "indel", "alleles": 1}]]
+    assert any(w.startswith("2 record(s) carry an ALT that is no VCF allele") for w in loaded.warnings), loaded.warnings

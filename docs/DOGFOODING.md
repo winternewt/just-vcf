@@ -39,5 +39,14 @@ header line carries an extra `#` (`###contig`, `##CHROM`) are recognised as `vcf
 #CHROM line". The Veritas shape could be read by accepting `##CHROM` as the column line; the spreadsheet
 one needs its own format id, as `23andme_csv` has. Not fixed: three files.
 
+**Veritas shape fixed 2026-10-22.** Not every header line has the extra `#`: `##fileformat` and `##ALT`
+are written right, `###FORMAT`, `###contig` and `###reference` carry a third, and the column line is
+`##CHROM`. Where no `#CHROM` line exists, a meta line that is VCF's column line with one `#` too many
+is now the column line, and the file is read through a rewritten copy; the `###` lines are kept as
+the meta lines VCF says they are (a key starting with `#`), so no contig and no FORMAT is declared from
+them, and GT and END are declared by the loader as for any undeclared key. Both files load (5,614 SV
+calls, all `0/1`; 2,632 CNV rows, all `0/1`, whose ALT `CNV` is F15). Code: `loaders/vcf.py`
+`read_header`, `HASHED_COLUMN_LINE`; test `test_a_column_line_written_with_two_hashes_is_read`.
+
 A third failure in the sweep is a corrupt upload (`gzip -t` fails too), and its error is correct.
 

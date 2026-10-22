@@ -3,6 +3,20 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F15 — An ALT that is no VCF allele counted as an indel
+
+Severity: low · Found 2026-10-22 loading the Veritas CNV upload F7's fix made readable.
+
+The file writes every ALT as the letters `CNV`, without angle brackets. The class rule took any run of
+letters for a sequence allele, so the facet's `variant_classes` said 2,632 indels and the callset
+inference counted the rows as small-variant sites. VCF allows only `ACGTN` in a sequence allele.
+
+Resolved 2026-10-22: a sequence ALT is `ACGTN` bases only, in `variant_class_expr` and in the
+callset's site count, so `CNV` (or an ambiguity code such as `R`) has no class and is no site; the
+loader keeps it verbatim and counts the records in one warning. Code: `just_vcf/callset.py`
+`variant_class_expr` and `spread`, `loaders/vcf.py` `scan_stats`; test
+`test_an_alt_that_is_no_vcf_allele_has_no_variant_class`.
+
 ## F2 — 23andMe rows with a doubled tab are dropped
 
 Severity: low · Found 2026-09-30 by loading the 503 PGP-HMS 23andMe-layout files.

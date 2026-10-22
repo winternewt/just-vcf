@@ -90,9 +90,24 @@ reference-supported positions.
 - **A store holding several collections** picks the one matching the most rows; a tie is refused
   unless `collection=` names one.
 
+**Dogfooded 2026-10-22** against Ensembl GRCh37 and GRCh38 primary assemblies in one store (built
+from the gzipped FASTAs in 103 s and 25 s, 2.2 GB; each assembly named by its own contig 1 length),
+on PGP-HMS files read from the Krypton share, aggregates only:
+
+- Six plain VCFs (73–142 MB). Five resolved: 34.2M rows read, all but 2 matching their source REF, and
+  both of those against an IUPAC code in the reference. One stated lengths for 194 GRCh38 contigs in
+  UCSC names; its `chr*_random` and `chrUn_*` contigs (44,594 rows, 1%) stayed unread, because
+  Ensembl names them by accession (`KI270721.1`) and `canonical_chrom` does not map the two. One VCF
+  with neither `##contig` lines nor a build hint was refused. A sixth failed to load (not RM3's).
+- Four build-37 23andMe exports (1.0–1.4M rows): 97.5–99.4% of rows read; the rest are I/D codes,
+  no-calls and MT. 14.7–19.4% of the rows read carry no REF allele, the range expected for
+  homozygous non-reference calls on a chip, not for a wrong build or strand. Four build-36 exports
+  were refused: no GRCh36 reference in the store.
+- `resolve_ref` on the 1.4M-row export: 11.4 s (load 1.3 s), of which 1.3 s reading bases.
+
 Left: indel anchor bases (no loaded format lacks them: 23andMe I/D codes need the chip manifest, and
 Living DNA's run-together `CCA` cannot be split without the site's alleles); emitting
-reference-supported positions; an opt-in test against a real assembly. A VCF with neither
+reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither
 `##contig` lengths nor a build hint, and an array without a stated build, are refused: nothing can
 show which assembly they are on.
 

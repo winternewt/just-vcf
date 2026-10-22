@@ -32,7 +32,7 @@ from pathlib import Path
 import polars as pl
 from gtars.refget import RefgetStore
 
-from just_vcf.loading import Loaded, cache_dir
+from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.schema import CALLS, CONTIG_RANK, SCHEMA_VERSION, RefCheck, canonical_chrom, canonical_order, empty
 
 logger = logging.getLogger(__name__)
@@ -267,14 +267,19 @@ def resolve_ref(
     if spill.exists():
         shutil.rmtree(spill)
     spill.mkdir(parents=True)
+    # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each contig
+    # below is a cheap filtered scan rather than a replay of whatever plan built the input.
+    loaded.calls.sink_parquet(spill / "input.parquet", row_group_size=SPILL_ROW_GROUP)
+    source = pl.scan_parquet(spill / "input.parquet")
     parts: list[Path] = []
     for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-        rows = loaded.calls.filter(pl.col("chrom") == chrom).collect()
+        rows = source.filter(pl.col("chrom") == chrom).collect()
         contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
         resolved = _resolve_rows(rows, store, contig, counts) if contig is not None else rows
         part = spill / f"calls-{index:05d}.parquet"
-        canonical_order(resolved.lazy()).sink_parquet(part)
+        canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
         parts.append(part)
+    (spill / "input.parquet").unlink()
     warnings += _row_warnings(counts, plan.digest)
     for warning in warnings:
         logger.warning("%s: %s", facet["facet_id"], warning)
@@ -489,47 +494,33 @@ def _count_array_unreadable(rows: pl.DataFrame, counts: Counter[str]) -> None:
 
 def _derive_array_alleles(work: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
     """For array rows whose base was read: `alts` the observed non-REF alleles, sorted; `gt` into `[ref] + alts`."""
-    target = work.filter(pl.col("_array") & pl.col("ref").is_not_null())
-    if target.is_empty():
+    target = pl.col("_array") & pl.col("ref").is_not_null()
+    if not work.select(target.any()).item():
         return work
-    target = target.with_columns(
-        pl.col("gt_alleles").list.drop_nulls().list.set_difference(pl.concat_list("ref")).list.unique().list.sort().alias("alts")
+    alleles = pl.col("gt_alleles")
+    work = work.with_columns(
+        pl.when(target)
+        .then(alleles.list.drop_nulls().list.set_difference(pl.concat_list("ref")).list.unique().list.sort())
+        .otherwise(pl.col("alts"))
+        .alias("alts")
     )
-    slots = target.select("_row", "ref", "gt_alleles").explode("gt_alleles", empty_as_null=False).with_row_index("_slot")
-    numbered = (
-        target.select("_row", "alts")
-        .explode("alts", empty_as_null=False)
-        .drop_nulls("alts")
-        .with_columns((pl.int_range(pl.len()).over("_row") + 1).alias("_index"))
-    )
-    slots = slots.join(numbered, left_on=["_row", "gt_alleles"], right_on=["_row", "alts"], how="left", maintain_order="left")
-    gt = (
-        slots.with_columns(
-            pl.when(pl.col("gt_alleles").is_null())
-            .then(None)
-            .when(pl.col("gt_alleles") == pl.col("ref"))
-            .then(0)
-            .otherwise(pl.col("_index"))
-            .cast(pl.UInt8)
-            .alias("gt")
-        )
-        .sort("_slot")
-        .group_by("_row", maintain_order=True)
-        .agg(pl.col("gt"))
-    )
-    target = target.drop("gt").join(gt, on="_row", how="left", maintain_order="left")
-    counts["array_read"] += target.height
-    counts["array_ref_not_acgt"] += target.filter(~pl.col("ref").is_in(_BASES)).height
-    counts["array_no_ref_allele"] += target.filter(~pl.col("gt").list.contains(0)).height
-    replaced = target.select("_row", "alts", "gt")
-    return (
-        work.join(replaced, on="_row", how="left", suffix="_derived", maintain_order="left")
-        .with_columns(
-            pl.coalesce("alts_derived", "alts").alias("alts"),
-            pl.coalesce("gt_derived", "gt").alias("gt"),
-        )
-        .drop("alts_derived", "gt_derived")
-    )
+    # Vectorised over haplotype slots and alt positions: each allele is a single base, so a slot's
+    # index is 0 when it is REF and j + 1 when it is the j-th sorted alt.
+    widths = work.filter(target).select(alleles.list.len().max().alias("slots"), pl.col("alts").list.len().max().alias("alts")).row(0)
+    indexes = []
+    for slot in range(widths[0]):
+        allele = alleles.list.get(slot, null_on_oob=True)
+        index = pl.when(allele.is_null()).then(None).when(allele == pl.col("ref")).then(0)
+        for position in range(widths[1]):
+            index = index.when(allele == pl.col("alts").list.get(position, null_on_oob=True)).then(position + 1)
+        indexes.append(index.otherwise(None).cast(pl.UInt8))
+    gt = pl.concat_list(indexes).list.head(alleles.list.len())
+    work = work.with_columns(pl.when(target).then(gt).otherwise(pl.col("gt")).alias("gt"))
+    derived = work.filter(target)
+    counts["array_read"] += derived.height
+    counts["array_ref_not_acgt"] += derived.filter(~pl.col("ref").is_in(_BASES)).height
+    counts["array_no_ref_allele"] += derived.filter(~pl.col("gt").list.contains(0)).height
+    return work
 
 
 def _row_warnings(counts: Counter[str], digest: str) -> list[str]:

@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Schema 0.0.5 (RM4): `facets.sorted_name_length_pairs_digest` is new, and VCF facets now fill
+  `assembly_label` (basis `inferred`), `callset_type` and `absence_means` where the evidence settles them.
+  Every earlier frame spill in the cache is orphaned by the version bump (RM268).
+
 - A VCF facet now gets `callset_type` (RM4): `wgs`, `wes`, `panel` or `imputed` from the spread of
   its calls and its header, ported from just-dna-lite `detect_callset_scope` (docs/PROVENANCE.md),
   and null wherever the evidence falls between classes. `absence_means` follows: `weak_reference`

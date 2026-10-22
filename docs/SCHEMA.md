@@ -311,6 +311,49 @@ imputed content, VCFs of array data), `weak_reference` (whole-genome callsets wi
 until a consumer asks for a position. When it does, the answer comes out as a `calls`-shaped row with
 `evidence_basis = absence` or `ref_block`.
 
+**Absence is per variant class.** `weak_reference` holds only for the classes in the facet's
+`variant_classes`; for any other class, absence is unknown. A small-variant caller that wrote no
+symbolic ALT says nothing about SVs. And a whole genome cut down to one class keeps
+`callset_type = wgs` (the assay did not change) but gets a `content_filter` (`snv_only`, `indel_only`,
+`sv_only`). Its absences say nothing about the classes cut away, even where a residue of them is
+present (`bcftools view -v snps` keeps a multi-allelic site whose other ALT is an indel), and the cut
+holds them back for the kept class too.
+
+`absence_is_reference(facet_row, variant_class, force=False)` is the rule in code, for just-vcf and
+for consumers that restore hom-ref themselves (just-prs, just-dna-lite). It returns `True` only when
+`absence_means` is `weak_reference`, the class is present in `variant_classes`, and the facet has no
+`content_filter`. `force=True` lifts the hold for the filter's kept class only. Every other case is
+`None`, never `False`, including `blocks` (a gVCF decides per position, in its `blocks` frame). Any
+hom-ref restoration from absence that just-vcf grows must ask it, and refuse a facet with a
+`content_filter` unless called with `force=True`.
+
+`content_filter` comes from the strongest evidence that settles it, and each weaker piece that
+disagrees is a warning naming both sides; the strongest is kept:
+
+1. **The rows** (`content_filter_basis = rows`): at least `MIN_FILTER_ALLELES` (10,000) ALT alleles of
+   one class, and the other classes together at most `MAX_FILTER_RESIDUE` (1%) of all ALT alleles. At
+   or above `MIN_UNFILTERED_RESIDUE` (5%) the rows show no filter, and they then overrule a header line
+   or a file name that says otherwise (a `bcftools concat` of the two halves keeps the first half's
+   `view -v snps` line). Between the two, or with fewer alleles, the rows do not settle it.
+2. **A header line** (`stated`): a bcftools `view`/`filter` command line with `-v`/`--types`,
+   `-V`/`--exclude-types` or an `-i`/`-e` expression that is a bare `TYPE` comparison and no soft
+   filter (`-s`), or a GATK SelectVariants line with one select type. `##source=DRAGEN_SNV` is not
+   one: it names DRAGEN's small-variant caller, which writes indels under the same line.
+3. **The file name** (`file_name`), only when nothing above speaks: one class word between
+   separators (`.snp.`, `.snps.`, `.snv.`, `.indel.`, `.indels.`, `.sv.`, `.cnv.`). `hard-filtered`
+   is quality filtering and names no class. Warnings quote the word, never the name.
+
+A genotype table writes no REF/ALT to count, so its `variant_classes` is null; its absence is
+`unknown` anyway.
+
+Measured 2026-10-22 on PGP-HMS uploads: the other classes are 0% of eleven `.snp.`/`.snps.` and
+`.indel.`/`.indels.` halves (five with no header line to say so, Isaac and CASAVA; three cut by GATK
+SelectVariants, three by `bcftools filter -i 'TYPE=…'`), 0.16% of a `bcftools view -v snps` DRAGEN
+half and 0.48% of its `-v indels` half;
+indels are 20.5% of an unsplit DRAGEN genome's ALT alleles (`##source=DRAGEN_SNV`) and 25.8% of a
+local DeepVariant genome's. DRAGEN's `.cnv.` files and Manta's `.sv.` file hold under 10,000 alleles,
+so their filter rests on the header or the name.
+
 ## Decision 5: the facet table and provenance (charter 5, 6)
 
 Provenance that is constant across a file lives once in a `facets` frame. Each row of `calls` and
@@ -333,6 +376,9 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
+| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (or `-`, F12), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class. `[]` = a VCF with no variant allele; null = not counted (a genotype table). just-vcf's own shape |
+| `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
+| `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | null unless stated |
 | `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`) |
 | `contig_map` | `list[struct{source, chrom}]`: how this file's contig names were mapped (Decision 7) |
@@ -788,6 +834,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **Next version, set at merge** (2026-10-22, RM4's filtered genomes): `facets.variant_classes`,
+  `content_filter` and `content_filter_basis`, and the per-class reading of absence (Decision 4) with
+  `absence_is_reference`. Additive; no value of an existing column changes. `SCHEMA_VERSION` is not
+  bumped on the branch.
 
 - **0.0.7, continued** (2026-10-22, RM271; no version bump: no column or dtype changed):
   `mint_vrs_ids` fills `vrs_allele_ids` and `vrs_errors`, and `vrs_withheld` computes why an id is

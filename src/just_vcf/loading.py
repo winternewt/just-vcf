@@ -8,6 +8,8 @@ loader for a look-alike format.
 import hashlib
 import json
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import polars as pl
@@ -82,12 +84,16 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
     Final Report without positions or plus-strand alleles) is refused with `TableLayoutError`. `sample`
     is ignored for formats that hold one person by construction.
 
-    A VCF's rows are spilled to parquet under `cache_dir()`, and an input polars-bio cannot read as
-    it is is first copied there; the lazy frames read those files. Each run first removes the cache
-    entries an older `REWRITE_VERSION` or `SCHEMA_VERSION` wrote (`just_vcf.cache.sweep_stale`).
+    A VCF's or Complete Genomics or key=value table's rows are spilled to parquet under `cache_dir()`,
+    as a generation the same rows find again (`just_vcf.cache.Spill`), so a load run again never
+    touches the files an earlier `Loaded` reads. An input polars-bio cannot read as it is is first
+    copied there; the lazy frames read the spill, never the copy. Each run first removes the cache
+    entries an older `REWRITE_VERSION`, `SCHEMA_VERSION`, `SPILL_LAYOUT` or `WORK_VERSION` wrote
+    (`just_vcf.cache.sweep_stale`).
     """
     cache.sweep_stale(cache.REWRITE_COPY, {"REWRITE_VERSION": vcf.REWRITE_VERSION})
-    cache.sweep_stale(cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION})
+    cache.sweep_stale(cache.FRAMES_SPILL, _FRAMES_VERSIONS)
+    cache.sweep_stale(cache.WORK_COPY, _WORK_VERSIONS)
     sniffed = source if isinstance(source, Sniffed) else sniff(Path(source))
     if not sniffed or sniffed.format not in LOADABLE_FORMATS:
         raise UnsupportedFormatError(sniffed)
@@ -126,8 +132,12 @@ def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:
 def _load_keyvalue(sniffed: Sniffed) -> Loaded:
     """PGP's freeBayes+VarScan2 key=value table: one facet per caller (SCHEMA Decision 8)."""
     source_sha256 = file_sha256(sniffed.path)
-    work = _work_dir(source_sha256, sniffed.member, "keyvalue")
-    copy = work / "payload.tsv"
+    origin = _origin(sniffed, source_sha256)
+    with _work_copy(origin, "keyvalue") as work:
+        return _load_keyvalue_copy(sniffed, source_sha256, origin, work / "payload.tsv")
+
+
+def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, copy: Path) -> Loaded:
     with open_payload(sniffed) as handle:
         head = keyvalue.copy_payload(handle, copy)
     rows = keyvalue.scan(copy)
@@ -142,7 +152,7 @@ def _load_keyvalue(sniffed: Sniffed) -> Loaded:
     for index, prefix, caller in keyvalue.CALLERS:
         facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={"caller_index": index})
         calls = keyvalue.to_calls_frame(keyvalue.caller_rows(rows, prefix), facet_id)
-        spilled, contigs = _spill(facet_id, calls, empty(BLOCKS))
+        spilled, _, contigs = _spill(facet_id, calls, empty(BLOCKS), origin)
         inference = callset.classify(spilled, ["DP"], None)
         logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
         kind = inference.callset_type if inference else None
@@ -167,15 +177,18 @@ def _load_keyvalue(sniffed: Sniffed) -> Loaded:
         )
         calls_parts.append(canonical_order_per_contig(spilled, contigs))
         warnings += [f"{caller} facet: {w}" for w in keyvalue.warnings_for(counts, prefix)]
-    copy.unlink()
     return _multi_facet_loaded(facets, calls_parts, [empty(BLOCKS)] * len(facets), warnings)
 
 
 def _load_cgi(sniffed: Sniffed) -> Loaded:
     """A Complete Genomics `var` or `masterVarBeta` file: one whole-genome facet, calls and blocks."""
     source_sha256 = file_sha256(sniffed.path)
-    work = _work_dir(source_sha256, sniffed.member, "cgi")
-    body = work / "body.tsv"
+    origin = _origin(sniffed, source_sha256)
+    with _work_copy(origin, "cgi") as work:
+        return _load_cgi_copy(sniffed, source_sha256, origin, work / "body.tsv")
+
+
+def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, body: Path) -> Loaded:
     with open_payload(sniffed) as handle:
         header = cgi.copy_body(handle, body)
     rows = cgi.prepare(cgi.scan(body, header), sniffed.format)
@@ -208,8 +221,7 @@ def _load_cgi(sniffed: Sniffed) -> Loaded:
 
     facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={})
     calls_frame, blocks_frame = cgi.to_frames(calls, blocks, facet_id)
-    spilled, contigs = _spill(facet_id, calls_frame, blocks_frame)
-    body.unlink()
+    spilled, spilled_blocks, contigs = _spill(facet_id, calls_frame, blocks_frame, origin)
     facet = {
         "facet_id": facet_id,
         "source_sha256": source_sha256,
@@ -233,38 +245,73 @@ def _load_cgi(sniffed: Sniffed) -> Loaded:
     return Loaded(
         facets=_facet_frame(facet),
         calls=canonical_order_per_contig(spilled, contigs),
-        blocks=_spilled_blocks(facet_id, contigs),
+        blocks=canonical_order_per_contig(spilled_blocks, contigs),
         warnings=tuple(warnings),
     )
 
 
-def _work_dir(source_sha256: str, member: str | None, kind: str) -> Path:
-    """A cache directory for one source's intermediate copies."""
-    path = cache_dir() / kind / hashlib.sha256(f"{source_sha256}!{member}".encode()).hexdigest()[:32]
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+_FRAMES_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+"""The version keys of a load spill, in its cache manifest."""
+
+WORK_VERSION = 1
+"""How a loader's working copy of a payload is written (`keyvalue/`, `cgi/`); a key in its manifest."""
+
+_WORK_VERSIONS = {"WORK_VERSION": WORK_VERSION}
 
 
-def _spill(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame) -> tuple[pl.LazyFrame, list[str]]:
-    """Write a facet's unsorted `calls` and `blocks` to parquet in one streaming pass and return a scan
-    of the calls and their canonical contigs. The blocks are read back from `blocks.parquet`."""
-    spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-    spill.mkdir(parents=True, exist_ok=True)
-    pl.collect_all(
-        [
-            calls.sink_parquet(spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
-            blocks.sink_parquet(spill / "blocks.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
-        ]
-    )
-    spilled = pl.scan_parquet(spill / "calls.parquet")
-    contigs = pl.concat(
-        [spilled.select("chrom").unique(), pl.scan_parquet(spill / "blocks.parquet").select("chrom").unique()]
-    ).unique().collect()["chrom"].to_list()
-    return spilled, contigs
+def _origin(sniffed: Sniffed, source_sha256: str) -> cache.Origin:
+    return cache.Origin(source_sha256=source_sha256, source_path=str(sniffed.path.resolve()), member=sniffed.member)
 
 
-def _spilled_blocks(facet_id: str, contigs: list[str]) -> pl.LazyFrame:
-    return canonical_order_per_contig(pl.scan_parquet(cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}" / "blocks.parquet"), contigs)
+@contextmanager
+def _work_copy(origin: cache.Origin, directory: str) -> Iterator[Path]:
+    """A cache entry for one source's decompressed payload while a loader reads it, under the entry's
+    lock and in the index (kind `work_copy`), so `clear_cache(source)` finds a copy a dead loader left.
+
+    The copy is a whole genome and no frame reads it once the rows are spilled, so its files go when
+    the block ends, whether the load succeeded or not; the manifest stays, with size 0.
+    """
+    entry = cache_dir() / directory / hashlib.sha256(f"{origin.source_sha256}!{origin.member}".encode()).hexdigest()[:32]
+    with cache.writing(entry, cache.WORK_COPY, _WORK_VERSIONS, origin):
+        entry.mkdir(parents=True, exist_ok=True)
+        try:
+            yield entry
+        finally:
+            for leftover in entry.iterdir():
+                leftover.unlink()
+
+
+def _spill(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origin: cache.Origin) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str]]:
+    """Spill a facet's rows (`_spill_files`) and return scans of the calls and the blocks, and the
+    contigs either holds."""
+    calls_path, blocks_path = _spill_files(facet_id, calls, blocks, origin)
+    spilled, spilled_blocks = pl.scan_parquet(calls_path), pl.scan_parquet(blocks_path)
+    contigs = pl.concat([spilled.select("chrom").unique(), spilled_blocks.select("chrom").unique()]).unique().collect()["chrom"].to_list()
+    return spilled, spilled_blocks, contigs
+
+
+def _spill_files(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origin: cache.Origin) -> tuple[Path, Path]:
+    """Write a facet's unsorted `calls` and `blocks` to parquet in one streaming pass, as a generation
+    of `frames/<facet_id>-<SCHEMA_VERSION>/` named by the bytes written (`just_vcf.cache.Spill`).
+
+    The same rows sink to the same bytes, so a load run again finds the generation an earlier one
+    committed and leaves its files as they are: the frames that earlier `Loaded` returned keep reading
+    them. Rejected: reusing a complete spill by its `facet_id` without writing, which would skip the
+    sink but hand a load the rows an earlier version of the loader wrote whenever a loader fix does
+    not bump `SCHEMA_VERSION`.
+    """
+    entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
+    with cache.spilling(entry, cache.FRAMES_SPILL, _FRAMES_VERSIONS, origin.model_copy(update={"facet_id": facet_id})) as spill:
+        staged_calls, staged_blocks = spill.stage / "calls.parquet", spill.stage / "blocks.parquet"
+        pl.collect_all(
+            [
+                calls.sink_parquet(staged_calls, row_group_size=SPILL_ROW_GROUP, lazy=True),
+                blocks.sink_parquet(staged_blocks, row_group_size=SPILL_ROW_GROUP, lazy=True),
+            ]
+        )
+        key = cache.content_key([staged_calls, staged_blocks], {"facet_id": facet_id})
+        done = spill.find(key) or spill.commit(key, {"calls": [staged_calls], "blocks": [staged_blocks]}, [])
+    return done.files("calls")[0], done.files("blocks")[0]
 
 
 def _multi_facet_loaded(
@@ -442,17 +489,9 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         calls_frame, blocks_frame = vcf.to_frames(calls, blocks, facet_id)
         # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
         # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
-        spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-        with cache.writing(spill, cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION}, origin.model_copy(update={"facet_id": facet_id})):
-            spill.mkdir(parents=True, exist_ok=True)
-            pl.collect_all(
-                [
-                    calls_frame.sink_parquet(spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
-                    blocks_frame.sink_parquet(spill / "blocks.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
-                ]
-            )
+        calls_path, blocks_path = _spill_files(facet_id, calls_frame, blocks_frame, origin)
         contigs = [canonical_chrom(name) for name in stats["chroms"]]
-        spilled = pl.scan_parquet(spill / "calls.parquet")
+        spilled = pl.scan_parquet(calls_path)
         flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
         part_warnings += vcf.split_warnings(flagged, marker_rows, header)
         if source.callset_type:
@@ -502,7 +541,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         )
         # The flagged positions join above the per-contig sort, so a filter still reaches the parquet scan.
         calls_parts.append(vcf.with_split_groups(canonical_order_per_contig(spilled, contigs), flagged))
-        blocks_parts.append(canonical_order_per_contig(pl.scan_parquet(spill / "blocks.parquet"), contigs))
+        blocks_parts.append(canonical_order_per_contig(pl.scan_parquet(blocks_path), contigs))
         if part.sf_alone:
             shared = facet_stats[0].get("shared_sources", 0)
             part_warnings.append(

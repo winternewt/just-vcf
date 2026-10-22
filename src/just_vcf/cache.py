@@ -1,15 +1,19 @@
 """The loader's cache: what each entry is, sweeping stale versions, and `clear_cache` (RM268).
 
-The cache (`cache_dir()`) holds two directories of entries:
+The cache (`cache_dir()`) holds four directories of entries:
 
 - `vcf/<key>/`: a rewritten copy of an input polars-bio cannot read as it is (`readable_path`), and a
   `structural/` copy inside it for a file polars-bio refused. Kind `rewrite_copy`.
+- `keyvalue/<key>/` and `cgi/<key>/`: the decompressed payload a key=value or Complete Genomics
+  loader reads while it spills the rows, removed when the load ends (`work_copy`). Indexed so a copy
+  a dead loader left is still traced to its source.
 - `frames/<name>/`: the parquet spills the lazy frames read. `<facet_id>-<SCHEMA_VERSION>` is a load's
   spill (`frames_spill`), or a derived facet's under its own id (`rejoin_spill`, `normalize_spill`,
   `lift_spill`);
   `<facet_id>-<SCHEMA_VERSION>-ref-<digest>-<RESOLVE_VERSION>` is `resolve_ref`'s (`resolve_spill`) and
-  `…-vrs-<digest>-<MINT_VERSION>` is `mint_vrs_ids`'s (`vrs_spill`). A derived step's entry holds one
-  directory per generation, `<key>/`, named by the content the result was computed from (`Spill`).
+  `…-vrs-<digest>-<MINT_VERSION>` is `mint_vrs_ids`'s (`vrs_spill`). Every spill entry, `load`'s
+  included, holds one directory per generation, `<key>/`, named by the content it holds or was
+  computed from (`Spill`).
 
 Each entry has two files beside it: `<name>.json`, its manifest (`CacheEntry`: kind, version keys,
 the root source's sha256, the facet it holds and the facet it came from, size, created and last
@@ -20,12 +24,13 @@ a genome, and only a directory whose name has an entry's shape is an entry.
 An entry without a manifest was written before the index. Its origin is unknown, so `clear_cache`
 never removes it; only the stale-version sweep does, and only where its name shows the version: a
 `vcf/` entry without a manifest predates `REWRITE_VERSION` 7, the version that brought the index,
-so it is stale by construction.
+so it is stale by construction, and a `keyvalue/` or `cgi/` one predates their index.
 
 Removing an entry a live `Loaded` reads breaks that frame's next `collect`. The stale-version sweep
 cannot hit one (no current frame reads an old version); `clear_cache` can, and that is the caller's
-call. A derived step run again never can: it reuses the generation an earlier run committed for the
-same content, or commits another beside it, and never rewrites or removes a complete one.
+call. `load` or a derived step run again never can: it reuses the generation an earlier run
+committed for the same content, or commits another beside it, and never rewrites or removes a
+complete one.
 """
 
 import hashlib
@@ -61,10 +66,15 @@ RESOLVE_SPILL = "resolve_spill"
 VRS_SPILL = "vrs_spill"
 NORMALIZE_SPILL = "normalize_spill"
 LIFT_SPILL = "lift_spill"
-CACHE_KINDS: frozenset[str] = frozenset({REWRITE_COPY, FRAMES_SPILL, REJOIN_SPILL, RESOLVE_SPILL, VRS_SPILL, NORMALIZE_SPILL, LIFT_SPILL})
+WORK_COPY = "work_copy"
+CACHE_KINDS: frozenset[str] = frozenset(
+    {REWRITE_COPY, FRAMES_SPILL, REJOIN_SPILL, RESOLVE_SPILL, VRS_SPILL, NORMALIZE_SPILL, LIFT_SPILL, WORK_COPY}
+)
 """What a cache entry can be. Grows as derived-facet steps that spill land."""
 
-_DIRS = ("vcf", "frames")
+_COPY_DIRS = ("vcf", "keyvalue", "cgi")
+"""Directories of copies of a source, each entry named by a 32-hex key that hashes the source."""
+_DIRS = (*_COPY_DIRS, "frames")
 _VCF_NAME = re.compile(r"[0-9a-f]{32}")
 _FRAMES_NAME = re.compile(
     r"(?P<facet>[0-9a-f]{32})-(?P<schema>[0-9][0-9.]*)(?:-(?P<op>ref|vrs)-(?P<digest>[A-Za-z0-9_-]+)-(?P<step>[0-9]+)|-(?P<lift>lift))?"
@@ -261,7 +271,7 @@ class Committed:
 
 
 class Spill:
-    """One run of a derived step writing into its entry, under the entry's lock (`spilling`).
+    """One run of `load` or a derived step writing into its entry, under the entry's lock (`spilling`).
 
     The run writes into `stage`, a directory of its own inside the entry, and `commit`s it by renaming
     it to `<entry>/<key>`, the key being the content the result was computed from. A generation is
@@ -309,10 +319,10 @@ class Spill:
 
 
 SPILL_LAYOUT = 2
-"""How a derived spill is laid out, a key in its manifest's versions: 2 is one directory per generation
-(`Spill`); 1 wrote the files into the entry itself, so the sweep retires those entries. `liftover`
-took generations after the other derived steps, at the same layout number: its spill had no
-manifest before."""
+"""How a spill is laid out, a key in its manifest's versions: 2 is one directory per generation
+(`Spill`); 1 wrote the files into the entry itself, so the sweep retires those entries. `load`'s
+spill and `liftover`'s took generations after the other derived steps, at the same layout number:
+their manifests before then carried no `SPILL_LAYOUT` key at all."""
 
 _STAGING = ".staging-"
 _RESULT = "result.json"
@@ -320,7 +330,7 @@ _RESULT = "result.json"
 
 @contextmanager
 def spilling(entry: Path, kind: str, versions: dict[str, object], origin: Origin) -> Iterator[Spill]:
-    """`writing` for a derived step: hold the entry's lock, and give the run a `Spill` to stage into.
+    """`writing` for a spill: hold the entry's lock, and give the run a `Spill` to stage into.
 
     The manifest is updated whether the run commits a new generation or reuses one (`last_used`, size).
     The staging directory goes when the block ends, committed or not.
@@ -361,7 +371,7 @@ def _read_generation(path: Path) -> Generation | None:
 def sweep_stale(kind: str, current: dict[str, object]) -> CacheClearReport:
     """Remove every entry of `kind` written under a version other than `current`, logging the bytes freed.
 
-    Run by the step that owns the kind, before it writes: `load` for `rewrite_copy` and `frames_spill`,
+    Run by the step that owns the kind, before it writes: `load` for `rewrite_copy`, `work_copy` and `frames_spill`,
     each derived step for its own. An entry with no manifest is judged by its name where the name shows
     its version, and a `vcf/` one is stale by construction (module docstring). Always safe: no current
     lazy frame reads an entry of an old version. An entry being written is left alone.
@@ -403,8 +413,8 @@ def clear_cache(
 
     `dry_run` lists what would go and removes nothing. An entry whose writer holds its lock is left
     alone and reported in `being_written`. An entry written before the index is never removed here
-    (`unknown_origin`). Only `vcf/` and `frames/` entries are considered: the reference store is
-    never touched.
+    (`unknown_origin`). Only `vcf/`, `keyvalue/`, `cgi/` and `frames/` entries are considered: the
+    reference store is never touched.
 
     Removing an entry that a live `Loaded` reads breaks that frame's next `collect`: that is the
     caller's call. Reload afterwards.
@@ -456,6 +466,9 @@ def _stale(entry: _Entry, kind: str, current: dict[str, str]) -> bool:
         return False
     if entry.relative.startswith("vcf/"):
         return kind == REWRITE_COPY
+    if not entry.relative.startswith("frames/"):
+        # `keyvalue/` and `cgi/`: every working copy written since the index has a manifest.
+        return kind == WORK_COPY
     match = _FRAMES_NAME.fullmatch(entry.path.name)
     if match["lift"]:
         # Written before the index and before generations: no run of this version reads it.
@@ -479,9 +492,10 @@ def _legacy_versions(relative: str) -> dict[str, str]:
 
 
 def _entries(root: Path) -> list[_Entry]:
-    """Every entry under `vcf/` and `frames/`: a directory or a manifest whose name has an entry's shape."""
+    """Every entry under `_DIRS`: a directory or a manifest whose name has an entry's shape."""
     entries = []
-    for directory, pattern in zip(_DIRS, (_VCF_NAME, _FRAMES_NAME)):
+    for directory in _DIRS:
+        pattern = _FRAMES_NAME if directory == "frames" else _VCF_NAME
         base = root / directory
         if not base.is_dir():
             continue

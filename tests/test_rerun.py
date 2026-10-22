@@ -1,6 +1,7 @@
-"""A derived step run again must not break the frame an earlier run returned.
+"""`load` or a derived step run again must not break the frame an earlier run returned.
 
-`rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids` and `liftover` each spill under `frames/<entry>/`. A run
+`load`, `rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids` and `liftover` each spill under
+`frames/<entry>/`. A run
 stages its files and commits them as a generation named by the content it was computed from; a later
 run with the same content reuses that generation, a run with other rows under the same facet id adds
 one beside it, and no run rewrites or removes a committed generation. Every test runs on the per-test
@@ -9,18 +10,24 @@ cache `isolated_cache` sets up (conftest).
 
 import multiprocessing
 import queue
+import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
 
 import polars as pl
 import pytest
-from test_cache import SEQ, manifests, size_on_disk, vcf_zip, write_entry
+from test_cache import SEQ, legacy_entry, manifests, sha256, size_on_disk, vcf_zip, write_entry
+from test_load_cgi import LOCI, var_text
+from test_load_cgi import write as write_cgi
+from test_load_keyvalue import ROWS as KEYVALUE_ROWS
+from test_load_keyvalue import write as write_keyvalue
 
 from just_vcf import (
     Loaded,
     ReferenceStore,
     cache,
+    clear_cache,
     liftover,
     load,
     mint_vrs_ids,
@@ -346,3 +353,112 @@ def test_two_processes_lifting_leave_a_live_lift_working(tmp_path: Path, default
     for got_calls, got_report in reported:
         assert pl.read_ipc(got_calls).equals(calls) and pl.read_ipc(got_report).equals(report)
     assert file_stamps(entry) == before and len(generations(entry)) == 1
+
+
+# load: the spill a load writes for each facet, of every loader that spills (VCF, Complete Genomics,
+# key=value), follows the same rules.
+SOURCES: dict[str, Callable[[Path], Path]] = {
+    "vcf": lambda tmp_path: vcf_zip(tmp_path, "one"),
+    "cgi": lambda tmp_path: write_cgi(tmp_path, var_text(LOCI), "var-GS000000001-ASM.tsv.bz2"),
+    "keyvalue": lambda tmp_path: write_keyvalue(tmp_path, KEYVALUE_ROWS),
+}
+
+
+def all_frames(loaded: Loaded) -> list[pl.DataFrame]:
+    return pl.collect_all([loaded.facets, loaded.calls, loaded.blocks])
+
+
+def same(got: list[pl.DataFrame], expected: list[pl.DataFrame]) -> bool:
+    return all(a.equals(b) for a, b in zip(got, expected, strict=True))
+
+
+def load_entries() -> list[Path]:
+    return [cache.cache_dir() / name for name in sorted(manifests(cache.FRAMES_SPILL))]
+
+
+@pytest.mark.parametrize("name", SOURCES)
+def test_loading_again_reuses_the_spill_and_touches_no_file(name: str, tmp_path: Path) -> None:
+    path = SOURCES[name](tmp_path)
+    first = load(path)
+    rows = all_frames(first)
+    entries = load_entries()
+    assert len(entries) == rows[0].height  # one spill per facet
+    before = {entry: file_stamps(entry) for entry in entries}
+    made = {entry.name: manifests(cache.FRAMES_SPILL)[f"frames/{entry.name}"] for entry in entries}
+
+    second = load(path)
+
+    assert {entry: file_stamps(entry) for entry in entries} == before
+    assert same(all_frames(first), rows) and same(all_frames(second), rows)
+    assert second.warnings == first.warnings
+    for entry in entries:
+        assert len(generations(entry)) == 1
+        again = manifests(cache.FRAMES_SPILL)[f"frames/{entry.name}"]
+        assert again.created == made[entry.name].created and again.last_used > made[entry.name].last_used
+        assert again.size_bytes == size_on_disk(entry)
+        assert again.versions == {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": str(cache.SPILL_LAYOUT)}
+
+
+def test_a_load_spill_in_the_layout_before_generations_is_swept(tmp_path: Path) -> None:
+    """A load spill indexed before generations: its manifest has no `SPILL_LAYOUT`, so `load` sweeps it."""
+    old = write_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION})
+    load(vcf_zip(tmp_path, "one"))
+    assert not old.exists()
+
+
+def _run_load(path: Path, results: "multiprocessing.Queue") -> None:
+    """In a child process: load the file, reporting its frames."""
+    results.put([frame.write_ipc(None).getvalue() for frame in all_frames(load(path))])
+
+
+@pytest.mark.parametrize("name", SOURCES)
+def test_two_processes_loading_leave_a_live_load_working(name: str, tmp_path: Path) -> None:
+    path = SOURCES[name](tmp_path)
+    live = load(path)
+    rows = all_frames(live)
+    entries = load_entries()
+    assert len(entries) == rows[0].height  # one spill per facet
+    before = {entry: file_stamps(entry) for entry in entries}
+
+    reported = run_children(_run_load, (path,), lambda: None if same(all_frames(live), rows) else pytest.fail("the live frame changed"))
+
+    for frames in reported:
+        assert same([pl.read_ipc(data) for data in frames], rows)
+    assert {entry: file_stamps(entry) for entry in entries} == before
+    assert all(len(generations(entry)) == 1 for entry in entries)
+
+
+def test_a_live_load_reads_the_spill_never_the_rewrite_copy(tmp_path: Path) -> None:
+    """The zipped VCF is read through a copy under `vcf/`; once `load` returns, no frame reads it."""
+    loaded = load(vcf_zip(tmp_path, "one"))
+    rows = all_frames(loaded)
+    ((copy, _),) = manifests(cache.REWRITE_COPY).items()
+    shutil.rmtree(cache.cache_dir() / copy)
+    assert same(all_frames(loaded), rows)
+
+
+@pytest.mark.parametrize("name", ["cgi", "keyvalue"])
+def test_clearing_a_cgi_or_keyvalue_source_removes_every_entry_from_it(name: str, tmp_path: Path) -> None:
+    mine = SOURCES[name](tmp_path)
+    theirs = vcf_zip(tmp_path, "theirs")
+    load(mine)
+    load(theirs)
+    from_mine = {entry for entry, m in manifests().items() if m.source_sha256 == sha256(mine)}
+    work = {entry for entry, m in manifests(cache.WORK_COPY).items()}
+    assert work and work <= from_mine and {m.kind for e, m in manifests().items() if e in from_mine} == {cache.WORK_COPY, cache.FRAMES_SPILL}
+    # The working copy is gone once the load returned; its manifest stays, at size 0.
+    assert all(size_on_disk(cache.cache_dir() / entry) == 0 == manifests()[entry].size_bytes for entry in work)
+    # A copy a loader that died left behind is found by its source.
+    (cache.cache_dir() / next(iter(work)) / "payload.tsv").write_bytes(b"left by a dead loader")
+
+    report = clear_cache(mine)
+
+    assert {e.path for e in report.removed} == from_mine
+    assert not any((cache.cache_dir() / entry).exists() for entry in from_mine)
+    assert {m.source_sha256 for m in manifests().values()} == {sha256(theirs)}
+
+
+def test_a_working_copy_from_before_the_index_is_swept(tmp_path: Path) -> None:
+    stale = {directory: legacy_entry(directory, "a" * 32) for directory in ("keyvalue", "cgi")}
+    load(vcf_zip(tmp_path, "one"))
+    assert not any(entry.exists() for entry in stale.values())

@@ -887,23 +887,26 @@ The frames `load` and the derived steps return are lazy scans over files in `cac
 (`JUST_VCF_CACHE_DIR`). Not part of the schema, and no version bump; the rules are here because a
 frame stops working when its files go.
 
-- Entries are directories under `vcf/` (rewrite copies, kind `rewrite_copy`) and `frames/` (spills:
-  `frames_spill`, `rejoin_spill`, `resolve_spill`, `vrs_spill`, `normalize_spill`, `lift_spill`). Beside each is
+- Entries are directories under `vcf/` (rewrite copies, kind `rewrite_copy`), `keyvalue/` and `cgi/`
+  (the decompressed payload the key=value and Complete Genomics loaders read while they spill, kind
+  `work_copy`, emptied when the load ends, failed or not) and `frames/` (spills: `frames_spill`,
+  `rejoin_spill`, `resolve_spill`, `vrs_spill`, `normalize_spill`, `lift_spill`). Beside each is
   `<name>.json`, its manifest, and `<name>.lock`, an OS file lock the writer holds while it writes.
   The manifest names the root source (sha256 and resolved path), which every derived facet carries
   down from its parent, so a genome's derived spills go with its copies.
 - An entry whose version key is not the current one is removed when the step that owns its kind next
   runs (`load` for copies and load spills). No current frame reads an old version, so this is safe.
   An entry with no manifest predates the index: removed only by that sweep, where its name shows an old
-  version or (a `vcf/` entry, below `REWRITE_VERSION` 7) where it must be old.
+  version or where it must be old (a `vcf/` entry, below `REWRITE_VERSION` 7; a `keyvalue/` or `cgi/`
+  one, from before those copies were indexed).
 - A manifest this version cannot read (a newer version's, with a kind or field it does not know) makes
   its entry unknown origin: kept, never swept, and it does not stop `load`. Kinds are checked where
   an entry is written.
-- A derived step's entry (`rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids`, `liftover`) holds one
+- A spill entry, `load`'s and each derived step's (`rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids`, `liftover`), holds one
   directory per generation. A run writes into a staging directory inside the entry, under the entry's
   lock, and renames it to `<key>/` when it is complete, `<key>` being a sha256 of the content the
-  result was computed from (the staged input's bytes, or for `rejoin_split` the result's, and the
-  facet row) and `result.json` in it listing its files and the step's row warnings. A run whose key is
+  result was computed from (the staged input's bytes, or for `rejoin_split` and `load` the result's,
+  and the facet row) and `result.json` in it listing its files and the step's row warnings. A run whose key is
   already there reuses that generation and writes nothing; a run on other rows under the same
   `facet_id` (a filtered `Loaded`) commits a second generation beside the first. No run rewrites or
   removes a complete generation, so a frame an earlier run returned, in this process or another,
@@ -917,9 +920,21 @@ frame stops working when its files go.
   from the report, so a reused generation answers as the run that wrote it. Its spill, once
   `frames/<facet_id>-<SCHEMA_VERSION>-lift/` with no manifest, removed and rewritten on every run, is
   now `frames/<facet_id>-<SCHEMA_VERSION>/` like the others; the old name is swept by `liftover`.
+- `load` sinks `calls.parquet` and `blocks.parquet` into its stage on every run, as before, and keys
+  them by their own bytes: the same file sinks to the same bytes, so a reload, in this process or
+  another, finds the generation and touches nothing. Measured 2026-10-22 on a PGP-HMS VCF (4,065,482
+  calls, 145 MB of spill): two loads in two processes wrote byte-identical files, and hashing them
+  takes 0.09 s (`content_key` over the two files, warm page cache) against a load of over a minute.
+  A reload never skips the sink. Rejected: reusing a complete spill by
+  `facet_id` without sinking, which would hand a load the rows an older loader wrote whenever a fix
+  to a loader does not bump `SCHEMA_VERSION`; and writing under a temporary name and renaming over
+  the old files, which swaps the files under a frame that is mid-`collect`.
+- A rewrite copy under `vcf/` is read only while `load` sinks its spill; no frame `load` returns reads
+  it, and a complete copy (its `.complete` marker present) is never written again, so it needs no
+  generations.
 - `clear_cache` removes what the caller names, even under a live `Loaded`; that frame's next
-  `collect` then fails. It skips an entry whose lock is held, and touches nothing outside `vcf/` and
-  `frames/`: the reference store under `reference/` is not a cache of a genome.
+  `collect` then fails. It skips an entry whose lock is held, and touches nothing outside `vcf/`,
+  `keyvalue/`, `cgi/` and `frames/`: the reference store under `reference/` is not a cache of a genome.
 - Rejected: a size cap with least-recently-used eviction. `last_used` is when a step wrote or reused an
   entry, not when a frame last read it, so a cap could evict under a live frame without anyone asking.
 

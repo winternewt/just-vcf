@@ -63,7 +63,7 @@ def default_store(tmp_path: Path) -> ReferenceStore:
 def manifests(kind: str | None = None) -> dict[str, cache.CacheEntry]:
     root = cache.cache_dir()
     found = {}
-    for directory in ("vcf", "frames"):
+    for directory in ("vcf", "keyvalue", "cgi", "frames"):
         for path in sorted((root / directory).glob("*.json")) if (root / directory).is_dir() else []:
             manifest = cache.CacheEntry.model_validate_json(path.read_bytes())
             if kind is None or manifest.kind == kind:
@@ -96,7 +96,7 @@ def test_every_entry_records_what_it_is_and_its_root_source(tmp_path: Path, defa
     normalized = normalize(resolved, default_store)
 
     found = manifests()
-    assert {m.kind for m in found.values()} == CACHE_KINDS - {cache.VRS_SPILL, cache.LIFT_SPILL}
+    assert {m.kind for m in found.values()} == CACHE_KINDS - {cache.VRS_SPILL, cache.LIFT_SPILL, cache.WORK_COPY}
     assert {m.source_sha256 for m in found.values()} == {sha256(path)}
     assert {m.source_path for m in found.values()} == {str(path.resolve())}
     load_id = loaded.facets.collect()["facet_id"][0]

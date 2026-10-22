@@ -319,6 +319,17 @@ def test_load_takes_a_stated_filter_and_then_the_name(tmp_path: Path) -> None:
     assert (named["content_filter"][0], named["content_filter_basis"][0]) == ("snv_only", "file_name")
 
 
+def test_a_vcf_of_blocks_only_counts_an_empty_list(tmp_path: Path) -> None:
+    """Counted and found nothing (`[]`) is not the same as not counted (null)."""
+    meta = ('##INFO=<ID=END,Number=1,Type=Integer,Description="End">', '##ALT=<ID=*,Description="Any other allele">')
+    blocks = [f"1\t{100 + i * 1000}\t.\tA\t<*>\t.\t.\tEND={600 + i * 1000}\tGT:DP\t0/0:20" for i in range(5)]
+    path = tmp_path / "x.g.vcf"
+    path.write_text("\n".join([*HEADER, *meta, COLUMNS, *blocks]) + "\n")
+    row = load(path).facets.collect().row(0, named=True)
+    assert (row["variant_classes"], row["content_filter"], row["absence_means"]) == ([], None, "blocks")
+    assert absence_is_reference(row, "snv", force=True) is None
+
+
 def test_a_genotype_table_counts_no_classes(tmp_path: Path) -> None:
     """An array file writes no REF/ALT, so nothing is counted: null, never an empty list."""
     path = tmp_path / "x.snps.txt"

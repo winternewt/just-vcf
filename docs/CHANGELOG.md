@@ -4,6 +4,18 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Population inference behind the `[ancestry]` extra (RM5): `just_vcf.ancestry.infer_ancestry(loaded,
+  panel_dir, panel)` places a facet on a reference-PCA panel (FRAPOSA's shrinkage-corrected projection,
+  then a 20-neighbour vote and PC-centroid proportions), and `consensus` combines estimates over the five
+  continental groups. Ported from just-prs `ancestry/` without its `PRSCatalog` wrappers or Hugging Face
+  pull; a panel is a local directory, and one just-prs built reads unchanged (docs/PROVENANCE.md). The
+  answer is an `AncestryEstimate`: the leading group, the vote, its margin, proportions and how many
+  panel sites it rests on, split into observed and absent-read-as-reference; or None with a reason
+  (`assembly_unknown`, `assembly_mismatch`, `panel_missing`, `too_few_sites`). The facet's own
+  `assembly_label` picks the panel's assembly, and its `absence_means` decides whether an absent site
+  is homozygous reference (`weak_reference`, or inside a `ref` block) or unknown; a no-call is never 0.
+  `just_vcf` itself does not import it, so the core still imports without numpy. No schema change.
+
 - Schema 0.0.5 (RM4): `facets.sorted_name_length_pairs_digest` is new, and VCF facets now fill
   `assembly_label` (basis `inferred`), `callset_type` and `absence_means` where the evidence settles them.
   Every earlier frame spill in the cache is orphaned by the version bump (RM268).

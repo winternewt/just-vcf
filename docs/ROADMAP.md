@@ -118,7 +118,7 @@ inference does not read yet; gVCF `END` expansion; an SNV-only or indel-only spl
 variant class too. Unmarked imputation output with read-evidence keys would read as `wgs`.
 
 ## RM5 — Population inference
-Severity: medium · Status: open · Owner: lead
+Severity: medium · Status: in progress (2026-10-22: PCA projection, neighbour vote, centroid proportions and consensus shipped as `just_vcf.ancestry`) · Owner: lead
 
 Port the just-prs `ancestry/` package (PCA projection, KNN, proportions, consensus) behind the
 `[ancestry]` extra, without the `PRSCatalog` wrappers or the Hugging Face pull.

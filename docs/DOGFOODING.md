@@ -68,3 +68,20 @@ the store, as the share of SNV rows whose called alleles include the reference b
 add NCBI36 to the reference store for the GRCh36 exports. A caller-asserted `assembly=` argument was
 considered and set aside: it lets a label stand in for evidence.
 
+## F10 — A GP that does not sum to 1 is lost when just-vcf reloads its own export
+
+Severity: low · Found 2026-10-22 by round-tripping a PGP-HMS VCF upload through `write_vcf` and `load`
+(RM6).
+
+The upload writes GP phred-scaled (values above 1), so the loader converts it and every row gets `gp`.
+Phred values rounded to integers do not convert to posteriors that sum to 1: 57,259 of its 956,057 GP
+rows are more than 0.02 short. `write_vcf` writes `gp` as probabilities under a VCF 4.3 header, where
+the spec defines GP as a probability. Reloading that output, the loader reads the scale from the values
+alone: all within [0, 1], and not all summing to 1, so it calls GP ambiguous and drops it from every
+row. Everything else in the file came back byte for byte.
+
+Not fixed, and not the writer's to fix. Normalizing the posteriors would change the evidence, and
+writing them back as phred under a 4.2 header would not read back bit for bit. The repair belongs in
+the loader's GP rule (RM2): values within [0, 1] under a 4.3+ header are probabilities, because the
+header settles what the values cannot, and a phred GP whose every value is at most 1 would mean
+genotypes all but equally likely, which is not what any caller writes.

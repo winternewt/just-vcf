@@ -204,7 +204,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: open (checked 2026-10-18: no writer yet) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`; left: gVCF blocks, splitting, left-align, strand, dedup, liftover, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -215,6 +215,49 @@ When it splits multi-allelic sites, the writer must not use the convention RM270
 input, where a split row's `0` can mean another ALT: it writes `.` for the other ALT, as vt, Glow,
 vcflib and `bcftools --multi-overlaps .` do (S2, from just-dna-lite). `rejoin_split` (RM270) re-joins
 such input today.
+
+**Shipped 2026-10-22: the writer** (`just_vcf.writing.write_vcf`; rules in its module docstring).
+One facet's `calls` out as a single-sample VCF 4.3, BGZF by default, through the repo's `BgzfWriter`.
+Round-tripped through `load` on a PGP-HMS upload (956,064 calls) and a local DeepVariant genome
+(6,436,476 calls) with 0 key mismatches, and checked by htslib (pysam, opt-in test). Decisions, each
+with what was rejected:
+
+- Our own text writer, not polars-bio's `sink_vcf`. Rejected: `sink_vcf`, which drops an undeclared
+  column silently (P13), wants polars-bio's genotype shape rather than `gt` + `phased`, and leaves float
+  and GT formatting, so byte determinism, to another library.
+- VCF 4.3. Rejected: 4.2, where GP is phred and `gp` holds probabilities; 4.4+, which our own loader
+  reads with the first haplotype's phase withheld (P4).
+- `gl` is written as GL. Rejected: PL by rounding `-10·gl`, since the frame does not remember whether
+  the source wrote PL, and a GL source would lose precision. `gl`, `gp` and `ad` are written only where
+  `source_alleles` is the written `[REF] + ALTs`; elsewhere they are left out and counted.
+- FORMAT is listed per row, keys with a value only. Rejected: one FORMAT string per file with `.` for
+  missing, which turns a GT the source left out into an uncalled `.` on reload.
+- REF is `ref`, else `source_ref`. Unwritable rows (no REF, a REF mismatch, no ALTs, a genotype not
+  indexed or indexed past its ALTs) raise `UnwritableRowsError` with a count per reason, unless
+  `resolved_only=True`. Rejected: writing them with a placeholder REF, or quietly leaving them out.
+- Split-flagged rows (RM270) are written as held, tagged `INFO/JUST_VCF_SPLIT=<signal>`, with a
+  warning and the count. Rejected: refusing until `rejoin_split` runs, which would block exporting a
+  pre-split file as it came; and writing them untagged, which loses the marker signal (the marker INFO
+  key is not in the frame).
+- Blocks are counted in the result and the warnings, not written. A gVCF block record needs the REF
+  base at its start, and the `blocks` frame has none before RM3 reads the sequence.
+- Contig names: `stored` (canonical), `chr` (a listed map, `MT` → `chrM`, nothing by pattern; other
+  contigs unchanged), or `source` (the facet's `contig_map`, and its `header_contigs` for a declared
+  contig with no rows; refused where the source spelled one contig two ways). `##contig` lines are sorted in the rows' canonical order, so a tool that checks
+  records against the header's order (GATK) accepts the file. Rejected: the source header's order,
+  which can put `chrM` first while the rows put it after `Y`.
+- The header names `facet_id`, `source_sha256`, `format_id`, a derived facet's parent and relation, the
+  assembly label and the package version. It leaves out `source_path` and the source's `##SAMPLE` and
+  `##PEDIGREE` lines, which can carry a real name. The sample column is the facet's `sample`, else
+  the `facet_id` for a source that names none, or the caller's `sample=`.
+- Rows must arrive grouped by contig with positions ascending, as `load` emits them; otherwise
+  `UnsortedRowsError`, and nothing is left at the target path. Rejected: sorting inside the writer,
+  which holds the whole frame in memory on a genome.
+
+**Left in RM6:** writing gVCF blocks (after RM3); a tabix index beside the output; SVLEN for symbolic
+SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
+does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting multi-allelic
+sites (writing `.` for the other ALT, above), left-align, strand resolution, dedup, liftover.
 
 
 ## RM271 — VRS allele ids

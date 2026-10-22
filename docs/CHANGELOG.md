@@ -33,6 +33,22 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   is homozygous reference (`weak_reference`, or inside a `ref` block) or unknown; a no-call is never 0.
   `just_vcf` itself does not import it, so the core still imports without numpy. No schema change.
 
+- `write_vcf(loaded, path)` writes a facet back out as a single-sample VCF 4.3, BGZF by default (RM6,
+  first slice; new exports `write_vcf`, `VcfWritten`, `ContigNames`, `UnwritableRowsError`,
+  `UnsortedRowsError`). It keeps GT with its per-haplotype phasing, GQ, DP, AD, GL, GP, DS, FT and PS,
+  listing per row only the keys that row has; declares every FILTER, INFO and FORMAT key it writes;
+  names the facet, its source digest and this package's version in the header, never the source
+  path. REF is `ref`, else what the file wrote, never the genotype: a row with neither (an array before
+  RM3), a REF mismatch, or no ALTs is refused with a count per reason, or skipped and counted with
+  `resolved_only=True`. Rows RM270 flagged as split are written as held, tagged `INFO/JUST_VCF_SPLIT`
+  and counted; blocks are counted and not written (a gVCF block needs a REF base the blocks frame does
+  not hold before RM3). Contigs as stored, `chr`-prefixed (`MT` → `chrM`), or as the source spelled
+  them. Two writes of the same frames give the same bytes. Round trips through `load`: a PGP-HMS VCF
+  upload (956,064 calls) and a local DeepVariant genome (6,436,476 calls) came back with 0 key
+  mismatches; htslib reads both outputs record for record, and the genome's output, reloaded and
+  written again, gives the same body byte for byte. The PGP-HMS file's GP did not come back (F10).
+  Minor: new functions and types only.
+
 - Schema 0.0.5 (RM4): `facets.sorted_name_length_pairs_digest` is new, and VCF facets now fill
   `assembly_label` (basis `inferred`), `callset_type` and `absence_means` where the evidence settles them.
   Every earlier frame spill in the cache is orphaned by the version bump (RM268).

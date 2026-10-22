@@ -29,6 +29,7 @@ from just_vcf.schema import (
     SplitSignal,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
+from just_vcf.writing import ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
 
 __version__ = version("just-vcf")
 
@@ -42,6 +43,7 @@ __all__ = [
     "AssemblyLabelBasis",
     "BlockKind",
     "CallsetType",
+    "ContigNames",
     "Loaded",
     "MultiSampleError",
     "NoSampleError",
@@ -54,7 +56,10 @@ __all__ = [
     "SniffOutcome",
     "SplitSignal",
     "TableLayoutError",
+    "UnsortedRowsError",
     "UnsupportedFormatError",
+    "UnwritableRowsError",
+    "VcfWritten",
     "__version__",
     "load",
     "open_payload",
@@ -63,4 +68,5 @@ __all__ = [
     "resolve_ref",
     "sniff",
     "vcf_samples",
+    "write_vcf",
 ]

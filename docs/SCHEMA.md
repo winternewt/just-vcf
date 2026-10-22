@@ -113,7 +113,7 @@ both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X):
   position; MT never) is scored: the share whose called alleles include the collection's base at that
   position, on the forward strand only. A row on a contig the collection lacks is not scored on it; a
   row past the contig's end counts against it. The best collection names its label when it was scored
-  on at least 1,000 rows, reaches 70%, and stands 20 points above both the best collection of any
+  on at least 1,000 rows, reaches 60%, and stands 20 points above both the best collection of any
   other label (an unlabelled collection counts as another) and chance (the mean number of distinct
   called alleles over four). The facet then gets `assembly_label` with basis `inferred`, and the
   scores go in one warning line. Rows that do not settle it refuse the facet, with the scores in the

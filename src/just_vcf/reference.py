@@ -316,7 +316,7 @@ def _infer_from_rows(store: ReferenceStore, loaded: Loaded, facet: dict, candida
     the very comparison that chose its build.
     """
     stated_lengths = any(entry["length"] is not None for entry in facet["header_contigs"] or [])
-    if facet["assembly_label"] is not None or stated_lengths:
+    if facet["assembly_label"] is not None or stated_lengths or facet["vcf_version"] is not None:
         return None
     sample = sample_snv_rows(loaded.calls)
     bases = {digest: _bases_at(store, digest, sample) for digest in candidates}

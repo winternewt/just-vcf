@@ -491,7 +491,7 @@ def test_one_collection_is_inferred_against_chance(tmp_path: Path) -> None:
 
 def test_rows_that_fit_no_collection_are_refused_with_the_scores(tmp_path: Path) -> None:
     s, _ = labelled_store(tmp_path, "two", {"GRCh37": SEQ, "GRCh38": OTHER_SEQ})
-    with pytest.raises(ReferenceMismatchError, match=r"rows do not settle one \(no collection reaches 70%.*% on GRCh3[78] "):
+    with pytest.raises(ReferenceMismatchError, match=r"rows do not settle one \(no collection reaches 60%.*% on GRCh3[78] "):
         resolve_ref(bare_array(tmp_path, drawn_rows(sequences(seed=23))), s)
 
 
@@ -535,6 +535,16 @@ def test_a_grch36_reference_is_named_by_its_contig_1_and_cannot_vouch_for_mt(tmp
     _, calls = frames(resolved)
     assert dict(calls.select("chrom", "ref").iter_rows()) == {"2": base("2", 10), "MT": None}
     assert any("the GRCh36 label cannot vouch for without a stated length: MT" in w for w in resolved.warnings)
+
+
+def test_a_vcf_without_lengths_or_a_build_is_not_scored_by_its_rows(tmp_path: Path) -> None:
+    """Scoring a VCF by its source REF would choose the build its `ref_check` then confirms."""
+    s, _ = labelled_store(tmp_path, "two", {"GRCh37": SEQ, "GRCh38": OTHER_SEQ})
+    records = [("1", p, base("1", p), other(base("1", p)), "0/1") for p in range(1, 1201)]
+    loaded = load(vcf(tmp_path, records, contigs=[]))
+    with pytest.raises(ReferenceMismatchError, match="so no reference can be shown to be its own") as refused:
+        resolve_ref(loaded, s)
+    assert "rows do not settle" not in str(refused.value)
 
 
 def test_a_stated_build_is_not_inferred_again(tmp_path: Path) -> None:

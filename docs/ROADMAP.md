@@ -216,7 +216,9 @@ every pair of classes. Decisions taken, each with what was rejected:
 - The classifier and the inference stay internal (`just_vcf.callset`, `just_vcf.assembly`, not in
   `__all__`); the facet columns are the contract. Rejected: exporting them before a consumer asks.
 
-**Left:** just-prs chip generation detection; contigs named by RefSeq accession (`NC_000001.11`), which the label
+**Left:** just-prs chip generation detection (F10 needs it for a strand table); GRCh36 in
+`ASSEMBLY_LENGTHS`, so a build-36 VCF's `##contig` lengths name it (the reference side knows GRCh36's
+contig 1 since F9; the header side reads those lengths as matching no assembly); contigs named by RefSeq accession (`NC_000001.11`), which the label
 inference does not read yet; gVCF `END` expansion; an SNV-only or indel-only split of a genome
 (`bcftools view -v snps`) reads as `wgs`, so its absences read as weak reference for the other
 variant class too. Unmarked imputation output with read-evidence keys would read as `wgs`.

@@ -177,10 +177,14 @@ ROWS_PER_CONTIG = 2_000
 MIN_SCORED_ROWS = 1_000
 """Sampled rows a collection must be scored on before the rows can name its assembly."""
 
-MIN_SHARE = 0.70
+MIN_SHARE = 0.60
 """The share of scored rows whose genotype carries the reference base, at or above which a collection
 fits. On the right build only homozygous non-reference calls miss; on a wrong one a position's base is
-unrelated to the probe, so the share falls towards chance (about a third for a chip's two-allele calls)."""
+unrelated to the probe, so the share falls towards chance. Measured on 153 PGP-HMS array exports
+(F9, 2026-10-22): the right build scored 0.665–0.913, every wrong one 0.230–0.334. The low end is
+FTDNA's X-chromosome exports, about 2,000 rows of mostly hemizygous calls, where a hom-alt call is
+common (a floor of 0.70 refused 27 of the 43), and one FTDNA autosomal export with some probes on the
+minus strand (F10)."""
 
 MIN_MARGIN = 0.20
 """How far the best collection's share must stand above the best collection of another label, and above

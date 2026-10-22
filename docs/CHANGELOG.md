@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- F9 closed after dogfooding on 153 PGP-HMS array exports: the row inference's floor is 60%, not 70%
+  (FTDNA's X-only exports fit their build at 66.5–84.3%, every wrong build stays at or below 33.4%),
+  and a VCF facet is not scored by its rows, so its refusal reads as before. F10 opened: an FTDNA
+  export with part of its probes on the minus strand.
+
 - A reference whose contig 1 is 247,249,719 bases is labelled `GRCh36`, so build-36 exports (23andMe
   v36, deCODEme) resolve against UCSC hg18 (where to get it: RM3). Like `GRCh37`, the label leaves an
   array's MT unread.

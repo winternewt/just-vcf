@@ -9,6 +9,7 @@ male X; `PAR-called-in-X` on chrY; format 2.0's `varQuality`.
 """
 
 import bz2
+import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +17,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import load, sniff
+from just_vcf import Loaded, load, sniff
 from just_vcf.schema import BLOCKS, CALLS, canonical_order
 from test_load_vcf import assert_gt_consistent
 
@@ -105,7 +106,15 @@ LOCI = [
         "chr1", 810000, 810002,
         haps=((Seg(810000, 810002, "no-call", "AC", "?", filter=""),), (Seg(810000, 810002, "no-call-rc", "AC", "?", filter=""),)),
     ),
-    Locus("chr1", 810002, 820000, uniform="ref"),
+    Locus("chr1", 810002, 815000, uniform="ref"),
+    Locus(
+        "chr1", 815000, 815004,
+        haps=(
+            (Seg(815000, 815004, "no-call", "ACGT", "?", filter=""),),
+            (Seg(815000, 815002, "no-call", "AC", "?", filter=""), Seg(815002, 815004, "no-call-ri", "GT", "?", filter="")),
+        ),
+    ),
+    Locus("chr1", 815004, 820000, uniform="ref"),
     Locus("chr1", 820000, 820000, uniform="no-call"),
     Locus("chr1", 820000, 830000, uniform="ref"),
     Locus("chrX", 2699520, 2699521, ploidy=1, haps=((Seg(2699520, 2699521, "snp", "A", "G"),),)),
@@ -137,10 +146,8 @@ def var_text(loci: list[Locus], version: str = "2.5", title: bool = True) -> str
 
 
 def joined(segments: tuple[Seg, ...]) -> str:
-    text = "".join(seg.seq for seg in segments)
-    while "??" in text:
-        text = text.replace("??", "?")
-    return text
+    """A haplotype as masterVarBeta writes it: the sub-rows' sequences run together, `??` included."""
+    return "".join(seg.seq for seg in segments)
 
 
 def master_var_text(loci: list[Locus]) -> str:
@@ -207,7 +214,7 @@ def test_blocks_are_the_uniform_loci_of_positive_length(var) -> None:
         (locus.chrom.removeprefix("chr").replace("M", "MT"), locus.begin + 1, locus.end, "ref" if locus.uniform == "ref" else "no_call")
         for locus in LOCI
         if locus.uniform and locus.end > locus.begin
-    ] + [("1", 810001, 810002, "no_call")]  # the locus whose haplotypes are all no-called
+    ] + [("1", 810001, 810002, "no_call"), ("1", 815001, 815004, "no_call")]  # loci with every haplotype no-called
     rank = {"1": 0, "X": 1, "Y": 2, "MT": 3}
     assert blocks.select("chrom", "pos", "end_pos", "kind").rows() == sorted(expected, key=lambda r: (rank[r[0]], r[1]))
 
@@ -294,6 +301,109 @@ def test_format_2_0_and_no_title(tmp_path: Path) -> None:
     assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF", "hapLink"]
 
 
+# --- var against CGI's own VCF of the same assembly --------------------------------------------------
+
+
+_KEY = pl.Struct({"key_pos": pl.Int64, "key_ref": pl.String, "set": pl.List(pl.String), "set_called": pl.List(pl.String)})
+
+
+def _key(row: dict) -> dict:
+    """A site as both files can be compared: the bases every called allele and REF share at the start
+    are cut and the position moves past them, so CGI's VCF anchor base (`CT>C` against var's `T>""`)
+    and a base var's locus already shares (`T>TAGAG`) both fall away. `set` is the sorted genotype, a
+    no-called haplotype `.`; `set_called` also reads a partly called one (`?A`) as `.`."""
+    alleles = row["gt_alleles"] or []
+    basis = [row["source_ref"], *(a for a in alleles if a is not None and "?" not in a)]
+    cut = len(os.path.commonprefix(basis))
+    return {
+        "key_pos": row["start"] + cut,
+        "key_ref": row["source_ref"][cut:],
+        "set": sorted("." if a is None else a[cut:] for a in alleles),
+        "set_called": sorted("." if a is None or "?" in a else a[cut:] for a in alleles),
+    }
+
+
+def _sites(calls: pl.LazyFrame, prefix: str) -> pl.LazyFrame:
+    """`_key` over every row. The first base of a row's span is `pos`, except at a CGI insertion point,
+    which sits at the base before it (`source_ref` empty)."""
+    start = pl.col("pos").cast(pl.Int64) + (pl.col("source_ref") == "").cast(pl.Int64)
+    keyed = pl.struct(start.alias("start"), "source_ref", "gt_alleles").map_elements(_key, return_dtype=_KEY)
+    return calls.select(
+        "chrom",
+        keyed.alias("_k"),
+        pl.col("gt_alleles").list.eval(pl.element().str.contains("?", literal=True)).list.any().fill_null(False).alias(f"{prefix}_partial"),
+        ((pl.col("source_ref") == "") & pl.col("gt").list.eval(pl.element().is_null()).list.all()).alias(f"{prefix}_unknown_insertion"),
+    ).unnest("_k").rename({"set": f"{prefix}_set", "set_called": f"{prefix}_set_called"})
+
+
+def _bases(intervals: dict[str, pl.LazyFrame]) -> pl.DataFrame:
+    """Bases per combination of interval sets (each `chrom, pos, end_pos`, 1-based inclusive, disjoint
+    within a set), by a sweep over their breakpoints."""
+    events = pl.concat(
+        [
+            frame.filter(pl.col("end_pos") >= pl.col("pos")).select(
+                "chrom",
+                pl.concat_list(pl.col("pos").cast(pl.Int64), pl.col("end_pos").cast(pl.Int64) + 1).alias("at"),
+                pl.lit([1, -1]).alias("delta"),
+            )
+            .explode("at", "delta")
+            .with_columns(pl.lit(name).alias("set"))
+            for name, frame in intervals.items()
+        ]
+    )
+    depth = (
+        events.group_by("chrom", "at")
+        .agg(*[pl.col("delta").filter(pl.col("set") == name).sum().alias(name) for name in intervals])
+        .sort("chrom", "at")
+        .with_columns(*[pl.col(name).cum_sum().over("chrom") for name in intervals])
+        .with_columns((pl.col("at").shift(-1).over("chrom") - pl.col("at")).alias("bases"))
+    )
+    return (
+        depth.filter(pl.col("bases").is_not_null())
+        .group_by(*[(pl.col(name) > 0).alias(name) for name in intervals])
+        .agg(pl.col("bases").sum())
+        .collect()
+    )
+
+
+def compare(var: Loaded, vcf: Loaded) -> dict[str, int]:
+    """How a `var` facet and the vcfBeta facet of the same assembly agree, as counts per class."""
+    sites = _sites(var.calls, "var").join(_sites(vcf.calls, "vcf"), on=["chrom", "key_pos", "key_ref"], how="full", coalesce=True)
+    in_var, in_vcf = pl.col("var_set").is_not_null(), pl.col("vcf_set").is_not_null()
+    same = pl.col("var_set") == pl.col("vcf_set")
+    partial = ~same & (pl.col("var_set_called") == pl.col("vcf_set_called"))
+    var_none_called = pl.col("var_set_called").list.eval(pl.element() == ".").list.all()
+    classes = sites.select(
+        (in_var & in_vcf & same).sum().alias("same"),
+        (in_var & in_vcf & partial).sum().alias("partial_as_no_call"),
+        (in_var & in_vcf & ~same & ~partial).sum().alias("genotype_differs"),
+        (in_var & ~in_vcf & pl.col("var_unknown_insertion")).sum().alias("unknown_insertion_var_only"),
+        (in_var & ~in_vcf & ~pl.col("var_unknown_insertion") & var_none_called).sum().alias("partial_only_var_only"),
+        (in_var & ~in_vcf & ~pl.col("var_unknown_insertion") & ~var_none_called).sum().alias("var_only"),
+        (~in_var & in_vcf).sum().alias("vcf_only"),
+    ).collect().row(0, named=True)
+    covered = _bases(
+        {
+            "var_ref": var.blocks.filter(pl.col("kind") == "ref").select("chrom", "pos", "end_pos"),
+            "var_other": pl.concat([var.blocks.filter(pl.col("kind") == "no_call").select("chrom", "pos", "end_pos"), var.calls.select("chrom", "pos", "end_pos")]),
+            "vcf": pl.concat([vcf.blocks.select("chrom", "pos", "end_pos"), vcf.calls.select("chrom", "pos", "end_pos")]),
+        }
+    )
+
+    def bases(**where: bool) -> int:
+        rows = covered.filter(pl.all_horizontal(pl.col(k) == v for k, v in where.items()))
+        return int(rows["bases"].sum())
+
+    return {
+        **classes,
+        "bases_var_ref": bases(var_ref=True),
+        "bases_var_ref_vcf_covered": bases(var_ref=True, vcf=True),
+        "bases_var_other": bases(var_other=True),
+        "bases_var_other_vcf_silent": bases(var_other=True, vcf=False),
+        "bases_vcf_outside_var": bases(var_ref=False, var_other=False, vcf=True),
+    }
+
+
 def test_bad_rows_and_loci_are_counted(tmp_path: Path) -> None:
     gap = Locus("chr1", 900000, 900003, haps=((Seg(900000, 900001, "ref", "A", "A"), Seg(900002, 900003, "snp", "C", "T")), (Seg(900000, 900003, "ref", "AGC", "AGC"),)))
     expanded = Locus("chr1", 910000, 910001, uniform="snp")
@@ -307,4 +417,69 @@ def test_bad_rows_and_loci_are_counted(tmp_path: Path) -> None:
     row[7], row[8] = "C", "T"
     _, _, calls, _ = frames(write(tmp_path, var_text([]) + "\t".join(row) + "\n", "all.tsv.bz2"))
     assert by_pos(calls)[("1", 910001)]["gt_alleles"] == ["T", "T"]
+
+
+# --- Real files (opt-in) -----------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def real_assembly(pgp_participants: Path) -> dict[str, Loaded]:
+    """The smallest PGP-HMS `var` on disk with the `masterVarBeta` and `vcfBeta` of the same assembly,
+    loaded once for the tests below."""
+    for var_path in sorted(pgp_participants.glob("*/arvados-*/var-*-ASM.tsv.bz2"), key=lambda p: p.stat().st_size):
+        assembly = var_path.name.removeprefix("var-").removesuffix(".tsv.bz2")
+        siblings = {
+            "master_var": var_path.with_name(f"masterVarBeta-{assembly}.tsv.bz2"),
+            "vcf": var_path.with_name(f"vcfBeta-{assembly}.vcf.bz2"),
+        }
+        if all(path.is_file() for path in siblings.values()):
+            return {"var": load(var_path), **{name: load(path) for name, path in siblings.items()}}
+    pytest.skip("no PGP-HMS CGI assembly with var, masterVarBeta and vcfBeta on disk")
+
+
+def test_real_var_and_master_var_agree(real_assembly: dict[str, Loaded]) -> None:
+    """Counts only: the two native files of one assembly give the same blocks and the same sites with
+    the same allele sets."""
+    var, master = real_assembly["var"], real_assembly["master_var"]
+    for loaded in (var, master):
+        facet = loaded.facets.collect().row(0, named=True)
+        assert (facet["caller"], facet["absence_means"]) == ("CGAPipeline", "blocks")
+    columns = ["chrom", "pos", "end_pos", "kind"]
+    assert var.blocks.select(columns).collect().equals(master.blocks.select(columns).collect())
+
+    def sites(loaded: Loaded) -> pl.LazyFrame:
+        return loaded.calls.select(
+            "chrom", "pos", "source_ref", "alts",
+            pl.col("gt_alleles").list.eval(pl.element().fill_null(".")).list.sort().alias("allele_set"),
+        )
+
+    keys = ["chrom", "pos", "source_ref", "alts", "allele_set"]
+    only_var = sites(var).join(sites(master), on=keys, how="anti", nulls_equal=True).select(pl.len()).collect().item()
+    only_master = sites(master).join(sites(var), on=keys, how="anti", nulls_equal=True).select(pl.len()).collect().item()
+    assert (only_var, only_master) == (0, 0)
+
+
+def test_real_var_converges_with_its_vcf_beta(real_assembly: dict[str, Loaded]) -> None:
+    """Counts only: where `var` and CGI's own VCF of one assembly hold a site, the allele sets agree,
+    and the disagreements fall in classes the two representations explain.
+
+    On the smallest assembly (2026-10-22): 4,138,184 sites the same; 27,505 where vcfBeta writes a
+    partly called haplotype `.`; 10,039 var loci called only partly, which vcfBeta writes as no-calls
+    (blocks); 346,474 uncalled insertion points, which vcfBeta writes as a no-call on the anchor base.
+    Left: 101 genotypes that differ, 1,119 var-only and 445 vcfBeta-only sites (0.04%), where vcfBeta
+    joins neighbouring loci into one record or places a repeat's indel elsewhere. Coverage: vcfBeta
+    covers every base var does not call reference, and 904,739 of var's 2.78G reference bases, the
+    anchor bases of its indels and no-calls.
+    """
+    counts = compare(real_assembly["var"], real_assembly["vcf"])
+    matched = counts["same"] + counts["partial_as_no_call"] + counts["genotype_differs"]
+    assert counts["same"] > 0.99 * matched, counts
+    assert counts["partial_as_no_call"] > 0, "vcfBeta writes a partly called haplotype as `.`"
+    assert counts["partial_only_var_only"] > 0, "and a locus called only partly as a no-call, which is a block"
+    assert counts["unknown_insertion_var_only"] > 0, "vcfBeta writes an uncalled insertion point as a block on its anchor"
+    unexplained = counts["genotype_differs"] + counts["var_only"] + counts["vcf_only"]
+    assert unexplained < 0.001 * matched, counts
+    # vcfBeta writes no reference-called record: what it leaves out is what var calls reference.
+    assert counts["bases_var_ref_vcf_covered"] < 0.001 * counts["bases_var_ref"], counts
+    assert counts["bases_var_other_vcf_silent"] < 0.001 * counts["bases_var_other"], counts
 

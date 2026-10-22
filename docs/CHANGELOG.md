@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The CGI convergence tests (opt-in, PGP-HMS): one assembly's `var` and `masterVarBeta` give the same
+  blocks and sites, and its `var` and `vcfBeta` agree on 4,138,184 sites, with 27,505 partial calls
+  vcfBeta writes `.`, 356,513 loci vcfBeta writes as no-calls, and 1,665 (0.04%) left where vcfBeta
+  joins neighbouring loci. vcfBeta covers every base `var` does not call reference: its silence is a
+  reference call. `vcf_cgi` still says `absence_means = blocks`; the value that should replace it is
+  open (RM2). The comparison found masterVarBeta writing two no-called stretches as `??`; it is now
+  read as one `?`, as `var` joins them, so both files give the same blocks.
+
 - Complete Genomics' native callsets load (RM2): `cgi_var` and `cgi_master_var` become one facet each,
   caller `CGAPipeline` at the file's `#SOFTWARE_VERSION`, `sample` its `#ASSEMBLY_ID`, `absence_means
   = blocks`, `callset_type = wgs` where `#TITLE` says whole-genome sequencing. Uniform loci become

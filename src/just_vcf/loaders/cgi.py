@@ -239,10 +239,11 @@ def master_var_parts(rows: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
                 "ploidy",
                 "begin",
                 "end",
-                pl.col(f"allele{number}Seq").alias("seq"),
+                # A no-called stretch is one `?`, as var_haplotypes joins it (masterVarBeta can write `??`).
+                pl.col(f"allele{number}Seq").str.replace_all(r"\?+", NO_CALL).alias("seq"),
                 "reference",
                 pl.lit(True).alias("tiles"),
-                pl.when(pl.col(f"allele{number}Seq") == NO_CALL)
+                pl.when(pl.col(f"allele{number}Seq").str.contains(r"^\?+$"))
                 .then(pl.lit([], dtype=pl.List(pl.String)))
                 .otherwise(pl.col(f"allele{number}VarFilter").str.split(";"))
                 .alias("filters"),

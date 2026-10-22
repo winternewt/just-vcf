@@ -24,10 +24,11 @@ The rules are in docs/SCHEMA.md ("Normalizing"); in short:
    pass through unchanged, counted. A deletion written as ALT `-` (F12: the REF bases at POS
    deleted, no anchor base) is read as the empty allele and anchored on the base before, then aligned
    like any deletion; at a contig's first base there is none, and it stays as written, counted.
-3. **Dedup and sort.** Rows identical in every column are kept once, counted. Rows for the same
-   allele at the same position that differ in anything else are all kept, with a warning
-   (charter 8: disagreement is data, never resolved by picking a winner). The result is in canonical
-   order (SCHEMA.md Decision 11).
+3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
+   but the ones a move clears (`_POSITIONAL`), so a moved indel and its unmoved twin with the same
+   genotype and evidence are one row, the unmoved one. Rows for the same allele at the same position
+   that differ in anything else are all kept, with a warning (charter 8: disagreement is data, never
+   resolved by picking a winner). The result is in canonical order (SCHEMA.md Decision 11).
 
 Rows the loader flagged as one record of a pre-split site (RM270) are left as written: a `0` there
 may mean another ALT, and moving one row of such a site would keep `rejoin_split` from finding it.
@@ -150,7 +151,10 @@ def _normalize_contig(rows: pl.DataFrame, store: ReferenceStore, contig: Contig 
     counts["flagged"] += held.height
     work = _align(_split(rows.filter(~flagged), counts), store, contig, counts)
     ordered = canonical_order(pl.concat([work, held], how="vertical").lazy()).collect()
-    unique = ordered.unique(maintain_order=True)
+    # A duplicate states what another row states: the columns a move clears describe how the source
+    # wrote the row, not what it says, so they do not make two rows differ. Canonical order puts a row
+    # with `source_ref` first, so of a moved indel and its unmoved twin the unmoved one is kept.
+    unique = ordered.unique(subset=[name for name in ordered.columns if name not in _POSITIONAL], keep="first", maintain_order=True)
     counts["duplicates"] += ordered.height - unique.height
     written_ref = pl.coalesce(pl.col("ref"), pl.col("source_ref"))
     conflicts = (

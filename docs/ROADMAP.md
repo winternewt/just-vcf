@@ -305,7 +305,13 @@ rejected:
 - Pre-split input (RM270 flags) passes through. Rejected: aligning those rows, which would move one
   row of a site away from the other and keep `rejoin_split` from finding it.
 - Exact duplicates are dropped; rows stating one allele with other values are all kept (charter 8).
-  Rejected: bcftools `-d`, which keeps the first.
+  Rejected: bcftools `-d`, which keeps the first. Since 2026-10-22 a duplicate is judged on what the
+  row states: the columns a move clears (`source_ref`, `ref_check`, `source_gt`, the VRS ids) are left
+  out of the comparison, so a moved indel and its unmoved twin are one row, the unmoved one kept.
+  Every other column still counts, `ids`, `filters` and `qual` included, so the upload whose 9,213
+  positions hold two records of one allele that differ in `ids` keeps both. Rejected: keying on
+  `(chrom, pos, ref, alts, gt, phased)` and the vectors alone, which would drop a row whose filters,
+  quality or ids differ and so lose what the source said.
 
 **Left in RM6:** writing gVCF blocks (after RM3); a tabix index beside the output; SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`

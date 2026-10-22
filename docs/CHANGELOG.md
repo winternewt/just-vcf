@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `normalize` judges a duplicate on what the row states: the columns a move clears (`source_ref`,
+  `ref_check`, `source_gt`, the VRS ids) no longer make two rows differ, so an indel the source wrote
+  twice, once already left-aligned, with the same genotype and evidence, is one row (the unmoved one)
+  rather than a reported conflict. Rows of one allele with other genotypes, evidence, filters or ids
+  are all kept, with the warning, as before.
+
 - A deletion written as ALT `-` (F12, about 8,080 rows in each of five PGP-HMS uploads) is now read as
   an unanchored deletion of the REF bases: the loader keeps it verbatim and counts it, `normalize`
   anchors it on the base before once REF has matched and then left-aligns it, and `write_vcf` refuses

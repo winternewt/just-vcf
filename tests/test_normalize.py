@@ -326,6 +326,33 @@ def test_exact_duplicates_drop_and_conflicts_stay(tmp_path: Path, store: Referen
     assert any(w.startswith("2 row(s) at 1 position(s) state the same allele and differ otherwise") for w in out.warnings)
 
 
+def test_a_moved_indel_and_its_unmoved_twin_are_one_row(tmp_path: Path, store: ReferenceStore) -> None:
+    # The source writes one deletion twice: already left-aligned, and at the run's end. After the move
+    # both state the same allele, genotype and evidence; only what the move clears (source_ref,
+    # ref_check, source_gt) tells them apart, and that is not a disagreement. The unmoved row is kept.
+    end_t = HOMOPOLYMER + 7
+    left = (HOMOPOLYMER - 1, at("1", HOMOPOLYMER - 1, 2), at("1", HOMOPOLYMER - 1))
+    right = (end_t - 1, at("1", end_t - 1, 2), at("1", end_t - 1))
+    records = [
+        record("1", left[0], left[1], left[2], "0/1"),
+        record("1", right[0], right[1], right[2], "0/1"),
+        # The same SNV twice with other ids: what the rows state differs, so both stay.
+        record("1", 40, at("1", 40), other(at("1", 40)), "0/1").replace("\t.\t", "\trs1\t", 1),
+        record("1", 40, at("1", 40), other(at("1", 40)), "0/1").replace("\t.\t", "\trs2\t", 1),
+    ]
+    parent, out = normalized(tmp_path, store, records)
+    calls = out.calls.collect()
+    twin = calls.filter(pl.col("pos") == left[0])
+    assert twin.height == 1
+    kept = twin.row(0, named=True)
+    source = parent.calls.filter(pl.col("pos") == left[0]).collect().row(0, named=True)
+    assert (kept["source_ref"], kept["ref_check"], kept["source_gt"]) == (source["source_ref"], "match", "0/1")
+    assert kept["gl"] == source["gl"] and kept["ad"] == source["ad"]
+    assert calls.filter(pl.col("pos") == 40).height == 2
+    assert "1 exact duplicate row(s) dropped" in out.warnings
+    assert any(w.startswith("2 row(s) at 1 position(s) state the same allele and differ otherwise") for w in out.warnings)
+
+
 def mixed_records() -> list[str]:
     end_t = HOMOPOLYMER + 7
     ref = at("1", 90)

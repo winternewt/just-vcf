@@ -479,11 +479,14 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    ALT `-` (F12) is the empty allele here: a matched row is anchored on the base before (`CT>-` at 30
    becomes `GCT>G` at 29) and then aligned like any deletion. At a contig's first base there is no
    base before, and the row stays as written, counted.
-3. **Dedup and sort.** Rows equal in every column are kept once, counted. Rows that state the same
-   allele at one position and differ in anything else are all kept, with a warning (charter 8). Then
-   canonical order (Decision 11). Because a moved row loses `source_ref`, `ref_check` and `source_gt`,
-   one indel written twice by the source, once already left-aligned and once further right, stays as
-   two rows and is reported as a conflict, not dropped as a duplicate.
+3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
+   except the ones a move clears (`source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids`,
+   `vrs_errors`), which say how the source wrote a row, not what it states. So one indel written twice
+   by the source, once already left-aligned and once further right, with the same genotype and
+   evidence, is one row, and the one kept is the row that did not move, with its source REF, check and
+   GT text. Rows that state the same allele at one position and differ in anything else (genotype,
+   phasing, the likelihoods, depths, quality, filters, ids) are all kept, with a warning (charter 8).
+   Then canonical order (Decision 11).
 
 Rows the loader flagged as one record of a pre-split site (RM270) pass through as written: run
 `rejoin_split`, then `resolve_ref`, then `normalize`. Blocks pass through unchanged.

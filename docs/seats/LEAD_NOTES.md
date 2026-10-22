@@ -37,7 +37,9 @@ status lines say what exists. Schema at 0.0.4.
   ALT come back as the unsplit file has them. Not run: a file split by bcftools itself, Hail or GATK.
 - **F8** resolved 2026-10-22 (desk #61's default): a sites-only VCF is refused with `NoSampleError`.
 - **Desk #43**: the order of work; closed unanswered 2026-10-21, so its default (the roadmap pass first) stands, as followed.
-- **Desk #57** (start RM269): worked under its default. Header survey, X/Y counts and a critic's read are
-  in RM269 (bb78932..967719f). **Desk #61** asks how much to build: facts only, plus an X-copy estimate
-  (recommended), or the full label. Its default: nothing for RM269, the lead moves on to F8.
+- **RM269**: the person answered desk #61 in chat on 2026-10-22, "269c" = option 3, the full label
+  (XX/XY/XXY/X0), which includes the facts and the X-copy estimate. Order: an RM4 slice (build from the
+  header's contig lengths, as INFERRED) → facts on the facet → X evidence (diploid-written calls only;
+  a haploid GT is the caller's assertion, its own line) → the Y region set (time-boxed to an hour; if
+  nothing citable exists for GRCh38, back to the desk) → calibration on PGP-HMS with self-reported sex.
 - **Open, not started**: RM2's next loaders, RM3, RM4, RM6, RM268 (cache eviction).

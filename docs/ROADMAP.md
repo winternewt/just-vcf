@@ -143,7 +143,7 @@ Options, not decided: sweep stale-version entries on each load; an explicit `cle
 API (and in the CLI once it exists); a size cap with least-recently-used eviction.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: open · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant

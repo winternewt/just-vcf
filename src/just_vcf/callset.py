@@ -119,7 +119,7 @@ def spread(calls: pl.LazyFrame, flank_bp: int = FLANK_BP) -> dict:
     Breadth is just-dna-lite's `_coverage_breadth`: each gap between neighbouring sites counts up to
     `2 * flank_bp`, summed (the reach), divided by the span the sites spread over per contig.
     """
-    sequence_allele = pl.col("alts").list.eval(pl.element().str.contains(r"^[A-Za-z]+$")).list.any()
+    sequence_allele = pl.col("alts").list.eval(pl.element().str.contains(r"^[ACGTNacgtn]+$")).list.any()
     primary = (
         calls.filter(pl.col("chrom").is_in(_PRIMARY) & ((pl.col("alts").list.len() == 0) | sequence_allele))
         .select("chrom", "pos")
@@ -174,8 +174,12 @@ copy-number window, the spanning deletion `*` (the variant is another record's).
 
 
 def variant_class_expr(ref: pl.Expr, alt: pl.Expr) -> pl.Expr:
-    """The `VariantClass` of one ALT against its REF, as a string, or null for no variant."""
-    sequence = alt.str.contains(r"^[A-Za-z]+$") & ref.str.contains(r"^[A-Za-z]+$")
+    """The `VariantClass` of one ALT against its REF, as a string, or null for no variant.
+
+    A sequence ALT is VCF's: bases `ACGTN` only. An ALT of other letters is no VCF allele (Veritas's
+    `CNV`, F15) and has no class: counting it as an indel would claim content the file does not hold.
+    """
+    sequence = alt.str.contains(r"^[ACGTNacgtn]+$") & ref.str.contains(r"^[A-Za-z]+$")
     symbolic = alt.str.starts_with("<") | alt.str.contains(r"[\[\]]") | alt.str.contains(r"^\.[A-Za-z]+$|^[A-Za-z]+\.$")
     return (
         pl.when(alt.is_in(list(NOT_A_VARIANT)) | alt.is_null())

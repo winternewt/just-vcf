@@ -107,6 +107,41 @@ def test_rows_that_do_not_fit_are_dropped_and_counted(tmp_path: Path) -> None:
     assert any(w.startswith("2 genotype(s) not readable") for w in loaded.warnings)
 
 
+def test_a_doubled_tab_after_the_id_is_read_past_and_counted(tmp_path: Path) -> None:
+    """F2: 2012–2014 23andMe exports write some rows with an empty field between id and chromosome.
+    Only that place is read past; an empty field elsewhere still drops the row."""
+    body = (
+        "rs1\t1\t100\tAG\n"
+        "rs15842\t\t1\t948921\tCT\n"
+        "rs7533\t\tX\t1479333\tA\n"
+        "rs548049170\t1\t69869\t\tTT\n"
+        "rs9\t\t\t1\t900\tCC\n"
+        "rs10\n"
+    )
+    loaded = _load_text(tmp_path, PREAMBLE_23 + body)
+    calls = loaded.calls.collect()
+    got = {r["ids"][0]: (r["chrom"], r["pos"], r["source_gt"], r["gt_alleles"]) for r in calls.iter_rows(named=True)}
+    assert got == {
+        "rs1": ("1", 100, "AG", ["A", "G"]),
+        "rs15842": ("1", 948921, "CT", ["C", "T"]),
+        "rs7533": ("X", 1479333, "A", ["A"]),
+    }
+    assert any(w.startswith("2 row(s) with an empty field between the id and the chromosome") for w in loaded.warnings)
+    assert any(w.startswith("3 row(s) without exactly 4 fields") and "1, 5, 6" in w for w in loaded.warnings)
+
+
+def test_an_appended_export_in_another_layout_is_named_not_read(tmp_path: Path) -> None:
+    """F3: a headerless 23andMe-shaped export followed by an AncestryDNA-shaped one (five fields)."""
+    first = "".join(f"rs{i}\t1\t{100 + i}\tAG\n" for i in range(1, 4))
+    second = "".join(f"rs{i}\t1\t{100 + i}\tA\tG\n" for i in range(1, 1001))
+    loaded = _load_text(tmp_path, first + second, "two.txt")
+    assert loaded.facets.collect()["format_id"].to_list() == ["rsid_table_headerless"]
+    assert loaded.calls.select(pl.len()).collect().item() == 3
+    assert any(w.startswith("the last 1000 data row(s) all have 5 fields") and "after the first 3 data row(s)" in w for w in loaded.warnings)
+    short = _load_text(tmp_path, first + second[: second.index("rs3\t")], "short.txt")
+    assert not any(w.startswith("the last") for w in short.warnings), "a few odd rows are not an export"
+
+
 def test_array_contig_codes_are_canonical_and_mapped(tmp_path: Path) -> None:
     body = "rs1\t23\t100\tA\nrs2\t24\t100\tC\nrs3\t25\t100\tAG\nrs4\t26\t100\tT\nrs5\tchrM\t50\tT\n"
     loaded = _load_text(tmp_path, "# rsid\tchromosome\tposition\tgenotype\n" + body)

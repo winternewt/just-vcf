@@ -4,6 +4,27 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A 23andMe-layout table that ends in 1,000 or more rows of one other width gets a warning that it
+  looks like a second export appended, which is not read (F3, still open).
+
+- A Final Report refused for want of positions or plus-strand alleles now names the manifest that
+  would supply them, as its `Content` line states it (`HumanOmni2.5-8v1_A.bpm`); `chip` gains
+  `final_report_content` for that line.
+
+- A VCF re-saved by a spreadsheet (quoted fields with doubled quotes, tab-padded meta lines, bare-CR
+  line ends) loads under `vcf`: the re-save is undone with `csv` and polars-bio reads a rewritten copy,
+  with a warning (F7, now resolved). `vcf_samples` reads such a file too.
+
+- A VCF whose column line is written `##CHROM` (two Veritas SV/CNV uploads, F7) loads: that line is
+  read as the column line where no `#CHROM` exists, and `###` meta lines are kept without being read as
+  declarations. An ALT of letters outside `ACGTN` (`CNV`) is no VCF allele: it gets no variant class
+  and no callset site, and is counted in a warning (F15). Values change for files with such ALTs:
+  `variant_classes` no longer counts them as indels or SNVs.
+
+- A 23andMe-layout row with a doubled tab right after the id (`rs15842⇥⇥1⇥948921⇥CT`) is read without
+  the empty field and counted in a warning, instead of being dropped (F2). Two 2012–2014 PGP-HMS exports
+  gain 35 and 14 rows; an empty field anywhere else still drops the row.
+
 - Schema 0.0.10: `facets.chip`, `chip_basis` (array chip, stated or inferred) and `strand_check` (set by
   `resolve_ref`; a `mixed` facet withholds the alleles that read differently on the two strands).
 

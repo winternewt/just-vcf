@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 import polars as pl
 
+from just_vcf.chip import final_report_content, header_lines
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import Coordinates, FormatSpec, HeaderMode
 from just_vcf.loaders.text import (
@@ -122,7 +123,9 @@ def read_table(data: bytes, spec: FormatSpec, sample: str | None = None) -> Tabl
     columns = _columns(names, spec)
     missing = [name for name in _REQUIRED[spec.id] if name not in columns]
     if missing:
-        raise TableLayoutError(f"{spec.id}: no column for {', '.join(missing)}{_strand_hint(spec, columns)}")
+        raise TableLayoutError(
+            f"{spec.id}: no column for {', '.join(missing)}{_strand_hint(spec, columns)}{_manifest_hint(data, spec, missing)}"
+        )
     if names is not None:
         used = {*_REQUIRED[spec.id], *_CONSUMED.get(spec.id, ())}
         table.dropped_columns = [name for name, canonical in zip(names, _canonical_names(names, spec)) if canonical not in used]
@@ -283,10 +286,28 @@ def _strand_hint(spec: FormatSpec, columns: dict[str, int]) -> str:
         named = sorted(name for name in columns if name.startswith(("allele1_", "allele2_")))
         if named:
             return (
-                f"; the alleles are given only as {', '.join(named)}, which are not the genomic plus strand, "
-                "and turning them into plus-strand letters needs the chip manifest"
+                f"; the alleles are given only as {', '.join(named)}, which are not the genomic plus strand"
             )
     return ""
+
+
+def _manifest_hint(data: bytes, spec: FormatSpec, missing: list[str]) -> str:
+    """For a Final Report: which manifest would supply what is missing, as its `Content` line names it.
+
+    A manifest's rows hold each probe's chromosome, position and strand; nothing in the report stands
+    in for them (a HumanOmni2.5 report on PGP-HMS has SNP names and Forward/Design alleles only)."""
+    if spec.id != "illumina_final_report":
+        return ""
+    needs = " and ".join(
+        part for part, names in (("positions", ("chromosome", "position")), ("plus-strand alleles", ("genotype_plus",)))
+        if any(name in missing for name in names)
+    )
+    if not needs:
+        return ""
+    manifest = final_report_content(header_lines(data))
+    if manifest is None:
+        return f"; the {needs} would come from the chip's manifest, which the header does not name"
+    return f"; the {needs} would come from the chip's manifest, {manifest} by the header's Content line"
 
 
 def _cut_trailer(rows: pl.DataFrame, position: int) -> pl.DataFrame:

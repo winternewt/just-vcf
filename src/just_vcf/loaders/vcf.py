@@ -16,11 +16,14 @@ here from VCF 4.5's END rule, not taken from polars-bio, whose `end` is one shor
 haplotype's `phased` entry is withheld rather than reported from the rewritten text.
 """
 
+import csv
 import hashlib
+import io
 import logging
 import re
 import shutil
 import struct
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -100,6 +103,10 @@ DASH_DELETION = "-"
 VCF has no such allele. The loader keeps it verbatim, since anchoring it needs the reference base
 before POS; `normalize` anchors it, and `write_vcf` refuses it until then."""
 
+_VCF_ALLELE_OR_DASH = r"^([ACGTNacgtn]+|\*|<[^<>]+>|\.[ACGTNacgtn]+|[ACGTNacgtn]+\.|-)$|\[|\]"
+"""An ALT VCF 4.5 allows (bases, `*`, a symbolic allele, a breakend), or the dash deletion F12 counts
+apart. Anything else is counted as no allele (F15)."""
+
 CGI_CNV_WINDOW = "<CGA_CNVWIN>"
 """Complete Genomics' 2 kb copy-number window: coverage, not a genotype. Left out of the frames."""
 
@@ -115,6 +122,10 @@ _REGISTERED: set[str] = set()
 REWRITE_VERSION = 7
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version."""
+
+HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
+"""The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
+came before it; the copy polars-bio reads writes it with one."""
 
 _HEADER_READ_CAP = 64 << 20
 _DATA_LINES_CHECKED = 1000
@@ -181,6 +192,12 @@ class Header:
     contigs: list[dict] = field(default_factory=list)
     sample_meta: list[str] = field(default_factory=list)
     format_first: bool = True
+    hashed_column_line: bool = False
+    resaved: bool = False
+    """The file was re-saved by a spreadsheet (F7): read through `undo_resave`, so polars-bio needs the
+    rewritten copy. Set by the caller that chose to read it so."""
+    """The column line was written `##CHROM` (F7: Veritas SV and CNV uploads), so polars-bio cannot
+    read the file as it is."""
     split_markers: dict[str, str] = field(default_factory=dict)
     alt_ids: set[str] = field(default_factory=set)
     """Symbolic alleles the header declares with `##ALT` (`CGA_NOCALL`, `NON_REF`, `DEL`…)."""
@@ -198,10 +215,13 @@ def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:
     columns: list[str] = []
     data: list[bytes] = []
     read = 0
+    hashed: str | None = None
     for raw in handle:
         read += len(raw)
         line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
         if line.startswith("##"):
+            if hashed is None and line.startswith(HASHED_COLUMN_LINE):
+                hashed = line
             meta.append(line)
         elif line.startswith("#"):
             columns = line[1:].split("\t")
@@ -211,9 +231,72 @@ def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:
                 break
         if read > _HEADER_READ_CAP and not columns:
             raise ValueError("no #CHROM line in the first 64 MiB")
+    from_hashed = not columns and hashed is not None
+    if from_hashed:
+        # F7: the column line with one `#` too many, and no real one. It names VCF's fixed columns
+        # exactly, so it is read as the column line and the rows after it as the records.
+        columns = hashed[2:].split("\t")
+        meta.remove(hashed)
     if not columns:
         raise ValueError("no #CHROM line")
-    return _parse_header(meta, columns), data
+    header = _parse_header(meta, columns)
+    header.hashed_column_line = from_hashed
+    return header, data
+
+
+RESAVE_HEAD_BYTES = 64 << 10
+"""How much of a payload `is_resaved` looks at."""
+
+_QUOTED_META = re.compile(rb'(\A|[\r\n])"##')
+
+
+def is_resaved(head: bytes) -> bool:
+    """Whether a VCF payload's head shows a spreadsheet's re-save (F7): a meta line wrapped in quotes
+    (`"##FILTER=<…""Low quality"">"`), or lines ended by a bare CR with no LF at all."""
+    return bool(_QUOTED_META.search(head)) or (b"\r" in head and b"\n" not in head)
+
+
+class _Lines(io.RawIOBase):
+    """A readable byte stream over an iterator of byte chunks."""
+
+    def __init__(self, chunks: Iterator[bytes]) -> None:
+        self._chunks = chunks
+        self._left = b""
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        while not self._left:
+            chunk = next(self._chunks, None)
+            if chunk is None:
+                return 0
+            self._left = chunk
+        size = min(len(buffer), len(self._left))
+        buffer[:size] = self._left[:size]
+        self._left = self._left[size:]
+        return size
+
+
+def undo_resave(handle: BinaryIO) -> BinaryIO:
+    """A spreadsheet-re-saved VCF payload as the tab-separated text it was saved from (F7).
+
+    The re-save is CSV quoting applied to a tab file: a field holding a comma or a quote is wrapped in
+    quotes with its own quotes doubled (an INFO with `EFF=…,…`, a sample field whose AD is `12,0`), meta
+    lines are padded with empty fields to the widest row, and lines may end in a bare CR. `csv` undoes the
+    quoting, universal newlines the CRs, and trailing empty fields are dropped from `##` lines only. What
+    the spreadsheet did to a value's text (a QUAL written `6980.9` for `6980.90`) cannot be undone or seen.
+    """
+    text = io.TextIOWrapper(handle, encoding="utf-8", errors="replace", newline=None)
+
+    def lines() -> Iterator[bytes]:
+        for row in csv.reader(text, delimiter="\t", quotechar='"'):
+            if row and row[0].startswith("##"):
+                while len(row) > 1 and row[-1] == "":
+                    row.pop()
+            yield ("\t".join(row) + "\n").encode()
+
+    return io.BufferedReader(_Lines(lines()), 1 << 20)
 
 
 def read_bcf_header(handle: BinaryIO) -> tuple[Header, bytes | None]:
@@ -420,7 +503,8 @@ def readable_path(
     `cache` is the entry (`vcf/<key>`); it is written, or reused, under its lock, with `origin` in its
     manifest (`just_vcf.cache.writing`).
     """
-    if layers in ((), ("gzip",), ("bgzf",)) and header.format_first and not missing and not structural_only:
+    as_is = header.format_first and not header.hashed_column_line and not header.resaved and not missing and not structural_only
+    if layers in ((), ("gzip",), ("bgzf",)) and as_is:
         return path
     with cache_index.writing(cache, cache_index.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION}, origin):
         return _write_copy(opener, header, missing, cache / "structural" if structural_only else cache, structural_only)
@@ -657,6 +741,7 @@ def scan_stats(records: pl.LazyFrame) -> dict:
         _is_block_record(alts).any().alias("any_block"),
         (alts.list.len().eq(1) & alts.list.first().eq(CGI_CNV_WINDOW)).sum().alias("cnv_windows"),
         alts.list.contains(DASH_DELETION).sum().alias("dash_alts"),
+        alts.list.eval(~pl.element().str.contains(_VCF_ALLELE_OR_DASH)).list.any().sum().alias("not_allele_alts"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).is_not_null().sum().alias("gp_rows"),
         (pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.sum() - 1.0).abs().gt(0.02).sum().alias("gp_off_one"),
         pl.col("chrom").unique().implode().alias("chroms"),
@@ -847,6 +932,11 @@ def to_rows(
             f"{stats['dash_alts']} record(s) write a deletion as ALT `-`, which VCF has no allele for (F12): kept as "
             "written, read as a deletion of the REF bases with no anchor base; normalize anchors it on the base "
             "before, and write_vcf refuses it until then"
+        )
+    if stats.get("not_allele_alts"):
+        warnings.append(
+            f"{stats['not_allele_alts']} record(s) carry an ALT that is no VCF allele (neither bases ACGTN, "
+            "a symbolic <…> allele, a breakend nor *), F15: kept as written, with no variant class"
         )
     v44 = (header.version_tuple or (0, 0)) >= (4, 4)
     # The file's REF goes to `source_ref` only. `ref` is read from the assembly sequence or stays null

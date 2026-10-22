@@ -13,14 +13,18 @@ The standard library cannot read it, so `sniff` reports `unreadable` and names t
 needs a third-party inflater (the `zipfile-deflate64` package, or `7z` as a subprocess) behind an extra.
 Not fixed: one file, and the same person's VCF may exist unzipped elsewhere.
 
-## F2 — 23andMe rows with a doubled tab are dropped
+**Corrected 2026-10-22.** The member is not a Veritas VCF: read through Info-ZIP `unzip -p` (built
+with Deflate64), its header is PGP's own freeBayes+VarScan2 `vcf-merge` on hg19, 2.93 GB unzipped
+from 678 MB, a format the loader already reads (`vcf_freebayes_varscan2`). The person has nothing
+else on disk but a 23andMe export, so this is their only sequencing callset here. `sniff` already
+answers right (`unreadable`, naming the method). Reading it needs a Deflate64 inflater, and each
+option is a dependency decision, which is the lead's (§5):
 
-Severity: low · Found 2026-09-30 by loading the 503 PGP-HMS 23andMe-layout files.
-
-Two 2012–2014 23andMe exports carry rows with an empty field between the rsid and the chromosome
-(`rs15842⇥⇥1⇥948921⇥CT`): 14 and 35 rows out of about 960,000. The loader drops them and says so in
-`Loaded.warnings`. Not fixed: accepting "exactly one empty field after the id" is a guess about what the
-vendor meant, and the rows are few. Revisit if another vendor shows the same shape.
+- `zipfile-deflate64` or `inflate64` (a C extension, the one py7zr uses) behind a new extra, opened
+  where `sniff` and `open_payload` hit method 9; a new dependency, licence to check;
+- `unzip` or `7z` as a subprocess when one is on `PATH`, streaming the member: no Python dependency,
+  but a system one, and a subprocess in a library;
+- leave it: one file in 1,851.
 
 ## F3 — A headerless file holding two exports loses the second one
 
@@ -31,6 +35,24 @@ One upload (`rsid_table_headerless`) is a 23andMe-shaped export followed by an A
 a warning, as FORMATS.md predicted. Not fixed: splitting one file into two facets needs a second format
 per file, which the loader does not have.
 
+**Measured and surfaced 2026-10-22.** Both halves are one person: of the 164,378 ids both halves call,
+164,275 have the same genotype (99.94%), and 166,047 of 166,528 shared ids sit at the same position.
+The first line is a stray 5-field row (an empty field between position and genotype, not F2's place),
+then 643,487 four-field rows, then 677,436 five-field rows to the end (chromosomes 1–26, `0` for no
+call). The load now says so: a file that ends in at least 1,000 rows of one other width gets a warning
+that it looks like a second export appended, not read. Still not loaded, and why each repair is wrong:
+
+- *Read the 5-field rows as a second facet in this loader:* the library cannot load that half even as
+  its own file (`ancestrydna` needs its header line), so it needs a new headerless two-allele format id
+  and a part option in the facet id, for one file whose halves state no vendor. Calling the second half
+  AncestryDNA would be the shape standing in for a vendor statement.
+- *Split the file into two inputs and load each:* that is routing around the loader (CLAUDE.md §7).
+
+What would close it: a headerless two-allele-column layout in `formats.rsid_tables`, and `load`
+returning one facet per layout block of a file (the shape `Loaded` already has for caller splits).
+Code of the warning: `loaders/rsid_table.py` `_appended_export`; test
+`test_an_appended_export_in_another_layout_is_named_not_read`.
+
 ## F4 — Living DNA indel genotypes cannot be split
 
 Severity: medium · Found 2026-09-30, same sweep.
@@ -39,14 +61,13 @@ Living DNA writes an indel's two allele sequences back to back (`CCA`, and up to
 file). 83 rows in the one real file keep the text in `source_gt` with `gt_alleles` null. Splitting needs
 the site's alleles, from a chip manifest or from REF once RM3 reads the sequence.
 
-## F7 — Two VCF shapes `sniff` accepts but the loader cannot read
-
-Severity: low · Found 2026-09-30, same sweep.
-
-A VCF re-saved by a spreadsheet (tab-padded, quoted `"##` lines) and Veritas SV/CNV VCFs whose every
-header line carries an extra `#` (`###contig`, `##CHROM`) are recognised as `vcf` but fail with "no
-#CHROM line". The Veritas shape could be read by accepting `##CHROM` as the column line; the spreadsheet
-one needs its own format id, as `23andme_csv` has. Not fixed: three files.
-
-A third failure in the sweep is a corrupt upload (`gzip -t` fails too), and its error is correct.
-
+**Anatomy, 2026-10-22.** Of the 83 texts (3 to 52 letters), 59 are a sequence written twice
+(`GTTGTT`), so homozygous if split in half, and 24 are not. If both alleles share their first base,
+as VCF's anchored alleles do, 58 have exactly one split (`CCA` → `C`/`CA`, `GCCTG` → `GCCT`/`G`) and 25
+have several (`AAAAGAAAAG` splits four ways). Splitting at the one anchored point was rejected: the
+shared anchor is VCF's convention, Living DNA states no encoding beyond "both allele sequences
+concatenated", and a quarter of the rows stay ambiguous even under it. The honest path is
+`resolve_ref`: read the sequence at `pos` and keep only the splits in which one allele is the
+reference over its own span. Even that leaves a repeat ambiguous (`C`/`CA` where the base after is
+`A` fits an insertion and a deletion alike), so the split may be known while REF and ALT are not.
+Not built: it needs the reference, which the loader does not read.

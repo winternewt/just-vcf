@@ -408,7 +408,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
-| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (or `-`, F12), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class. `[]` = a VCF with no variant allele; null = not counted (a genotype table). just-vcf's own shape |
+| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (or `-`, F12), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a VCF with no variant allele; null = not counted (a genotype table). just-vcf's own shape |
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | null unless stated |
@@ -454,7 +454,7 @@ all 22 autosomes with at most 60% breadth; `panel` 50–5,000 sites reaching at 
 extract of a larger callset reads as `panel`, which is what its absences then mean. `imputed` when the
 header names an imputation tool or declares an imputation INFO key. Every sequencing class needs a
 read-evidence FORMAT key (AD, DP, GQ, PL, GL, MIN_DP) in the header. A site is a row with a sequence
-ALT or none; rows whose ALTs are all symbolic do not count, so a genome-wide SV callset is not `wgs`.
+ALT (bases `ACGTN`) or none; rows whose ALTs are all symbolic do not count, so a genome-wide SV callset is not `wgs`.
 Anything between the bands is null. A gVCF is not a callset type: its blocks set
 `absence_means = blocks`, whatever its scope. Otherwise `wgs` gives `weak_reference` and every other
 type, null included, `unknown`. A lifted facet is `unknown` whatever its type ("Lifting"). Measured on PGP-HMS uploads: four Genos exomes at 44,020–44,796 sites
@@ -963,6 +963,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **Rule change, still 0.0.10** (2026-10-22, F15): a sequence ALT is `ACGTN` bases only, in the
+  variant-class rule (`variant_classes`) and in the callset's site count (RM4). An ALT of other letters
+  (`CNV`, an ambiguity code) gets no class and is no site, counted in a load warning. Values change on
+  files with such ALTs; no column changed, so no version bump.
 
 - **Three facet columns, version bump pending** (2026-10-22, RM4's chip detection and F13):
   `facets.chip`, `facets.chip_basis` and `facets.strand_check`, all nullable and additive, which by

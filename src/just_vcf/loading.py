@@ -11,6 +11,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import BinaryIO
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
@@ -406,9 +407,24 @@ def vcf_samples(source: Path | str | Sniffed) -> list[str]:
     sniffed = source if isinstance(source, Sniffed) else sniff(Path(source))
     if not sniffed or sniffed.format not in vcf.FORMATS:
         raise UnsupportedFormatError(sniffed)
+    if sniffed.format == vcf.BCF:
+        with open_payload(sniffed) as handle:
+            return vcf.read_bcf_header(handle)[0].samples
+    with _vcf_text(sniffed, _resaved(sniffed)) as handle:
+        return vcf.read_header(handle)[0].samples
+
+
+def _resaved(sniffed: Sniffed) -> bool:
+    """Whether a text VCF was re-saved by a spreadsheet (F7), from the head of its payload."""
     with open_payload(sniffed) as handle:
-        header = vcf.read_bcf_header(handle)[0] if sniffed.format == vcf.BCF else vcf.read_header(handle)[0]
-    return header.samples
+        return vcf.is_resaved(handle.read(vcf.RESAVE_HEAD_BYTES))
+
+
+@contextmanager
+def _vcf_text(sniffed: Sniffed, resaved: bool) -> Iterator[BinaryIO]:
+    """A text VCF's payload, with a spreadsheet's re-save undone where `resaved` (F7)."""
+    with open_payload(sniffed) as handle:
+        yield vcf.undo_resave(handle) if resaved else handle
 
 
 def table_samples(source: Path | str | Sniffed) -> list[str]:
@@ -425,13 +441,16 @@ def table_samples(source: Path | str | Sniffed) -> list[str]:
 
 def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     binary = sniffed.format == vcf.BCF
-    with open_payload(sniffed) as handle:
-        if binary:
+    resaved = not binary and _resaved(sniffed)
+    if binary:
+        with open_payload(sniffed) as handle:
             header, first_record = vcf.read_bcf_header(handle)
-            data: list[bytes] = []
-        else:
+        data: list[bytes] = []
+    else:
+        with _vcf_text(sniffed, resaved) as handle:
             header, data = vcf.read_header(handle)
-            first_record = data[0] if data else None
+        header.resaved = resaved
+        first_record = data[0] if data else None
     warnings: list[str] = []
     if sniffed.format == vcf.FREEBAYES_VARSCAN2:
         # One person, two callers (SCHEMA Decision 8): one facet per caller, whatever the columns.
@@ -465,6 +484,19 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         )
     elif not header.format_first:
         warnings.append("##fileformat was not the first line; the header was reordered for reading")
+    if header.resaved:
+        warnings.append(
+            "the file was re-saved by a spreadsheet (quoted fields, padded meta lines or bare-CR line ends): read "
+            "with the quoting undone; a value whose text the spreadsheet rewrote (a number's trailing zeros) "
+            "cannot be told"
+        )
+    if header.hashed_column_line:
+        hashed_meta = sum(1 for line in header.meta if line.startswith("###"))
+        warnings.append(
+            "the column line is written ##CHROM (one # too many); read as the column line. "
+            f"{hashed_meta} meta line(s) starting ### are meta lines with a key starting #, kept as written "
+            "and not read as declarations (no ##contig or ##FORMAT is taken from them)"
+        )
     source_sha256 = file_sha256(sniffed.path)
     copy = cache_dir() / "vcf" / hashlib.sha256(f"{source_sha256}!{sniffed.member}!{vcf.REWRITE_VERSION}".encode()).hexdigest()[:32]
     origin = cache.Origin(source_sha256=source_sha256, source_path=str(sniffed.path.resolve()), member=sniffed.member)
@@ -596,7 +628,7 @@ def _read_text_records(
 ) -> tuple[pl.LazyFrame, dict]:
     """A text VCF's records for one part and their stats, read once more from a structural copy if
     polars-bio refuses the first read (P7, P8). The retry is reported in `warnings`."""
-    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, copy, origin)
+    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: _vcf_text(sniffed, header.resaved), header, missing, copy, origin)
     try:
         records = part.select(vcf.read_records(path, header, part.sample, data[0] if data else None, extra_info=part.info))
         return records, vcf.scan_stats(records)
@@ -605,7 +637,7 @@ def _read_text_records(
             f"polars-bio refused the file ({err}); read again with a header of only the carried INFO and "
             "FORMAT keys and the FILTER, ALT and contig lines"
         )
-    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), header, missing, copy, origin, structural_only=True)
+    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: _vcf_text(sniffed, header.resaved), header, missing, copy, origin, structural_only=True)
     first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
     records = part.select(vcf.read_records(path, header, part.sample, first, extra_info=part.info))
     stats = vcf.scan_stats(records)

@@ -7,7 +7,7 @@ genotype text verbatim in `source_gt`, one entry per written allele in `gt_allel
 because an array export writes none and REF only ever comes from the assembly sequence (charter 10).
 
 Rows that do not fit the layout are dropped and counted, never guessed at: a row with the wrong
-number of fields, a position that is not a number, a genotype with letters outside the encoding. The
+number of fields (except one whose only extra field is an empty one right after the id, F2), a position that is not a number, a genotype with letters outside the encoding. The
 counts come back as warnings, one per reason.
 """
 
@@ -61,6 +61,22 @@ def read_calls(data: bytes, spec: FormatSpec) -> tuple[pl.DataFrame, list[str]]:
         .filter(~pl.col("line").str.contains(_COMMENT))
         .with_columns(pl.col("line").str.split(delimiter).alias("fields"))
     )
+    # F2: a doubled delimiter right after the id (`rs15842⇥⇥1⇥948921⇥CT`). Only that place: every such
+    # row in the PGP-HMS exports has it there, and its id sits at the same chromosome and position in
+    # other exports. An empty field anywhere else is not read past.
+    doubled = (pl.col("fields").list.len() == len(_FIELDS) + 1) & (pl.col("fields").list.get(1, null_on_oob=True) == "")
+    collapsed = rows.filter(doubled).height
+    if collapsed:
+        warnings.append(
+            f"{collapsed} row(s) with an empty field between the id and the chromosome (a doubled delimiter) "
+            "read without it"
+        )
+        rows = rows.with_columns(
+            pl.when(doubled)
+            .then(pl.concat_list(pl.col("fields").list.slice(0, 1), pl.col("fields").list.slice(2)))
+            .otherwise(pl.col("fields"))
+            .alias("fields")
+        )
     wrong_width = rows.filter(pl.col("fields").list.len() != len(_FIELDS))
     if wrong_width.height:
         widths = sorted(set(wrong_width["fields"].list.len().to_list()))
@@ -68,6 +84,8 @@ def read_calls(data: bytes, spec: FormatSpec) -> tuple[pl.DataFrame, list[str]]:
             f"{wrong_width.height} row(s) without exactly {len(_FIELDS)} fields dropped "
             f"(widths seen: {', '.join(map(str, widths))})"
         )
+        if tail := _appended_export(rows):
+            warnings.append(tail)
     rows = rows.filter(pl.col("fields").list.len() == len(_FIELDS)).select(
         pl.col("fields").list.get(i).str.strip_chars().alias(name) for i, name in enumerate(_FIELDS)
     )
@@ -97,6 +115,29 @@ def read_calls(data: bytes, spec: FormatSpec) -> tuple[pl.DataFrame, list[str]]:
         pl.lit(EvidenceBasis.ASSAY.value).alias("evidence_basis"),
     )
     return calls, warnings
+
+
+APPENDED_EXPORT_ROWS = 1_000
+"""Rows of another width the file must end with before `read_calls` says it looks like a second export."""
+
+
+def _appended_export(rows: pl.DataFrame) -> str | None:
+    """A warning when the file ends in a run of rows of one other width (F3: a 23andMe-shaped export
+    followed by an AncestryDNA-shaped one), or None. Such a run is not read: this loader has one layout
+    per file, and a second facet from it needs a format id the file does not carry."""
+    widths = rows["fields"].list.len()
+    last = widths[-1]
+    if last == len(_FIELDS):
+        return None
+    differs = (widths != last).arg_true()
+    start = int(differs[-1]) + 1 if differs.len() else 0
+    run = rows.height - start
+    if run < APPENDED_EXPORT_ROWS or start == 0:
+        return None
+    return (
+        f"the last {run} data row(s) all have {last} fields: the file looks like a second export in another "
+        f"layout appended after the first {start} data row(s); it is not read (one layout per file, F3)"
+    )
 
 
 def to_calls_frame(calls: pl.DataFrame, facet_id: str) -> pl.LazyFrame:

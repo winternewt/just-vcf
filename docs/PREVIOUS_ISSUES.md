@@ -3,6 +3,75 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F7 — Two VCF shapes `sniff` accepts but the loader cannot read
+
+Severity: low · Found 2026-09-30, same sweep.
+
+A VCF re-saved by a spreadsheet (tab-padded, quoted `"##` lines) and Veritas SV/CNV VCFs whose every
+header line carries an extra `#` (`###contig`, `##CHROM`) are recognised as `vcf` but fail with "no
+#CHROM line". The Veritas shape could be read by accepting `##CHROM` as the column line; the spreadsheet
+one needs its own format id, as `23andme_csv` has. Not fixed: three files.
+
+**Veritas shape fixed 2026-10-22.** Not every header line has the extra `#`: `##fileformat` and `##ALT`
+are written right, `###FORMAT`, `###contig` and `###reference` carry a third, and the column line is
+`##CHROM`. Where no `#CHROM` line exists, a meta line that is VCF's column line with one `#` too many
+is now the column line, and the file is read through a rewritten copy; the `###` lines are kept as
+the meta lines VCF says they are (a key starting with `#`), so no contig and no FORMAT is declared from
+them, and GT and END are declared by the loader as for any undeclared key. Both files load (5,614 SV
+calls, all `0/1`; 2,632 CNV rows, all `0/1`, whose ALT `CNV` is F15). Code: `loaders/vcf.py`
+`read_header`, `HASHED_COLUMN_LINE`; test `test_a_column_line_written_with_two_hashes_is_read`.
+
+
+**Spreadsheet shape fixed 2026-10-22; F7 resolved.** The re-save is CSV quoting applied to a tab file:
+a field holding a comma or a quote is wrapped in quotes with its quotes doubled (115,123 of 115,220
+rows, their INFO holding SnpEff's `EFF=…,…` or their sample field an AD of `12,0`; the 97 unquoted
+rows are `./.`), meta lines are padded with tabs to ten fields, and lines end in a bare CR, which is
+why `read_header` found no `#CHROM` line in 64 MiB. Undoing that is exact, so the rejected option was
+the separate format id: the delimiter did not change, as it did for `23andme_csv`, and the quoting
+and CRs are a container's mangling, like CRLF, which `sniff` already reads through. The loader looks
+at the payload's first 64 KiB (a line starting `"##`, or CRs with no LF); a re-saved file is read
+through `csv` with universal newlines, trailing empty fields dropped from `##` lines, and polars-bio
+reads the rewritten copy; a warning says so, and that a number whose text the spreadsheet rewrote
+(GATK's `6980.90` as `6980.9`) cannot be told. The upload loads all 115,220 rows (a GATK
+UnifiedGenotyper exome, `wes`, GRCh37 from its 25 contigs), its genotype tally equal to the raw
+text's. Code: `loaders/vcf.py` `is_resaved`, `undo_resave`; `loading.py` `_vcf_text`; test
+`test_a_vcf_resaved_by_a_spreadsheet_loads_as_the_text_it_was_saved_from`.
+
+The third failure in the sweep, a corrupt upload (`gzip -t` fails too), keeps its correct error.
+
+## F15 — An ALT that is no VCF allele counted as an indel
+
+Severity: low · Found 2026-10-22 loading the Veritas CNV upload F7's fix made readable.
+
+The file writes every ALT as the letters `CNV`, without angle brackets. The class rule took any run of
+letters for a sequence allele, so the facet's `variant_classes` said 2,632 indels and the callset
+inference counted the rows as small-variant sites. VCF allows only `ACGTN` in a sequence allele.
+
+Resolved 2026-10-22: a sequence ALT is `ACGTN` bases only, in `variant_class_expr` and in the
+callset's site count, so `CNV` (or an ambiguity code such as `R`) has no class and is no site; the
+loader keeps it verbatim and counts the records in one warning. Code: `just_vcf/callset.py`
+`variant_class_expr` and `spread`, `loaders/vcf.py` `scan_stats`; test
+`test_an_alt_that_is_no_vcf_allele_has_no_variant_class`.
+
+## F2 — 23andMe rows with a doubled tab are dropped
+
+Severity: low · Found 2026-09-30 by loading the 503 PGP-HMS 23andMe-layout files.
+
+Two 2012–2014 23andMe exports carry rows with an empty field between the rsid and the chromosome
+(`rs15842⇥⇥1⇥948921⇥CT`): 14 and 35 rows out of about 960,000. The loader drops them and says so in
+`Loaded.warnings`. Not fixed: accepting "exactly one empty field after the id" is a guess about what the
+vendor meant, and the rows are few. Revisit if another vendor shows the same shape.
+
+Resolved 2026-10-22. The rows were checked rather than the vendor's intent guessed: in both exports
+every such row (49 distinct ids, all rsids of four or five digits) has its one empty field right after
+the id, and each of the 49 sits at the same chromosome and position in other PGP-HMS 23andMe exports
+(the first 120 checked), with none placed elsewhere. It is not tab-stop alignment: most ids of the
+same length are written with one tab. So a row of exactly five fields whose second field is empty is
+read without that field, and counted in its own warning line; an empty field anywhere else still drops
+the row (the stray first row of the F3 file, empty between position and genotype, stays dropped). Both
+exports now load 960,613 rows, the same count. Code: `just_vcf/loaders/rsid_table.py` `read_calls`;
+test `test_a_doubled_tab_after_the_id_is_read_past_and_counted`.
+
 ## F12 — Some VCF uploads write a deletion as ALT `-`
 
 Severity: low · Found 2026-10-22 running `normalize` against `bcftools norm` on PGP-HMS uploads (RM6).

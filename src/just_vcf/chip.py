@@ -93,6 +93,17 @@ class ChipInference(BaseModel):
         return self.chip is not None
 
 
+def final_report_content(header: list[str]) -> str | None:
+    """The manifest a Final Report's `Content` line names (`HumanOmni2.5-8v1_A.bpm`), as written."""
+    for line in header:
+        line = line.rstrip("\r\n")
+        if line.startswith("[Data]"):
+            break
+        if found := _CONTENT.match(line):
+            return found.group(1)
+    return None
+
+
 def stated_chip(format_id: str, header: list[str]) -> ChipInference | None:
     """The chip the header names, or None when it names none. `header` is the file's leading lines."""
     for line in header:

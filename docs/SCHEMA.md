@@ -262,7 +262,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
 | `sample_meta` | the file's `##SAMPLE` and `##PEDIGREE` lines for this sample, verbatim. Pedigree becomes GA4GH Pedigree later (charter) |
-| `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9) |
+| `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9). For a delimited table, the file's own column names that no frame column carries (a Final Report's `GenCall Score`) |
 | `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.

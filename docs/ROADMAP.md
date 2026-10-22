@@ -17,7 +17,7 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; checked 2026-10-18: 10 of the 39 declared formats load, the 9 rsid-table layouts and `vcf`; the VCF dialects `vcf_cgi`, `vcf_freebayes_varscan2`, `vcf_no_meta` and `bcf`, CGI, AncestryDNA, FTDNA and the vendor CSVs are next) · Owner: lead
+Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; vendor-table loader 2026-10-22: 18 of the 39 declared formats load, the 9 rsid-table layouts, `vcf`, and AncestryDNA, FTDNA (both exports), the RSID/RESULT table (MyHeritage), Color, deCODEme, Genos and the Illumina Final Report with plus-strand alleles; the VCF dialects `vcf_cgi`, `vcf_freebayes_varscan2`, `vcf_no_meta` and `bcf`, and CGI `var`/`masterVarBeta` are next; Geno 2.0 and Final Reports without positions or plus-strand alleles wait for chip manifests) · Owner: lead
 
 **Shipped:** content-based detection. `just_vcf.sniff` and the declarative registry in
 `just_vcf.formats` (docs/FORMATS.md). Over the PGP-HMS participants, 8 of about 1,740 files stay unknown,

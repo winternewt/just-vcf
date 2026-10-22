@@ -15,7 +15,9 @@ import polars as pl
 from platformdirs import user_cache_dir
 from pydantic import BaseModel, ConfigDict
 
-from just_vcf.loaders import rsid_table, vcf
+from just_vcf.formats import get_spec
+from just_vcf.formats.spec import Family
+from just_vcf.loaders import rsid_table, table, vcf
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
     BLOCKS,
@@ -34,15 +36,17 @@ from just_vcf.sniff import Sniffed, open_payload, sniff
 
 logger = logging.getLogger(__name__)
 
-LOADABLE_FORMATS: frozenset[str] = rsid_table.FORMATS | vcf.FORMATS
+LOADABLE_FORMATS: frozenset[str] = rsid_table.FORMATS | table.FORMATS | vcf.FORMATS
 """Format ids `load` can read. Grows as loaders land."""
 
 SPILL_ROW_GROUP = 200_000
 """Rows per parquet row group in a spill. Small enough that a contig filter skips most of the file."""
 
 _IMPUTED_FORMATS = frozenset({"genes_for_good_imputed"})
-_UNKNOWN_CALLSET_FORMATS = frozenset({"plink_23"})
-"""PLINK's 23andMe layout is written from any source (the one real file looks imputed or sequenced)."""
+_UNKNOWN_CALLSET_FORMATS = frozenset({"plink_23", "genos", "color_genotypes"})
+"""Formats whose callset type the file does not say. PLINK's 23andMe layout is written from any source
+(the one real file looks imputed or sequenced). Genos reports exome sequencing at a request list of
+sites, and Color does not say which assay its trait SNPs come from; RM4 infers either."""
 
 
 class UnsupportedFormatError(ValueError):
@@ -70,56 +74,98 @@ class Loaded(BaseModel):
 def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
     """Load `source` (a path, or a `sniff` result for it) into the three frames.
 
-    `sample` picks one sample of a multi-sample VCF; a VCF with several samples and no choice is
-    refused with `MultiSampleError`, and a sites-only VCF, which holds no sample, with `NoSampleError`.
-    `sample` is ignored for formats that hold one person by construction.
+    `sample` picks one sample of a multi-sample VCF or of a table with a sample column (an Illumina
+    Final Report); several samples and no choice is refused with `MultiSampleError`, and a sites-only
+    VCF, which holds no sample, with `NoSampleError`. A table whose columns lack what its format needs (a
+    Final Report without positions or plus-strand alleles) is refused with `TableLayoutError`. `sample`
+    is ignored for formats that hold one person by construction.
     """
     sniffed = source if isinstance(source, Sniffed) else sniff(Path(source))
     if not sniffed or sniffed.format not in LOADABLE_FORMATS:
         raise UnsupportedFormatError(sniffed)
     if sniffed.format in vcf.FORMATS:
         return _load_vcf(sniffed, sample)
+    if sniffed.format in table.FORMATS:
+        return _load_table(sniffed, sample)
+    return _load_rsid_table(sniffed)
+
+
+def _load_rsid_table(sniffed: Sniffed) -> Loaded:
     spec = rsid_table.spec_for(sniffed.format)
     with open_payload(sniffed) as handle:
         data = handle.read()
-
     calls, warnings = rsid_table.read_calls(data, spec)
     if spec.columns and rsid_table.column_line_ok(data, spec) is False:
         warnings.append("the column line does not read rsid, chromosome, position, genotype; columns taken by position")
-    source_sha256 = _sha256(sniffed.path)
-    facet_id = _facet_id(source_sha256, sniffed.member, spec.id, options={})
+    return _array_loaded(sniffed, calls, warnings, build=sniffed.build, options={}, extra={})
 
+
+def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:
+    spec = table.spec_for(sniffed.format)
+    with open_payload(sniffed) as handle:
+        data = handle.read()
+    read = table.read_table(data, spec, sample)
+    build = read.build if read.rows_state_build else sniffed.build or _sibling_build(sniffed)
+    options = {} if read.sample_index is None else {"sample_index": read.sample_index}
+    extra = {"sample": read.sample, "dropped_fields": read.dropped_columns}
+    return _array_loaded(sniffed, read.calls, read.warnings, build=build, options=options, extra=extra)
+
+
+def _sibling_build(sniffed: Sniffed) -> str | None:
+    """The build a metadata member beside this one in the same archive states (deCODEme's info file)."""
+    stated = sorted({m.build for m in sniffed.members if m.family is Family.METADATA and m.build})
+    return stated[0] if len(stated) == 1 else None
+
+
+def _array_loaded(
+    sniffed: Sniffed,
+    calls: pl.DataFrame,
+    warnings: list[str],
+    *,
+    build: str | None,
+    options: dict,
+    extra: dict,
+) -> Loaded:
+    """The three frames of a genotype table: an array-like facet, the calls, no blocks."""
+    source_sha256 = _sha256(sniffed.path)
+    facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options=options)
     callset = (
         CallsetType.IMPUTED
-        if spec.id in _IMPUTED_FORMATS
+        if sniffed.format in _IMPUTED_FORMATS
         else None
-        if spec.id in _UNKNOWN_CALLSET_FORMATS
+        if sniffed.format in _UNKNOWN_CALLSET_FORMATS
         else CallsetType.ARRAY
     )
+    spec_vendor = get_spec(sniffed.format).vendor
     facet = {
         "facet_id": facet_id,
         "source_sha256": source_sha256,
         "source_path": str(sniffed.path),
         "member": sniffed.member,
-        "format_id": spec.id,
-        "family": spec.family.value,
-        "vendor": None if spec.vendor == "unknown" else spec.vendor,
-        "assembly_label": sniffed.build,
-        "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
+        "format_id": sniffed.format,
+        "family": sniffed.family.value if sniffed.family else None,
+        "vendor": None if spec_vendor == "unknown" else spec_vendor,
+        "assembly_label": build,
+        "assembly_label_basis": AssemblyLabelBasis.STATED.value if build else None,
         "callset_type": callset.value if callset else None,
         "absence_means": AbsenceMeans.UNKNOWN.value,
         "contig_map": contig_map(calls["source_chrom"].unique().to_list()),
+        **{name: value for name, value in extra.items() if value is not None},
     }
-    facets = pl.LazyFrame([facet], schema={name: FACETS[name] for name in facet}).select(
-        [pl.col(name) if name in facet else pl.lit(None, dtype=dtype).alias(name) for name, dtype in FACETS.items()]
-    )
     for warning in warnings:
         logger.warning("%s: %s", facet_id, warning)
     return Loaded(
-        facets=facets,
+        facets=_facet_frame(facet),
         calls=canonical_order(rsid_table.to_calls_frame(calls, facet_id)),
         blocks=empty(BLOCKS),
         warnings=tuple(warnings),
+    )
+
+
+def _facet_frame(facet: dict) -> pl.LazyFrame:
+    """One `facets` row from the columns a loader knows; every other column null."""
+    return pl.LazyFrame([facet], schema={name: FACETS[name] for name in facet}).select(
+        [pl.col(name) if name in facet else pl.lit(None, dtype=dtype).alias(name) for name, dtype in FACETS.items()]
     )
 
 
@@ -216,13 +262,10 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         "dropped_fields": vcf.dropped_fields(header),
         "split_marker": ",".join(sorted(header.split_markers)) if marker_rows else None,
     }
-    facets = pl.LazyFrame([facet], schema={name: FACETS[name] for name in facet}).select(
-        [pl.col(name) if name in facet else pl.lit(None, dtype=dtype).alias(name) for name, dtype in FACETS.items()]
-    )
     for warning in warnings:
         logger.warning("%s: %s", facet_id, warning)
     return Loaded(
-        facets=facets,
+        facets=_facet_frame(facet),
         # The flagged positions join above the per-contig sort, so a filter still reaches the parquet scan.
         calls=vcf.with_split_groups(canonical_order_per_contig(spilled, contigs), flagged),
         blocks=canonical_order_per_contig(pl.scan_parquet(spill / "blocks.parquet"), contigs),

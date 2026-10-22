@@ -154,7 +154,8 @@ TWENTYTHREE_AND_ME = FormatSpec(
     columns=RSID_COLUMNS,
     genotype_encoding=(
         "plus-strand allele letters; one letter on haploid sites (male X/Y, MT); "
-        "D/I on indel probes, which the loader resolves against the probe's alleles"
+        "D/I on indel probes, which the loader keeps verbatim: resolving them needs the chip manifest's "
+        "alleles and a REF (RM3)"
     ),
     no_call=("--",),
     build_hints=(

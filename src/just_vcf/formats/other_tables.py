@@ -118,7 +118,8 @@ _FINAL_REPORT_NOTES = (
     "is a vendor convention, not a header statement, so the build stays unknown.",
     "`Chr 0` marks probes the manifest leaves unmapped; `XY` is the pseudoautosomal region; `MT` is mtDNA.",
     "Many probe names are not rsids; `-XX` suffixes (`1:153941698-CT`) mark a second probe at one site.",
-    "Indel probes are called `I`/`D` (`II`, `DD`, `ID`); resolve against the manifest's alleles.",
+    "Indel probes are called `I`/`D` (`II`, `DD`, `ID`). The loader keeps them verbatim: resolving them "
+    "needs the manifest's alleles and a REF (RM3).",
     "Files are often CRLF.",
 )
 
@@ -135,7 +136,8 @@ ILLUMINA_FINAL_REPORT = FormatSpec(
     ),
     comment_prefix=None,
     delimiter=None,
-    header=HeaderMode.LINE,
+    header=HeaderMode.SECTION,
+    section="Data",
     columns=FINAL_REPORT_COLUMNS,
     genotype_encoding=(
         "Report Wizard chooses the columns: either one two-letter field (`Alleles - Plus`) or one field per "
@@ -148,7 +150,11 @@ ILLUMINA_FINAL_REPORT = FormatSpec(
         "The column set varies per export: seen are {SNP Name, Sample ID, Allele1/2 - Forward, Allele1/2 - "
         "Design, GC Score} (Omni 2.5) and {SNP Name, Chr, MapInfo, Alleles - Plus, GenCall Score, LogR, BFreq, "
         "X, Y, Xraw, Yraw} (GSA-24v2). `columns` is the union; map by name and keep the strand the file names.",
-        "A no-call is `-` per allele (`-`/`-` in the per-allele layout) and a single `-` in `Alleles - Plus`.",
+        "A no-call is `-` per allele (`-`/`-` in the per-allele layout) and a single `-` in `Alleles - Plus`, "
+        "where every called row holds two letters, so the loader reads that `-` as two missing alleles.",
+        "The loader needs `Chr`, `MapInfo` and `Alleles - Plus`. An export with only Forward, Design or Top "
+        "alleles is refused (`TableLayoutError`): turning those into plus-strand letters needs the manifest.",
+        "A report can hold several samples (`Sample ID`); `load(sample=…)` picks one, as for a VCF.",
         "Exports without Chr/MapInfo carry no coordinates: positions come from the manifest, and that "
         "manifest's build must be stated, not assumed.",
     ),

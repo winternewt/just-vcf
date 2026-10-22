@@ -11,6 +11,7 @@ from just_vcf.loading import (
     load,
     vcf_samples,
 )
+from just_vcf.loaders.table import TableLayoutError
 from just_vcf.rejoin import rejoin_split
 from just_vcf.schema import (
     BLOCKS,
@@ -49,6 +50,7 @@ __all__ = [
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
+    "TableLayoutError",
     "UnsupportedFormatError",
     "__version__",
     "load",

@@ -4,6 +4,26 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load` reads eight more genotype tables (RM2), through a new loader driven by each format's spec:
+  `ancestrydna`, `ftdna`, `ftdna_space`, `rsid_result_csv` (where MyHeritage exports land),
+  `color_genotypes`, `decodeme`, `genos` and `illumina_final_report`. 18 of the 39 declared formats
+  now load. Columns are found by name; a file whose columns lack what its format needs is refused
+  with the new `TableLayoutError` (exported), for instance a Final Report with only Forward or Design
+  alleles, which need the chip manifest to reach the plus strand. `load(sample=…)` also picks one
+  sample of a table with a sample column (a Final Report, Color), and refuses several samples with
+  no choice, as for a VCF. No REF is written; an absent site means unknown. AncestryDNA's doubled
+  letters on haploid sites stay two alleles, the vendor's convention. Color's 0-based positions are
+  shifted by one and its build read from the rows; deCODEme's `-` strand rows are complemented in
+  `gt_alleles` (`source_gt` keeps the letters) and its build comes from the info member of its zip;
+  Genos insertion sites sit at the base before them with `end_pos` null until RM3. Rows on
+  chromosome 0, a column line repeated inside the file and unreadable genotypes are each one counted
+  warning. Columns not carried are listed in `facets.dropped_fields` by their file names.
+  `FormatSpec` gains `HeaderMode.SECTION` and a `section` field (the Final Report's `[Data]`). Minor:
+  new formats, a new exception and a new spec field; nothing that loaded before changes. Measured on
+  the PGP-HMS copy: 41 AncestryDNA, 103 FTDNA (7 of them two exports joined), 2 FTDNA space-separated,
+  4 deCODEme (build 36 from the zip), 4 Genos, 1 Color and 1 RSID/RESULT table load with no error; of
+  the 2 Final Reports, the GSA one loads (665,604 calls) and the Forward/Design one is refused.
+
 - A sites-only VCF (no FORMAT column, no sample) is refused by `load` with the new `NoSampleError`
   (exported), instead of failing inside the parquet spill with a polars conversion error (F8). Minor:
   a new exception; nothing that loaded before changes, facet ids included.

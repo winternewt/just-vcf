@@ -33,6 +33,7 @@ from just_vcf.schema import (
     AbsenceMeans,
     AssemblyLabelBasis,
     CallsetType,
+    ContentFilter,
     canonical_chrom,
     canonical_order,
     canonical_order_per_contig,
@@ -93,18 +94,25 @@ _READ_FAILURES = (pl.exceptions.ComputeError, zlib.error, gzip.BadGzipFile, EOFE
 """How a damaged compressed input fails a read: polars-bio's error at collect, or the standard
 library's when the payload is read or copied in Python."""
 
+_WALKED = "_just_vcf_bgzf_walked"
+"""The attribute `_damage_named` sets on a read failure it walked the file for and found no damage."""
+
 
 @contextmanager
 def _damage_named(sniffed: Sniffed, facet_id: str | None, source_sha256: str | None = None) -> Iterator[None]:
     """Re-raise a read failure as `DamagedBgzfError` when the input's outer layer is BGZF and a block
     of it does not read back; any other failure, and a BGZF input whose blocks all read, unchanged.
 
-    The walk reads the whole file, so it runs only once a read has failed."""
+    The walk reads the whole file, so it runs only once a read has failed, and once per failure: a
+    failure an inner block already walked for is marked, and an outer block re-raises it unwalked."""
     try:
         yield
     except _READ_FAILURES as err:
+        if getattr(err, _WALKED, False):
+            raise
         damage = bgzf.find_damage(sniffed.path) if sniffed.layers[:1] == ("bgzf",) else None
         if damage is None:
+            setattr(err, _WALKED, True)
             raise
         raise DamagedBgzfError(damage, facet_id, source_sha256 or file_sha256(sniffed.path)) from err
 
@@ -174,7 +182,9 @@ def _load_rsid_table(sniffed: Sniffed) -> Loaded:
         return _array_loaded(sniffed, first, warnings)
     # F3: the second export is its own facet, read by its own layout's rules; the two are never merged.
     # Its chip is not inferred: the 23andMe rule reads the first layout's rows, and no rule reads this one.
-    second = _array_facet(sniffed, appended.calls, build=sniffed.build, options={"part": 1}, extra={"relation": rsid_table.APPENDED_EXPORT, "dropped_fields": []})
+    # Nor is its build stated: the preamble that states one belongs to the first export, so the label
+    # stays unknown until `resolve_ref` scores this export's own rows (F9).
+    second = _array_facet(sniffed, appended.calls, build=None, options={"part": 1}, extra={"relation": rsid_table.APPENDED_EXPORT, "dropped_fields": []})
     warnings.append(
         f"a second export in another layout (an allele per column) follows the first {appended.after_rows} data "
         f"row(s): its {appended.calls.height} row(s) are their own facet (relation {rsid_table.APPENDED_EXPORT})"
@@ -221,6 +231,8 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
         inference = callset.classify(spilled, ["DP"], None)
         logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
         kind = inference.callset_type if inference else None
+        # No header line records a filtering command here; the member's own name is read for its words only.
+        classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
         facets.append(
             {
                 "facet_id": facet_id,
@@ -233,6 +245,7 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
                 "caller": caller,
                 "callset_type": kind.value if kind else None,
                 "absence_means": callset.absence_means(kind, False).value,
+                **classes,
                 "relation": vcf.CALLER_SPLIT,
                 "assembly_label": sniffed.build,
                 "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
@@ -241,7 +254,7 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
             }
         )
         calls_parts.append(canonical_order_per_contig(spilled, contigs))
-        warnings += [f"{caller} facet: {w}" for w in keyvalue.warnings_for(counts, prefix)]
+        warnings += [f"{caller} facet: {w}" for w in [*keyvalue.warnings_for(counts, prefix), *class_warnings]]
     return _multi_facet_loaded(facets, calls_parts, [empty(BLOCKS)] * len(facets), warnings)
 
 
@@ -287,6 +300,16 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
     facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={})
     calls_frame, blocks_frame = cgi.to_frames(calls, blocks, facet_id)
     spilled, spilled_blocks, contigs = _spill(facet_id, calls_frame, blocks_frame, origin)
+    # Unanchored alleles (`""`) count as indels; the member's own name is read for its words only.
+    classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
+    warnings += class_warnings
+    if cgi.states_whole_genome(header):
+        kind: CallsetType | None = CallsetType.WGS
+    else:
+        # The header is silent (28 of 250 PGP-HMS files have no #TITLE): the rows say, as for a VCF (RM4).
+        inference = callset.classify(spilled, list(cgi.READ_EVIDENCE), None)
+        logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
+        kind = inference.callset_type
     facet = {
         "facet_id": facet_id,
         "source_sha256": source_sha256,
@@ -300,8 +323,10 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
         "sample": header.first("ASSEMBLY_ID"),
         "assembly_label": sniffed.build,
         "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
-        "callset_type": CallsetType.WGS.value if cgi.states_whole_genome(header) else None,
+        "callset_type": kind.value if kind else None,
+        # The files tile the genome in ref and no-call blocks, whatever the type (Decision 4).
         "absence_means": AbsenceMeans.BLOCKS.value,
+        **classes,
         "contig_map": contig_map(counts[3]["chromosome"].to_list()),
         "dropped_fields": cgi.dropped_fields(sniffed.format, header),
     }
@@ -594,8 +619,9 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 # A BCF declares every key it uses, and its header cannot be rewritten without re-encoding
                 # the records, so a refusal from polars-bio is final here.
                 path = vcf.readable_bcf_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), copy, origin)
-                records = part.select(vcf.read_records(path, header, part.sample, first_record, extra_info=part.info))
-                stats = vcf.scan_stats(records)
+                raw = vcf.read_records(path, header, part.sample, first_record, extra_info=part.info)
+                records = part.select(raw)
+                stats = vcf.scan_stats(records, part.unsourced(raw))
             else:
                 records, stats = _read_text_records(sniffed, header, missing, data, copy, origin, part, part_warnings)
             calls, blocks, row_warnings = vcf.to_rows(records, header, stats, text_gt=not binary, gl_phred=gl_phred)
@@ -605,6 +631,12 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
             # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
             calls_path, blocks_path = _spill_files(facet_id, calls_frame, blocks_frame, origin)
+        if stats.get("unsourced"):
+            # The file's, not a caller's: no caller prefix (Decision 8).
+            warnings.append(
+                f"{stats['unsourced']} record(s) whose INFO/SF names no caller of the merge (no SF, or no "
+                "##sourceFiles index) left out: they belong to no caller's facet"
+            )
         contigs = [canonical_chrom(name) for name in stats["chroms"]]
         spilled = pl.scan_parquet(calls_path)
         flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
@@ -620,10 +652,8 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 f"{source.caller} leaves out the positions it called reference, but the rows do not show a whole genome "
                 f"(callset type {kind.value if kind else 'unknown'}): absence is not read as reference"
             )
-        counts = callset.variant_class_counts(spilled)
-        content = callset.infer_content_filter(counts, stated_filters, named_filter)
-        logger.info("%s: content filter %s (%s)", facet_id, content.content_filter.value if content.content_filter else "none", content.reason)
-        part_warnings += content.warnings
+        classes, class_warnings = _variant_classes(facet_id, spilled, stated_filters, named_filter)
+        part_warnings += class_warnings
         caller = part.caller if part.split else source.caller
         facets.append(
             {
@@ -651,10 +681,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                     if part.sf_alone
                     else callset.absence_means(kind, stats["any_block"], omitted_called_reference=omitted_called_reference)
                 ).value,
-                # Absence reads as reference only for the classes present and not cut away (Decision 4).
-                "variant_classes": [{"variant_class": cls.value, "alleles": n} for cls, n in counts.items() if n],
-                "content_filter": content.content_filter.value if content.content_filter else None,
-                "content_filter_basis": content.basis.value if content.basis else None,
+                **classes,
                 "contig_map": contig_map(stats["chroms"]),
                 "header_contigs": header.contigs,
                 "vcf_version": header.version,
@@ -689,6 +716,28 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     )
 
 
+def _variant_classes(
+    facet_id: str,
+    calls: pl.LazyFrame,
+    stated: list[tuple[ContentFilter, str]],
+    named: tuple[ContentFilter, str] | None,
+) -> tuple[dict, list[str]]:
+    """A facet's `variant_classes`, `content_filter` and `content_filter_basis` from its spilled calls
+    (`source_ref`, `alts`), the header's filtering lines and the file name's words, with the warnings.
+
+    Every loader that writes REF and ALT fills them the same way: absence reads as reference only for
+    the classes present and not cut away (Decision 4)."""
+    counts = callset.variant_class_counts(calls)
+    content = callset.infer_content_filter(counts, stated, named)
+    logger.info("%s: content filter %s (%s)", facet_id, content.content_filter.value if content.content_filter else "none", content.reason)
+    columns = {
+        "variant_classes": [{"variant_class": cls.value, "alleles": n} for cls, n in counts.items() if n],
+        "content_filter": content.content_filter.value if content.content_filter else None,
+        "content_filter_basis": content.basis.value if content.basis else None,
+    }
+    return columns, list(content.warnings)
+
+
 def _concat(frames: list[pl.LazyFrame]) -> pl.LazyFrame:
     """One facet's frame as it is; several, one after another (they are already in facet order)."""
     return frames[0] if len(frames) == 1 else pl.concat(frames, how="vertical", parallel=False)
@@ -708,8 +757,9 @@ def _read_text_records(
     polars-bio refuses the first read (P7, P8). The retry is reported in `warnings`."""
     path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: _vcf_text(sniffed, header.resaved), header, missing, copy, origin)
     try:
-        records = part.select(vcf.read_records(path, header, part.sample, data[0] if data else None, extra_info=part.info))
-        return records, vcf.scan_stats(records)
+        raw = vcf.read_records(path, header, part.sample, data[0] if data else None, extra_info=part.info)
+        records = part.select(raw)
+        return records, vcf.scan_stats(records, part.unsourced(raw))
     except vcf.HeaderRefused as err:
         warnings.append(
             f"polars-bio refused the file ({err}); read again with a header of only the carried INFO and "
@@ -717,8 +767,9 @@ def _read_text_records(
         )
     path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: _vcf_text(sniffed, header.resaved), header, missing, copy, origin, structural_only=True)
     first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
-    records = part.select(vcf.read_records(path, header, part.sample, first, extra_info=part.info))
-    stats = vcf.scan_stats(records)
+    raw = vcf.read_records(path, header, part.sample, first, extra_info=part.info)
+    records = part.select(raw)
+    stats = vcf.scan_stats(records, part.unsourced(raw))
     if left_out := vcf.pos_zero_left_out(copy):
         warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
     return records, stats

@@ -428,7 +428,12 @@ disagrees is a warning naming both sides; the strongest is kept:
    is quality filtering and names no class. Warnings quote the word, never the name.
 
 A genotype table writes no REF/ALT to count, so its `variant_classes` is null; its absence is
-`unknown` anyway.
+`unknown` anyway. The other loaders that read a REF and ALT count them as the VCF loader does: the
+PGP key=value table, and CGI's native `var` and `masterVarBeta`, whose unanchored alleles (`""`, a
+deletion's ALT or an insertion point's REF) are indels. Their content filter rests on the rows and
+the file name; neither format has a header line that records a filtering command. Counting `""`
+matters there: CGI writes every indel unanchored, so a genome counted without them would read
+`snv_only`.
 
 Measured 2026-10-22 on PGP-HMS uploads: the other classes are 0% of eleven `.snp.`/`.snps.` and
 `.indel.`/`.indels.` halves (five with no header line to say so, Isaac and CASAVA; three cut by GATK
@@ -460,7 +465,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
-| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a VCF with no variant allele; null = not counted (a genotype table). just-vcf's own shape |
+| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele; null = not counted (a genotype table, which writes no REF or ALT). just-vcf's own shape |
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | null unless stated |
@@ -512,6 +517,12 @@ Anything between the bands is null. A CGAPipeline VCF typed `wgs` gets `absence_
 `absence_means = blocks`, whatever its scope. Otherwise `wgs` gives `weak_reference` and every other
 type, null included, `unknown`. A lifted facet is `unknown` whatever its type ("Lifting"). Measured on PGP-HMS uploads: four Genos exomes at 44,020–44,796 sites
 and 13.6% breadth, about 400 Mb reached.
+
+CGI's native `var` and `masterVarBeta` are typed `wgs` where `#TITLE` says the file is a whole
+genome. Where the header is silent (28 of 250 PGP-HMS files have no `#TITLE`), the same rule reads
+the rows; the read-evidence gate counts as met, since the format is CGAPipeline's own output from
+reads. Either way `absence_means` stays `blocks`: the files state their reference calls. Rejected:
+typing `wgs` from the format alone, which a region cut from a native file would then claim too.
 
 There is no `ref_basis` column. A non-null `ref` always came from the facet's assembly sequence
 (charter 10), so the basis would have one value. Which collection it came from is `ref_seqcol_digest`.
@@ -833,7 +844,8 @@ the same collection still has both.
 **Built 2026-10-22, from the merged VCF only.** `load` returns both facets in one `Loaded`, in
 `facet_id` order, each with `relation = caller_split` and its own `caller` (read from the merge's
 `##sourceFiles` names, `.FB.` and `.VS.`; null where they do not say). A row belongs to a caller when
-INFO/SF lists its index. With a column per caller, each facet reads its own column. With one data
+INFO/SF lists its index; a record whose SF lists no caller's index (SF absent, or naming an index no
+`##sourceFiles` line declares) belongs to no facet, and a load warning counts it. With a column per caller, each facet reads its own column. With one data
 column, the column holds the first caller's genotype wherever that caller found the site, so the
 VarScan2 facet holds only the sites VarScan2 alone found, and a warning counts the shared sites it
 lost. `derived_from` stays null: the merged file is not loaded as a facet of its own (that is option
@@ -872,7 +884,10 @@ layout. A run of any other layout is not read, with a warning. Both facets keep 
   prefers a direct facet over a derived one, which would demote one export below the other for no
   reason in the data;
 - reading the second export's chip with the 23andMe rule: that rule reads 23andMe's internal ids,
-  which the second layout does not number. Its `chip` stays null.
+  which the second layout does not number. Its `chip` stays null;
+- giving the second facet the build the file's preamble states (`assembly_label_basis = stated`): the
+  preamble is the first export's, and nothing in the file states the second's build. Its label stays
+  null until `resolve_ref` scores its own rows against the reference (F9, basis `inferred`).
 
 ## Decision 9: INFO and FORMAT fields the schema does not name
 
@@ -1009,8 +1024,15 @@ frame stops working when its files go.
   `<name>.json`, its manifest, and `<name>.lock`, an OS file lock the writer holds while it writes.
   The manifest names the root source (sha256 and resolved path), which every derived facet carries
   down from its parent, so a genome's derived spills go with its copies.
-- An entry whose version key is not the current one is removed when the step that owns its kind next
-  runs (`load` for copies and load spills). No current frame reads an old version, so this is safe.
+- An entry of an older version is removed when the step that owns its kind next runs (`load` for
+  copies and load spills). Older means no version key ahead of the running version's and at least
+  one behind, compared numerically (`0.0.9` is behind `0.0.11`); a key the running version has and
+  the entry lacks counts as behind (the entry predates the key). An entry with any key ahead, a key
+  the running version does not know, or a value that is not a number is a newer install's, or may
+  be: kept. Two installs of different versions share the platform user cache, and the older one must
+  not remove the newer one's live spills; the newer one retires the older one's. No current frame
+  reads an old version, so this is safe. Rejected: sweeping every version other than the running
+  one, which made two installs delete each other's spills on every load.
   An entry with no manifest predates the index: removed only by that sweep, where its name shows an old
   version or where it must be old (a `vcf/` entry, below `REWRITE_VERSION` 7; a `keyvalue/` or `cgi/`
   one, from before those copies were indexed).
@@ -1060,6 +1082,22 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
+  (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from
+  its rows, where it was null. `absence_means` stays `blocks`. Values change on files that already
+  load.
+
+- **No version change** (2026-10-23, classes of CGI and key=value facets): no column changes. Rule
+  stated (Decision 4): CGI's native files and the PGP key=value table fill `variant_classes`,
+  `content_filter` and `content_filter_basis` as a VCF does, from the rows and the file name. They
+  wrote null. Values change on files that already load; `absence_is_reference` is unchanged for them
+  (their absence is `blocks` and `unknown`), but a consumer gating by class now has the classes.
+
+- **No version change** (2026-10-23, the appended export's build): no column changes. Rule changed
+  (Decision 8, "Two exports in one file"): an appended export's facet gets no `assembly_label` from
+  the first export's preamble; null until `resolve_ref` infers it from the rows (F9). Values change on
+  files that already load, where the first export states a build.
 
 - **No version change** (2026-10-23, the empty allele): no column changes. Rule stated: a zero-length
   allele is `""` in every allele column (Decision 2). Values change on files that already load: an

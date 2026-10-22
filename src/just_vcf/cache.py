@@ -27,7 +27,8 @@ never removes it; only the stale-version sweep does, and only where its name sho
 so it is stale by construction, and a `keyvalue/` or `cgi/` one predates their index.
 
 Removing an entry a live `Loaded` reads breaks that frame's next `collect`. The stale-version sweep
-cannot hit one (no current frame reads an old version); `clear_cache` can, and that is the caller's
+cannot hit one: no current frame reads an old version, and it removes only entries older than the
+running version, never a newer install's that shares the cache. `clear_cache` can, and that is the caller's
 call. `load` or a derived step run again never can: it reuses the generation an earlier run
 committed for the same content, or commits another beside it, and never rewrites or removes a
 complete one.
@@ -369,7 +370,11 @@ def _read_generation(path: Path) -> Generation | None:
 
 
 def sweep_stale(kind: str, current: dict[str, object]) -> CacheClearReport:
-    """Remove every entry of `kind` written under a version other than `current`, logging the bytes freed.
+    """Remove every entry of `kind` written under an older version than `current`, logging the bytes freed.
+
+    Older means no version key ahead of `current` and at least one behind, compared numerically
+    (`_older`). An entry a newer version wrote is kept: two installs of different versions can share
+    the platform user cache, and the older one must not remove the newer one's live spills.
 
     Run by the step that owns the kind, before it writes: `load` for `rewrite_copy`, `work_copy` and `frames_spill`,
     each derived step for its own. An entry with no manifest is judged by its name where the name shows
@@ -459,9 +464,42 @@ def _source_matcher(source: Path | str):
     return lambda m: m.source_path == resolved
 
 
+def _version(value: str) -> tuple[int, ...] | None:
+    """A version key's value as numbers: `7` is `(7,)`, `0.0.11` is `(0, 0, 11)`; None when it is not one."""
+    parts = value.split(".")
+    return tuple(int(part) for part in parts) if all(part.isdigit() for part in parts) else None
+
+
+def _older(versions: dict[str, str], current: dict[str, str]) -> bool:
+    """Whether an entry's version keys put it behind `current`: none ahead, and at least one behind.
+
+    Compared numerically, so `0.0.9` is behind `0.0.11`. A key `current` has and the entry lacks is
+    behind: the entry was written before the key existed (`load`'s spills before `SPILL_LAYOUT`). A
+    key the entry has and `current` lacks, or a value that is not a number, cannot be ordered, so the
+    entry may be a newer version's and is not behind. Two installs of different versions share the
+    platform user cache, and an older one must never remove a newer one's live spills.
+    """
+    if set(versions) - set(current):
+        return False
+    behind = False
+    for key, now in current.items():
+        if key not in versions:
+            behind = True
+            continue
+        mine, theirs = _version(versions[key]), _version(now)
+        if mine is None or theirs is None:
+            return False
+        width = max(len(mine), len(theirs))
+        mine, theirs = mine + (0,) * (width - len(mine)), theirs + (0,) * (width - len(theirs))
+        if mine > theirs:
+            return False
+        behind = behind or mine < theirs
+    return behind
+
+
 def _stale(entry: _Entry, kind: str, current: dict[str, str]) -> bool:
     if entry.manifest is not None:
-        return entry.manifest.kind == kind and entry.manifest.versions != current
+        return entry.manifest.kind == kind and _older(entry.manifest.versions, current)
     if entry.unreadable or not entry.path.is_dir():
         return False
     if entry.relative.startswith("vcf/"):

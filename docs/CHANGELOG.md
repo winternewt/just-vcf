@@ -4,6 +4,33 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
+  `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
+  was dropped without a word. Counting it reads the file a second time, beside the first part's stats
+  pass. No column changes.
+
+- A Complete Genomics `var` or `masterVarBeta` whose header does not say it is a whole genome (28 of
+  250 PGP-HMS files have no `#TITLE`) gets its `callset_type` from its rows, by the rule a VCF's
+  follows; it was null. `absence_means` stays `blocks`. A value change on files that already load.
+
+- Complete Genomics' native `var` and `masterVarBeta` facets and the PGP key=value table's facets fill
+  `variant_classes`, `content_filter` and `content_filter_basis` as a VCF facet does, from the rows and
+  the file name; they were null. CGI's unanchored deletions and insertions (`""`) count as indels, so
+  a whole CGI genome shows no content filter rather than reading `snv_only`. A value change on files
+  that already load. No column changes.
+
+- An appended export (F3) no longer takes the build the first export's preamble states: its
+  `assembly_label` is null until `resolve_ref` infers it from its own rows (F9), where it read the
+  first export's label as `stated`. A value change on files that already load. No column changes.
+
+- A read of an intact BGZF input that fails for another reason walks the file's blocks once, where it
+  walked them twice (once at the facet, once at the source) before re-raising the reader's error.
+
+- The cache sweep removes only entries an older version wrote, comparing version keys numerically
+  (`0.0.9` is behind `0.0.11`). An entry a newer just-vcf wrote is kept, so two installs sharing the
+  platform user cache no longer delete each other's live spills on every load; before, any version
+  other than the running one was swept.
+
 - Schema 0.0.11: `absence_means` gains `reference` (a Complete Genomics VCF typed `wgs`). Values change on
   files that already load: the empty allele is `""` everywhere (Genos and upload `-` included), and
   `dropped_fields` is `[]` rather than null where nothing was dropped.
@@ -59,7 +86,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   as unchecked. Normalized facets get new ids (`NORMALIZE_VERSION` 3).
 
 - A 23andMe-layout table that ends in 1,000 or more rows of one other width gets a warning that it
-  looks like a second export appended, which is not read (F3, still open).
+  looks like a second export appended, which is not read (F3 surfaced). Since resolved: an appended
+  export of one allele per column loads as its own facet (the F3 entry below); a run of any other
+  width keeps this warning.
 
 - An FTDNA or MyHeritage-style export, or a Final Report that names no manifest, gets `facets.chip` by
   marker overlap with Illumina's manifests (RM4): `illumina_omniexpress` or `illumina_gsa`, basis

@@ -17,8 +17,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import Loaded, load, sniff
-from just_vcf.schema import BLOCKS, CALLS, canonical_order
+from just_vcf import Loaded, callset, load, sniff
+from just_vcf.schema import BLOCKS, CALLS, CallsetType, canonical_order
 from test_load_vcf import assert_gt_consistent
 
 VAR_COLUMNS = (
@@ -293,9 +293,62 @@ def test_master_var_gives_the_same_sites_blocks_and_allele_sets(tmp_path: Path, 
     assert_gt_consistent(calls)
 
 
+def _genome_loci(snvs: int, deletions: int, insertions: int) -> list[Locus]:
+    """Het loci 100 bp apart on chr1: SNVs, one-base deletions written `T` to `""` and two-base
+    insertions written `""` to `GG`, as CGI writes them, with no anchor base."""
+    loci = []
+    for i in range(snvs + deletions + insertions):
+        b = 1_000_000 + 100 * i
+        if i < snvs:
+            loci.append(Locus("chr1", b, b + 1, haps=((Seg(b, b + 1, "snp", "A", "G"),), (Seg(b, b + 1, "ref", "A", "A"),))))
+        elif i < snvs + deletions:
+            loci.append(Locus("chr1", b, b + 1, haps=((Seg(b, b + 1, "ref", "T", "T"),), (Seg(b, b + 1, "del", "T", ""),))))
+        else:
+            loci.append(Locus("chr1", b, b, haps=((Seg(b, b, "ref", "", ""),), (Seg(b, b, "ins", "", "GG"),))))
+    return loci
+
+
+def test_unanchored_indels_count_so_a_genome_does_not_read_snv_only(tmp_path: Path) -> None:
+    """Decision 4: CGI's deletions (`T` to `""`) and insertions (`""` to `GG`) are indels. Counted, the
+    rows show more than one class; if the empty allele were no class, 10,000 SNVs alone would read
+    `snv_only` and hold back every absence."""
+    snvs, deletions, insertions = 10_000, 300, 300
+    for text, name in (
+        (var_text(_genome_loci(snvs, deletions, insertions)), "var-GS000000002-ASM.tsv.bz2"),
+        (master_var_text(_genome_loci(snvs, deletions, insertions)), "masterVarBeta-GS000000002-ASM.tsv.bz2"),
+    ):
+        _, facet, calls, _ = frames(write(tmp_path, text, name))
+        assert calls.filter(pl.col("alts") == [""]).height == deletions and calls.filter(pl.col("source_ref") == "").height == insertions
+        assert facet["variant_classes"] == [{"variant_class": "snv", "alleles": snvs}, {"variant_class": "indel", "alleles": deletions + insertions}], name
+        assert (facet["content_filter"], facet["content_filter_basis"]) == (None, None), name
+
+
+def test_the_fixture_facet_counts_its_classes(var) -> None:
+    """`LOCI`, by the classes of its called ALTs: partial calls (`?` inside a sequence) are no class."""
+    _, facet, calls, _ = var
+    alleles = [(r["source_ref"], alt) for r in calls.iter_rows(named=True) for alt in r["alts"] if "?" not in alt]
+    found = {"snv": 0, "mnv": 0, "indel": 0}
+    for ref, alt in alleles:
+        found["indel" if len(ref) != len(alt) else "snv" if len(alt) == 1 else "mnv"] += 1
+    assert facet["variant_classes"] == [{"variant_class": cls, "alleles": n} for cls, n in found.items() if n]
+    assert facet["content_filter"] is None, "too few alleles to show a filter, and nothing else says one"
+
+
+def test_without_a_title_the_rows_give_the_callset_type(tmp_path: Path) -> None:
+    """RM4 on a native file whose header is silent: the spread of its calls names the class, as for a
+    VCF. Absence stays the blocks' to say, whatever the class."""
+    loci = _genome_loci(callset.MIN_PANEL_SITES * 2, 0, 0)
+    untitled = frames(write(tmp_path, var_text(loci, title=False), "untitled.tsv.bz2"))[1]
+    expected = callset.classify(pl.LazyFrame({"chrom": ["1"] * len(loci), "pos": [lo.begin + 1 for lo in loci], "alts": [["G"]] * len(loci)}), ["DP"], None)
+    assert expected.callset_type is CallsetType.PANEL, expected.reason
+    assert (untitled["callset_type"], untitled["absence_means"]) == ("panel", "blocks")
+    titled = frames(write(tmp_path, var_text(loci), "titled.tsv.bz2"))[1]
+    assert (titled["callset_type"], titled["absence_means"]) == ("wgs", "blocks"), "a title that says so is kept"
+
+
 def test_format_2_0_and_no_title(tmp_path: Path) -> None:
     loaded, facet, calls, _ = frames(write(tmp_path, var_text(LOCI, version="2.0", title=False), "old.tsv.bz2"))
-    assert facet["callset_type"] is None, "no #TITLE says what the file is"
+    assert facet["callset_type"] is None, "no #TITLE says what the file is, and too few sites for the rows to"
     assert facet["absence_means"] == "blocks"
     assert by_pos(calls)[("1", 752566)]["sample_filters"] == ["VQHIGH"], "varQuality's vocabulary is kept, not mapped"
     assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF", "hapLink"]
@@ -444,6 +497,9 @@ def test_real_var_and_master_var_agree(real_assembly: dict[str, Loaded]) -> None
     for loaded in (var, master):
         facet = loaded.facets.collect().row(0, named=True)
         assert (facet["caller"], facet["absence_means"]) == ("CGAPipeline", "blocks")
+        # A whole genome, unanchored indels counted: it shows no content filter.
+        classes = {entry["variant_class"]: entry["alleles"] for entry in facet["variant_classes"]}
+        assert classes["indel"] >= 0.05 * sum(classes.values()) and facet["content_filter"] is None
     columns = ["chrom", "pos", "end_pos", "kind"]
     assert var.blocks.select(columns).collect().equals(master.blocks.select(columns).collect())
 

@@ -4,11 +4,13 @@ import random
 import struct
 from pathlib import Path
 
+import polars as pl
 import pytest
 
-from just_vcf import DamagedBgzfError, load
+from just_vcf import DamagedBgzfError, bgzf, load
 from just_vcf.bgzf import BLOCK_PAYLOAD, EOF_BLOCK, BgzfWriter, find_damage
 from just_vcf.cache import file_sha256
+from just_vcf.loaders import vcf
 from just_vcf.loading import _facet_id
 from just_vcf.sniff import sniff
 
@@ -168,3 +170,24 @@ def test_damage_in_plain_gzip_keeps_the_readers_error(tmp_path: Path) -> None:
     with pytest.raises(Exception) as caught:
         load(path)
     assert not isinstance(caught.value, DamagedBgzfError)
+
+
+def test_a_read_failure_that_is_not_damage_walks_the_file_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An intact BGZF input whose read fails for another reason is walked once, not once per level
+    that names damage, and fails with the reader's own error."""
+    path = tmp_path / "intact.vcf.gz"
+    _vcf_bgzf(path, rows=2_000)
+    walks: list[Path] = []
+
+    def counted(target: Path, *args, **kwargs):
+        walks.append(target)
+        return find_damage(target, *args, **kwargs)
+
+    def refuse(*_):
+        raise pl.exceptions.ComputeError("a read failure that is not damage")
+
+    monkeypatch.setattr(bgzf, "find_damage", counted)
+    monkeypatch.setattr(vcf, "scan_stats", refuse)
+    with pytest.raises(pl.exceptions.ComputeError, match="not damage"):
+        load(path)
+    assert len(walks) == 1

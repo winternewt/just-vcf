@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- VRS allele ids (RM271): `mint_vrs_ids(loaded, reference)` fills `calls.vrs_allele_ids` after
+  `resolve_ref`, one VRS 2.x id per slot of `[ref] + alts`, equal to vrs-python's on every kind of
+  allele tested and on 19,000 real PGP-HMS alleles; `vrs_withheld(calls)` says why an id is missing.
+  Substitutions now wait for REF to be read, like indels (SCHEMA.md; no version bump, no column
+  changed). vrs-python joins the dev dependencies as the test oracle.
+
 - Schema 0.0.7 (RM3): `facets.ref_seqcol_digest` is new; `resolve_ref` fills `ref`, `ref_check`, and an
   array row's `alts` and `gt` from a reference.
 

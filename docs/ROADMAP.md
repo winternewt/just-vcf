@@ -211,7 +211,7 @@ such input today.
 
 
 ## RM271 — VRS allele ids
-Severity: high · Status: in progress (a builder, 2026-10-22) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: `mint_vrs_ids` and `vrs_withheld` shipped for VCF and array rows, equal to vrs-python on 19,000 real alleles; left: the gtars RLE gap filed upstream, an opt-in test on a real assembly) · Owner: lead
 
 Charter invariant 4: a call's identity is the VRS Allele id of its fully justified allele on a
 refget-addressed sequence, and that id is the join key between facets on the same assembly. Today
@@ -221,6 +221,50 @@ collection on `facets.ref_seqcol_digest`, so each allele can be placed on a sequ
 accession. An id that cannot be minted conformantly (an allele that cannot be justified, a contig with
 no refget accession, an unresolved REF, an array I/D code) is withheld with a counted reason in
 `vrs_errors`, never approximated. vrs-python is a test oracle only (CLAUDE.md §5).
+
+**Shipped 2026-10-22: `mint_vrs_ids(loaded, reference)` and `vrs_withheld(calls)` (`just_vcf.vrs`).**
+The rules are in docs/SCHEMA.md ("When an id is minted", "Why an id is missing"). Choices made, each
+with the alternative rejected:
+
+- **A step after `resolve_ref`, not inside it.** It refuses a facet whose REF was never read, and
+  reads the collection `ref_seqcol_digest` names from the same store. Rejected: minting inside
+  `resolve_ref`, which would make every REF read pay for ids, and leave no way to re-mint when the
+  rule changes (`MINT_VERSION`) without reading REF again.
+- **Every allele waits for `ref`, substitutions too.** Rejected: SCHEMA's earlier no-bases path for
+  substitutions from a table of contig accessions per assembly. No table exists, and a contig
+  `resolve_ref` could not match has no accession shown to be the facet's.
+- **`[ref] + alts`, the REF slot minted** as VRS's reference allele (a `ReferenceLengthExpression`
+  over REF's span), as SCHEMA and gnomAD have it. Rejected: one id per ALT only, which the brief
+  named; it would retype a signed-off column.
+- **The state choice and canonical JSON are ours; rolling and sha512t24u are gtars'.** gtars 0.10
+  rolls an indel correctly but always returns a literal sequence, and its Python API digests only
+  `LiteralSequenceExpression`; vrs-python gives a `ReferenceLengthExpression` for every deletion, every
+  repeat insertion and the reference allele (VRS 2.x), so gtars' own ids differ from vrs-python's
+  there. Rejected: withholding those alleles until gtars has it (most indels and every REF slot), and
+  vrs-python in core (CLAUDE.md §5). Owed upstream: a VRS 2.x state in gtars' normalization and an RLE
+  digest in its Python API; then `_justify` and the JSON shrink to calls. Not filed.
+- **Rows walked as runs of one contig** (`rle` over the spilled input), reading only the columns
+  minting needs; the ids go to their own files and sit beside the spilled rows by position. Rejected:
+  a filtered scan per contig with a re-sort (resolve_ref's shape), one scan of the file per contig (170
+  on the GRCh38 genome).
+- **The oracle is `scripts/vrs_oracle.py`**: a vrs-python data proxy over the same gtars store, so
+  both sides read the same sequence; vrs-python is a dev dependency.
+
+**Dogfooded 2026-10-22** on three PGP-HMS VCFs, aggregates only (`scripts/vrs_conformance.py`), each
+sample drawn with a fixed seed from the minted alleles and checked against vrs-python on the same
+store:
+
+- A GRCh38 genome, 4,651,432 rows: 9,256,478 of 9,345,929 alleles minted (363,409 deletions, 412,401
+  insertions); 89,451 withheld as `ref_unchecked`, all on contigs `resolve_ref` left unread (UCSC
+  `_random`/`chrUn_` names, RM3). 8,000 checked, 0 mismatch.
+- A GRCh37 indel-only genome split, 956,064 rows, 1,039,271 ALTs: every allele minted; 9,000 checked
+  (deletions, insertions, REF), 0 mismatch.
+- A GRCh37 SNV-only genome split, 3,461,640 rows: all but 4 alleles minted (the 4 on rows whose source
+  REF the reference contradicts); 2,000 checked, 0 mismatch.
+- Time on the 4.65M-row genome: 59 s wall and 103–112 s CPU with the cache on a fast local disk; 112–208
+  s wall with the cache under `data/interim/` on the NTFS disk, which `dd` measured at 2.5 MB/s during
+  the runs (other sessions were writing to it; the workspace note says about 350 MB/s). Peak RSS of the
+  minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
 ## RM268 — Cache eviction
 Severity: medium · Status: open · Owner: lead

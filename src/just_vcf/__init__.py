@@ -29,6 +29,7 @@ from just_vcf.schema import (
     SplitSignal,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
+from just_vcf.vrs import mint_vrs_ids, vrs_withheld
 
 __version__ = version("just-vcf")
 
@@ -57,10 +58,12 @@ __all__ = [
     "UnsupportedFormatError",
     "__version__",
     "load",
+    "mint_vrs_ids",
     "open_payload",
     "reference_dir",
     "rejoin_split",
     "resolve_ref",
     "sniff",
     "vcf_samples",
+    "vrs_withheld",
 ]

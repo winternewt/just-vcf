@@ -57,9 +57,10 @@ it is registered too late or detects too loosely.
 
 | Loader | Formats |
 |---|---|
-| `loaders.vcf` | `vcf` |
+| `loaders.vcf` | `vcf`, `vcf_cgi`, `vcf_freebayes_varscan2`, `vcf_no_meta`, `bcf` |
 | `loaders.rsid_table` | `23andme`, `23andme_csv`, `living_dna`, `selfdecode`, `plink_23`, `genes_for_good`, `genes_for_good_imputed`, `rsid_table`, `rsid_table_headerless` |
 | `loaders.table` | `ancestrydna`, `ftdna`, `ftdna_space`, `rsid_result_csv`, `color_genotypes`, `decodeme`, `genos`, `illumina_final_report` |
+| `loaders.keyvalue` | `freebayes_varscan2_keyvalue`: one facet per caller (SCHEMA Decision 8) |
 
 `loaders.table` reads each file through its spec: the column names from the file (matched against the
 spec's names and aliases, case-insensitively), the delimiter, the coordinate convention and the no-call
@@ -69,8 +70,7 @@ its format needs is refused with `TableLayoutError`. MyHeritage exports load as 
 (the `ftdna` spec excludes them), with the vendor left unclaimed; no MyHeritage file was available to
 check that against.
 
-Not loadable yet: the CGI native files (`cgi_var`, `cgi_master_var`), the VCF dialects (`vcf_cgi`,
-`vcf_freebayes_varscan2`, `vcf_no_meta`, `bcf`), the key=value table and the other tables. Geno 2.0
+Not loadable yet: the CGI native files (`cgi_var`, `cgi_master_var`) and the other tables. Geno 2.0
 (`genographic_geno2`, its headerless variant) and the headerless Final Report name markers without
 positions, so their rows cannot be `calls` rows until a chip manifest places them.
 
@@ -125,3 +125,5 @@ entry says how.
   write two letters on every called row (FTDNA's `---`, a Final Report's single `-`) it gives two
   nulls.
 - **Variable-width rows.** The key=value table has 12 fixed fields and an annotation tail of any length.
+  *Closed in the loader:* only the twelve fixed fields are read, each checked for its key; the tail's
+  keys, read from the first 1,000 rows, are listed in `facets.dropped_fields`.

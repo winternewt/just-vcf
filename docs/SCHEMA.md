@@ -490,8 +490,19 @@ INFO/SF lists its index. With a column per caller, each facet reads its own colu
 column, the column holds the first caller's genotype wherever that caller found the site, so the
 VarScan2 facet holds only the sites VarScan2 alone found, and a warning counts the shared sites it
 lost. `derived_from` stays null: the merged file is not loaded as a facet of its own (that is option
-A), so there is no parent row to point at. Not built: sourcing from the `-orig` key=value table,
-which has no loader yet.
+A), so there is no parent row to point at.
+
+**The `-orig` key=value table, built 2026-10-22.** It loads the same way, as two `caller_split`
+facets (`caller_index` 0 and 1 in the facet id, as for the merge), each holding the rows where its
+caller's genotype is not `NULL`. It is not a second copy of the merge: on the one pair on disk it holds
+2.04M of the merge's 5.30M rows, on every chromosome, the gene-dense ones most, and every row carries
+gene annotation, so it reads as a gene-annotated subset. Within it, its freeBayes rows are the merge's,
+and its VarScan2 facet keeps the genotypes the one-column merge lost (1.75M shared sites there). So
+the two loads complement each other: the merge's VarScan2 facet has VarScan2's lone sites genome-wide,
+the table's has VarScan2 at shared sites inside the subset. Nothing links the two loads: their facet ids
+differ, and `derived_from` stays null on both, since neither file is made from the other. A table
+facet's `callset_type` is inferred from its rows as for a VCF (RM4); the one on disk fits no class, so
+it says `absence_means = unknown`.
 
 ## Decision 9: INFO and FORMAT fields the schema does not name
 

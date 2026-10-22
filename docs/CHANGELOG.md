@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `freebayes_varscan2_keyvalue` loads (RM2, SCHEMA Decision 8): PGP's `-orig` key=value table
+  becomes one `caller_split` facet per caller, rows where that caller's genotype is not `NULL`, with
+  `gt` over `[REF] + ALT`, the genotype text in `source_gt` and the caller's total depth in `dp`. Its
+  VarScan2 facet keeps the genotype at sites both callers found, which a one-column merge gives to
+  freeBayes. On the one pair on disk the table is a subset of its merge (2.04M of 5.30M rows, every
+  chromosome, the gene-dense ones most): its freeBayes rows all match the merge's, and its VarScan2
+  rows agree with the merge's wherever both have one. `callset_type` is inferred from the rows as for a
+  VCF (RM4); that table's spread fits no class, so its facets say `absence_means = unknown`.
+
 - Schema 0.0.6 (RM2's VCF side): `facets.ploidy_statements` is new, and the caller, its version, the
   vendor and the phasing method are filled from VCF headers. `REWRITE_VERSION` 6 and the schema bump
   orphan earlier cache entries (RM268).

@@ -83,6 +83,10 @@ INFO_KEYS: dict[str, tuple[str, str]] = {"END": ("1", "Integer"), "SVLEN": ("A",
 SPLIT_MARKER_ID = "OLD_MULTIALLELIC"
 """The INFO key vt decompose and Glow write on a record split off a multi-allelic site."""
 
+SPLIT_INFO_KEY = "JUST_VCF_SPLIT"
+"""The INFO key `write_vcf` puts on a row flagged as one record of a split multi-allelic site
+(`normalize`'s split rows, and rows RM270 flagged). Read back as a marker, whatever its value."""
+
 BCFTOOLS_OLD_REC = "Original variant. Format: CHR|POS|REF|ALT|USED_ALT_IDX"
 """The Description bcftools norm writes for its `--old-rec-tag` key, whatever the key is named
 (vcfnorm.c). Only a split record gets the fifth, `USED_ALT_IDX`, field; a realigned one has four."""
@@ -145,9 +149,11 @@ def _attrs(body: str) -> dict[str, str]:
 
 
 def _split_marker_kind(attrs: dict[str, str]) -> str | None:
-    """`vt` or `bcftools` when a declared INFO key marks records split off a multi-allelic site."""
+    """`vt`, `just_vcf` or `bcftools` when a declared INFO key marks records split off a multi-allelic site."""
     if attrs.get("ID") == SPLIT_MARKER_ID:
         return "vt"
+    if attrs.get("ID") == SPLIT_INFO_KEY:
+        return "just_vcf"
     if attrs.get("Description", "").strip('"') == BCFTOOLS_OLD_REC:
         return "bcftools"
     return None
@@ -171,7 +177,7 @@ class Header:
     split_markers: dict[str, str] = field(default_factory=dict)
     alt_ids: set[str] = field(default_factory=set)
     """Symbolic alleles the header declares with `##ALT` (`CGA_NOCALL`, `NON_REF`, `DEL`…)."""
-    """Declared INFO keys that mark split records → `vt` or `bcftools` (`_split_marker_kind`)."""
+    """Declared INFO keys that mark split records → `vt`, `just_vcf` or `bcftools` (`_split_marker_kind`)."""
 
     @property
     def version_tuple(self) -> tuple[int, int] | None:
@@ -680,10 +686,10 @@ def _gt_expr() -> pl.Expr:
 
 
 def _tagged(key: str, kind: str) -> pl.Expr:
-    """True on a record INFO `key` tags as split off a multi-allelic site: any vt value, or a
-    bcftools value with its fifth, `USED_ALT_IDX`, field."""
+    """True on a record INFO `key` tags as split off a multi-allelic site: any vt or just-vcf value, or
+    a bcftools value with its fifth, `USED_ALT_IDX`, field."""
     column = pl.col(f"info_{key}")
-    return column.is_not_null() if kind == "vt" else column.str.count_matches(r"\|").fill_null(0) == 4
+    return column.str.count_matches(r"\|").fill_null(0) == 4 if kind == "bcftools" else column.is_not_null()
 
 
 def _marker_expr(header: Header) -> pl.Expr:

@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load` reads `write_vcf`'s own `INFO/JUST_VCF_SPLIT` back as a split marker: those rows get
+  `split_signal = marker` and the facet's `split_marker` names the key, so a normalized facet written
+  and reloaded keeps its split rows flagged and `rejoin_split` joins them again. Before, the tag was
+  dropped as an unknown INFO key and the loader's patterns flagged some of the rows as `slot_pattern`.
+  `writing.SPLIT_INFO_KEY` now lives in `loaders.vcf` (still importable from `writing`). No schema
+  version change.
+
 - PL now loads as the Float32 nearest `-PL/10`, divided in Float64 and rounded once, so a PL file and a
   GL file stating one likelihood compare equal on `gl` (F11). Complete Genomics' phred-unit GL is
   divided the same way. This changes `gl` by one Float32 step on some entries of files that already

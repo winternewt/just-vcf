@@ -320,7 +320,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
 | `sample_meta` | the file's `##SAMPLE` and `##PEDIGREE` lines for this sample, verbatim. Pedigree becomes GA4GH Pedigree later (charter) |
 | `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9). For a delimited table, the file's own column names that no frame column carries (a Final Report's `GenCall Score`) |
-| `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
+| `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, `write_vcf`'s `JUST_VCF_SPLIT`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
@@ -403,9 +403,11 @@ other ALT of a genotype as `0`, so `1/2` at `A>G,T` becomes `1/0` at `A>G` and `
 `gt_alleles` reads each `0` as REF (RM270). The loader flags such rows and changes no value. Within a
 contig, over the rows that become `calls` (blocks never take part), first match wins:
 
-1. `marker`: the row carries INFO `OLD_MULTIALLELIC` (vt, Glow), or a value with five `|` fields under
-   a key declared with bcftools' `--old-rec-tag` Description. A record bcftools only realigned has
-   four and is not flagged.
+1. `marker`: the row carries INFO `OLD_MULTIALLELIC` (vt, Glow) or `JUST_VCF_SPLIT` (`write_vcf`'s
+   own tag, any value), or a value with five `|` fields under a key declared with bcftools'
+   `--old-rec-tag` Description. A record bcftools only realigned has four and is not flagged. So a
+   facet `normalize` split keeps `split_signal = marker` through `write_vcf` and `load`; a row RM270
+   flagged by a pattern comes back as `marker` too, since the file now carries the tag.
 2. `slot_pattern`: two or more non-reference rows at one `pos`, each GT slot non-zero in at most one.
 3. `all_zero_beside_alt`: a fully called all-`0` row, of any ploidy, beside a non-reference row at
    the same `pos`. Every row of the position gets the signal.

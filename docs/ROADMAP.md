@@ -278,9 +278,12 @@ rejected:
 - Split rows carry `split_signal = marker`, as vt's output does once loaded, so `rejoin_split` can
   join them. Rejected: a new `SplitSignal` value (a new Enum category changes the column's dtype, a
   schema bump), and no flag at all (the row would not say it is one part of a site). In a written file
-  the tag is `write_vcf`'s `JUST_VCF_SPLIT`, which the loader does not read back as a marker yet; vt's
-  `OLD_MULTIALLELIC` and bcftools' `--old-rec-tag` were rejected because their values are the original
-  record, which the frame does not keep per row.
+  the tag is `write_vcf`'s `JUST_VCF_SPLIT`, and since 2026-10-22 the loader reads it back as a marker
+  (any value), so a written normalized facet keeps its flag. Rejected for reading it back: restoring
+  the signal the value names (`slot_pattern`, `all_zero_beside_alt`), since the loader finds those
+  patterns again from the rows and the file now carries a marker key. vt's `OLD_MULTIALLELIC` and
+  bcftools' `--old-rec-tag` were rejected for writing because their values are the original record,
+  which the frame does not keep per row.
 - `gl` on a split row only where no GT slot holds another ALT. Rejected: bcftools' slice on every row,
   which on `1/2` leaves a `1/.` row whose likelihoods point at `0/0`. `gp` withheld on split rows.
   Rejected: bcftools' unrescaled slice (it does not sum to 1, and the loader drops such GP, F10) and a

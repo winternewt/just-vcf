@@ -23,9 +23,11 @@ What is written, and the rules it follows:
 - **VCF 4.3**, not 4.4+: GP is a probability from 4.3 on, which is what `gp` holds, and the writer
   emits no leading phase indicator, so the first haplotype's phase follows 4.3's implicit rule.
 - **INFO** carries `END` where `end_pos` is not the REF span (symbolic alleles), and
-  `JUST_VCF_SPLIT` on rows RM270 flagged as one record of a split multi-allelic site. Those rows are
-  written as the frame holds them, with a warning and the tag, so a reader is told that a `0` there
-  may mean another ALT. `rejoin_split` joins them first, if that is what the caller wants.
+  `JUST_VCF_SPLIT` on rows flagged as one record of a split multi-allelic site (`split_signal`:
+  `normalize`'s split rows, and rows RM270 flagged). Those rows are written as the frame holds them,
+  with a warning and the tag, so a reader is told that a `0` there may mean another ALT. `load` reads
+  the tag back as a marker (`split_signal = marker`), so a written normalized facet keeps its flag.
+  `rejoin_split` joins them first, if that is what the caller wants.
 - **Blocks** are not written. A gVCF block record needs the reference base at its start, which the
   `blocks` frame does not hold until RM3 reads the sequence; the count is reported.
 - **Contig names** are written as stored (the canonical `chrom`), with the `chr` prefix (`MT` becomes
@@ -51,16 +53,13 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.bgzf import BgzfWriter
-from just_vcf.loaders.vcf import FORMAT_KEYS
+from just_vcf.loaders.vcf import FORMAT_KEYS, SPLIT_INFO_KEY
 from just_vcf.loading import Loaded
 from just_vcf.schema import CONTIG_RANK, SCHEMA_VERSION, RefCheck, canonical_chrom
 
 logger = logging.getLogger(__name__)
 
 VCF_VERSION = "VCFv4.3"
-
-SPLIT_INFO_KEY = "JUST_VCF_SPLIT"
-"""INFO key on a written row that RM270 flagged as one record of a split multi-allelic site."""
 
 _FORMAT_DESCRIPTIONS = {
     "GT": "Genotype",

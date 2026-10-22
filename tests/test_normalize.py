@@ -370,6 +370,14 @@ def test_written_output_reloads_as_held(tmp_path: Path, store: ReferenceStore) -
     view = lambda frame: [(r["chrom"], r["pos"], r["alts"], r["gt"]) for r in frame.iter_rows(named=True)]  # noqa: E731
     assert view(reloaded) == view(held)
     assert reloaded["source_ref"].to_list() == held.select(pl.coalesce("ref", "source_ref"))["ref"].to_list()
+    # The split rows keep their flag through the file: write_vcf tags them, load reads the tag as a marker.
+    assert held["split_signal"].drop_nulls().len() >= 4
+    assert reloaded["split_signal"].to_list() == held["split_signal"].to_list()
+    again = load(written.path)
+    assert again.facets.collect()["split_marker"].item() == "JUST_VCF_SPLIT"
+    assert not any("INFO/JUST_VCF_SPLIT" in field for field in again.facets.collect()["dropped_fields"].item())
+    site = rejoin_split(again).calls.filter((pl.col("chrom") == "1") & (pl.col("pos") == 90)).collect()
+    assert site.height == 1 and len(site["alts"].item()) == 3
 
 
 # --- against bcftools norm (htslib's, bundled in pysam) -----------------------------------------

@@ -17,7 +17,7 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; on 2026-10-22 the vendor-table loader, the VCF `source` detector and the VCF dialects `bcf`, `vcf_no_meta`, `vcf_cgi` and `vcf_freebayes_varscan2` (from the merged VCF; not yet from the `-orig` table): 22 of the 39 declared formats load, the 9 rsid-table layouts, `vcf` and its four dialects, AncestryDNA, FTDNA (both exports), the RSID/RESULT table (MyHeritage), Color, deCODEme, Genos and the Illumina Final Report with plus-strand alleles; `freebayes_varscan2_keyvalue` and CGI `var`/`masterVarBeta` are next; Geno 2.0 and Final Reports without positions or plus-strand alleles wait for chip manifests) · Owner: lead
+Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; on 2026-10-22 the vendor-table loader, the VCF `source` detector and the VCF dialects `bcf`, `vcf_no_meta`, `vcf_cgi` and `vcf_freebayes_varscan2`, then the `freebayes_varscan2_keyvalue` table and CGI's native `var` and `masterVarBeta`: 25 of the 39 declared formats load, the 9 rsid-table layouts, `vcf` and its four dialects, the key=value table, CGI `var` and `masterVarBeta`, AncestryDNA, FTDNA (both exports), the RSID/RESULT table (MyHeritage), Color, deCODEme, Genos and the Illumina Final Report with plus-strand alleles; Geno 2.0 and Final Reports without positions or plus-strand alleles wait for chip manifests) · Owner: lead
 
 **Shipped:** content-based detection. `just_vcf.sniff` and the declarative registry in
 `just_vcf.formats` (docs/FORMATS.md). Over the PGP-HMS participants, 8 of about 1,740 files stay unknown,
@@ -58,7 +58,38 @@ starling) were added from the PGP-HMS headers. Decisions:
 rows counted, never a reference-called record, which suggests an absent position was called
 reference. The loader keeps `absence_means = blocks` (absent is not reference) until CGI's own
 documentation or a comparison with the same genome's `var` file settles it; `weak_reference` or a
-stronger value would be the change.
+stronger value would be the change. **Settled by the comparison, the value not yet chosen
+(2026-10-22):** on the smallest PGP-HMS assembly, vcfBeta covers every base its `var` does not call
+reference (0 bases missed of 317.7M) and touches 904,739 of the 2.78G bases `var` calls reference,
+the anchor bases of its indels and no-calls. So a position absent from a vcfBeta is one CGI called
+reference, as explicitly as a `var` ref block. Which value says that is the open part:
+`weak_reference` understates it, and a stronger one is a new `AbsenceMeans` member, which changes the
+`pl.Enum` dtype (a schema decision). The test is `test_real_var_converges_with_its_vcf_beta`.
+
+**CGI native files, built 2026-10-22** (`loaders/cgi.py`). Decisions, each with what was rejected:
+
+- Indels stay unpadded: a deleted allele is `""`, an insertion point sits at `pos = begin` with
+  `end_pos` null (the Genos rule). Rejected: an anchor base, which needs the sequence (RM3); and
+  `pos = begin + 1` with `end_pos = pos - 1` for an insertion, which keeps one interbase rule but puts
+  an `end_pos` below `pos` in the frame.
+- An uncalled insertion point (a zero-length no-call, 346,474 in one genome) is a `calls` row with
+  every haplotype null. Rejected: dropping it with a count, which loses "looked and could not tell"
+  (Decision 2); and a block on the anchor base, as vcfBeta writes it, which overlaps a `ref` block.
+- `alts` sorted by string, slots as each file wrote them, `phased` null. Rejected: reading `hapLink`
+  as a phase set; neither file's slot order is a phase (the two files of one assembly order the slots
+  differently), and hapLink's semantics were not checked against CGI's documentation.
+- `gq`, `gl` null; the allele scores and `hapLink` in `dropped_fields`. Rejected: `gq` as the lower
+  allele score, the convention CGI's VCF writer uses, which is a derivation, not a value the file
+  states.
+- `varQuality` values kept verbatim (VQHIGH). Rejected: mapping VQHIGH to PASS without a CGI document
+  that says so.
+- `callset_type = wgs` only where `#TITLE` says whole-genome sequencing. Rejected: `wgs` from the
+  format id alone.
+- `masterVarBeta`'s `totalReadCount` fills `dp`; its per-allele read counts are not made into `ad`.
+
+**Left for CGI:** `ad` from masterVarBeta's read counts; `hapLink` as phase sets; the 1.x layouts
+(`totalScore`, no file on disk); memory (a whole `var` peaks at 8.9 GB, the haplotype sort);
+GET-Evidence copies named `<assembly>.tsv.bz2`, not checked.
 
 Header evidence found while declaring the VCF formats:
 

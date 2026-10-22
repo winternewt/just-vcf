@@ -9,7 +9,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import MultiSampleError, TableLayoutError, load
+from just_vcf import MultiSampleError, TableLayoutError, UnsupportedFormatError, load, table_samples
 from just_vcf.formats import get_spec
 from just_vcf.loaders.table import FORMATS as TABLE_FORMATS
 from just_vcf.loading import LOADABLE_FORMATS, Loaded
@@ -441,6 +441,31 @@ def test_final_report_with_two_samples_and_unplaced_probes(tmp_path: Path) -> No
     facet = loaded.facets.collect().row(0, named=True)
     assert facet["sample"] == "S1" and facet["assembly_label"] is None, "a manifest name is not a build statement"
     assert facet["dropped_fields"] == ["GC Score"]
+
+
+def test_table_samples_lists_the_sample_column(tmp_path: Path) -> None:
+    rows = [("rs1", "S2"), ("rs1", "S1"), ("rs2", "S2"), ("rs3", "S3"), ("rs3", "S1")]
+    body = "".join(f"{rsid}\t{sample}\t1\t100\tAG\t0.9\n" for rsid, sample in rows)
+    text = REPORT_HEAD + "SNP Name\tSample ID\tChr\tMapInfo\tAlleles - Plus\tGC Score\n" + body
+    path = tmp_path / "report.txt"
+    path.write_text(text)
+    first_seen = list(dict.fromkeys(sample for _, sample in rows))
+    assert table_samples(path) == first_seen
+    with pytest.raises(MultiSampleError, match="table_samples"):
+        load(path)
+    for sample in first_seen:
+        loaded = load(path, sample=sample)
+        assert loaded.calls.select(pl.len()).collect().item() == sum(s == sample for _, s in rows)
+    color = tmp_path / "color.csv"
+    color.write_text(COLOR_HEADER + "K1,2,100,rs1,AG,GRCh37\n")
+    assert table_samples(color) == ["K1"]
+    ancestry = tmp_path / "ancestry.txt"
+    ancestry.write_text(get_spec("ancestrydna").example)
+    assert table_samples(ancestry) == [], "no sample column, nothing to choose"
+    vcf = tmp_path / "calls.vcf"
+    vcf.write_text("##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\n1\t1\t.\tA\tG\t.\t.\t.\tGT\t0/1\n")
+    with pytest.raises(UnsupportedFormatError):
+        table_samples(vcf)
 
 
 def test_final_report_without_plus_strand_alleles_is_refused(tmp_path: Path) -> None:

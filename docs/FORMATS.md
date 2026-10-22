@@ -57,9 +57,11 @@ it is registered too late or detects too loosely.
 
 | Loader | Formats |
 |---|---|
-| `loaders.vcf` | `vcf` |
+| `loaders.vcf` | `vcf`, `vcf_cgi`, `vcf_freebayes_varscan2`, `vcf_no_meta`, `bcf` |
 | `loaders.rsid_table` | `23andme`, `23andme_csv`, `living_dna`, `selfdecode`, `plink_23`, `genes_for_good`, `genes_for_good_imputed`, `rsid_table`, `rsid_table_headerless` |
 | `loaders.table` | `ancestrydna`, `ftdna`, `ftdna_space`, `rsid_result_csv`, `color_genotypes`, `decodeme`, `genos`, `illumina_final_report` |
+| `loaders.keyvalue` | `freebayes_varscan2_keyvalue`: one facet per caller (SCHEMA Decision 8) |
+| `loaders.cgi` | `cgi_var`, `cgi_master_var`: Complete Genomics loci into calls and blocks |
 
 `loaders.table` reads each file through its spec: the column names from the file (matched against the
 spec's names and aliases, case-insensitively), the delimiter, the coordinate convention and the no-call
@@ -67,10 +69,20 @@ spellings. Columns the frames do not carry are listed by their file names in `fa
 (deCODEme's `Variation`, a Final Report's GenCall score and intensities). A file whose columns lack what
 its format needs is refused with `TableLayoutError`. MyHeritage exports load as `rsid_result_csv`
 (the `ftdna` spec excludes them), with the vendor left unclaimed; no MyHeritage file was available to
-check that against.
+check that against. A table with a sample column (a Final Report of several samples, Color) loads one
+sample at a time: `load(path, sample=…)`, with `just_vcf.table_samples(path)` listing the ids in the
+order they first appear, as `vcf_samples` does for a VCF.
 
-Not loadable yet: the CGI native files (`cgi_var`, `cgi_master_var`), the VCF dialects (`vcf_cgi`,
-`vcf_freebayes_varscan2`, `vcf_no_meta`, `bcf`), the key=value table and the other tables. Geno 2.0
+`loaders.cgi` reads both CGI callsets into one per-haplotype shape (a `var` locus's sub-rows joined
+in `begin` order, a `masterVarBeta` row's two allele columns) and makes the rows from there, so the
+two files of one assembly give the same sites, blocks and allele sets; the haplotype slots can differ,
+since neither file's slot order is a phase and `phased` stays null. The facet's caller is
+`CGAPipeline` at the file's `#SOFTWARE_VERSION`, as CGI's own VCF names it, its `callset_type` is
+`wgs` where `#TITLE` says whole-genome sequencing (28 of 250 PGP-HMS files have no `#TITLE`), and its
+blocks make `absence_means = blocks`. A whole PGP-HMS `var` (18.9M rows, bz2) loads in about 3.5
+minutes with a peak of 8.9 GB: the haplotype rows are sorted and grouped in memory.
+
+Not loadable yet: the other tables. Geno 2.0
 (`genographic_geno2`, its headerless variant) and the headerless Final Report name markers without
 positions, so their rows cannot be `calls` rows until a chip manifest places them.
 
@@ -81,13 +93,22 @@ entry says how.
 
 - **Columns differ by format version.** A spec declares one layout (CGI declares 2.5). Earlier
   versions drop, add or rename columns; CGI 1.x has `totalScore` where 2.x has three score columns.
-  The loader should read names from the file's header and look dtypes up by name.
+  The loader should read names from the file's header and look dtypes up by name. *Closed for CGI:*
+  the loader reads the `>` line and takes columns by name; the ones on disk are format 2.0 (3 `var`, 1
+  `masterVarBeta`) and 2.5.
 - **An alias can hide a vocabulary change.** CGI `varQuality` (VQHIGH/VQLOW, ≤2.2) is aliased to
-  `varFilter` (PASS/VQLOW/AMBIGUOUS, 2.5); the values need mapping, not just the name.
+  `varFilter` (PASS/VQLOW/AMBIGUOUS, 2.5); the values need mapping, not just the name. *Kept, not
+  mapped:* `sample_filters` holds VQHIGH as written; no CGI document read here equates it with PASS.
 - **0-based conversion is more than `+1`.** CGI insertions have `begin == end` and need an anchor base
   from the reference; `reference` is `=` on ref and no-call blocks, so REF comes from the FASTA.
+  *Closed in the loader without a FASTA:* a span is `pos = begin + 1`, `end_pos = end`; an insertion
+  point sits at `pos = begin` with `end_pos` null and `source_ref = ""`; alleles stay unpadded, `""`
+  for an empty one, until RM3 adds the anchor (SCHEMA Decision 2).
 - **`no_call` is a flat tuple of spellings.** It cannot express a partial no-call inside an allele
   (CGI `GC?`), `half` zygosity, or 1.x `no-call-rc`. These live in `genotype_encoding` and `notes`.
+  *Closed for CGI:* a haplotype written `?` is a null in `gt_alleles`, a `?` inside a sequence is kept
+  verbatim, and every no-call varType (`no-call`, `no-call-rc`, `no-call-ri`, `no-ref`,
+  `PAR-called-in-X`) reads as no call.
 - **Column names outside the table.** Genos names its columns in a `##Columns=` meta line; the spec
   uses `HeaderMode.NONE` with the columns in order. *Closed:* the loader reads the names from that line
   when it is there (the spec's aliases match them) and falls back to the spec's order when it is not.
@@ -125,3 +146,5 @@ entry says how.
   write two letters on every called row (FTDNA's `---`, a Final Report's single `-`) it gives two
   nulls.
 - **Variable-width rows.** The key=value table has 12 fixed fields and an annotation tail of any length.
+  *Closed in the loader:* only the twelve fixed fields are read, each checked for its key; the tail's
+  keys, read from the first 1,000 rows, are listed in `facets.dropped_fields`.

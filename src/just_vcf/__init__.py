@@ -13,6 +13,7 @@ from just_vcf.loading import (
     NoSampleError,
     UnsupportedFormatError,
     load,
+    table_samples,
     vcf_samples,
 )
 from just_vcf.loaders.table import TableLayoutError
@@ -93,6 +94,7 @@ __all__ = [
     "resolve_ref",
     "sex_chromosome_evidence",
     "sniff",
+    "table_samples",
     "vcf_samples",
     "vrs_withheld",
     "write_vcf",

@@ -163,7 +163,17 @@ How the awkward cases land under C:
 - **23andMe `I`/`D`**: kept verbatim as symbolic alleles. Resolving them needs chip manifests
   (LANDSCAPE). No VRS id is minted for them.
 - **CGI partial no-call inside an allele** (`GC?`): kept verbatim in `gt_alleles` (`"GC?"`), with no VRS
-  id. The `?` marks the bases CGI could not call.
+  id. The `?` marks the bases CGI could not call. Because `gt` indexes `[source_ref] + alts`, a partial
+  allele is in `alts` too (the native `var` and `masterVarBeta` files; CGI's VCF writes such a
+  haplotype `.`).
+- **No anchor base** (CGI native files): CGI writes an indel over its own span, without VCF's padding
+  base, and REF only comes from the sequence. So an allele can be the empty string: a deletion of the
+  whole span is `""` (`source_ref = "T"`, `alts = [""]` at `pos = begin + 1`). A locus of zero length
+  (an insertion point) has `source_ref = ""`, sits at the base before it (`pos = begin`, where VCF puts
+  the anchor) and has `end_pos` null until RM3 reads that base, as Genos insertion sites do. An empty
+  string in `source_ref`, `alts` or `gt_alleles` occurs only in such rows, which is how RM3 finds the
+  rows it has to pad. An insertion point CGI could not call stays a row with every haplotype null: it
+  covers no base, so it cannot be a block.
 - **The `*` allele** (VCF: "allele missing due to overlapping deletion") is kept as `"*"` in `alts` and
   `gt_alleles`. It says the haplotype is covered by a deletion called at another record. It is not
   a reference call, and it gets no VRS id. `0/2` over `ALT=C,*` must never be read as a het with a
@@ -290,6 +300,12 @@ included), or when it has no ALT (`.`) and an `INFO/END` extent, which is how Il
 reference block. Either way its GT must assert reference or nothing; a GT calling `<*>` stays a call. A record with `ALT=TC,<*>` is a variant call that also carries the `<*>` allele, and it
 stays in `calls` with `<*>` in `alts`. A monomorphic record (ALT `.`) stays in `calls` too.
 
+Complete Genomics' native `var` and `masterVarBeta` files state their blocks directly: a `ref` locus is
+a `ref` block, and `no-call`, `no-ref` (an assembly gap) and `PAR-called-in-X` (chrY stretches whose
+calls are on chrX) are `no_call`, as is a variant locus whose every haplotype is no-called. Each block
+is `pos = begin + 1`, `end_pos = end`. A locus of zero length is never a block (above). The files tile
+the genome, so `absence_means = blocks`.
+
 Complete Genomics' VCF (`vcf_cgi`, or any VCF declaring its alleles) adds two block kinds, both
 `no_call`: a `<CGA_NOCALL>` record spans POS to INFO `END`, and, where the header declares
 `CGA_NOCALL`, a record with ALT `.`, no `END` and no allele called (`./.`, `.|.`, or a haploid `.`,
@@ -369,7 +385,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `format_id`, `family` | from `sniff` |
 | `vendor`, `caller`, `caller_version` | the RM2 `source` detector, from header lines only. Null = not identifiable, never guessed. `vendor` is the party the header names as delivering the file (`##center`, `##generatedby`), falling back to the format's own vendor (`vcf_cgi`); a caller's maker is not a vendor. `caller` is the program that wrote the genotypes; tools that only touched the file afterwards (GATK SelectVariants, ApplyVQSR, bcftools view) are not evidence. Two callers in one header leave both fields null, with a warning; so do two versions of one caller for `caller_version` |
 | `ploidy_statements` | the header's ploidy lines verbatim, in header order (RM269 half 1): a meta line whose key names a ploidy or karyotype (DRAGEN `##referenceSexKaryotype=XY`, CGI `##source_MAX_PLOIDY`), and each ploidy option of a recorded command line, prefixed with the line it came from (`GATKCommandLine HaplotypeCaller: --sample-ploidy 2`, `bcftools_callCommand: --ploidy GRCh38`). An option whose value is a path writes `<path>` for it. No vocabulary: reading a model out of these is the karyotype work's job. `[]` = a VCF header with none; null = not a VCF. just-vcf's own shape |
-| `sample` | the sample column name, verbatim. **Identifying**: PGP uploads carry real names here. Logs, warnings and error messages name the `facet_id`, never the sample |
+| `sample` | the sample column name, verbatim; for a CGI native file its `#ASSEMBLY_ID`, which CGI's VCF uses as its sample column. **Identifying**: PGP uploads carry real names here. Logs, warnings and error messages name the `facet_id`, never the sample |
 | `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` or null. A stated label is kept when the lengths disagree, with a warning (RM4, below). `inferred` has three sources: a VCF's contig lengths at load (RM4), an array's own rows scored against the reference by `resolve_ref` (F9, Decision 2), and a lifted facet's target collection (`liftover`, "Lifting"). A consumer tells them apart by `relation = liftover_to` for the third, then by `header_contigs`, which only the first has |
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
@@ -729,8 +745,19 @@ INFO/SF lists its index. With a column per caller, each facet reads its own colu
 column, the column holds the first caller's genotype wherever that caller found the site, so the
 VarScan2 facet holds only the sites VarScan2 alone found, and a warning counts the shared sites it
 lost. `derived_from` stays null: the merged file is not loaded as a facet of its own (that is option
-A), so there is no parent row to point at. Not built: sourcing from the `-orig` key=value table,
-which has no loader yet.
+A), so there is no parent row to point at.
+
+**The `-orig` key=value table, built 2026-10-22.** It loads the same way, as two `caller_split`
+facets (`caller_index` 0 and 1 in the facet id, as for the merge), each holding the rows where its
+caller's genotype is not `NULL`. It is not a second copy of the merge: on the one pair on disk it holds
+2.04M of the merge's 5.30M rows, on every chromosome, the gene-dense ones most, and every row carries
+gene annotation, so it reads as a gene-annotated subset. Within it, its freeBayes rows are the merge's,
+and its VarScan2 facet keeps the genotypes the one-column merge lost (1.75M shared sites there). So
+the two loads complement each other: the merge's VarScan2 facet has VarScan2's lone sites genome-wide,
+the table's has VarScan2 at shared sites inside the subset. Nothing links the two loads: their facet ids
+differ, and `derived_from` stays null on both, since neither file is made from the other. A table
+facet's `callset_type` is inferred from its rows as for a VCF (RM4); the one on disk fits no class, so
+it says `absence_means = unknown`.
 
 ## Decision 9: INFO and FORMAT fields the schema does not name
 

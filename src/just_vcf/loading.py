@@ -18,7 +18,7 @@ from just_vcf.assembly import infer_assembly, sorted_name_length_pairs_digest
 from just_vcf.cache import cache_dir, file_sha256
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import Family
-from just_vcf.loaders import rsid_table, table, vcf
+from just_vcf.loaders import cgi, keyvalue, rsid_table, table, vcf
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
     BLOCKS,
@@ -38,7 +38,7 @@ from just_vcf.source import detect_source
 
 logger = logging.getLogger(__name__)
 
-LOADABLE_FORMATS: frozenset[str] = rsid_table.FORMATS | table.FORMATS | vcf.FORMATS
+LOADABLE_FORMATS: frozenset[str] = rsid_table.FORMATS | table.FORMATS | vcf.FORMATS | keyvalue.FORMATS | cgi.FORMATS
 """Format ids `load` can read. Grows as loaders land."""
 
 SPILL_ROW_GROUP = 200_000
@@ -95,6 +95,10 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
         return _load_vcf(sniffed, sample)
     if sniffed.format in table.FORMATS:
         return _load_table(sniffed, sample)
+    if sniffed.format in keyvalue.FORMATS:
+        return _load_keyvalue(sniffed)
+    if sniffed.format in cgi.FORMATS:
+        return _load_cgi(sniffed)
     return _load_rsid_table(sniffed)
 
 
@@ -117,6 +121,165 @@ def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:
     options = {} if read.sample_index is None else {"sample_index": read.sample_index}
     extra = {"sample": read.sample, "dropped_fields": read.dropped_columns}
     return _array_loaded(sniffed, read.calls, read.warnings, build=build, options=options, extra=extra)
+
+
+def _load_keyvalue(sniffed: Sniffed) -> Loaded:
+    """PGP's freeBayes+VarScan2 key=value table: one facet per caller (SCHEMA Decision 8)."""
+    source_sha256 = file_sha256(sniffed.path)
+    work = _work_dir(source_sha256, sniffed.member, "keyvalue")
+    copy = work / "payload.tsv"
+    with open_payload(sniffed) as handle:
+        head = keyvalue.copy_payload(handle, copy)
+    rows = keyvalue.scan(copy)
+    counts = keyvalue.stats(rows)
+    shared_warnings = []
+    if counts["malformed"]:
+        shared_warnings.append(
+            f"{counts['malformed']} row(s) whose fields do not carry the twelve fixed keys in order, or whose "
+            "position is not a 32-bit count, dropped"
+        )
+    facets, calls_parts, warnings = [], [], list(shared_warnings)
+    for index, prefix, caller in keyvalue.CALLERS:
+        facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={"caller_index": index})
+        calls = keyvalue.to_calls_frame(keyvalue.caller_rows(rows, prefix), facet_id)
+        spilled, contigs = _spill(facet_id, calls, empty(BLOCKS))
+        inference = callset.classify(spilled, ["DP"], None)
+        logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
+        kind = inference.callset_type if inference else None
+        facets.append(
+            {
+                "facet_id": facet_id,
+                "source_sha256": source_sha256,
+                "source_path": str(sniffed.path),
+                "member": sniffed.member,
+                "format_id": sniffed.format,
+                "family": sniffed.family.value if sniffed.family else None,
+                "vendor": get_spec(sniffed.format).vendor,
+                "caller": caller,
+                "callset_type": kind.value if kind else None,
+                "absence_means": callset.absence_means(kind, False).value,
+                "relation": vcf.CALLER_SPLIT,
+                "assembly_label": sniffed.build,
+                "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
+                "contig_map": contig_map(counts["chroms"]),
+                "dropped_fields": keyvalue.dropped_fields(head),
+            }
+        )
+        calls_parts.append(canonical_order_per_contig(spilled, contigs))
+        warnings += [f"{caller} facet: {w}" for w in keyvalue.warnings_for(counts, prefix)]
+    copy.unlink()
+    return _multi_facet_loaded(facets, calls_parts, [empty(BLOCKS)] * len(facets), warnings)
+
+
+def _load_cgi(sniffed: Sniffed) -> Loaded:
+    """A Complete Genomics `var` or `masterVarBeta` file: one whole-genome facet, calls and blocks."""
+    source_sha256 = file_sha256(sniffed.path)
+    work = _work_dir(source_sha256, sniffed.member, "cgi")
+    body = work / "body.tsv"
+    with open_payload(sniffed) as handle:
+        header = cgi.copy_body(handle, body)
+    rows = cgi.prepare(cgi.scan(body, header), sniffed.format)
+    if sniffed.format == cgi.VAR:
+        uniform, segments = cgi.var_parts(rows)
+        haplotypes = cgi.var_haplotypes(segments)
+    else:
+        uniform, haplotypes = cgi.master_var_parts(rows)
+    checks = cgi.locus_checks(haplotypes)
+    good = haplotypes.join(checks.filter(pl.col("problem").is_null()).select("locus"), on="locus", how="semi")
+    calls, none_called = cgi.call_rows(good)
+    stretches = pl.concat([uniform.select("chromosome", "begin", "end", "varType"), none_called], how="vertical")
+    blocks = cgi.block_rows(stretches)
+
+    counts = pl.collect_all(
+        [
+            rows.select(cgi.malformed(rows).sum().alias("malformed")),
+            checks.filter(pl.col("problem").is_not_null()).group_by("problem").len().sort("problem"),
+            uniform.group_by("varType").len().sort("varType"),
+            rows.filter(~cgi.malformed(rows)).select(pl.col("chromosome").unique()),
+        ]
+    )
+    warnings = []
+    if counts[0]["malformed"][0]:
+        warnings.append(f"{counts[0]['malformed'][0]} row(s) whose locus, begin or end is not a number, or whose end lies before its begin, dropped")
+    warnings += [f"{n} locus(es) with {problem} dropped" for problem, n in counts[1].iter_rows()]
+    by_type = dict(counts[2].iter_rows())
+    if by_type.get("PAR-called-in-X"):
+        warnings.append(f"{by_type['PAR-called-in-X']} chrY stretch(es) called on chrX (PAR-called-in-X) kept as no-call blocks")
+
+    facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={})
+    calls_frame, blocks_frame = cgi.to_frames(calls, blocks, facet_id)
+    spilled, contigs = _spill(facet_id, calls_frame, blocks_frame)
+    body.unlink()
+    facet = {
+        "facet_id": facet_id,
+        "source_sha256": source_sha256,
+        "source_path": str(sniffed.path),
+        "member": sniffed.member,
+        "format_id": sniffed.format,
+        "family": sniffed.family.value if sniffed.family else None,
+        "vendor": get_spec(sniffed.format).vendor,
+        "caller": cgi.CALLER,
+        "caller_version": header.first("SOFTWARE_VERSION"),
+        "sample": header.first("ASSEMBLY_ID"),
+        "assembly_label": sniffed.build,
+        "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
+        "callset_type": CallsetType.WGS.value if cgi.states_whole_genome(header) else None,
+        "absence_means": AbsenceMeans.BLOCKS.value,
+        "contig_map": contig_map(counts[3]["chromosome"].to_list()),
+        "dropped_fields": cgi.dropped_fields(sniffed.format, header),
+    }
+    for warning in warnings:
+        logger.warning("%s: %s", facet_id, warning)
+    return Loaded(
+        facets=_facet_frame(facet),
+        calls=canonical_order_per_contig(spilled, contigs),
+        blocks=_spilled_blocks(facet_id, contigs),
+        warnings=tuple(warnings),
+    )
+
+
+def _work_dir(source_sha256: str, member: str | None, kind: str) -> Path:
+    """A cache directory for one source's intermediate copies."""
+    path = cache_dir() / kind / hashlib.sha256(f"{source_sha256}!{member}".encode()).hexdigest()[:32]
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _spill(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame) -> tuple[pl.LazyFrame, list[str]]:
+    """Write a facet's unsorted `calls` and `blocks` to parquet in one streaming pass and return a scan
+    of the calls and their canonical contigs. The blocks are read back from `blocks.parquet`."""
+    spill = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
+    spill.mkdir(parents=True, exist_ok=True)
+    pl.collect_all(
+        [
+            calls.sink_parquet(spill / "calls.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
+            blocks.sink_parquet(spill / "blocks.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
+        ]
+    )
+    spilled = pl.scan_parquet(spill / "calls.parquet")
+    contigs = pl.concat(
+        [spilled.select("chrom").unique(), pl.scan_parquet(spill / "blocks.parquet").select("chrom").unique()]
+    ).unique().collect()["chrom"].to_list()
+    return spilled, contigs
+
+
+def _spilled_blocks(facet_id: str, contigs: list[str]) -> pl.LazyFrame:
+    return canonical_order_per_contig(pl.scan_parquet(cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}" / "blocks.parquet"), contigs)
+
+
+def _multi_facet_loaded(
+    facets: list[dict], calls: list[pl.LazyFrame], blocks: list[pl.LazyFrame], warnings: list[str]
+) -> Loaded:
+    """One `Loaded` from several facets of one source, in `facet_id` order."""
+    order = sorted(range(len(facets)), key=lambda i: facets[i]["facet_id"])
+    for warning in warnings:
+        logger.warning("%s: %s", facets[order[0]]["facet_id"], warning)
+    return Loaded(
+        facets=pl.concat([_facet_frame(facets[i]) for i in order], how="vertical"),
+        calls=_concat([calls[i] for i in order]),
+        blocks=_concat([blocks[i] for i in order]),
+        warnings=tuple(warnings),
+    )
 
 
 def _sibling_build(sniffed: Sniffed) -> str | None:
@@ -185,6 +348,18 @@ def vcf_samples(source: Path | str | Sniffed) -> list[str]:
     with open_payload(sniffed) as handle:
         header = vcf.read_bcf_header(handle)[0] if sniffed.format == vcf.BCF else vcf.read_header(handle)[0]
     return header.samples
+
+
+def table_samples(source: Path | str | Sniffed) -> list[str]:
+    """The sample ids of a genotype table with a sample column (an Illumina Final Report, Color), in
+    the order they first appear; `[]` for a table format without one. They can be real names: treat
+    them as identifying."""
+    sniffed = source if isinstance(source, Sniffed) else sniff(Path(source))
+    if not sniffed or sniffed.format not in table.FORMATS:
+        raise UnsupportedFormatError(sniffed)
+    with open_payload(sniffed) as handle:
+        data = handle.read()
+    return table.samples(data, table.spec_for(sniffed.format))
 
 
 def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:

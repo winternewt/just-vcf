@@ -156,6 +156,38 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 - Schema 0.0.7 (RM3): `facets.ref_seqcol_digest` is new; `resolve_ref` fills `ref`, `ref_check`, and an
   array row's `alts` and `gt` from a reference.
 
+- The CGI convergence tests (opt-in, PGP-HMS): one assembly's `var` and `masterVarBeta` give the same
+  blocks and sites, and its `var` and `vcfBeta` agree on 4,138,184 sites, with 27,505 partial calls
+  vcfBeta writes `.`, 356,513 loci vcfBeta writes as no-calls, and 1,665 (0.04%) left where vcfBeta
+  joins neighbouring loci. vcfBeta covers every base `var` does not call reference: its silence is a
+  reference call. `vcf_cgi` still says `absence_means = blocks`; the value that should replace it is
+  open (RM2). The comparison found masterVarBeta writing two no-called stretches as `??`; it is now
+  read as one `?`, as `var` joins them, so both files give the same blocks.
+
+- Complete Genomics' native callsets load (RM2): `cgi_var` and `cgi_master_var` become one facet each,
+  caller `CGAPipeline` at the file's `#SOFTWARE_VERSION`, `sample` its `#ASSEMBLY_ID`, `absence_means
+  = blocks`, `callset_type = wgs` where `#TITLE` says whole-genome sequencing. Uniform loci become
+  `ref` and `no_call` blocks; a variant locus becomes one call, its haplotypes joined from `var`'s
+  sub-rows or read from `masterVarBeta`'s two allele columns. Indels stay unpadded (CGI writes no
+  anchor base and REF only comes from the sequence): a deleted allele is `""`, and an insertion point
+  sits at the base before it with `end_pos` null and `source_ref = ""`. Partial calls (`?A`) are kept
+  verbatim; `phased`, `gl` and `gq` stay null (the allele scores are no likelihood, and `hapLink` is
+  not read). No column changes, so `SCHEMA_VERSION` is unchanged.
+
+- `just_vcf.table_samples(path)` lists the sample ids of a genotype table with a sample column (an
+  Illumina Final Report of several samples, Color) in the order they first appear, the table
+  counterpart of `vcf_samples`; `[]` for a table format without one. The refusal of a several-sample
+  table now names it.
+
+- `freebayes_varscan2_keyvalue` loads (RM2, SCHEMA Decision 8): PGP's `-orig` key=value table
+  becomes one `caller_split` facet per caller, rows where that caller's genotype is not `NULL`, with
+  `gt` over `[REF] + ALT`, the genotype text in `source_gt` and the caller's total depth in `dp`. Its
+  VarScan2 facet keeps the genotype at sites both callers found, which a one-column merge gives to
+  freeBayes. On the one pair on disk the table is a subset of its merge (2.04M of 5.30M rows, every
+  chromosome, the gene-dense ones most): its freeBayes rows all match the merge's, and its VarScan2
+  rows agree with the merge's wherever both have one. `callset_type` is inferred from the rows as for a
+  VCF (RM4); that table's spread fits no class, so its facets say `absence_means = unknown`.
+
 - Schema 0.0.6 (RM2's VCF side): `facets.ploidy_statements` is new, and the caller, its version, the
   vendor and the phasing method are filled from VCF headers. `REWRITE_VERSION` 6 and the schema bump
   orphan earlier cache entries (RM268).

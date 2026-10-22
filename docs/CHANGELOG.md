@@ -4,6 +4,18 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref(loaded, reference)` (RM3, charter 10) reads REF from the facet's assembly sequence,
+  held in a gtars refget store (`ReferenceStore`; a FASTA, plain or gzipped, is added to the store at
+  `JUST_VCF_REFERENCE_DIR` once). A VCF row gets `ref` over its `source_ref` span and `ref_check`
+  `match` or `mismatch`; an array row gets `ref` from the reference, `alts` from its genotype's
+  non-REF alleles (sorted) and `gt` into `[ref] + alts`. REF is never taken from the genotype. Before
+  any base is read, each contig is matched with the reference by its stated length and md5, or, for
+  arrays, by assembly label; a primary contig of another length refuses the facet
+  (`ReferenceMismatchError`), and any other unmatched contig (hg19's chrM against GRCh37's MT) is left
+  unread, counted in the warnings. I/D codes, no-calls and spans past a contig's end stay unread too.
+  `chr`-prefixed and plain names meet through `canonical_chrom`. The facet keeps its id and gains
+  `facets.ref_seqcol_digest` (schema: one new nullable column, version bump at merge). Minor.
+
 - A sites-only VCF (no FORMAT column, no sample) is refused by `load` with the new `NoSampleError`
   (exported), instead of failing inside the parquet spill with a polars conversion error (F8). Minor:
   a new exception; nothing that loaded before changes, facet ids included.

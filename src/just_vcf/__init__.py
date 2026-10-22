@@ -11,6 +11,7 @@ from just_vcf.loading import (
     load,
     vcf_samples,
 )
+from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
 from just_vcf.schema import (
     BLOCKS,
@@ -46,6 +47,8 @@ __all__ = [
     "EvidenceBasis",
     "PhaseSetKind",
     "RefCheck",
+    "ReferenceMismatchError",
+    "ReferenceStore",
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
@@ -53,7 +56,9 @@ __all__ = [
     "__version__",
     "load",
     "open_payload",
+    "reference_dir",
     "rejoin_split",
+    "resolve_ref",
     "sniff",
     "vcf_samples",
 ]

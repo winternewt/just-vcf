@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Running `rejoin_split`, `resolve_ref`, `normalize` or `mint_vrs_ids` again on a facet no longer
+  breaks the frame an earlier run returned. Each run stages its spill and commits it as a generation
+  named by the content it came from: the same input again reuses it (warnings included) and writes
+  nothing, other rows under the same `facet_id` get a generation of their own, and two processes on
+  one facet wait on the entry's lock and share one generation. Before, a second run removed and
+  rewrote the files, and the first frame's next `collect` failed (`Invalid thrift`) when the rows
+  differed or another process was mid-write. The derived spills' manifests carry `SPILL_LAYOUT` 2, so
+  the next run of each step sweeps the entries written the old way. `load`'s own spill is unchanged.
+
 - `normalize` drops `<*>` (and `<NON_REF>`) from the ALTs it splits: DeepVariant's variant records,
   `A>G,<*>`, become plain biallelic rows (no split flag) with `ad` and `gl` sliced exactly, and are
   then left-aligned like any other. Sites with two or more concrete ALTs beside `<*>` split as before,

@@ -25,7 +25,6 @@ that converts between them (charter 13).
 import hashlib
 import logging
 import os
-import shutil
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
@@ -264,7 +263,7 @@ def resolve_ref(
     a primary contig's stated length or md5 disagrees with the reference, or when more than one
     collection fits equally and `collection` does not choose.
     """
-    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "RESOLVE_VERSION": RESOLVE_VERSION}
+    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "RESOLVE_VERSION": RESOLVE_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
     cache.sweep_stale(cache.RESOLVE_SPILL, versions)
     facets = loaded.facets.collect()
     if facets.height != 1:
@@ -287,26 +286,30 @@ def resolve_ref(
 
     warnings = [f"assembly inferred from the rows as {inferred.label}: {inferred.summary()}"] if inferred is not None else []
     warnings += _contig_warnings(plan, rows_per_chrom)
-    counts: Counter[str] = Counter()
-    spill = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
-    parts: list[Path] = []
-    with cache.writing(spill, cache.RESOLVE_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])):
-        if spill.exists():
-            shutil.rmtree(spill)
-        spill.mkdir(parents=True)
+    entry = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
+    with cache.spilling(entry, cache.RESOLVE_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])) as spill:
         # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each contig
-        # below is a cheap filtered scan rather than a replay of whatever plan built the input.
-        loaded.calls.sink_parquet(spill / "input.parquet", row_group_size=SPILL_ROW_GROUP)
-        source = pl.scan_parquet(spill / "input.parquet")
-        for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-            rows = source.filter(pl.col("chrom") == chrom).collect()
-            contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
-            resolved = _resolve_rows(rows, store, contig, counts) if contig is not None else rows
-            part = spill / f"calls-{index:05d}.parquet"
-            canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
-            parts.append(part)
-        (spill / "input.parquet").unlink()
-    warnings += _row_warnings(counts, plan.digest)
+        # below is a cheap filtered scan rather than a replay of whatever plan built the input. Its
+        # bytes also key the result: a run on the same input reuses what an earlier one wrote.
+        staged = spill.stage / "input.parquet"
+        loaded.calls.sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
+        key = cache.content_key([staged], facet)
+        done = spill.find(key)
+        if done is None:
+            counts: Counter[str] = Counter()
+            source = pl.scan_parquet(staged)
+            parts: list[Path] = []
+            for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
+                rows = source.filter(pl.col("chrom") == chrom).collect()
+                contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
+                resolved = _resolve_rows(rows, store, contig, counts) if contig is not None else rows
+                part = spill.stage / f"calls-{index:05d}.parquet"
+                canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
+                parts.append(part)
+            staged.unlink()
+            done = spill.commit(key, {"calls": parts}, _row_warnings(counts, plan.digest))
+    warnings += done.warnings
+    parts = done.files("calls")
     for warning in warnings:
         logger.warning("%s: %s", facet["facet_id"], warning)
 

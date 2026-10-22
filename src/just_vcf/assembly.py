@@ -18,6 +18,7 @@ Two answers, kept apart because they are different kinds of fact:
 
 from enum import Enum
 
+import polars as pl
 from pydantic import BaseModel, ConfigDict
 from refget.digests import sha512t24u_digest
 from refget.utils import build_sorted_name_length_pairs, canonical_str
@@ -168,6 +169,161 @@ def infer_assembly(contigs: list[dict]) -> AssemblyInference:
 
 
 _NAMES_AND_MT = [*_NAMES, "MT"]
+
+
+ROWS_PER_CONTIG = 2_000
+"""SNV rows sampled per primary chromosome when a build is inferred from the rows."""
+
+MIN_SCORED_ROWS = 1_000
+"""Sampled rows a collection must be scored on before the rows can name its assembly."""
+
+MIN_SHARE = 0.60
+"""The share of scored rows whose genotype carries the reference base, at or above which a collection
+fits. On the right build only homozygous non-reference calls miss; on a wrong one a position's base is
+unrelated to the probe, so the share falls towards chance. Measured on 153 PGP-HMS array exports
+(F9, 2026-10-22): the right build scored 0.665–0.913, every wrong one 0.230–0.334. The low end is
+FTDNA's X-chromosome exports, about 2,000 rows of mostly hemizygous calls, where a hom-alt call is
+common (a floor of 0.70 refused 27 of the 43), and one FTDNA autosomal export with some probes on the
+minus strand (F13)."""
+
+MIN_MARGIN = 0.20
+"""How far the best collection's share must stand above the best collection of another label, and above
+chance. Two builds that both fit the rows (a wrong label on the same bases) are not told apart."""
+
+_ROW_BASES = ["A", "C", "G", "T"]
+
+
+class RowsOutcome(str, Enum):
+    """Why `infer_assembly_from_rows` gave the answer it gave. Only `INFERRED` carries a label."""
+
+    INFERRED = "inferred"
+    TOO_FEW_ROWS = "too_few_rows"
+    """Fewer than `MIN_SCORED_ROWS` rows could be scored on any collection."""
+    NO_FIT = "no_fit"
+    """No collection reaches `MIN_SHARE`."""
+    NO_MARGIN = "no_margin"
+    """The best share is within `MIN_MARGIN` of another label's, or of chance."""
+    UNLABELLED = "unlabelled"
+    """The best-scoring collection has no assembly label, so the rows cannot name one."""
+
+
+class RowsInference(BaseModel):
+    """The assembly an array facet's rows support, scored against reference collections. Truthy with a label."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str | None
+    digest: str | None
+    """The collection that scored best, when it named the label."""
+    outcome: RowsOutcome
+    reason: str
+    sampled: int
+    """SNV rows in the deterministic sample."""
+    scored: dict[str, int] = {}
+    """Collection digest → sampled rows on a contig the collection has."""
+    shares: dict[str, float] = {}
+    """Collection digest → share of its scored rows whose called alleles include its reference base."""
+    labels: dict[str, str | None] = {}
+    chance: float | None = None
+    """The share a random base would get: the mean number of distinct called alleles over four."""
+
+    def __bool__(self) -> bool:
+        return self.label is not None
+
+    def summary(self) -> str:
+        """The scores as one line, best first: `81.2% on GRCh37 (digest, 24000 rows); …`."""
+        order = sorted(self.shares, key=lambda digest: (-self.shares[digest], digest))
+        parts = [f"{self.shares[d]:.1%} on {self.labels.get(d) or 'an unlabelled collection'} ({d}, {self.scored[d]} rows)" for d in order]
+        if self.chance is not None:
+            parts.append(f"chance {self.chance:.1%}")
+        return "; ".join(parts)
+
+
+def sample_snv_rows(calls: pl.LazyFrame, per_contig: int = ROWS_PER_CONTIG) -> pl.DataFrame:
+    """A deterministic sample of array SNV rows: `chrom`, `pos`, `alleles` (distinct called bases, sorted).
+
+    Only rows without a source REF (array rows), on 1–22, X and Y, whose called alleles are all single
+    bases with at least one called. Per chromosome, rows sorted by position and genotype, every k-th row
+    is kept so that at most `per_contig` remain, spread over the whole chromosome. MT is left out: hg19's
+    chrM and rCRS differ, and a label covering both cannot be scored there.
+    """
+    called = pl.col("gt_alleles").list.drop_nulls()
+    snv = (
+        pl.col("source_ref").is_null()
+        & pl.col("chrom").is_in(_NAMES)
+        & pl.col("gt_alleles").is_not_null()
+        & (called.list.len() > 0)
+        & called.list.eval(pl.element().is_in(_ROW_BASES)).list.all()
+    )
+    rows = (
+        calls.filter(snv)
+        .select("chrom", "pos", called.list.unique().list.sort().alias("alleles"))
+        .sort("chrom", "pos", "alleles")
+        .collect()
+    )
+    index = pl.int_range(pl.len()).over("chrom")
+    step = ((pl.len().over("chrom") + per_contig - 1) // per_contig).clip(lower_bound=1)
+    return rows.filter(index % step == 0)
+
+
+def infer_assembly_from_rows(
+    sample: pl.DataFrame, bases: dict[str, pl.Series], labels: dict[str, str | None]
+) -> RowsInference:
+    """The assembly the sampled rows support (F9; charter 9: unknown unless the rows settle it).
+
+    `sample` is `sample_snv_rows`' output; `bases[digest]` is each collection's base at every sampled
+    row, parallel to it: null where the collection has no such contig (the row is not scored on it),
+    and an empty string where the position is past the contig's end (the row counts against it).
+    `labels[digest]` is the collection's assembly label, or None.
+
+    A collection's share is the fraction of its scored rows whose called alleles include its base.
+    The best collection names its label when it was scored on at least `MIN_SCORED_ROWS` rows, reaches
+    `MIN_SHARE`, and stands `MIN_MARGIN` above both the best collection of any other label and chance
+    (`chance`). An unlabelled collection counts as another label: it could be another assembly.
+    """
+    sampled = sample.height
+    chance = sample["alleles"].list.len().mean() / 4 if sampled else None
+    scored: dict[str, int] = {}
+    shares: dict[str, float] = {}
+    for digest, series in sorted(bases.items()):
+        on_contig = sample.select("alleles").with_columns(series.alias("_base")).filter(pl.col("_base").is_not_null())
+        scored_rows = on_contig.height
+        if scored_rows == 0:
+            continue
+        scored[digest] = scored_rows
+        shares[digest] = on_contig.select(pl.col("alleles").list.contains(pl.col("_base")).mean()).item()
+    result = {"sampled": sampled, "scored": scored, "shares": shares, "labels": {d: labels.get(d) for d in shares}, "chance": chance}
+    if not scored or max(scored.values()) < MIN_SCORED_ROWS:
+        most = max(scored.values(), default=0)
+        return RowsInference(
+            label=None, digest=None, outcome=RowsOutcome.TOO_FEW_ROWS,
+            reason=f"{most} SNV row(s) could be scored on a collection; {MIN_SCORED_ROWS} are needed", **result,
+        )  # fmt: skip
+    eligible = [d for d in shares if scored[d] >= MIN_SCORED_ROWS]
+    best = max(eligible, key=lambda d: (shares[d], d))
+    label = labels.get(best)
+    if shares[best] < MIN_SHARE:
+        return RowsInference(
+            label=None, digest=None, outcome=RowsOutcome.NO_FIT,
+            reason=f"no collection reaches {MIN_SHARE:.0%} of rows carrying its reference base", **result,
+        )  # fmt: skip
+    if label is None:
+        return RowsInference(
+            label=None, digest=None, outcome=RowsOutcome.UNLABELLED,
+            reason="the collection that fits best has no assembly label", **result,
+        )  # fmt: skip
+    rivals = [shares[d] for d in shares if labels.get(d) != label]
+    second = max([*rivals, chance or 0.0])
+    if shares[best] - second < MIN_MARGIN:
+        return RowsInference(
+            label=None, digest=None, outcome=RowsOutcome.NO_MARGIN,
+            reason=f"{label} scores {shares[best]:.1%}, within {MIN_MARGIN:.0%} of {second:.1%}", **result,
+        )  # fmt: skip
+    return RowsInference(
+        label=label, digest=best, outcome=RowsOutcome.INFERRED,
+        reason=f"{shares[best]:.1%} of {scored[best]} sampled SNV rows carry {label}'s reference base, against {second:.1%} at best otherwise",
+        **result,
+    )  # fmt: skip
 
 
 def sorted_name_length_pairs_digest(contigs: list[dict]) -> str | None:

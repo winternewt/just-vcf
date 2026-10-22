@@ -2,6 +2,7 @@
 
 from importlib.metadata import version
 
+from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.loading import (
     LOADABLE_FORMATS,
     Loaded,
@@ -31,6 +32,7 @@ from just_vcf.schema import (
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
 from just_vcf.writing import ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
+from just_vcf.vrs import mint_vrs_ids, vrs_withheld
 
 __version__ = version("just-vcf")
 
@@ -49,10 +51,12 @@ __all__ = [
     "MultiSampleError",
     "NoSampleError",
     "EvidenceBasis",
+    "KaryotypicSex",
     "PhaseSetKind",
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
+    "SexChromosomeEvidence",
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
@@ -61,14 +65,18 @@ __all__ = [
     "UnsupportedFormatError",
     "UnwritableRowsError",
     "VcfWritten",
+    "XCopies",
     "__version__",
     "load",
+    "mint_vrs_ids",
     "normalize",
     "open_payload",
     "reference_dir",
     "rejoin_split",
     "resolve_ref",
+    "sex_chromosome_evidence",
     "sniff",
     "vcf_samples",
+    "vrs_withheld",
     "write_vcf",
 ]

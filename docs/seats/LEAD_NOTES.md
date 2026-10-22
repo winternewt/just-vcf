@@ -57,4 +57,16 @@ status lines say what exists. Schema at 0.0.4.
   the `[reference]` extra's pysam backs nothing since RM3 (removing it is a surface change); UCSC
   `chr*_random`/`chrUn_*` names do not meet Ensembl accessions (1% of GRCh38 rows unread); one PGP
   VCF under 150 MB raised ValueError in `load` (not yet identified).
+- **Desk #72** (who is who in felis, ksuhaster, newton; default: unknown, never paired) and **#73** (may
+  Privé's ancestry files be redistributed; default: local only), filed 2026-10-22 when the person went
+  unattended. `docs/ANCESTRY_PANELS.md` stays out of CLAUDE.md's read-first list (the lead's call: it
+  matters only to ancestry work). Merged since: RM5 (4c6c9c1), RM6 writer (a1f3317), F10 + SV END
+  (ec95596), RM6 normalize (9469c6b).
+- **Wave 3** (2026-10-22): merged F9 (2ff9b00; strand finding renumbered F13), RM269 evidence layer
+  (7384428: XY/XXY or unknown; XX and XO wait for a coverage facet), RM271 VRS ids (b41bda5; 19,000
+  alleles equal vrs-python; `vrs_allele_ids` follows SCHEMA's `[ref] + alts` layout, not one per ALT).
+  The lead decided RM268's outline (cache index, stale-version sweep, `clear_cache`, no LRU). Running:
+  RM2 CGI loaders, RM6 follow-ups, RM268, RM6 liftover, RM4 chip detection + F13. Open from RM269:
+  freeBayes males read an X het share of 0.38–0.40 (inside the unknown band; depth says one X);
+  two Helix exomes read `wgs` (RM4); a starling upload fails in polars-bio ("invalid BGZF ISIZE").
 - **Open, not started**: RM2's next loaders, RM3, RM4, RM6, RM268 (cache eviction).

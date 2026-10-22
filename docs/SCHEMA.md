@@ -79,7 +79,9 @@ slots above filled, and leaves the `Loaded` it was given unchanged. That is not 
 charter's sense (invariant 5): every column it writes is one this schema defines as "not read yet"
 until the sequence is read (`ref` null, `ref_check = not_run`, an array row's `alts` and `gt` null),
 nothing the source wrote is touched, and the result is fixed by the facet and its assembly's
-sequence, not by a choice. The alternative, a derived facet (`relation = ref_checked`), was rejected:
+sequence, not by a choice. The same holds for an array's `assembly_label` when the facet stated none
+(null is "unknown", and the rows against the sequence settle it, below); a stated label is never
+replaced. The alternative, a derived facet (`relation = ref_checked`), was rejected:
 every facet would then stay `not_run` for ever and its checked twin would be a second identity for the
 same calls. A facet already read is refused rather than read again.
 
@@ -101,9 +103,22 @@ both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X):
 - the facet stated the contig's length (`header_contigs`): the reference's length must equal it, and
   its md5 too where the header gives one;
 - it did not (arrays): the facet's `assembly_label` must equal the reference's. The reference's label
-  comes from its contig 1 length (GRCh37, GRCh38, T2T-CHM13), or from one the caller asserted when
-  adding the FASTA. `GRCh37` cannot vouch for MT, since it covers hg19's chrM (16,571 bases) as well
-  as rCRS (16,569), so an array's MT stays unread.
+  comes from its contig 1 length (GRCh36, GRCh37, GRCh38, T2T-CHM13), or from one the caller asserted
+  when adding the FASTA. `GRCh37` cannot vouch for MT, since it covers hg19's chrM (16,571 bases) as
+  well as rCRS (16,569), and `GRCh36` neither (NCBI36 and hg18 carry the 16,571-base chrM), so an
+  array's MT stays unread.
+- it stated neither lengths nor a label (an FTDNA export, a headerless table): the label is inferred
+  from the rows (F9), and then matched as above. Per collection in the store, a deterministic sample
+  of the facet's array SNV rows (at most 2,000 per chromosome on 1–22, X and Y, every k-th row by
+  position; MT never) is scored: the share whose called alleles include the collection's base at that
+  position, on the forward strand only. A row on a contig the collection lacks is not scored on it; a
+  row past the contig's end counts against it. The best collection names its label when it was scored
+  on at least 1,000 rows, reaches 60%, and stands 20 points above both the best collection of any
+  other label (an unlabelled collection counts as another) and chance (the mean number of distinct
+  called alleles over four). The facet then gets `assembly_label` with basis `inferred`, and the
+  scores go in one warning line. Rows that do not settle it refuse the facet, with the scores in the
+  error. Only array rows are scored: for a VCF without lengths or a build hint, `ref_check` would then
+  confirm the very comparison that chose its build, so it is still refused.
 
 A primary contig (1–22, X, Y) whose stated length or md5 differs refuses the whole facet
 (`ReferenceMismatchError`): it is another assembly. Any other contig that does not match (hg19's chrM
@@ -312,7 +327,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `vendor`, `caller`, `caller_version` | the RM2 `source` detector, from header lines only. Null = not identifiable, never guessed. `vendor` is the party the header names as delivering the file (`##center`, `##generatedby`), falling back to the format's own vendor (`vcf_cgi`); a caller's maker is not a vendor. `caller` is the program that wrote the genotypes; tools that only touched the file afterwards (GATK SelectVariants, ApplyVQSR, bcftools view) are not evidence. Two callers in one header leave both fields null, with a warning; so do two versions of one caller for `caller_version` |
 | `ploidy_statements` | the header's ploidy lines verbatim, in header order (RM269 half 1): a meta line whose key names a ploidy or karyotype (DRAGEN `##referenceSexKaryotype=XY`, CGI `##source_MAX_PLOIDY`), and each ploidy option of a recorded command line, prefixed with the line it came from (`GATKCommandLine HaplotypeCaller: --sample-ploidy 2`, `bcftools_callCommand: --ploidy GRCh38`). An option whose value is a path writes `<path>` for it. No vocabulary: reading a model out of these is the karyotype work's job. `[]` = a VCF header with none; null = not a VCF. just-vcf's own shape |
 | `sample` | the sample column name, verbatim. **Identifying**: PGP uploads carry real names here. Logs, warnings and error messages name the `facet_id`, never the sample |
-| `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` (contig lengths) or null. A stated label is kept when the lengths disagree, with a warning (RM4, below) |
+| `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` or null. A stated label is kept when the lengths disagree, with a warning (RM4, below). `inferred` has two sources: a VCF's contig lengths at load (RM4), and an array's own rows scored against the reference by `resolve_ref` (F9, Decision 2). A consumer tells them apart by `header_contigs`, which only the first has |
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
@@ -383,8 +398,8 @@ With Decisions 1–5 as recommended:
 | `ref_check` | `Enum` | there is no `source_ref` to compare. `not_run`, `match` or `mismatch` (Decision 2) |
 | `alts` | `list[str]` | the source did not say (a non-VCF row before RM3). `[]` = a stated monomorphic record (ALT `.`). Symbolic alleles and `*` kept verbatim, except `<NON_REF>`, which is written `<*>` |
 | `source_alleles` | `list[str]` | the source gave no vector to index (Decision 2) |
-| `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention. An element is null when it was withheld (charter 4); the whole list is null when nothing could be minted. Minting rule below ("When an id is minted") |
-| `vrs_errors` | `list[str]` | parallel to `vrs_allele_ids`: what minting itself reported for an allele it tried and could not mint (`not_justifiable`, `no_contig`, …). Null where minting succeeded or never ran. Only facts that minting alone learns go here; see "Why an id is missing" below |
+| `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention: the REF slot first, then one per ALT in `alts` order. An element is null when it was withheld (charter 4); the whole list is null when nothing was minted. Minting rule below ("When an id is minted") |
+| `vrs_errors` | `list[str]` | parallel to `vrs_allele_ids`: what minting itself reported for an allele it tried and could not mint (`no_contig`, `refused`). Null where minting succeeded or never ran. Only facts that minting alone learns go here; see "Why an id is missing" below |
 | `gt_alleles` | `list[str]` | the genotype text cannot be split into haplotypes without the site's alleles (Living DNA writes an indel's two allele sequences back to back, `CCA`); `source_gt` keeps the text. Entries null per uncalled haplotype |
 | `gt` | `list[u8]` | there is no allele list to index yet. Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
 | `source_gt` | `str` | the source wrote no genotype text (a BCF encodes GT in binary). The file's raw text, not polars-bio's rewrite of it |
@@ -525,39 +540,53 @@ counted in a warning.
 Where REF is not known yet (an array `I`/`D` row) `end_pos` is null. A single-position array call has
 `end_pos = pos`.
 
-**When an id is minted.** A VRS Allele id for a substitution does not encode REF. It needs only the
-contig's refget accession, the position and the allele, so it is minted without reading any bases.
-An indel id needs the sequence around it (VRS normalises it against that sequence), so it waits for
-bases. Per allele:
+**When an id is minted (RM271, `mint_vrs_ids`).** An id is the VRS 2.x Allele id of the fully
+justified allele, on the refget sequence (`SQ.…`) of the contig in the collection REF was read from
+(`facets.ref_seqcol_digest`). Every slot of `[ref] + alts` gets one: the REF slot is the reference
+allele, which VRS writes as a `ReferenceLengthExpression` over REF's span (length and
+`repeatSubunitLength` both `len(ref)`), as vrs-python does for REF = ALT. An ALT is normalized as the
+spec says: trimmed of shared bases; a substitution keeps a `LiteralSequenceExpression` on the trimmed
+span; an insertion or deletion is rolled over its whole region of ambiguity and becomes a
+`ReferenceLengthExpression` when it is a deletion or an insertion that continues a repeat, and a
+`LiteralSequenceExpression` otherwise. Inside VRS objects coordinates are 0-based interbase; `pos`
+stays 1-based, and `reference._span` is the one conversion (charter 13).
 
-- **Substitution** (REF and allele the same length): minted as soon as the facet's assembly is
-  identified and the contig has an accession, from a small table of contig accessions per assembly.
-  No sequence is read. `ref_check = not_run` does not block it. `ref_check = mismatch` withholds it,
-  because a mismatch is evidence that the position or the build is wrong.
-- **Indel or MNV with a length change**: minted only after bases have been read and
-  `ref_check = match`.
-- **Array rows**: minted once RM3 has derived `alts`, under the same two rules.
+An allele is minted only when its row's `ref` was read from the sequence (`resolve_ref`) and the
+source did not contradict it (`ref_check` is `match`, or null on an array row). Substitutions too:
+`mint_vrs_ids` refuses a facet whose REF was never read. The rule the draft had, minting a
+substitution from a table of contig accessions per assembly without reading bases, was not built:
+no such table exists, and a contig `resolve_ref` could not match has no accession that was shown to
+be the facet's own. Array rows mint once `resolve_ref` has derived their `alts`. Minting has been
+compared with vrs-python on the same store for every kind of allele (tests) and on real PGP-HMS VCFs
+(docs/ROADMAP.md, RM271).
 
-So loading a VCF needs no reference download. The table of contig accessions is derived by gtars from
-each assembly's sequence collection and checked by a test, never typed in by hand. Where the bases come
-from when they are needed (a local store, or a hosted one read lazily) is RM3's decision; the
-measurements are in docs/ROADMAP.md, RM3.
+gtars 0.10 rolls the allele (`normalize_allele`) and computes sha512t24u, but its Python surface
+digests a `LiteralSequenceExpression` only, and its normalization never returns a
+`ReferenceLengthExpression`. So the choice of state and the canonical JSON (keys sorted, no
+whitespace, inherent properties only: an RLE's `sequence` is not digested) are just-vcf's, in one
+place (`just_vcf.vrs`), and tested against vrs-python.
 
 **Why an id is missing** is not a stored column. Most of the reasons are already facts in the frame,
 and a stored copy of them drifts: RM3 fills `ref`, and a stored reason still says "unchecked". So the
-reason is computed by one function, `vrs_withheld()`, a lazy Polars expression over the frame. It
-returns one reason per allele, parallel to `vrs_allele_ids`, and null where an id exists. It checks in
-this fixed order and the first hit wins:
+reason is computed by one function, `vrs_withheld(calls)`, which returns the lazy `calls` frame with a
+`vrs_withheld` column: one reason per slot of `[ref] + alts`, parallel to `vrs_allele_ids`, null where
+an id exists. A row with neither `ref` nor `alts` (an array row whose REF was not read) has one slot.
+It checks in this fixed order and the first hit wins:
 
-1. **What the allele is**, read from the allele string: `symbolic` (`<DEL>`, `<CNV:TR>`, breakends),
-   `unspecified` (`<*>`), `spanning_deletion` (`*`), `array_code` (23andMe `I`/`D`), `partial_call`
-   (CGI `?`).
-2. **Pipeline state**, read from other columns: `ref_unresolved` (`ref` and `source_ref` both null),
-   `ref_unchecked` (`ref_check = not_run`, indels only; substitutions mint without the check),
-   `ref_mismatch` (`ref_check = mismatch`), `no_seqcol`
-   (`facets.seqcol_digest` null), `telomere` (`pos` 0, or past the contig's length).
-3. **What minting reported**: the `vrs_errors` element.
+1. **What the allele is**, read from the allele string: `unspecified` (`<*>`), `spanning_deletion`
+   (`*`), `symbolic` (`<DEL>`, `<CNV:TR>`, breakends, `.`-anchored single breakends), `partial_call`
+   (CGI `?`), `array_code` (23andMe `I`/`D` where the source wrote no REF), `not_sequence` (anything
+   else outside `ACGTN`, such as an ambiguity code in ALT).
+2. **Pipeline state**, read from the row: `array_code` (an array row with an `I`/`D` genotype, whose
+   REF stays unread), `telomere` (`pos` 0), `ref_unresolved` (`ref` and `source_ref` both null),
+   `ref_unchecked` (a source REF, but `ref` not read: a contig the reference could not match, or a
+   span past the contig's end), `ref_mismatch` (`ref_check = mismatch`).
+3. **What minting reported**, the `vrs_errors` element: `no_contig` (the collection has no single
+   sequence for the contig) or `refused` (gtars refused the allele; its message is counted in the
+   warnings). After `resolve_ref` neither is expected: `ref` was read from that very sequence.
 4. Otherwise `not_run`: nothing forbids minting and it has not happened yet.
+
+`mint_vrs_ids` counts the withheld slots per reason in the facet's warnings, one line per reason.
 
 The reasons form an open vocabulary (a `frozenset[str]` with a validator, stored as `str`), not a
 `pl.Enum`: every new kind of facet brings reasons, and an Enum would change the frame's dtype each
@@ -674,7 +703,9 @@ lifted to GRCh38. How the draft holds up:
   asserted ploidy (Decision 2), so nothing is silently "corrected". **Open:** nothing in the draft can
   *say* the karyotype. It is a fact about the person, measured from evidence (Y depth near 2x, X depth
   near 1x). It is not a fact about any one facet. A person-level finding with its own provenance does
-  not exist yet.
+  not exist yet. Since RM269 each facet's own evidence can be measured (below); it reads this person's
+  X as one copy and Y as present, so `XY`: the Y depth of a variant-call VCF does not
+  separate one Y from two, and XYY stays open until a coverage facet.
 - **The deleted region, absent from the GRCh38 VCF.** The GRCh38 facet is WGS without blocks, so
   `absence_means = weak_reference`, and a question about a site in the deletion gets "weak evidence of
   reference". For a deletion on both Y copies, that is wrong. **Open:** absence has to be conditioned
@@ -685,12 +716,46 @@ lifted to GRCh38. How the draft holds up:
   a gap. The derived facet has no row for it. **Open:** a lift that drops a row has to be counted on
   the derived facet (the Glow-style liftover status in LANDSCAPE). Otherwise "absent in the lifted
   facet" reads as "absent in the person".
-- **A GRCh38 REF that is `N`.** A site inside the gap has no base to compare, and `ref_check` would
-  compare against `N`. Whether gtars mints on an `N` reference has not been checked. If it refuses,
-  the refusal lands in `vrs_errors`.
+- **A GRCh38 REF that is `N`.** A site inside the gap has no base to compare, and `ref_check`
+  compares against `N`. Where the source REF is `N` too, the id is minted: gtars and vrs-python both
+  justify an allele over `N` bases and agree on the id (tested, RM271). Were gtars to refuse, the
+  refusal would land in `vrs_errors` as `refused`.
 
 None of this changes a column today. It marks where the person-level layer and the coverage facet have
 to connect.
+
+## Sex-chromosome evidence: computed per facet, not stored (RM269)
+
+`sex_chromosome_evidence(loaded)` returns one `SexChromosomeEvidence` per row of `loaded.facets`. Like
+`vrs_withheld()`, it is a function over the frames, not a column, so it adds nothing to the schema and
+needs no version bump. Rejected: a struct column on `facets`, which would cost a full scan of `calls`
+at every load, orphan every cache spill with its version bump (RM268) and freeze today's thresholds
+into stored data. There is no person in the schema yet, so nothing person-level is stored either;
+weighing facets against each other (liftovers of one callset are one piece of evidence) is for that
+later layer.
+
+What it reads, over `assay` rows no filter failed (`filters` and `sample_filters` null or `["PASS"]`;
+null is VCF's "filters not applied"):
+
+- `ploidy`: rows by the number of haplotypes their genotype was written with, per group (autosomes,
+  non-PAR X, non-PAR Y, PAR, MT). What the source wrote, not a measured ploidy.
+- `x_heterozygosity`: on non-PAR X, the het share of fully called two-allele genotypes with an ALT
+  (rows with a `split_signal` left out), the count of one-allele ALT genotypes (the caller's
+  assertion, never counted as evidence), and the median het allele balance from `ad`.
+  `y_heterozygosity`: the same on the X-degenerate Y, reported only.
+- `depth`: the median `dp` of ALT-carrying rows on non-PAR X and on the X-degenerate Y, each over the
+  same median on chr20.
+- `caller` and `ploidy_statements`, the facet's own columns, carried through unread.
+
+It answers `x_copies` (`one`, `two_or_more`) and `y_present` separately, so a facet whose Y line is
+unusable still says how many X copies it holds, and `inferred_karyotypic_sex`, a GA4GH Phenopackets
+`KaryotypicSex` value (charter invariant 2: the vocabulary is the standard's, the field is
+just-vcf's, since Phenopackets has no place for an inference). Only `XY`, `XXY` and
+`UNKNOWN_KARYOTYPE` are estimated, the last always with a reason: `y_present` is `True` or unknown,
+never `False`, because depth at called sites cannot show a Y absent (a man's GATK genome read below the
+present band, close to the two-X range), so `XX` and `XO` wait for a coverage facet. The PAR bounds and the X-degenerate
+Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
+unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 
 ## Open questions
 
@@ -699,6 +764,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **0.0.7, continued** (2026-10-22, RM271; no version bump: no column or dtype changed):
+  `mint_vrs_ids` fills `vrs_allele_ids` and `vrs_errors`, and `vrs_withheld` computes why an id is
+  missing. Substitutions now wait for `resolve_ref` like every allele; `no_seqcol` left the reasons
+  (a read `ref` implies its collection); `not_sequence`, `no_contig` and `refused` joined them;
+  `telomere` covers POS 0 only (a span past the contig's end reads as `ref_unchecked`).
 
 - **No version change** (2026-10-22, RM6's second slice): `normalize` emits the `normalized` relation
   the facets table already listed, and no column changes. Rules added: the normalizing rules above;
@@ -741,13 +812,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 - Coordinates: `pos` and `end_pos` are 1-based and inclusive. VRS objects keep 0-based interbase coordinates
   internally, and nothing else does.
 - REF: `ref` only from the assembly sequence; `source_ref` is what the file wrote; `ref_check` compares
-  them. Substitution ids mint without bases and are withheld on a mismatch; indel ids wait for a match.
+  them. VRS ids wait for `ref` to be read, and are withheld on a mismatch.
 - Genotype: literal `gt_alleles` always; `gt` indices into the file's own allele list; `source_gt` is
   the raw text.
   Vectors are indexed over `source_alleles` and never reordered.
 - Evidence: `gl` (likelihoods), `gp` (posteriors) and `dosage` never mixed, and a row can have more
   than one. `evidence_basis` is the origin only (`assay`, `ref_block`, `absence`). Array calls have no
   vector until concordance can measure one.
-- Identity: `vrs_allele_ids` parallel to `[ref] + alts`. `vrs_errors` stores only what minting
-  reported; why an id is missing is computed by `vrs_withheld()`. `seqcol_digest` per facet.
+- Identity: `vrs_allele_ids` parallel to `[ref] + alts`, minted by `mint_vrs_ids` once REF is read.
+  `vrs_errors` stores only what minting reported; why an id is missing is computed by
+  `vrs_withheld()`. `seqcol_digest` per facet.
 - Absence: a facet property (`absence_means`), turned into a row only on request.

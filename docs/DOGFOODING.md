@@ -50,21 +50,22 @@ one needs its own format id, as `23andme_csv` has. Not fixed: three files.
 
 A third failure in the sweep is a corrupt upload (`gzip -t` fails too), and its error is correct.
 
-## F9 — An array export that states no build cannot get its REF
+## F13 — An FTDNA export reports some probes on the minus strand
 
-Severity: high · Found 2026-10-22 by running `resolve_ref` (RM3) on the table formats RM2 just made
-loadable, on public PGP-HMS uploads (counts only).
+Severity: medium · Found 2026-10-22 by F9's row inference on the 103 PGP-HMS FTDNA exports (counts
+only).
 
-`resolve_ref` worked where the facet carries an assembly: an AncestryDNA export (stated GRCh37) had REF
-read for 681,662 of 701,478 rows (97.2%), a Color file for all of its rows. Two FTDNA exports were
-refused with `ReferenceMismatchError` ("the facet states neither contig lengths nor an assembly"): an
-FTDNA file names no build, and an array has no `##contig` lines, so RM4's length inference has nothing
-to read. A deCODEme export (GRCh36, stated in its zip) was refused because the store holds only GRCh37
-and GRCh38. The refusals are correct (never assume a build), so the gap is evidence, not the check.
+One autosomal FTDNA export (about 709,000 rows) fits GRCh36 at 68.2% of sampled SNV rows, against
+80–83% for the other 59 autosomal FTDNA exports. Of its heterozygous rows, only 81% carry the reference
+base (99.96–100% in every other export with autosomes), and 13.0% of all sampled rows carry the complement of
+the reference base (0.0–3.0% elsewhere). So a share of its probes, about one
+in eight, is written on the minus strand. `resolve_ref` reads REF for 99.8% of its rows, and on the
+flipped rows derives `alts` and `gt` against the wrong strand: a flipped hom-ref row reads as hom-alt.
+The existing warning counts them among the rows that "carry no REF allele", which does not single
+them out.
 
-Not fixed. Candidate repairs: (a) infer an array's build from its own rows against each collection in
-the store, as the share of SNV rows whose called alleles include the reference base at that position
-(the right build scores near 100%, a wrong one near chance), recorded as `inferred` with the scores; (b)
-add NCBI36 to the reference store for the GRCh36 exports. A caller-asserted `assembly=` argument was
-considered and set aside: it lets a label stand in for evidence.
-
+Not fixed. Candidate repairs, each wrong for now: complementing a row whose alleles miss REF (an A/T
+or C/G probe is its own complement, and a true hom-alt call would be flipped into a hom-ref one);
+scoring both strands (a complemented het covers all four bases, so a wrong build would fit as well as
+the right one); a per-chip strand table (the right fix, but FTDNA ships none in the export, and the
+chip is not identified yet: RM4's chip generation detection).

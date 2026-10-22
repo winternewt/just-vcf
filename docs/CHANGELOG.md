@@ -36,6 +36,21 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   divided the same way. This changes `gl` by one Float32 step on some entries of files that already
   load. No schema version change (a rule change, no column).
 
+- New `sex_chromosome_evidence(loaded)` (RM269): for each facet, what its calls say about X and Y, and
+  an estimate of the karyotype. It measures GT ploidy as written per group (autosomes, non-PAR X,
+  non-PAR Y, PAR, MT), the het share of non-PAR X calls written diploid with their AD allele balance,
+  and the median DP of ALT calls on non-PAR X and on the X-degenerate Y (from GIAB v3.6
+  stratifications, carried in `assets/`) over chr20's. It answers `x_copies` (one, two or more) and
+  `y_present` (true, or unknown: call-site depth cannot show a Y absent), and from them a GA4GH
+  Phenopackets `KaryotypicSex` value (`XY`, `XXY`, or `UNKNOWN_KARYOTYPE` with a reason), on GRCh37
+  and GRCh38 whole-genome facets only; `XX` and `XO` wait for a coverage facet. X thresholds sit in the
+  middle of the gaps the lead measured on 16 local genomes; checked on 27 PGP-HMS VCFs with
+  self-reported sex, where every labelled man with a decided answer read `XY` and no woman read a Y
+  (table in docs/ROADMAP.md RM269). A karyotype, not a sex, estimated from variant calls; not a
+  cytogenetic result. Haploid genotypes and `ploidy_statements` are carried as the caller's assertion
+  and never counted. Computed, not stored: no schema change. Minor: new exports
+  (`sex_chromosome_evidence`, `SexChromosomeEvidence`, `KaryotypicSex`, `XCopies`).
+
 - Normalization as a derived facet (RM6, second slice): `normalize(loaded, reference)` splits
   multi-allelic sites one row per ALT (the other ALT written `.`, each row `split_signal = marker`),
   left-aligns and trims indels whose REF matched the reference, drops exact duplicates (counted), keeps
@@ -63,6 +78,26 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   values on files that already load: such 4.3+ files now get `gp`, and `source_alleles` on those rows.
   A 4.2 or older header, or none, still withholds it; a header without a version no longer counts as
   4.3 for the warnings. No schema version change (a rule change, no column).
+
+- F9 closed after dogfooding on 153 PGP-HMS array exports: the row inference's floor is 60%, not 70%
+  (FTDNA's X-only exports fit their build at 66.5–84.3%, every wrong build stays at or below 33.4%),
+  and a VCF facet is not scored by its rows, so its refusal reads as before. F13 opened: an FTDNA
+  export with part of its probes on the minus strand.
+
+- A reference whose contig 1 is 247,249,719 bases is labelled `GRCh36`, so build-36 exports (23andMe
+  v36, deCODEme) resolve against UCSC hg18 (where to get it: RM3). Like `GRCh37`, the label leaves an
+  array's MT unread.
+
+- `resolve_ref` infers an array's build from its own rows when the facet states none (F9): the share
+  of sampled SNV rows whose genotype carries each collection's reference base names the build, with
+  basis `inferred` and the scores in a warning, or the facet is refused with the scores. No column
+  changed.
+
+- VRS allele ids (RM271): `mint_vrs_ids(loaded, reference)` fills `calls.vrs_allele_ids` after
+  `resolve_ref`, one VRS 2.x id per slot of `[ref] + alts`, equal to vrs-python's on every kind of
+  allele tested and on 19,000 real PGP-HMS alleles; `vrs_withheld(calls)` says why an id is missing.
+  Substitutions now wait for REF to be read, like indels (SCHEMA.md; no version bump, no column
+  changed). vrs-python joins the dev dependencies as the test oracle.
 
 - Schema 0.0.7 (RM3): `facets.ref_seqcol_digest` is new; `resolve_ref` fills `ref`, `ref_check`, and an
   array row's `alts` and `gt` from a reference.

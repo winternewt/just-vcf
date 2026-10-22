@@ -87,7 +87,7 @@ Header evidence found while declaring the VCF formats:
 Not identifiable from the header: 23andMe's exome VCF, the Dante- and Nebula-named uploads (generic GATK).
 
 ## RM3 — REF lookup and padding
-Severity: high · Status: in progress (2026-10-22: the FASTA tier shipped as `resolve_ref` on a gtars refget store, for VCF and array rows; indel anchor bases and reference-supported positions are left) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the FASTA tier shipped as `resolve_ref` on a gtars refget store, for VCF and array rows, an array without a stated build inferred from its rows (F9); indel anchor bases and reference-supported positions are left) · Owner: lead
 
 Port just-prs `reference_allele.py` (reference-panel tier, FASTA tier, FASTA build check). New work:
 ALT derivation from genotype against REF, indel anchor bases, chr-prefixed FASTA support, emitting
@@ -137,8 +137,40 @@ carry no `ref` while the facet keeps `ref_seqcol_digest`, and `resolve_ref` refu
 Left: indel anchor bases (no loaded format lacks them: 23andMe I/D codes need the chip manifest, and
 Living DNA's run-together `CCA` cannot be split without the site's alleles); emitting
 reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither
-`##contig` lengths nor a build hint, and an array without a stated build, are refused: nothing can
-show which assembly they are on.
+`##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array
+without a stated build has it inferred from its rows (F9, below).
+
+**Shipped 2026-10-22: an array's build from its own rows (F9).** `resolve_ref` scores a facet that
+states neither a label nor contig lengths against every collection it considers
+(`just_vcf.assembly.infer_assembly_from_rows`, called from `reference._infer_from_rows`); the rule
+is in docs/SCHEMA.md Decision 2. Choices, each with the alternative rejected:
+
+- **The scores go in a warning line**, and the label into the existing `assembly_label` with basis
+  `inferred`. Rejected: a `facets` column for the scores, which is a schema change for a value only a
+  reader of the inference needs; and a new `AssemblyLabelBasis` member (`rows`), which retypes the
+  `pl.Enum` dtype, when `header_contigs` already tells the two `inferred` sources apart.
+- **Inside `resolve_ref`, not at load.** Scoring needs the reference's bases, and loading reads no
+  reference. Rejected: a separate public `infer_build(loaded, store)` step before a consumer asks for
+  one; the function stays internal, as RM4's inference does.
+- **Margin against another label, not another collection.** hg19 and Ensembl GRCh37 score alike, and
+  are one assembly. An unlabelled collection counts as a rival (it could be another build). With one
+  collection, chance is the rival: the mean number of distinct called alleles over four.
+- **Arrays only.** A VCF without lengths or a build hint could be scored by its source REF, and would
+  then pass a `ref_check` chosen by that same comparison. It stays refused.
+- **MT is never scored**: the GRCh37 and GRCh36 labels each cover two mitochondrial sequences (the
+  Yoruba chrM of hg19, hg18 and NCBI36, and rCRS).
+- **A sample, not every row**: at most 2,000 rows per chromosome, every k-th by position, so the
+  same file always scores the same rows.
+
+**GRCh36 in the store (2026-10-22).** A reference with contig 1 of 247,249,719 bases is labelled
+`GRCh36`, and that label, like `GRCh37`'s, cannot vouch for MT (NCBI36 and hg18 carry the Yoruba
+chrM, 16,571 bases; an array labelled build 36 does not say which MT it used). Where to get it: UCSC
+`https://hgdownload.soe.ucsc.edu/goldenPath/hg18/bigZips/hg18.fa.gz` (943 MB, md5
+`5cf361b2f92d01691ee7d555ffca721f` per the `md5sum.txt` beside it, checked), then
+`ReferenceStore.open(…).add_fasta("hg18.fa.gz")`: 176 s, 49 sequences (`chr*_random` and the
+haplotypes included). Not Ensembl release 54's `Homo_sapiens.NCBI36.54.dna.chromosome.*.fa.gz`: its
+Y is a sub-range (`chromosome:NCBI36:Y:2709521:57443437`, the PARs cut off), so every Y position in it
+is offset by 2,709,520, and the release publishes no checksums.
 
 **Measured 2026-09-30: gtars RefgetStore as the sequence source** (gtars 0.10, Ensembl GRCh38
 primary-assembly FASTA, 3.15 GB, 194 sequences):
@@ -161,7 +193,7 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; left: chip generation, array build, gVCF `END` expansion) · Owner: lead
+Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); left: chip generation, gVCF `END` expansion) · Owner: lead
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
@@ -184,8 +216,9 @@ every pair of classes. Decisions taken, each with what was rejected:
 - The classifier and the inference stay internal (`just_vcf.callset`, `just_vcf.assembly`, not in
   `__all__`); the facet columns are the contract. Rejected: exporting them before a consumer asks.
 
-**Left:** just-prs chip generation detection; array build inference (just-prs has none, it defaults
-to GRCh37, which is not ported); contigs named by RefSeq accession (`NC_000001.11`), which the label
+**Left:** just-prs chip generation detection (F13 needs it for a strand table); GRCh36 in
+`ASSEMBLY_LENGTHS`, so a build-36 VCF's `##contig` lengths name it (the reference side knows GRCh36's
+contig 1 since F9; the header side reads those lengths as matching no assembly); contigs named by RefSeq accession (`NC_000001.11`), which the label
 inference does not read yet; gVCF `END` expansion; an SNV-only or indel-only split of a genome
 (`bcftools view -v snps`) reads as `wgs`, so its absences read as weak reference for the other
 variant class too. Unmarked imputation output with read-evidence keys would read as `wgs`.
@@ -326,7 +359,7 @@ reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; liftover.
 
 
 ## RM271 — VRS allele ids
-Severity: high · Status: in progress (a builder, 2026-10-22) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: `mint_vrs_ids` and `vrs_withheld` shipped for VCF and array rows, equal to vrs-python on 19,000 real alleles; left: the gtars RLE gap filed upstream, an opt-in test on a real assembly) · Owner: lead
 
 Charter invariant 4: a call's identity is the VRS Allele id of its fully justified allele on a
 refget-addressed sequence, and that id is the join key between facets on the same assembly. Today
@@ -336,6 +369,50 @@ collection on `facets.ref_seqcol_digest`, so each allele can be placed on a sequ
 accession. An id that cannot be minted conformantly (an allele that cannot be justified, a contig with
 no refget accession, an unresolved REF, an array I/D code) is withheld with a counted reason in
 `vrs_errors`, never approximated. vrs-python is a test oracle only (CLAUDE.md §5).
+
+**Shipped 2026-10-22: `mint_vrs_ids(loaded, reference)` and `vrs_withheld(calls)` (`just_vcf.vrs`).**
+The rules are in docs/SCHEMA.md ("When an id is minted", "Why an id is missing"). Choices made, each
+with the alternative rejected:
+
+- **A step after `resolve_ref`, not inside it.** It refuses a facet whose REF was never read, and
+  reads the collection `ref_seqcol_digest` names from the same store. Rejected: minting inside
+  `resolve_ref`, which would make every REF read pay for ids, and leave no way to re-mint when the
+  rule changes (`MINT_VERSION`) without reading REF again.
+- **Every allele waits for `ref`, substitutions too.** Rejected: SCHEMA's earlier no-bases path for
+  substitutions from a table of contig accessions per assembly. No table exists, and a contig
+  `resolve_ref` could not match has no accession shown to be the facet's.
+- **`[ref] + alts`, the REF slot minted** as VRS's reference allele (a `ReferenceLengthExpression`
+  over REF's span), as SCHEMA and gnomAD have it. Rejected: one id per ALT only, which the brief
+  named; it would retype a signed-off column.
+- **The state choice and canonical JSON are ours; rolling and sha512t24u are gtars'.** gtars 0.10
+  rolls an indel correctly but always returns a literal sequence, and its Python API digests only
+  `LiteralSequenceExpression`; vrs-python gives a `ReferenceLengthExpression` for every deletion, every
+  repeat insertion and the reference allele (VRS 2.x), so gtars' own ids differ from vrs-python's
+  there. Rejected: withholding those alleles until gtars has it (most indels and every REF slot), and
+  vrs-python in core (CLAUDE.md §5). Owed upstream: a VRS 2.x state in gtars' normalization and an RLE
+  digest in its Python API; then `_justify` and the JSON shrink to calls. Not filed.
+- **Rows walked as runs of one contig** (`rle` over the spilled input), reading only the columns
+  minting needs; the ids go to their own files and sit beside the spilled rows by position. Rejected:
+  a filtered scan per contig with a re-sort (resolve_ref's shape), one scan of the file per contig (170
+  on the GRCh38 genome).
+- **The oracle is `scripts/vrs_oracle.py`**: a vrs-python data proxy over the same gtars store, so
+  both sides read the same sequence; vrs-python is a dev dependency.
+
+**Dogfooded 2026-10-22** on three PGP-HMS VCFs, aggregates only (`scripts/vrs_conformance.py`), each
+sample drawn with a fixed seed from the minted alleles and checked against vrs-python on the same
+store:
+
+- A GRCh38 genome, 4,651,432 rows: 9,256,478 of 9,345,929 alleles minted (363,409 deletions, 412,401
+  insertions); 89,451 withheld as `ref_unchecked`, all on contigs `resolve_ref` left unread (UCSC
+  `_random`/`chrUn_` names, RM3). 8,000 checked, 0 mismatch.
+- A GRCh37 indel-only genome split, 956,064 rows, 1,039,271 ALTs: every allele minted; 9,000 checked
+  (deletions, insertions, REF), 0 mismatch.
+- A GRCh37 SNV-only genome split, 3,461,640 rows: all but 4 alleles minted (the 4 on rows whose source
+  REF the reference contradicts); 2,000 checked, 0 mismatch.
+- Time on the 4.65M-row genome: 59 s wall and 103–112 s CPU with the cache on a fast local disk; 112–208
+  s wall with the cache under `data/interim/` on the NTFS disk, which `dd` measured at 2.5 MB/s during
+  the runs (other sessions were writing to it; the workspace note says about 350 MB/s). Peak RSS of the
+  minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
 ## RM268 — Cache eviction
 Severity: medium · Status: open · Owner: lead
@@ -367,7 +444,7 @@ Options, not decided: sweep stale-version entries on each load; an explicit `cle
 API (and in the CLI once it exists); a size cap with least-recently-used eviction.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO wait for a coverage facet, as do XXX, XYY and arrays) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -453,3 +530,117 @@ Legality: minor. Filling `caller`/`caller_version`, a new nullable facet field a
 finding are all additive. Where the finding lives (a new frame or columns on an existing one) is a
 schema decision for the lead. just-prs builds a stopgap now (karyotype from its normalized parquet,
 caller and version as parquet metadata) and moves to this when it exists.
+
+**Depth measured 2026-10-22 (lead), on the same 16 local private single-sample WGS VCFs** (aggregates
+only, no file named). Medians of the calls' own FORMAT DP, each over the median DP of PASS calls on
+chr20:
+
+- non-PAR X, PASS calls: 0.42–0.50 in the low-X-het cluster (11 files), 0.89–1.00 in the high one (5).
+  Nothing between.
+- X-degenerate Y (GIAB v3.6 chrY nonPAR minus XTR minus ampliconic), PASS calls carrying an ALT:
+  0.56–0.82 in the low-X-het cluster, 0.35–0.40 in the high one. Nothing between. Every row with DP in
+  that region, PASS or not, overlaps less cleanly (0.68–1.06 against 0.35–0.57), so the ALT-call
+  median is the one used.
+- One sex-aware caller's file writes X haploid; its X depth ratio (0.48) agrees with its haploid calls,
+  the independent check the critique asked for.
+- Liftovers that dropped FORMAT carry no DP and give no depth line.
+
+So X copies have two independent lines (X depth and the diploid X het share) that agree on all 16
+files, and Y presence has one (the X-degenerate Y depth). Y-region ALT calls with DP were in the
+thousands per file. Rerun through `sex_chromosome_evidence` on the 17 local single-sample VCFs it can
+load: 12 facets read one X (X depth 0.419–0.500, Y depth 0.560–0.824) and 5 two X (het share
+0.580–0.626, X depth 0.892–1.000, Y depth 0.351–0.400); no facet fell in an unknown band.
+
+**PGP-HMS calibration, 2026-10-22** (consented-public, CC0, so per-file values are kept). 27 uploaded
+single-sample VCFs with DP, read from the Krypton copy; labels are the participants' self-reported
+`Sex/Gender` in `PGP_Participant_Survey.csv` of the HU-PGP-DB-2021-06-18 Arvados snapshot (14 files
+labelled male, 4 female, 9 unlabelled; unverified). The profile pages could not be read: the site's
+certificate names another host. Shipped rules, file by file (`x` and `y` are the depth ratios):
+
+| Participant / upload | Label | Build, caller | X evidence | Y ratio | Answer |
+|---|---|---|---|---|---|
+| huE0F0CE/4084 | female | GRCh38 DRAGEN | share 0.593, x 0.926 | 0.222 | two X, Y not shown |
+| huF7A4DE/3936 | female | GRCh38 GATK HC | share 0.618, x 0.938 | 0.125 | two X, Y not shown |
+| hu21731A/2058, huAA16BD/825 | female | GRCh37 exomes | share 0.588, 0.467 | - | `not_wgs` |
+| hu6ABACE/3885 | male | GRCh37 DRAGEN | share 0.041, x 0.446 | 0.607 | XY |
+| huE18D82/3910 | male | GRCh37 DRAGEN | share 0.043, x 0.474 | 0.842 | XY |
+| hu0486D6/1048 | male | GRCh37 Isaac | haploid X, x 0.560 | 0.560 | XY |
+| huA2692E/2816 | male | GRCh37 Isaac | share 0.058, x 0.552 | 0.862 | XY |
+| hu3BDC4B/3479, /3481 | male | GRCh37 GATK HC (bwa, bowtie2) | share 0.016, 0.012; x 0.484, 0.500 | 0.484, 0.433 | one X, Y not shown |
+| hu2B76CC/2104, huF06AD0/1506 | male | GRCh37 freeBayes (no AD) | share 0.396, 0.378; x 0.500 | 1.450, 1.188 | share intermediate |
+| hu80855C/1126, /1128 | male | GRCh37 Isaac | haploid X, x 0.552 | 162 sites | one X, Y too few sites |
+| hu832966/3674, hu6ABACE/3884 | male | GRCh38 Helix | haploid X, x 0.500, 0.517 | 286, 251 sites | one X, Y too few sites |
+| huFD37C8/3255 | male | GRCh37 exome | share 0.088 | - | `not_wgs` |
+| huE2F2FC/2771 | male | starling | - | - | load failed: polars-bio "invalid BGZF ISIZE" |
+| huBEF5E2, hu24385B, hu1C1368, huC39675, huBE0518, hu416394, hu2BA77F | unlabelled | GATK, DRAGEN, Isaac, bcftools | one X each | 0.548–1.970 | XY |
+| hu876E3D/4118 | unlabelled | GRCh37 DRAGEN | haploid X, x 0.471 | 0.471 | one X, Y not shown |
+| huCDFB7C/3206 | unlabelled | GRCh37 GATK UG | 33 diploid X calls | 0 sites | too few sites |
+
+What it changed:
+
+- **No Y threshold says absent.** Self-reported women read 0.125 and 0.222, the local two-X genomes
+  0.351–0.400, but one man's GATK genome read 0.433 and 0.484 (two alignments of the same reads). The
+  first build of this layer had an absent band at 0.44 and below and called him `XO`. Y presence is
+  now only ever `True` (ratio 0.52 or more, which every labelled or clustered two-X genome stays 0.12
+  under), and `XX` and `XO`, which need a Y shown absent, are not emitted.
+- **A sex-aware caller's few diploid X calls are no het share.** huBE0518's DRAGEN wrote 103,154
+  haploid X ALT calls and 1,315 diploid ones, all hets; read as a share they said two X against a
+  one-X depth. The share now counts only where most X ALT calls were written diploid. Its header's
+  `##referenceSexKaryotype=XY` agrees with the depth-based answer, an independent check.
+- **freeBayes males read an intermediate het share** (0.378, 0.396; those files have no AD). The share
+  fell in the unknown band, so they answer unknown although their X depth (0.500) says one X: a share
+  in the band is not overruled by the other line. Whether freeBayes needs its own band is open.
+- Isaac males sit at X depth 0.548–0.560, above the local 0.42–0.50 and under the 0.60 edge.
+- The X-degenerate Y het share, also measured, does not transfer: 0.40–1.00 in local one-X facets,
+  0.06–0.12 in hu3BDC4B's GATK files. It is reported, not used.
+- Two Helix uploads labelled exome read `callset_type = wgs` (RM4), with only 3,211 and 4,214 chr20
+  ALT calls; their Y line had too few sites anyway.
+
+**Built 2026-10-22: the evidence layer** (`just_vcf.karyotype`, exported `sex_chromosome_evidence`,
+`SexChromosomeEvidence`, `KaryotypicSex`, `XCopies`; docs/SCHEMA.md "Sex-chromosome evidence"). Per
+facet: GT ploidy counts per group, the X het share on diploid-written calls with the AD allele balance,
+the X and X-degenerate Y depth ratios against chr20, and the facet's `ploidy_statements` carried
+verbatim. The estimate gives `x_copies` and `y_present` separately, then `XY`, `XXY` or
+`UNKNOWN_KARYOTYPE` with a reason (`no_build`, `unsupported_build`, `not_wgs`, `too_few_sites`,
+`intermediate`, `lines_disagree`, `caller_asserted_only`, `no_depth`, `y_unusable`; `y_reason` may also
+be `y_not_shown`). `XX` and `XO` are not emitted (above).
+
+Thresholds: each unknown band is the central half of the measured gap, so every class edge keeps a
+quarter of the gap as margin. X het share: one X at most 0.23, two at least 0.46 (gap 0.115–0.580).
+X depth ratio: one X at most 0.60, two from 0.79 to 1.25 (gap 0.50–0.89; above 1.25 fits three copies
+better than two, so it is unknown, not two). Y depth ratio: present at 0.52 or more, otherwise not
+shown, never absent (PGP-HMS, above). Minimum sites: 1,000 diploid X ALT calls for the share, 1,000 X and 1,000 chr20 ALT
+calls with DP for the X ratio, 300 X-degenerate Y ALT calls with DP for the Y ratio. Where the het share
+and the X depth both decide, they must agree. The share counts only where most X ALT calls were written
+diploid; otherwise (a sex-aware caller) depth alone decides.
+
+Decisions, each with what was rejected:
+
+- Computed on demand, one result per facet. Rejected: a struct column on `facets` (a calls scan at
+  every load, a schema bump that orphans the cache, thresholds frozen into data) and a person-level
+  verdict (no person in the schema; the critique's advice).
+- A `Loaded` with several facets (a freeBayes+VarScan2 merge) gets one answer per facet, in `facets`
+  order. Rejected: a `facet_id` argument, which makes the common case a lookup.
+- "Not failed" is `filters` null or `["PASS"]`, and the same for FORMAT `FT`. Rejected: literal PASS
+  only, which leaves a GATK file whose every FILTER is `.` with no rows.
+- The depth denominator is chr20, because the thresholds were measured against it. Rejected: all
+  autosomes, which would move every ratio off its calibration.
+- Rows carrying a `split_signal` stay out of the het share (a `0` there can be another ALT, RM270).
+- The allele balance is reported, not used: no calibration says where a mosaic begins.
+- X copies stay known when the karyotype is not (`y_unusable`, `no_depth`): what just-prs needs for
+  dosage (S1).
+- T2T-CHM13 answers `unsupported_build`, not `no_build`: it has a label but no region set here.
+- The header's ploidy lines are carried and the caller's haploid genotypes counted, never as evidence.
+- Y presence is never `False`. Rejected: an absent band under a threshold, which named a man `XO`
+  (above); and dropping the Y line altogether, which would lose `XY` and `XXY` where Y depth is high
+  and the women measured sit far below.
+
+**Left:** `XX` and `XO` need a Y shown absent, and XXX, XYY and the other classes a copy count:
+both wait for a coverage facet (depth at called sites cannot show a region empty, and does not
+separate one Y from two). An array's female Y probes are no-calls, which may be the absence signal
+arrays have and genomes lack. Arrays (no `gt`
+before RM3, no depth) and exomes answer unknown; an array's own lines (female Y probes no-calls,
+AncestryDNA's doubled X letters) are not built. Liftovers of one callset are not yet weighed as one
+piece of evidence (`facets_disagree` belongs to the person-level layer). GRCh37's last X-degenerate
+interval may reach about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md). The somalier question in the
+critique is not answered.

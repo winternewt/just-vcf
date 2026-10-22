@@ -116,6 +116,7 @@ FACETS = pl.Schema(
         "assembly_label": pl.String,
         "assembly_label_basis": enum_dtype(AssemblyLabelBasis),
         "seqcol_digest": pl.String,
+        "sorted_name_length_pairs_digest": pl.String,
         "callset_type": enum_dtype(CallsetType),
         "absence_means": enum_dtype(AbsenceMeans),
         "phasing_method": pl.String,

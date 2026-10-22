@@ -15,6 +15,8 @@ import polars as pl
 from platformdirs import user_cache_dir
 from pydantic import BaseModel, ConfigDict
 
+from just_vcf import callset
+from just_vcf.assembly import infer_assembly, sorted_name_length_pairs_digest
 from just_vcf.loaders import rsid_table, vcf
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
@@ -198,6 +200,10 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     spilled = pl.scan_parquet(spill / "calls.parquet")
     flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
     warnings += vcf.split_warnings(flagged, marker_rows, header)
+    label, basis, label_warnings = _assembly_label(sniffed.build, header.contigs)
+    warnings += label_warnings
+    kind = callset.classify(spilled, list(header.format), callset.imputation_marker(header.meta, list(header.info)))
+    logger.info("%s: callset type %s (%s)", facet_id, kind.callset_type.value if kind else "unknown", kind.reason)
     facet = {
         "facet_id": facet_id,
         "source_sha256": source_sha256,
@@ -206,9 +212,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         "format_id": sniffed.format,
         "family": sniffed.family.value if sniffed.family else None,
         "sample": chosen,
-        "assembly_label": sniffed.build,
-        "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
-        "absence_means": (AbsenceMeans.BLOCKS if stats["any_block"] else AbsenceMeans.UNKNOWN).value,
+        "assembly_label": label,
+        "assembly_label_basis": basis.value if basis else None,
+        "sorted_name_length_pairs_digest": sorted_name_length_pairs_digest(header.contigs),
+        "callset_type": kind.callset_type.value if kind else None,
+        "absence_means": callset.absence_means(kind.callset_type, stats["any_block"]).value,
         "contig_map": contig_map(stats["chroms"]),
         "header_contigs": header.contigs,
         "vcf_version": header.version,
@@ -228,6 +236,29 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         blocks=canonical_order_per_contig(pl.scan_parquet(spill / "blocks.parquet"), contigs),
         warnings=tuple(warnings),
     )
+
+
+def _assembly_label(stated: str | None, contigs: list[dict]) -> tuple[str | None, AssemblyLabelBasis | None, list[str]]:
+    """The facet's assembly label and its basis, plus a warning for each disagreement.
+
+    A label the header states is kept as stated, even when the contig lengths point elsewhere: the
+    disagreement is reported, never resolved here. Without a stated label, the contig lengths give
+    one only when they settle it (`infer_assembly`); otherwise the label stays unknown.
+    """
+    inferred = infer_assembly(contigs)
+    warnings = []
+    if len(inferred.matched) > 1:
+        warnings.append(f"##contig lengths match more than one assembly ({inferred.reason})")
+    if stated and inferred and inferred.label != stated:
+        warnings.append(
+            f"the header states {stated}, but {inferred.matched[inferred.label]} primary chromosome length(s) "
+            f"match {inferred.label}; the stated label is kept"
+        )
+    if stated:
+        return stated, AssemblyLabelBasis.STATED, warnings
+    if inferred:
+        return inferred.label, AssemblyLabelBasis.INFERRED, warnings
+    return None, None, warnings
 
 
 def _sha256(path: Path) -> str:

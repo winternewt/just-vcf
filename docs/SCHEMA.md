@@ -168,6 +168,11 @@ How the awkward cases land under C:
   `gt_alleles`. It says the haplotype is covered by a deletion called at another record. It is not
   a reference call, and it gets no VRS id. `0/2` over `ALT=C,*` must never be read as a het with a
   reference haplotype and nothing else.
+- **A deletion written as ALT `-`** (some uploads, F12: REF holds the deleted bases at POS, with no
+  anchor base) is kept as `"-"` in `alts` and `gt_alleles`, counted in a load warning. It is an
+  unanchored deletion, which VCF has no allele for, and the anchor needs the reference base before
+  POS, so the loader cannot rewrite it. `normalize` anchors it once `resolve_ref` has matched its REF;
+  until then `write_vcf` refuses it.
 - **A monomorphic record** (ALT `.`) has `alts = []`, which is a stated "no alternate allele". A null
   `alts` means the source did not say, which only happens for non-VCF sources (an array row before
   RM3). ALT is a required VCF column, so polars-bio's `""` always means `.` and becomes `[]`.
@@ -214,7 +219,7 @@ and so is the reverse without the prior. So:
 | Option | Cost |
 |---|---|
 | A. One vector column, everything converted into it | Mixes likelihoods with posteriors under one name. That is exactly the kind of approximation the charter forbids |
-| **B. Separate columns per quantity** | `gl: list[f32]`: log10 likelihoods (from PL as `-PL/10`, or GL directly). `gp: list[f32]`: posterior probabilities (GP, Oxford `.gen` triples). Both are in VCF genotype order over `source_alleles` (Decision 2). Which of them is non-null says which quantities the source gave, and a row can have more than one. A consumer has to handle two columns, and the schema is honest about what each one is |
+| **B. Separate columns per quantity** | `gl: list[f32]`: log10 likelihoods (from PL as `-PL/10`, computed in Float64 and rounded to Float32 once, so PL and GL stating one likelihood load equal; or GL directly). `gp: list[f32]`: posterior probabilities (GP, Oxford `.gen` triples). Both are in VCF genotype order over `source_alleles` (Decision 2). Which of them is non-null says which quantities the source gave, and a row can have more than one. A consumer has to handle two columns, and the schema is honest about what each one is |
 | C. Keep native columns (`PL`, `GL`, `GP`, `DS`) as-is | No normalisation at all. Every consumer then re-learns every caller's dialect |
 
 **Recommendation: B.** Scalars that callers commonly give sit beside it: `gq: u16`, `dp: u32`,
@@ -335,7 +340,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
 | `sample_meta` | the file's `##SAMPLE` and `##PEDIGREE` lines for this sample, verbatim. Pedigree becomes GA4GH Pedigree later (charter) |
 | `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9). For a delimited table, the file's own column names that no frame column carries (a Final Report's `GenCall Score`) |
-| `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
+| `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, `write_vcf`'s `JUST_VCF_SPLIT`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
@@ -418,9 +423,11 @@ other ALT of a genotype as `0`, so `1/2` at `A>G,T` becomes `1/0` at `A>G` and `
 `gt_alleles` reads each `0` as REF (RM270). The loader flags such rows and changes no value. Within a
 contig, over the rows that become `calls` (blocks never take part), first match wins:
 
-1. `marker`: the row carries INFO `OLD_MULTIALLELIC` (vt, Glow), or a value with five `|` fields under
-   a key declared with bcftools' `--old-rec-tag` Description. A record bcftools only realigned has
-   four and is not flagged.
+1. `marker`: the row carries INFO `OLD_MULTIALLELIC` (vt, Glow) or `JUST_VCF_SPLIT` (`write_vcf`'s
+   own tag, any value), or a value with five `|` fields under a key declared with bcftools'
+   `--old-rec-tag` Description. A record bcftools only realigned has four and is not flagged. So a
+   facet `normalize` split keeps `split_signal = marker` through `write_vcf` and `load`; a row RM270
+   flagged by a pattern comes back as `marker` too, since the file now carries the tag.
 2. `slot_pattern`: two or more non-reference rows at one `pos`, each GT slot non-zero in at most one.
 3. `all_zero_beside_alt`: a fully called all-`0` row, of any ploidy, beside a non-reference row at
    the same `pos`. Every row of the position gets the signal.
@@ -473,8 +480,15 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    - `gp` and `dosage` are withheld: a posterior over part of the genotypes does not sum to 1, and
      rescaling it would change the values;
    - `source_alleles` is the row's `[REF, ALT]` where any vector is kept, null otherwise.
-   A site holding a symbolic allele (`<*>`, `<DEL>`, a breakend) is left as written: a split `<*>` row
-   would read back as a reference block. `*` is split like any allele.
+   `<*>` beside concrete ALTs (DeepVariant writes it on every variant record of a gVCF, and
+   `<NON_REF>`, loaded as `<*>`, in its VCF) names no allele, so it gets no row: the concrete ALTs are
+   split as above, indexed over the parent's own allele list, so `ad` and `gl` are sliced exactly as
+   for any other ALT and withheld where the slice would not hold the called genotype. A site left with
+   one concrete ALT is an ordinary biallelic row, with `split_signal` null; `split_signal = marker` is
+   set only where two or more concrete ALTs were split. Left as written, counted: a site whose
+   genotype calls `<*>` (a haplotype carries some other allele, which no split row could hold), and a
+   site holding any other symbolic allele (`<DEL>`, a breakend). bcftools' own `0/.` row for `<*>` was
+   set aside: the loader would read it back as a reference block. `*` is split like any allele.
 2. **Left-align and trim**, only on biallelic sequence rows with `ref_check = match`: drop a common last
    base, and when an allele runs empty, prepend the reference base before both and step `pos` back;
    repeat; then drop common first bases while both alleles keep one. At position 1 an allele keeps
@@ -483,12 +497,18 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and `vrs_errors` are null: they described
    the representation the source wrote, at the position it wrote it. A `ref_check = match` here would be
    bases read from the sequence compared with that same sequence. Rows whose REF was not shown to
-   match pass through, counted, and so do rows whose ALT is no VCF allele (a `-` for a deletion).
-3. **Dedup and sort.** Rows equal in every column are kept once, counted. Rows that state the same
-   allele at one position and differ in anything else are all kept, with a warning (charter 8). Then
-   canonical order (Decision 11). Because a moved row loses `source_ref`, `ref_check` and `source_gt`,
-   one indel written twice by the source, once already left-aligned and once further right, stays as
-   two rows and is reported as a conflict, not dropped as a duplicate.
+   match pass through, counted, and so do rows whose ALT is no VCF allele. A deletion written as
+   ALT `-` (F12) is the empty allele here: a matched row is anchored on the base before (`CT>-` at 30
+   becomes `GCT>G` at 29) and then aligned like any deletion. At a contig's first base there is no
+   base before, and the row stays as written, counted.
+3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
+   except the ones a move clears (`source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids`,
+   `vrs_errors`), which say how the source wrote a row, not what it states. So one indel written twice
+   by the source, once already left-aligned and once further right, with the same genotype and
+   evidence, is one row, and the one kept is the row that did not move, with its source REF, check and
+   GT text. Rows that state the same allele at one position and differ in anything else (genotype,
+   phasing, the likelihoods, depths, quality, filters, ids) are all kept, with a warning (charter 8).
+   Then canonical order (Decision 11).
 
 Rows the loader flagged as one record of a pre-split site (RM270) pass through as written: run
 `rejoin_split`, then `resolve_ref`, then `normalize`. Blocks pass through unchanged.
@@ -760,6 +780,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   not sum to 1 are probabilities under a 4.3+ header (Decision 3); a symbolic SV's `end_pos` reads INFO
   END (the `end_pos` rule). Values change on files that already load; no column changed, so no version
   bump.
+- **Rule changes, still 0.0.7** (2026-10-22, RM6 follow-ups): PL becomes `gl` as `-PL/10` in Float64,
+  rounded to Float32 once (F11); `JUST_VCF_SPLIT` is a split marker (`split_signal`); ALT `-` is an
+  unanchored deletion that `normalize` anchors (F12); `normalize` drops `<*>` from split rows and
+  judges a duplicate without the columns a move clears. Values change; no column changed, so no
+  version bump (`NORMALIZE_VERSION` is 2).
 
 - **0.0.7** (2026-10-22, RM3): `facets.ref_seqcol_digest` names the collection
   `resolve_ref` read REF from. Additive. `resolve_ref` fills `ref`, `ref_check`, and an array row's

@@ -237,7 +237,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, and normalization, `normalize`: split, left-align, trim, dedup, sort; left: gVCF blocks, splitting `<*>` sites, strand, liftover, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, and normalization, `normalize`: split, left-align, trim, dedup, sort; left: gVCF blocks, strand, liftover, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -265,8 +265,8 @@ with what was rejected:
   `source_alleles` is the written `[REF] + ALTs`; elsewhere they are left out and counted.
 - FORMAT is listed per row, keys with a value only. Rejected: one FORMAT string per file with `.` for
   missing, which turns a GT the source left out into an uncalled `.` on reload.
-- REF is `ref`, else `source_ref`. Unwritable rows (no REF, a REF mismatch, no ALTs, a genotype not
-  indexed or indexed past its ALTs) raise `UnwritableRowsError` with a count per reason, unless
+- REF is `ref`, else `source_ref`. Unwritable rows (no REF, a REF mismatch, no ALTs, an ALT that is
+  no VCF allele such as F12's `-`, a genotype not indexed or indexed past its ALTs) raise `UnwritableRowsError` with a count per reason, unless
   `resolved_only=True`. Rejected: writing them with a placeholder REF, or quietly leaving them out.
 - Split-flagged rows (RM270) are written as held, tagged `INFO/JUST_VCF_SPLIT=<signal>`, with a
   warning and the count. Rejected: refusing until `rejoin_split` runs, which would block exporting a
@@ -311,9 +311,12 @@ rejected:
 - Split rows carry `split_signal = marker`, as vt's output does once loaded, so `rejoin_split` can
   join them. Rejected: a new `SplitSignal` value (a new Enum category changes the column's dtype, a
   schema bump), and no flag at all (the row would not say it is one part of a site). In a written file
-  the tag is `write_vcf`'s `JUST_VCF_SPLIT`, which the loader does not read back as a marker yet; vt's
-  `OLD_MULTIALLELIC` and bcftools' `--old-rec-tag` were rejected because their values are the original
-  record, which the frame does not keep per row.
+  the tag is `write_vcf`'s `JUST_VCF_SPLIT`, and since 2026-10-22 the loader reads it back as a marker
+  (any value), so a written normalized facet keeps its flag. Rejected for reading it back: restoring
+  the signal the value names (`slot_pattern`, `all_zero_beside_alt`), since the loader finds those
+  patterns again from the rows and the file now carries a marker key. vt's `OLD_MULTIALLELIC` and
+  bcftools' `--old-rec-tag` were rejected for writing because their values are the original record,
+  which the frame does not keep per row.
 - `gl` on a split row only where no GT slot holds another ALT. Rejected: bcftools' slice on every row,
   which on `1/2` leaves a `1/.` row whose likelihoods point at `0/0`. `gp` withheld on split rows.
   Rejected: bcftools' unrescaled slice (it does not sum to 1, and the loader drops such GP, F10) and a
@@ -321,15 +324,36 @@ rejected:
 - On a moved or trimmed row, `source_ref`, `ref_check`, `source_gt` and the VRS ids are null and `ref`
   carries the new REF. Rejected: `ref_check = match` on the new bases, which would compare the sequence
   with itself; and keeping the old `source_ref`, which no longer describes the row's span.
-- Sites with a symbolic allele (`<*>`, `<DEL>`, breakends) are left as written. bcftools splits `<*>`
-  off as its own `0/.` row, which our loader would read back as a reference block; a DeepVariant gVCF
-  writes `<*>` on every variant record, so these stay multi-allelic for now.
+- Sites with a symbolic allele (`<DEL>`, breakends) are left as written. Since 2026-10-22 `<*>` beside
+  concrete ALTs (every variant record of a DeepVariant gVCF) is dropped from the split rows: the
+  concrete ALTs are split, the vectors sliced over the parent's alleles where exact, and a site left
+  with one ALT is an ordinary biallelic row with no split flag. A site whose genotype calls `<*>` stays
+  as written, counted. Dogfooded on a local DeepVariant gVCF: every one of its 6,079,801
+  variant records carried `<*>`, none remains after `normalize` (173 s), 82,113 sites with two
+  concrete ALTs split into 164,466 flagged rows, no genotype called `<*>`, and htslib reads all
+  6,162,154 rows of the export. Rejected: bcftools' own `0/.` row for `<*>`, which our loader would read back as
+  a reference block; dropping `<*>` where the genotype calls it, which loses a haplotype's stated
+  non-reference allele; and flagging every row of a `<*>` site, which would make each DeepVariant
+  variant record look pre-split, so a second `normalize` would hold it and `rejoin_split` would try to
+  join a lone row.
 - Only `ref_check = match` rows are aligned or trimmed. Rejected: trimming unchecked rows, which needs
   no bases but rewrites a REF nobody has shown to be right.
+- A deletion written as ALT `-` (F12) is anchored by `normalize`, on the base before, once REF has
+  matched; the loader keeps it verbatim and counts it, and `write_vcf` refuses it as
+  `alt_not_an_allele`. Rejected: anchoring in `resolve_ref`, which fills slots of the same facet and
+  touches nothing the source wrote, while anchoring moves `pos` and rewrites REF and ALT; rewriting
+  it in the loader, which has no reference base to anchor on; and the loader refusing such rows,
+  which would drop calls whose REF matches the reference everywhere it was checked.
 - Pre-split input (RM270 flags) passes through. Rejected: aligning those rows, which would move one
   row of a site away from the other and keep `rejoin_split` from finding it.
 - Exact duplicates are dropped; rows stating one allele with other values are all kept (charter 8).
-  Rejected: bcftools `-d`, which keeps the first.
+  Rejected: bcftools `-d`, which keeps the first. Since 2026-10-22 a duplicate is judged on what the
+  row states: the columns a move clears (`source_ref`, `ref_check`, `source_gt`, the VRS ids) are left
+  out of the comparison, so a moved indel and its unmoved twin are one row, the unmoved one kept.
+  Every other column still counts, `ids`, `filters` and `qual` included, so the upload whose 9,213
+  positions hold two records of one allele that differ in `ids` keeps both. Rejected: keying on
+  `(chrom, pos, ref, alts, gt, phased)` and the vectors alone, which would drop a row whose filters,
+  quality or ids differ and so lose what the source said.
 
 **Left in RM6:** writing gVCF blocks (after RM3); a tabix index beside the output; SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`

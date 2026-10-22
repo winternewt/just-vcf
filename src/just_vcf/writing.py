@@ -11,7 +11,8 @@ What is written, and the rules it follows:
 
 - **REF** is `ref` (read from the assembly sequence) when there is one, else `source_ref` (what the
   file wrote). It is never taken from the genotype (charter 10). A row with neither, a row without
-  `alts` (an array row before RM3), a row whose `ref_check` is `mismatch`, a row with a genotype that
+  `alts` (an array row before RM3), a row whose `ref_check` is `mismatch`, a row with an ALT that is
+  no VCF allele (a `-` written for a deletion, F12, until `normalize` anchors it), a row with a genotype that
   is not indexed (`gt` null beside `gt_alleles`) and a row whose `gt` points past its ALTs cannot be
   written as valid VCF. The writer refuses them with `UnwritableRowsError`, counted per reason, unless
   the caller passes `resolved_only=True`; then the rest is written and the counts are reported.
@@ -23,9 +24,11 @@ What is written, and the rules it follows:
 - **VCF 4.3**, not 4.4+: GP is a probability from 4.3 on, which is what `gp` holds, and the writer
   emits no leading phase indicator, so the first haplotype's phase follows 4.3's implicit rule.
 - **INFO** carries `END` where `end_pos` is not the REF span (symbolic alleles), and
-  `JUST_VCF_SPLIT` on rows RM270 flagged as one record of a split multi-allelic site. Those rows are
-  written as the frame holds them, with a warning and the tag, so a reader is told that a `0` there
-  may mean another ALT. `rejoin_split` joins them first, if that is what the caller wants.
+  `JUST_VCF_SPLIT` on rows flagged as one record of a split multi-allelic site (`split_signal`:
+  `normalize`'s split rows, and rows RM270 flagged). Those rows are written as the frame holds them,
+  with a warning and the tag, so a reader is told that a `0` there may mean another ALT. `load` reads
+  the tag back as a marker (`split_signal = marker`), so a written normalized facet keeps its flag.
+  `rejoin_split` joins them first, if that is what the caller wants.
 - **Blocks** are not written. A gVCF block record needs the reference base at its start, which the
   `blocks` frame does not hold until RM3 reads the sequence; the count is reported.
 - **Contig names** are written as stored (the canonical `chrom`), with the `chr` prefix (`MT` becomes
@@ -51,16 +54,13 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.bgzf import BgzfWriter
-from just_vcf.loaders.vcf import FORMAT_KEYS
+from just_vcf.loaders.vcf import FORMAT_KEYS, SPLIT_INFO_KEY
 from just_vcf.loading import Loaded
 from just_vcf.schema import CONTIG_RANK, SCHEMA_VERSION, RefCheck, canonical_chrom
 
 logger = logging.getLogger(__name__)
 
 VCF_VERSION = "VCFv4.3"
-
-SPLIT_INFO_KEY = "JUST_VCF_SPLIT"
-"""INFO key on a written row that RM270 flagged as one record of a split multi-allelic site."""
 
 _FORMAT_DESCRIPTIONS = {
     "GT": "Genotype",
@@ -78,7 +78,18 @@ loader's `FORMAT_KEYS`, so a written file declares each key the way the loader r
 
 _NO_STRINGS = pl.lit([], dtype=pl.List(pl.String))
 
-_UNWRITABLE_REASONS = ("ref_unresolved", "ref_mismatch", "alts_unresolved", "genotype_unindexed", "genotype_index_past_alts")
+_UNWRITABLE_REASONS = (
+    "ref_unresolved",
+    "ref_mismatch",
+    "alts_unresolved",
+    "alt_not_an_allele",
+    "genotype_unindexed",
+    "genotype_index_past_alts",
+)
+
+_VCF_ALLELE = r"^([ACGTNacgtn]+|\*|<[^<>]+>|\.[ACGTNacgtn]+|[ACGTNacgtn]+\.)$|\[|\]"
+"""An ALT VCF can write: bases, `*`, a symbolic allele, a single breakend (`.A`, `A.`) or a breakend
+(`A[2:500[`). Anything else (F12's `-` for a deletion) is not one, and htslib refuses the file."""
 
 
 class ContigNames(str, Enum):
@@ -259,6 +270,8 @@ def _unwritable() -> pl.Expr:
         .then(pl.lit("ref_mismatch"))
         .when(pl.col("alts").is_null())
         .then(pl.lit("alts_unresolved"))
+        .when(~pl.col("alts").list.eval(pl.element().str.contains(_VCF_ALLELE)).list.all())
+        .then(pl.lit("alt_not_an_allele"))
         .when(pl.col("gt").is_null() & pl.col("gt_alleles").is_not_null())
         .then(pl.lit("genotype_unindexed"))
         .when(pl.col("gt").list.max().cast(pl.Int64) > pl.col("alts").list.len().cast(pl.Int64))

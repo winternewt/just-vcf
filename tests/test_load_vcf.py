@@ -1,5 +1,6 @@
 import gzip
 import re
+import struct
 import zipfile
 from pathlib import Path
 
@@ -451,6 +452,15 @@ def test_an_undeclared_end_is_declared_so_a_block_keeps_its_extent(tmp_path: Pat
     assert any("INFO/END" in w and "not declared" in w for w in loaded.warnings)
 
 
+def test_a_dash_alt_is_kept_verbatim_and_counted(tmp_path: Path) -> None:
+    # F12: ALT `-` is an unanchored deletion of the REF bases; the loader has no reference to anchor it.
+    records = ["1\t100\t.\tCT\t-\t.\t.\t.\tGT\t0/1", "1\t200\t.\tA\tG\t.\t.\t.\tGT\t0/1", "1\t300\t.\tG\t-\t.\t.\t.\tGT\t0/0"]
+    calls, _, warnings = frames(write(tmp_path, vcf_text(records)))
+    assert calls.filter(pl.col("pos") == 100).select("source_ref", "alts", "end_pos").row(0) == ("CT", ["-"], 101)
+    assert_gt_consistent(calls)
+    assert any(w.startswith("2 record(s) write a deletion as ALT `-`") for w in warnings), warnings
+
+
 def test_vectors_not_parallel_to_their_alleles_are_withheld(tmp_path: Path) -> None:
     """`ad` is one value per allele and `gl`/`gp` one per genotype. A row whose vector has another
     length is withheld and counted, never truncated; a haploid row needs one value per allele."""
@@ -474,6 +484,21 @@ def test_vectors_not_parallel_to_their_alleles_are_withheld(tmp_path: Path) -> N
         "1 PL value(s) not one per genotype set to null",
         "1 GP value(s) not one per genotype set to null",
     }
+
+
+def test_pl_and_the_same_likelihood_as_gl_load_equal(tmp_path: Path) -> None:
+    """F11: PL `p` and GL `-p/10` are one likelihood, so they load as the same Float32: the one nearest
+    to `-p/10`, as a GL file's own value is parsed."""
+    values = list(range(0, 300))
+    triples = [values[i : i + 3] for i in range(0, len(values), 3)]
+    pl_records = [f"1\t{100 + i}\t.\tA\tG\t.\t.\t.\tGT:PL\t0/1:{','.join(map(str, t))}" for i, t in enumerate(triples)]
+    gl_records = [f"1\t{100 + i}\t.\tA\tG\t.\t.\t.\tGT:GL\t0/1:{','.join(repr(-p / 10) for p in t)}" for i, t in enumerate(triples)]
+    gl_line = '##FORMAT=<ID=GL,Number=G,Type=Float,Description="Log10 likelihoods">'
+    from_pl, _, _ = frames(write(tmp_path, vcf_text(pl_records, fmt=("GT", "PL")), "pl.vcf"))
+    from_gl, _, _ = frames(write(tmp_path, vcf_text(gl_records, fmt=("GT",), extra_meta=(gl_line,)), "gl.vcf"))
+    assert from_pl["gl"].to_list() == from_gl["gl"].to_list()
+    nearest = [[struct.unpack("f", struct.pack("f", -p / 10))[0] for p in t] for t in triples]
+    assert from_pl["gl"].to_list() == nearest
 
 
 def test_a_vector_key_declared_with_a_fixed_count_is_not_carried(tmp_path: Path) -> None:

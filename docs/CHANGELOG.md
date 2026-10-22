@@ -4,6 +4,38 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `normalize` drops `<*>` (and `<NON_REF>`) from the ALTs it splits: DeepVariant's variant records,
+  `A>G,<*>`, become plain biallelic rows (no split flag) with `ad` and `gl` sliced exactly, and are
+  then left-aligned like any other. Sites with two or more concrete ALTs beside `<*>` split as before,
+  each row `split_signal = marker`. A site whose genotype calls `<*>`, and sites holding another
+  symbolic allele, stay as written, counted. Before, every site holding `<*>` was left multi-allelic.
+
+- `normalize` judges a duplicate on what the row states: the columns a move clears (`source_ref`,
+  `ref_check`, `source_gt`, the VRS ids) no longer make two rows differ, so an indel the source wrote
+  twice, once already left-aligned, with the same genotype and evidence, is one row (the unmoved one)
+  rather than a reported conflict. Rows of one allele with other genotypes, evidence, filters or ids
+  are all kept, with the warning, as before.
+
+- A deletion written as ALT `-` (F12, about 8,080 rows in each of five PGP-HMS uploads) is now read as
+  an unanchored deletion of the REF bases: the loader keeps it verbatim and counts it, `normalize`
+  anchors it on the base before once REF has matched and then left-aligns it, and `write_vcf` refuses
+  any ALT that is no VCF allele as `alt_not_an_allele` (a new `UnwritableRowsError` reason). Before,
+  `write_vcf` wrote `-` and htslib refused the file. `NORMALIZE_VERSION` is now 2, which changes every
+  normalized `facet_id`; the one bump also covers the dedup and `<*>` changes of the same day. No
+  schema version change.
+
+- `load` reads `write_vcf`'s own `INFO/JUST_VCF_SPLIT` back as a split marker: those rows get
+  `split_signal = marker` and the facet's `split_marker` names the key, so a normalized facet written
+  and reloaded keeps its split rows flagged and `rejoin_split` joins them again. Before, the tag was
+  dropped as an unknown INFO key and the loader's patterns flagged some of the rows as `slot_pattern`.
+  `writing.SPLIT_INFO_KEY` now lives in `loaders.vcf` (still importable from `writing`). No schema
+  version change.
+
+- PL now loads as the Float32 nearest `-PL/10`, divided in Float64 and rounded once, so a PL file and a
+  GL file stating one likelihood compare equal on `gl` (F11). Complete Genomics' phred-unit GL is
+  divided the same way. This changes `gl` by one Float32 step on some entries of files that already
+  load. No schema version change (a rule change, no column).
+
 - New `sex_chromosome_evidence(loaded)` (RM269): for each facet, what its calls say about X and Y, and
   an estimate of the karyotype. It measures GT ploidy as written per group (autosomes, non-PAR X,
   non-PAR Y, PAR, MT), the het share of non-PAR X calls written diploid with their AD allele balance,

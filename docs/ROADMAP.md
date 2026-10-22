@@ -326,15 +326,18 @@ and recall, the share of the manifest's sampled rsids in the export. A chip fami
 0.90 and 0.30 above the other's, and its recall at least 0.40; otherwise the chip is unknown and a
 warning gives both shares per manifest.
 
-Measured through `load` on every loadable PGP-HMS array export (660 facets; 606 with 61,000 rsids or
-more, where the sampled shares are within 0.011 of the full sets'). Coverage / recall, sampled:
+Measured through `load` on every loadable array export under the Krypton copy's
+`pgp-hms/participants/`, duplicates as uploaded (660 facets; 606 with 61,000 rsids or more, where the
+sampled shares are within 0.011 of the full sets'). That corpus is larger than the 341 23andMe exports
+the generation bands above were measured on, so the 23andMe counts below are not the same measurement
+as that table's. Coverage / recall, sampled:
 
 | Exports | GSA-24v3 | OmniExpress-24 v1.2 |
 |---|---|---|
 | 57 FTDNA, 680,544–720,449 rows | 0.24–0.25 / 0.26–0.28 | 0.98–0.99 / 0.94–0.99 |
 | 3 FTDNA + 2 `ftdna_space`, 548,011 rows (2010 Affymetrix) | 0.15 / 0.13 | 0.33 / 0.26 |
 | 43 FTDNA, 15,789–18,091 rows (X chromosome only; 245–270 sampled rsids) | 0.22–0.52 / ≤0.01 | 0.22–0.99 / ≤0.02 |
-| 1 rsid CSV (`rsid_result_csv`), 631,369 rows | 0.84 / 0.84 | 0.36 / 0.32 |
+| 1 rsid CSV (`rsid_result_csv`, vendor unstated), 631,369 rows | 0.84 / 0.84 | 0.36 / 0.32 |
 | 1 Final Report, stated `GSA-24v2-0_A1` (half its probes named by position) | 0.97 / 0.52 | 0.41 / 0.19 |
 | 28 23andMe v5 (a custom GSA) | 0.93 / 0.92 | 0.28 / 0.24 |
 | 271 23andMe v3 | 0.20 / 0.31 | 0.71–0.72 / 0.96–0.98 |
@@ -344,15 +347,16 @@ more, where the sampled shares are within 0.011 of the full sets'). Coverage / r
 Outcome on the formats in scope, through `load`: 57 FTDNA `illumina_omniexpress` (inferred); 43 FTDNA
 unknown, too few sampled rsids; 3 FTDNA, 2 `ftdna_space` and the rsid CSV unknown, no manifest clearly
 holds them; the Final Report keeps its stated chip, and the Omni2.5 one still does not load. No
-Final Report on disk names no manifest, so that branch is tested on synthetic rows only. No MyHeritage
-export is on disk either.
+Final Report on disk names no manifest, so that branch is tested on synthetic rows only. No file on
+disk states MyHeritage (the rsid CSV states no vendor).
 
 Decisions, each with what was rejected:
 
 - The value names the family (`illumina_omniexpress`, `illumina_gsa`), not the manifest compared with.
-  Rejected: `illumina:InfiniumOmniExpress-24v1-2_A1`, the Final Report spelling: FTDNA's chip was an
-  OmniExpress-12, and the GSA Final Report above, on GSA v2, reaches 0.97 against the v3 manifest, so
-  the overlap cannot tell versions apart; naming one would be a statement the export never made.
+  Rejected: `illumina:InfiniumOmniExpress-24v1-2_A1`, the Final Report spelling: the GSA Final Report
+  above states GSA v2 and reaches 0.97 against the v3 manifest, so the overlap does not tell a
+  manifest's version from its neighbour's; naming the one compared with would be a statement the
+  export never made.
 - Coverage, margin and recall all have to hold. Rejected: coverage alone, which an extract of a chip
   passes (39 of the 43 FTDNA X exports have 0.96–0.99 of their rsids in OmniExpress's manifest, and
   hold 2% of it); and a
@@ -369,8 +373,8 @@ Decisions, each with what was rejected:
   The F3 appended export is not read either (no vendor stated; its shares match AncestryDNA V2's and no
   rule names that).
 
-**Left:** chip manifests beyond the two (OmniExpress-12, GSA v1/v2, Affymetrix's for the 2010 FTDNA
-exports, MyHeritage's custom GSA), which would name more of the unknowns above; an FTDNA
+**Left:** more manifests (other OmniExpress and GSA versions, an Affymetrix one that might place the
+2010 FTDNA exports, whatever the rsid CSV's chip is), which could name more of the unknowns above; an FTDNA
 X-chromosome export, which reads like an extract of its chip, could take the chip of the same
 person's autosomal export, but nothing links the two files yet; GRCh36 in
 `ASSEMBLY_LENGTHS`, so a build-36 VCF's `##contig` lengths name it (the reference side knows GRCh36's

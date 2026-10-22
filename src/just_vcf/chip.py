@@ -21,8 +21,8 @@ Two kinds of evidence, recorded apart in `facets.chip_basis`:
   holds a good part of the manifest's: an extract, an export on a chip no manifest here describes, or
   two chips' content mixed stays unknown. Thresholds measured on PGP-HMS (docs/ROADMAP.md RM4). The
   name is the platform's family (`illumina_omniexpress`, `illumina_gsa`), not the manifest compared
-  with: one manifest per family is on hand, and its versions (OmniExpress-12 and -24, GSA v1 to v3)
-  share most of their content, so the overlap cannot tell them apart. A row count names nothing here.
+  with: one manifest per family is on hand, and a Final Report that states GSA v2 reaches 0.97 against
+  the GSA v3 manifest, so the overlap does not tell versions apart. A row count names nothing here.
 
 The vocabulary is open (`CHIPS`, a `frozenset[str]` with a validator, stored as `str`): every vendor
 release adds a chip. A Final Report's manifest is kept as Illumina names it, `illumina:<manifest>`.
@@ -241,8 +241,8 @@ FTDNA X-chromosome exports have 245-270, every whole export 8,964 or more."""
 
 MIN_COVERAGE = 0.90
 """Share of the export's sampled rsids the winning manifest must hold. On PGP-HMS: 0.98-0.99 for the 57
-FTDNA exports on OmniExpress; at most 0.33 for the 2010 Affymetrix ones; 0.84 for the one rsid CSV on a
-GSA-like chip, which therefore reads unknown."""
+FTDNA exports on OmniExpress; at most 0.33 for the 2010 Affymetrix ones; 0.84 against GSA for the one
+rsid CSV (vendor unstated), which therefore reads unknown."""
 
 MIN_MARGIN = 0.30
 """How far the winning manifest's share must stand above every other manifest's (0.73 or more on PGP-HMS

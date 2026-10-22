@@ -85,3 +85,15 @@ writing them back as phred under a 4.2 header would not read back bit for bit. T
 the loader's GP rule (RM2): values within [0, 1] under a 4.3+ header are probabilities, because the
 header settles what the values cannot, and a phred GP whose every value is at most 1 would mean
 genotypes all but equally likely, which is not what any caller writes.
+
+## F11 — PL to `gl` lands one float step off the nearest value
+
+Severity: low · Found 2026-10-22 by comparing `normalize` with `bcftools norm` (RM6).
+
+The loader turns PL into `gl` as `PL / -10` in Float32, and Polars computes that division so that PL 21
+gives -2.1000001, while the nearest Float32 to -2.1 is -2.0999999. A file that writes the same
+likelihood as GL (`-2.1`) therefore loads one step away from one that writes PL 21. Deterministic, so no
+digest or test of ours moves, and the size is far below any PHRED rounding; but two facets of one
+genome, one with PL and one with GL, do not compare equal on `gl`, and a test comparing against an
+outside tool needs a tolerance (`test_agrees_with_bcftools_norm`). Not fixed here: it is the loader's
+PL rule (RM2). The repair is to divide in Float64 and cast the result to Float32 once.

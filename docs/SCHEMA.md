@@ -431,9 +431,46 @@ parquet spill of `calls`, three columns, so they cost no second parse of the VCF
 
 A position stays as written, its rows still flagged, when it cannot be read as one site: two ALTs in
 one slot, rows of different ploidy, a symbolic allele, REFs that are not prefixes of one another, an
-index past a row's ALTs, or a row with no genotype. Each reason is one warning with a count. Not done:
+index past a row's ALTs, a row with no genotype, or a row with no `source_ref` (one `normalize` moved).
+Each reason is one warning with a count. Not done:
 grouping by the bcftools marker's original record, which would also catch split indels that
 left-alignment moved to another POS.
+
+**Normalizing: `normalize(loaded, reference)`** (RM6) returns a derived facet (`relation = normalized`,
+`derived_from` the parent, which is never changed; its `facet_id` digests the parent's, the
+collection read and the rule's version). It takes a facet `resolve_ref` has read, and reads more bases
+from the same collection (`ref_seqcol_digest`) of the same store. In order:
+
+1. **Split.** A row with two or more ALTs becomes one row per ALT, as `bcftools norm -m-any
+   --multi-overlaps .`, vt and Glow write them: a GT slot holding another ALT is null (`.`), never
+   `0`, so `1/2` at `A>G,T` becomes `1/.` and `./1`, and `1/1` gives `./.` on the uncarried ALT. Each
+   split row has `split_signal = marker`: in the frame it is tagged as split, as vt's output is, and
+   `rejoin_split` can join it again. `source_gt` is null (no file wrote the text). Vectors:
+   - `ad` is `[REF, ALT]`, sliced from the parent's: read counts per allele do not depend on the other
+     alleles;
+   - `gl` is sliced to the genotypes over `[REF, ALT]` (haploid `0, k`; diploid `0/0, 0/k, k/k`) only
+     where no GT slot holds another ALT. Where one does, no entry of the slice is the genotype the
+     caller chose, and the slice alone would point at one it rejected, so it is withheld;
+   - `gp` and `dosage` are withheld: a posterior over part of the genotypes does not sum to 1, and
+     rescaling it would change the values;
+   - `source_alleles` is the row's `[REF, ALT]` where any vector is kept, null otherwise.
+   A site holding a symbolic allele (`<*>`, `<DEL>`, a breakend) is left as written: a split `<*>` row
+   would read back as a reference block. `*` is split like any allele.
+2. **Left-align and trim**, only on biallelic sequence rows with `ref_check = match`: drop a common last
+   base, and when an allele runs empty, prepend the reference base before both and step `pos` back;
+   repeat; then drop common first bases while both alleles keep one. At position 1 an allele keeps
+   its last base. On a row this changed, `ref` is the new REF (read from the reference), `gt_alleles`
+   and `source_alleles` follow the new spelling (same order, so the vectors stay indexed), and
+   `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and `vrs_errors` are null: they described
+   the representation the source wrote, at the position it wrote it. A `ref_check = match` here would be
+   bases read from the sequence compared with that same sequence. Rows whose REF was not shown to
+   match pass through, counted.
+3. **Dedup and sort.** Rows equal in every column are kept once, counted. Rows that state the same
+   allele at one position and differ in anything else are all kept, with a warning (charter 8). Then
+   canonical order (Decision 11).
+
+Rows the loader flagged as one record of a pre-split site (RM270) pass through as written: run
+`rejoin_split`, then `resolve_ref`, then `normalize`. Blocks pass through unchanged.
 
 **`end_pos`.** It is named apart from polars-bio's `end` because that value is wrong for symbolic SV
 alleles (P3), so the two must not share a name. The rule follows VCF 4.5's computed END:
@@ -624,6 +661,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-22, RM6's second slice): `normalize` emits the `normalized` relation
+  the facets table already listed, and no column changes. Rules added: the normalizing rules above;
+  on a row `normalize` moved or trimmed, `ref_check` and `source_ref` are null although `ref` is set
+  (Decision 6's "null means no `source_ref`" covers it: the derived row has none).
 
 - **0.0.7** (2026-10-22, RM3): `facets.ref_seqcol_digest` names the collection
   `resolve_ref` read REF from. Additive. `resolve_ref` fills `ref`, `ref_check`, and an array row's

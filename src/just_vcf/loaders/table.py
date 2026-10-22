@@ -96,9 +96,9 @@ class Table:
     calls: pl.DataFrame
     """`calls` rows without `facet_id`, plus `source_chrom` for the facet's `contig_map`."""
     warnings: list[str] = field(default_factory=list)
-    dropped_columns: list[str] | None = None
-    """The file's column names that no frame column carries, in file order; None where the file
-    names no columns."""
+    dropped_columns: list[str] = field(default_factory=list)
+    """The file's column names that no frame column carries, in file order; for a file that names no
+    columns, the format's names for them. `[]` when every column is carried."""
     sample: str | None = None
     """The sample id the file states, if any. Identifying: never logged."""
     sample_index: int | None = None
@@ -126,9 +126,12 @@ def read_table(data: bytes, spec: FormatSpec, sample: str | None = None) -> Tabl
         raise TableLayoutError(
             f"{spec.id}: no column for {', '.join(missing)}{_strand_hint(spec, columns)}{_manifest_hint(data, spec, missing)}"
         )
+    used = {*_REQUIRED[spec.id], *_CONSUMED.get(spec.id, ())}
     if names is not None:
-        used = {*_REQUIRED[spec.id], *_CONSUMED.get(spec.id, ())}
         table.dropped_columns = [name for name, canonical in zip(names, _canonical_names(names, spec)) if canonical not in used]
+    else:
+        # A file that names no columns has the format's own, in spec order (a Genos file without `##Columns=`).
+        table.dropped_columns = [column["name"] for column in spec.columns if column["name"] not in used]
 
     width = len(names) if names is not None else len(spec.columns)
     if names is not None:

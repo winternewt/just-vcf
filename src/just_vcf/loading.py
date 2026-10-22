@@ -168,7 +168,9 @@ def _load_rsid_table(sniffed: Sniffed) -> Loaded:
     calls, warnings = rsid_table.read_calls(data, spec)
     if spec.columns and rsid_table.column_line_ok(data, spec) is False:
         warnings.append("the column line does not read rsid, chromosome, position, genotype; columns taken by position")
-    return _array_loaded(sniffed, calls, warnings, build=sniffed.build, options={}, extra=_chip(sniffed.format, data, calls, warnings))
+    # The four fields of the layout are all carried: none dropped, which is `[]`, not null (Decision 5).
+    extra = {"dropped_fields": [], **_chip(sniffed.format, data, calls, warnings)}
+    return _array_loaded(sniffed, calls, warnings, build=sniffed.build, options={}, extra=extra)
 
 
 def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:

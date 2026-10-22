@@ -443,7 +443,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
 | `sample_meta` | the file's `##SAMPLE` and `##PEDIGREE` lines for this sample, verbatim. Pedigree becomes GA4GH Pedigree later (charter) |
-| `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9). For a delimited table, the file's own column names that no frame column carries (a Final Report's `GenCall Score`) |
+| `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9). For a delimited table, the file's own column names that no frame column carries (a Final Report's `GenCall Score`), or, where the file names none, the format's names for them; for CGI's native files and the key=value table, their columns and keys. `[]` = the loader read the file's fields and dropped none (every 23andMe-layout table: its four fields are all carried). Null = the format has no notion of fields; no loaded format is one today. A derived facet keeps its parent's |
 | `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, `write_vcf`'s `JUST_VCF_SPLIT`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
 | `derivation_inputs` | `list[struct{role, name, sha256}]`: the files a derived facet was made with besides its parent and its reference collection (`ref_seqcol_digest`). A liftover writes its chain (`role = chain`, the file's name, not its path, and the sha256 of its bytes). Null on a facet read from a file. just-vcf's own shape |
 | `chip`, `chip_basis` | the genotyping chip an array export came from (RM4, `just_vcf.chip`), and how it is known: `stated` (the header names it: AncestryDNA's array version, a Final Report's `Content` manifest, Living DNA's genotype chip) or `inferred` (a 23andMe export's row count and internal-id profile both point at one generation; a preamble-less table in its layout is read so when it carries 23andMe's `i…` ids). An open vocabulary: `23andme_v1_v2` (the two are not told apart), `23andme_v3`, `23andme_v4`, `23andme_v5`, `ancestrydna_v1`, `ancestrydna_v2`, `living_dna_sirius`, and `illumina:<manifest>` as a Final Report names it. Null = unknown (a statement with no entry is quoted in a warning; FTDNA exports state nothing and are not inferred) or not an array. just-vcf's own shape |
@@ -1007,6 +1007,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, `dropped_fields`): no column changes. Rule stated: `[]` means the
+  loader read the file's fields and dropped none, null that the format has no notion of fields
+  (Decision 5). 23andMe-layout tables and a Genos file without `##Columns=` wrote null; they now write
+  `[]`. Values change on files that already load.
 
 - **No version change** (2026-10-22, F4): no column changes. Rule added in `resolve_ref` (Decision 2):
   a Living DNA run-together indel genotype is split against the reference, so `gt_alleles` is set on

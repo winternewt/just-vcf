@@ -110,6 +110,7 @@ def test_every_example_round_trips(tmp_path: Path, format_id: str) -> None:
     assert calls["source_ref"].null_count() == calls.height
     assert calls["phased"].null_count() == calls.height, "a genotype table says nothing about phase"
     assert calls["evidence_basis"].to_list() == ["assay"] * calls.height
+    assert facet["dropped_fields"][0] is not None, "a table has fields: [] when none was dropped, never null"
 
 
 def test_load_is_deterministic_and_order_free(tmp_path: Path) -> None:
@@ -395,6 +396,17 @@ def test_genos_spans_insertions_and_hemizygous_calls(tmp_path: Path) -> None:
     assert any(w.startswith("1 genotype(s) not readable") for w in loaded.warnings)
     facet = loaded.facets.collect().row(0, named=True)
     assert (facet["sample"], facet["assembly_label"], facet["callset_type"]) == ("KIT1", "GRCh37", None)
+
+
+def test_genos_reads_every_field_with_or_without_its_column_line(tmp_path: Path) -> None:
+    """`dropped_fields` is `[]` when the loader read the file's fields and dropped none, whether the
+    file names them (`##Columns=`) or the format does (a Genos file without that line)."""
+    row = "chr1\t99\t100\trs1\tC/T\n"
+    named = _load_text(tmp_path, GENOS_HEAD + row, "named.tsv")
+    unnamed = _load_text(tmp_path, GENOS_HEAD.replace("##Columns=CHROM\tBEGIN\tEND\tID\tGENOTYPE\n", "") + row, "unnamed.tsv")
+    for loaded in (named, unnamed):
+        assert loaded.facets.collect()["dropped_fields"].to_list() == [[]]
+    assert _by_id(unnamed)["rs1"]["gt_alleles"] == ["C", "T"]
 
 
 def test_genos_with_other_columns_is_refused(tmp_path: Path) -> None:

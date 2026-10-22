@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `facets.dropped_fields` means the same in every loader: `[]` when the loader read the file's fields
+  and dropped none, null only for a format with no notion of fields. The 23andMe-layout tables (all
+  nine) and a Genos file without its `##Columns=` line wrote null; they now write `[]`. A value change
+  on files that already load.
+
 - `resolve_ref` splits Living DNA's run-together indel genotypes (`CCA`) against the reference where
   exactly one split fits (both pieces start with one base, one equals the reference over its span),
   and sets REF and ALT where only one allele is the reference. On the real file: 58 of 83 rows split, 4

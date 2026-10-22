@@ -262,6 +262,15 @@ def test_rsid_result_table_with_a_preamble_and_unplaced_probes(tmp_path: Path) -
     assert loaded.facets.collect()["vendor"][0] is None, "the vendor is not claimed for this layout"
 
 
+def test_a_table_whose_every_row_is_dropped_loads_empty(tmp_path: Path) -> None:
+    loaded = _load_text(tmp_path, 'RSID,CHROMOSOME,POSITION,RESULT\n"kgp1","0","0","--"\n', "unplaced.csv")
+    calls = loaded.calls.collect()
+    assert calls.height == 0 and calls.schema == CALLS
+    facet = loaded.facets.collect()
+    assert facet.height == 1 and facet["contig_map"][0].to_list() == []
+    assert loaded.warnings == ("1 row(s) on chromosome 0 (probes with no mapped position) dropped",)
+
+
 # --- Color -------------------------------------------------------------------------------------------
 
 COLOR_HEADER = "SampleID,Chromosome,Position,RSID,Genotype,ReferenceVersion\n"

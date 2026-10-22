@@ -816,11 +816,12 @@ def to_rows(
     reference_or_nothing = pl.col("gt").is_null() | pl.col("gt").list.eval(pl.element().is_null() | (pl.element() == 0)).list.all()
     rows = rows.with_columns((pl.col("_block") & reference_or_nothing).alias("_block"))
     if CGI_NOCALL.strip("<>") in header.alt_ids:
+        # polars-bio returns a haploid no-call `.` as a null GT (male X and Y), so a null GT on such a
+        # record is a no-call too: CGI writes GT on every record.
         no_call_span = (
             pl.col("alts").list.len().eq(0)
             & pl.col("info_END").is_null()
-            & pl.col("gt").list.len().gt(0)
-            & pl.col("gt").list.eval(pl.element().is_null()).list.all()
+            & (pl.col("gt").is_null() | pl.col("gt").list.eval(pl.element().is_null()).list.all())
         )
         rows = rows.with_columns((pl.col("_block") | no_call_span.fill_null(False)).alias("_block"))
     # RM270: a marker tags its own row here; the patterns need whole positions, read from the spill.

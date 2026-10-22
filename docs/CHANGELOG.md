@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A CGI no-called span written with a haploid `.` (male X and Y) now goes to `blocks` like `./.`.
+  polars-bio 0.36 returns a haploid `.` GT as null, so these 139,310 records of a PGP-HMS vcfBeta had
+  stayed in `calls` with no genotype at all. The same polars-bio behaviour makes a haploid `.` in any
+  VCF load with `gt`, `gt_alleles` and `source_gt` null rather than one null haplotype (open).
+
 - `load` reads PGP-HMS's freeBayes+VarScan2 merges (`vcf_freebayes_varscan2`, RM2) as two facets in
   one `Loaded`, one per caller (SCHEMA Decision 8), each with `relation = caller_split` and its caller
   and version. A row goes to a caller when INFO/SF lists its index. In the one-column layout most PGP

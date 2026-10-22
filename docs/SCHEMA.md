@@ -231,7 +231,8 @@ stays in `calls` with `<*>` in `alts`. A monomorphic record (ALT `.`) stays in `
 
 Complete Genomics' VCF (`vcf_cgi`, or any VCF declaring its alleles) adds two block kinds, both
 `no_call`: a `<CGA_NOCALL>` record spans POS to INFO `END`, and, where the header declares
-`CGA_NOCALL`, a record with ALT `.`, no `END` and no allele called (`./.`, `.|.`) spans its REF. Its
+`CGA_NOCALL`, a record with ALT `.`, no `END` and no allele called (`./.`, `.|.`, or a haploid `.`,
+which polars-bio 0.36 returns as a null GT) spans its REF. Its
 `<CGA_CNVWIN>` records are 2 kb copy-number windows, not genotypes, and are left out with a count. A
 half-called reference span (`0|.`, ALT `.`) stays a call.
 

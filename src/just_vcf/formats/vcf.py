@@ -73,6 +73,8 @@ VCF_CGI = FormatSpec(
         "126,604 rows with GQ in one file, GQ was the gap between the two best. The loader reads gl = GL / 10.",
         "FORMAT AD is declared `Number=2` and counts reads per GT slot (`1/1` writes `3,3`), not per allele: "
         "not carried.",
+        "On male X and Y the no-called spans write a haploid `.`; polars-bio 0.36 returns that GT as null, "
+        "the same as a record with no GT, so the loader reads a null GT on such a record as a no-call.",
         "No ALT `.` record is called reference (`0/0`) in the first 400k rows: reference-called positions "
         "are absent. Whether absence means reference here is not settled, so `absence_means` stays `blocks`.",
     ),

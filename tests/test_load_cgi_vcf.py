@@ -24,6 +24,7 @@ HEADER = [
     "##phasing=partial",
     "##reference=ftp://ftp.completegenomics.com/ReferenceFiles/build37.fa.bz2",
     "##contig=<ID=1,length=249250621,assembly=B37>",
+    "##contig=<ID=X,length=155270560,assembly=B37>",
     '##ALT=<ID=CGA_CNVWIN,Description="Copy number analysis window">',
     '##ALT=<ID=CGA_NOCALL,Description="No-called record">',
     '##INFO=<ID=NS,Number=1,Type=Integer,Description="Number of Samples With Data">',
@@ -51,6 +52,7 @@ RECORDS = [
     "1\t770000\t.\tGA\t.\t.\t.\tNS=1;AN=1\tGT:PS\t.|0:752566",
     f"1\t780000\t.\tC\tA,T\t.\t.\tNS=1;AN=2;AC=1,1\t{FMT}\t1|2:752566:PASS:40:-200,-90,-120,-60,0,-40:30:14,16",
     "1\t790000\t.\tC\t.\t.\t.\tNS=1;AN=0\tGT:PS\t.|.:.",
+    "X\t2699509\t.\tAAAAGAAGTTAA\t.\t.\t.\tNS=1;AN=0\tGT:PS\t.:.",  # haploid no-call on male X
 ]
 
 
@@ -63,10 +65,11 @@ def test_record_classes(cgi_vcf: Path) -> None:
     assert sniff(cgi_vcf).format == "vcf_cgi"
     loaded = load(cgi_vcf)
     facets, calls, blocks = pl.collect_all([loaded.facets, loaded.calls, loaded.blocks])
-    assert blocks.select("pos", "end_pos", "kind").rows() == [
-        (1, 10000, "no_call"),  # <CGA_NOCALL> to END
-        (10001, 10006, "no_call"),  # ALT . with ./.: the REF's span
-        (790000, 790000, "no_call"),
+    assert blocks.select("chrom", "pos", "end_pos", "kind").rows() == [
+        ("1", 1, 10000, "no_call"),  # <CGA_NOCALL> to END
+        ("1", 10001, 10006, "no_call"),  # ALT . with ./.: the REF's span
+        ("1", 790000, 790000, "no_call"),
+        ("X", 2699509, 2699520, "no_call"),  # a haploid `.`, which polars-bio returns as a null GT
     ]
     assert calls["pos"].to_list() == [752566, 752721, 760000, 770000, 780000], "the CNV window is left out"
     assert "1 <CGA_CNVWIN> record(s) left out: copy-number windows, not genotypes" in loaded.warnings
@@ -110,7 +113,7 @@ def test_a_cgi_vcf_without_the_centre_line_gets_the_same_rules(tmp_path: Path) -
     assert sniff(path).format == "vcf"
     loaded = load(path)
     calls, blocks = pl.collect_all([loaded.calls, loaded.blocks])
-    assert blocks.height == 3 and calls.height == 5
+    assert blocks.height == 4 and calls.height == 5
     assert calls.filter(pl.col("pos") == 760000)["gl"].to_list()[0] == pytest.approx([-17.0, -7.3, 0.0])
     assert loaded.facets.collect()["vendor"][0] is None, "no line names the vendor"
 
@@ -137,3 +140,5 @@ def test_real_cgi_vcf(pgp_participants: Path) -> None:
     assert summary["calls"] > 0 and summary["windows"] == 0 and summary["nocall_calls"] == 0
     assert summary["gq_not_gap"] == 0 and summary["end_before_pos"] == 0
     assert set(kinds["kind"].to_list()) == {"no_call"}
+    no_genotype = loaded.calls.filter(pl.col("gt").is_null() & (pl.col("alts").list.len() == 0)).select(pl.len()).collect().item()
+    assert no_genotype == 0, "every ALT . record without a called allele is a no-call block"

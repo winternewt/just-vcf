@@ -328,7 +328,10 @@ rejected:
   concrete ALTs (every variant record of a DeepVariant gVCF) is dropped from the split rows: the
   concrete ALTs are split, the vectors sliced over the parent's alleles where exact, and a site left
   with one ALT is an ordinary biallelic row with no split flag. A site whose genotype calls `<*>` stays
-  as written, counted. Rejected: bcftools' own `0/.` row for `<*>`, which our loader would read back as
+  as written, counted. Dogfooded on a local DeepVariant gVCF (GRCh38): every one of its 6,079,801
+  variant records carried `<*>`, none remains after `normalize` (173 s), 82,113 sites with two
+  concrete ALTs split into 164,466 flagged rows, no genotype called `<*>`, and htslib reads all
+  6,162,154 rows of the export. Rejected: bcftools' own `0/.` row for `<*>`, which our loader would read back as
   a reference block; dropping `<*>` where the genotype calls it, which loses a haplotype's stated
   non-reference allele; and flagging every row of a `<*>` site, which would make each DeepVariant
   variant record look pre-split, so a second `normalize` would hold it and `rejoin_split` would try to

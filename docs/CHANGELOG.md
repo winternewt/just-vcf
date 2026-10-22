@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load` reads `vcf_no_meta`, a VCF body under a bare `#CHROM` line (RM2). The loader synthesises
+  `##fileformat` and declares the carried keys the rows use; `vcf_version` stays null. For every VCF,
+  an undeclared INFO `END` or `SVLEN` is now declared too, so a block whose header forgot END keeps
+  its extent instead of ending at POS, and `dropped_fields` also lists the keys the first 1,000 rows use
+  without a declaration (polars-bio drops those unread, P1). Cached rewrites are made once more
+  (`REWRITE_VERSION` 6). Dogfooded on the one PGP-HMS `vcf_no_meta` file (a freeBayes+VarScan2 merge
+  stripped of its meta lines): 7,123,137 calls in 236 s over the SMB share; its INFO/SF split by
+  caller is not applied (no `##sourceFiles` line says which index is which caller).
 - `load` reads BCF (`bcf`, RM2). polars-bio reads the records; just-vcf reads the header out of the
   binary layout itself, and the first record's contig and position to check polars-bio's coordinates,
   as it does for text. polars-bio takes BCF only from a path named `.bcf`, so a BCF under another name

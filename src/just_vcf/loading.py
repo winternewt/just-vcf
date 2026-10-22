@@ -162,11 +162,16 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     chosen = sample if sample is not None else header.samples[0]
 
     warnings: list[str] = []
-    missing = vcf.undeclared_format_keys(header, data)
+    missing = vcf.undeclared_keys(header, data)
     if missing:
-        warnings.append(f"FORMAT key(s) used but not declared, declared by the loader: {', '.join(missing)}")
-        header.format.update({key: vcf.FORMAT_KEYS[key][0] for key in missing})
-    if not header.format_first:
+        warnings.append(f"key(s) used but not declared, declared by the loader: {', '.join(missing)}")
+        vcf.declare(header, missing)
+    if not header.meta:
+        warnings.append(
+            "no meta lines: read under a synthesised header (##fileformat=VCFv4.2 and the carried keys the "
+            "rows use); the file states no VCF version, no contigs and no build"
+        )
+    elif not header.format_first:
         warnings.append("##fileformat was not the first line; the header was reordered for reading")
     source_sha256 = _sha256(sniffed.path)
     cache = cache_dir() / "vcf" / hashlib.sha256(f"{source_sha256}!{sniffed.member}!{vcf.REWRITE_VERSION}".encode()).hexdigest()[:32]
@@ -223,7 +228,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         "header_contigs": header.contigs,
         "vcf_version": header.version,
         "sample_meta": header.sample_meta,
-        "dropped_fields": vcf.dropped_fields(header),
+        "dropped_fields": vcf.dropped_fields(header, data),
         "split_marker": ",".join(sorted(header.split_markers)) if marker_rows else None,
     }
     facets = pl.LazyFrame([facet], schema={name: FACETS[name] for name in facet}).select(

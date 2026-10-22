@@ -110,8 +110,10 @@ header does not define is dropped without a warning, GT included. A header repai
 just-vcf (the `vcf_no_meta` and `freebayes_varscan2_keyvalue` formats) must define every key the rows
 use, or the genotypes vanish.
 
-Mitigation: the VCF loader declares every carried FORMAT key the rows use without a declaration, in a
-rewritten copy of the file, and says so in `Loaded.warnings` (`loaders/vcf.py`, `readable_path`). Not filed.
+Mitigation: the VCF loader declares every carried FORMAT key, and INFO `END` and `SVLEN`, that the rows
+use without a declaration, in a rewritten copy of the file, and says so in `Loaded.warnings`
+(`loaders/vcf.py`, `readable_path`); the other undeclared keys the first rows use are listed in
+`facets.dropped_fields`. `vcf_no_meta` loads this way (2026-10-22). Not filed.
 
 *Upstream (2026-09-30).* Not reported anywhere. The drop is in datafusion-bio-formats
 `bio-format-vcf/src/physical_exec.rs:1849`: the column index is built from the header, and a row key

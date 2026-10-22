@@ -382,3 +382,41 @@ def test_a_declared_marker_that_tags_nothing_leaves_the_facet_null(tmp_path: Pat
     loaded = load(write(tmp_path, vcf_text(records, extra_meta=(bcftools,))))
     assert loaded.facets.collect()["split_marker"][0] is None
     assert loaded.calls.collect()["split_signal"].to_list() == [None] and loaded.warnings == ()
+
+
+def test_vcf_no_meta_loads_under_a_synthesised_header(tmp_path: Path) -> None:
+    """A `#CHROM` line with no meta lines (`vcf_no_meta`): the carried keys the rows use are declared
+    by the loader, the rest are listed as dropped, and the rows equal the same body under a header."""
+    body = [
+        "chr1\t752566\t.\tG\tA\t50.2\t.\tAB=0.5;SF=0\tGT:RO:AO:GQ\t0/1:7:5:40",
+        "chr1\t776546\t.\tA\tG\t.\tPASS\tADP=28;SF=1\tGT:FREQ\t0/1:28.57%",
+        "chr2\t100\t.\tC\t<*>\t.\t.\tEND=180;SF=0\tGT:GQ\t0/0:30",
+    ]
+    columns = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSample1"
+    bare = write(tmp_path, "\n".join([columns, *body]) + "\n", "bare.vcf")
+    from just_vcf import sniff
+
+    assert sniff(bare).format == "vcf_no_meta"
+    loaded = load(bare)
+    calls, blocks = pl.collect_all([loaded.calls, loaded.blocks])
+    facet = loaded.facets.collect().row(0, named=True)
+    assert calls["gt"].to_list() == [[0, 1], [0, 1]] and calls["gq"].to_list() == [40, None]
+    assert blocks.select("chrom", "pos", "end_pos", "kind").rows() == [("2", 100, 180, "ref")]
+    assert (facet["format_id"], facet["vcf_version"], facet["header_contigs"]) == ("vcf_no_meta", None, [])
+    assert facet["dropped_fields"] == ["INFO/AB", "INFO/ADP", "INFO/SF", "FORMAT/AO", "FORMAT/FREQ", "FORMAT/RO"]
+    assert any(w.startswith("no meta lines") for w in loaded.warnings)
+    assert any("INFO/END" in w and "FORMAT/GT" in w and "not declared" in w for w in loaded.warnings)
+
+    headed = write(tmp_path, vcf_text([], fmt=("GT", "GQ"), info=("END",)).split("#CHROM")[0] + columns + "\n" + "\n".join(body) + "\n", "headed.vcf")
+    reference = load(headed)
+    ref_calls, ref_blocks = pl.collect_all([reference.calls, reference.blocks])
+    assert calls.drop("facet_id").equals(ref_calls.drop("facet_id"))
+    assert blocks.drop("facet_id").equals(ref_blocks.drop("facet_id"))
+
+
+def test_an_undeclared_end_is_declared_so_a_block_keeps_its_extent(tmp_path: Path) -> None:
+    records = ["1\t100\t.\tG\t<NON_REF>\t.\t.\tEND=113\tGT:GQ\t0/0:60", "1\t200\t.\tA\t.\t.\tPASS\tEND=250\tGT\t0/0"]
+    loaded = load(write(tmp_path, vcf_text(records, fmt=("GT", "GQ"))))
+    blocks = loaded.blocks.collect()
+    assert blocks.select("pos", "end_pos").rows() == [(100, 113), (200, 250)]
+    assert any("INFO/END" in w and "not declared" in w for w in loaded.warnings)

@@ -223,7 +223,9 @@ VCF_NO_META = FormatSpec(
     notes=(
         "polars-bio 0.36 rejects the file ('invalid record'). Prepending `##fileformat` makes it readable, but "
         "every INFO and FORMAT key without a definition is then dropped silently, GT included: synthesise a "
-        "definition for each key seen in the rows.",
+        "definition for each key seen in the rows. The loader does this for the keys the frames carry "
+        "(GT, GQ, DP, AD, PL, … and INFO END, SVLEN) and lists every other key the first rows use in "
+        "`dropped_fields`; the facet's `vcf_version` stays null, since the file states none.",
         "No build statement is possible; the build comes from the data or from a sibling file.",
         "The one PGP-HMS case is a freeBayes+VarScan2 merge stripped of its meta lines (one `Sample1` column, "
         "INFO SF, both callers' FORMAT keys): split it as `vcf_freebayes_varscan2`'s notes describe.",

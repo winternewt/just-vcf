@@ -35,7 +35,7 @@ from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKin
 
 logger = logging.getLogger(__name__)
 
-FORMATS: frozenset[str] = frozenset({"vcf", "bcf"})
+FORMATS: frozenset[str] = frozenset({"vcf", "bcf", "vcf_no_meta"})
 """Format ids this loader reads. The dialects with their own ids join as their quirks are handled."""
 
 BCF = "bcf"
@@ -58,8 +58,8 @@ FORMAT_KEYS: dict[str, tuple[str, str]] = {
 }
 """FORMAT keys the schema carries, with the Number and Type VCF 4.5 reserves for them."""
 
-INFO_KEYS = ("END", "SVLEN")
-"""INFO keys the loader reads, for `end_pos` only."""
+INFO_KEYS: dict[str, tuple[str, str]] = {"END": ("1", "Integer"), "SVLEN": ("A", "Integer")}
+"""INFO keys the loader reads, for `end_pos` only, with the Number and Type VCF 4.5 gives them."""
 
 SPLIT_MARKER_ID = "OLD_MULTIALLELIC"
 """The INFO key vt decompose and Glow write on a record split off a multi-allelic site."""
@@ -74,7 +74,7 @@ _SV_LENGTH_TYPES = ("DEL", "DUP", "INV", "CNV")
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 5
+REWRITE_VERSION = 6
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused."""
 
 _HEADER_READ_CAP = 64 << 20
@@ -247,14 +247,35 @@ def _parse_header(meta: list[str], columns: list[str]) -> Header:
     return header
 
 
-def undeclared_format_keys(header: Header, data: list[bytes]) -> list[str]:
-    """Carried FORMAT keys the rows use without the header declaring them."""
-    used: set[str] = set()
+def row_keys(data: list[bytes]) -> tuple[set[str], set[str]]:
+    """The INFO and FORMAT keys the rows in `data` use."""
+    info: set[str] = set()
+    fmt: set[str] = set()
     for raw in data:
         fields = raw.decode("utf-8", errors="replace").rstrip("\r\n").split("\t")
+        if len(fields) > 7 and fields[7] not in ("", "."):
+            info.update(item.split("=", 1)[0] for item in fields[7].split(";") if item)
         if len(fields) > 8:
-            used.update(fields[8].split(":"))
-    return sorted(key for key in used if key in FORMAT_KEYS and key not in header.format)
+            fmt.update(fields[8].split(":"))
+    return info, fmt
+
+
+def undeclared_keys(header: Header, data: list[bytes]) -> list[str]:
+    """Carried keys the rows use without the header declaring them, namespaced (`INFO/END`, `FORMAT/GT`)."""
+    info, fmt = row_keys(data)
+    return sorted(f"INFO/{key}" for key in info if key in INFO_KEYS and key not in header.info) + sorted(
+        f"FORMAT/{key}" for key in fmt if key in FORMAT_KEYS and key not in header.format
+    )
+
+
+def declare(header: Header, missing: list[str]) -> None:
+    """Record the loader's declarations of `missing` keys in `header`, as `readable_path` writes them."""
+    for name in missing:
+        namespace, key = name.split("/", 1)
+        if namespace == "INFO":
+            header.info[key] = INFO_KEYS[key][0]
+        else:
+            header.format[key] = FORMAT_KEYS[key][0]
 
 
 def readable_path(
@@ -290,10 +311,11 @@ def readable_path(
                     continue
                 declared.add(key.groups())
             out.write(f"{line}\n".encode())
-        for key in missing:
-            number, kind = FORMAT_KEYS[key]
+        for name in missing:
+            namespace, key = name.split("/", 1)
+            number, kind = (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key]
             out.write(
-                f'##FORMAT=<ID={key},Number={number},Type={kind},'
+                f'##{namespace}=<ID={key},Number={number},Type={kind},'
                 f'Description="Declared by just-vcf: used by the rows, missing from the header">\n'.encode()
             )
         out.write(("#" + "\t".join(header.columns) + "\n").encode())
@@ -802,11 +824,15 @@ def _bounded(key: str, dtype: pl.DataType) -> pl.Expr:
     return pl.when((value >= 0) & (value <= _BOUNDED[key])).then(value).otherwise(None).cast(dtype)
 
 
-def dropped_fields(header: Header) -> list[str]:
-    """Declared keys the frames do not carry, namespaced."""
-    info = [f"INFO/{key}" for key in header.info if key not in INFO_KEYS and key not in header.split_markers]
-    fmt = [f"FORMAT/{key}" for key in header.format if key not in FORMAT_KEYS]
-    return sorted(info) + sorted(fmt)
+def dropped_fields(header: Header, data: list[bytes] = ()) -> list[str]:
+    """Keys present in the file that the frames do not carry, namespaced: the declared ones, and the
+    ones the rows in `data` use without a declaration (polars-bio drops those unread, P1)."""
+    info, fmt = row_keys(list(data))
+    info |= set(header.info)
+    fmt |= set(header.format)
+    dropped_info = [f"INFO/{key}" for key in info if key not in INFO_KEYS and key not in header.split_markers]
+    dropped_fmt = [f"FORMAT/{key}" for key in fmt if key not in FORMAT_KEYS]
+    return sorted(dropped_info) + sorted(dropped_fmt)
 
 
 def to_frames(calls: pl.LazyFrame, blocks: pl.LazyFrame, facet_id: str) -> tuple[pl.LazyFrame, pl.LazyFrame]:

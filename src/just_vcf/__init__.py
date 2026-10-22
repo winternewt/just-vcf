@@ -12,6 +12,7 @@ from just_vcf.loading import (
     vcf_samples,
 )
 from just_vcf.loaders.table import TableLayoutError
+from just_vcf.normalize import normalize
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
 from just_vcf.schema import (
@@ -62,6 +63,7 @@ __all__ = [
     "VcfWritten",
     "__version__",
     "load",
+    "normalize",
     "open_payload",
     "reference_dir",
     "rejoin_split",

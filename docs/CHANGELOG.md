@@ -4,6 +4,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Normalization as a derived facet (RM6, second slice): `normalize(loaded, reference)` splits
+  multi-allelic sites one row per ALT (the other ALT written `.`, each row `split_signal = marker`),
+  left-aligns and trims indels whose REF matched the reference, drops exact duplicates (counted), keeps
+  conflicting rows side by side with a warning, and sorts. `ad` is sliced, `gl` sliced only where the
+  genotype holds no other ALT, `gp` withheld on split rows. Relation `normalized`; rules in
+  docs/SCHEMA.md ("Normalizing"); no schema version change. Agrees with `bcftools norm -m-any
+  --multi-overlaps . -f` on a synthetic file (sites, genotypes, AD, the GL it keeps), except that it
+  drops the exact duplicates bcftools keeps. `rejoin_split` now leaves a group holding a row with no
+  `source_ref` as written instead of failing on it. On six PGP-HMS uploads, chromosome 22: 235,911 of
+  236,425 rows as bcftools writes them, the rest pre-split input left for `rejoin_split`. New opt-in
+  test variable `JUST_VCF_TEST_REFERENCE_DIR` (`.env.template`). Found on the way: F11 (PL to `gl` one
+  float step off) and F12 (uploads writing a deletion as ALT `-`).
+
 - A symbolic SV's `end_pos` now reads INFO END: `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes
   end at END where the record gives one, else at POS + |SVLEN|, as SCHEMA.md's `end_pos` rule now says.
   Before, END was ignored there, so an SV with END and no SVLEN (a caller that writes none, and

@@ -204,7 +204,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`; left: gVCF blocks, splitting, left-align, strand, dedup, liftover, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, and normalization, `normalize`: split, left-align, trim, dedup, sort; left: gVCF blocks, splitting `<*>` sites, strand, liftover, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -254,10 +254,54 @@ with what was rejected:
   `UnsortedRowsError`, and nothing is left at the target path. Rejected: sorting inside the writer,
   which holds the whole frame in memory on a genome.
 
+**Shipped 2026-10-22: normalization** (`just_vcf.normalize.normalize`; rules in docs/SCHEMA.md,
+"Normalizing"). A derived facet, `relation = normalized`, from a facet `resolve_ref` has read, with
+bases read from the same collection. Checked against `bcftools norm -m-any --multi-overlaps . -f`
+(htslib's, bundled in pysam) on a synthetic file of 64 records: the same rows, genotypes and AD, and
+the same GL wherever we keep one. Dogfooded on six PGP-HMS VCF uploads (GRCh37, 176 thousand to
+7.7 million rows, read from the Krypton share), chromosome 22 against bcftools: 235,911 of 236,425
+rows identical in position, REF, ALT and genotype; all 514 that differ, in two files, are rows the
+loader flagged as one record of a pre-split site, which `normalize` leaves for `rejoin_split`.
+`normalize` took 1–34 s per genome. Splits per genome ranged from 22 to 92,403 sites, trimmed rows
+up to 55,350; one upload holds 9,213 positions with two records of one allele (they
+differ in `ids`), kept side by side. Found on the way: F11, F12. Decisions, each with what was
+rejected:
+
+- Our own Polars pass, not a bcftools subprocess: the frame is the product, bcftools would need the
+  facet written out and read back, and it is not a core dependency. Splitting and rewriting are Polars
+  expressions; only the left-align loop runs in Python, on `(pos, REF, ALT)` scalars of the candidate
+  rows (building rows as Python dicts took 78 s on an 831-thousand-row genome, against 8 s now).
+  Reference bases are fetched in one batch per contig, 100 bases left of each indel, and again 16 times
+  wider for the rows a repeat carried further.
+- The other ALT is written `.`, not `0` (RM270's finding). Rejected: bcftools' default `0`, which reads
+  as a REF haplotype the person does not have.
+- Split rows carry `split_signal = marker`, as vt's output does once loaded, so `rejoin_split` can
+  join them. Rejected: a new `SplitSignal` value (a new Enum category changes the column's dtype, a
+  schema bump), and no flag at all (the row would not say it is one part of a site). In a written file
+  the tag is `write_vcf`'s `JUST_VCF_SPLIT`, which the loader does not read back as a marker yet; vt's
+  `OLD_MULTIALLELIC` and bcftools' `--old-rec-tag` were rejected because their values are the original
+  record, which the frame does not keep per row.
+- `gl` on a split row only where no GT slot holds another ALT. Rejected: bcftools' slice on every row,
+  which on `1/2` leaves a `1/.` row whose likelihoods point at `0/0`. `gp` withheld on split rows.
+  Rejected: bcftools' unrescaled slice (it does not sum to 1, and the loader drops such GP, F10) and a
+  rescaled one (other values than the caller's).
+- On a moved or trimmed row, `source_ref`, `ref_check`, `source_gt` and the VRS ids are null and `ref`
+  carries the new REF. Rejected: `ref_check = match` on the new bases, which would compare the sequence
+  with itself; and keeping the old `source_ref`, which no longer describes the row's span.
+- Sites with a symbolic allele (`<*>`, `<DEL>`, breakends) are left as written. bcftools splits `<*>`
+  off as its own `0/.` row, which our loader would read back as a reference block; a DeepVariant gVCF
+  writes `<*>` on every variant record, so these stay multi-allelic for now.
+- Only `ref_check = match` rows are aligned or trimmed. Rejected: trimming unchecked rows, which needs
+  no bases but rewrites a REF nobody has shown to be right.
+- Pre-split input (RM270 flags) passes through. Rejected: aligning those rows, which would move one
+  row of a site away from the other and keep `rejoin_split` from finding it.
+- Exact duplicates are dropped; rows stating one allele with other values are all kept (charter 8).
+  Rejected: bcftools `-d`, which keeps the first.
+
 **Left in RM6:** writing gVCF blocks (after RM3); a tabix index beside the output; SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
-does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting multi-allelic
-sites (writing `.` for the other ALT, above), left-align, strand resolution, dedup, liftover.
+does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting sites that carry `<*>`;
+reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; liftover.
 
 
 ## RM271 — VRS allele ids

@@ -53,6 +53,25 @@ def ancestry_dir() -> Path:
 
 
 @pytest.fixture(scope="session")
+def test_reference_dir() -> Path:
+    """`JUST_VCF_TEST_REFERENCE_DIR`, a real reference store (GRCh37 and GRCh38), read like `samples_dir`.
+
+    Apart from `JUST_VCF_REFERENCE_DIR`, which every test sees empty: a test that reads a real assembly
+    asks for this fixture, and only reads the store.
+    """
+    if "JUST_VCF_TEST_REFERENCE_DIR" in os.environ:
+        value = os.environ["JUST_VCF_TEST_REFERENCE_DIR"]
+    else:
+        value = dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_TEST_REFERENCE_DIR")
+    if not value:
+        pytest.skip("JUST_VCF_TEST_REFERENCE_DIR is not set")
+    path = Path(value)
+    if not path.is_dir():
+        pytest.skip(f"{path} is absent")
+    return path
+
+
+@pytest.fixture(scope="session")
 def pgp_root(samples_dir: Path) -> Path:
     """The PGP-HMS download tree under the samples directory (docs/PGP_HMS.md)."""
     root = samples_dir / "pgp-hms"

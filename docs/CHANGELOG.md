@@ -4,6 +4,22 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A loaded VCF's facet now says who made it, from its header alone (RM2's `source` detector,
+  `just_vcf/source.py`): `vendor` (the party the header names as delivering the file), `caller` and
+  `caller_version` (the program that wrote the genotypes: GATK HaplotypeCaller or UnifiedGenotyper,
+  DRAGEN, DeepVariant, freeBayes, VarScan2, CGAPipeline, Isaac/starling, CASAVA, Platypus, Manta,
+  aengine, bcftools call, loimpute, Minimac), every row of RM2's header-evidence table plus
+  `##bcftools_callVersion`. Tools that only touched the file (SelectVariants, ApplyVQSR, bcftools view)
+  are not caller evidence. Two callers in one header leave `caller` null with one warning naming both;
+  a `vcf-merge` of callers is not a conflict. Where the header says the content is array or imputed
+  genotypes (Illumina GenotypingToVCF, the Open Humans and DNA.Land 23andMe conversions, Gencove,
+  Minimac, Genes for Good), `callset_type` is `array` or `imputed`; nothing else sets it yet (RM4).
+  `phasing_method` is filled from `##eagleVersion`. New facet column `ploidy_statements` (RM269 half
+  1): the header's ploidy lines verbatim (`##referenceSexKaryotype=XY`, GATK `sample_ploidy=2`,
+  `bcftools call --ploidy GRCh38`), with no vocabulary. Schema change: one new nullable column, minor.
+  Checked against the 233 PGP-HMS pipeline VCF headers (CGI and freeBayes+VarScan2): every one names
+  its caller, none conflicts.
+
 - A sites-only VCF (no FORMAT column, no sample) is refused by `load` with the new `NoSampleError`
   (exported), instead of failing inside the parquet spill with a polars conversion error (F8). Minor:
   a new exception; nothing that loaded before changes, facet ids included.

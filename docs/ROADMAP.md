@@ -17,7 +17,7 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; checked 2026-10-18: 10 of the 39 declared formats load, the 9 rsid-table layouts and `vcf`; the VCF dialects `vcf_cgi`, `vcf_freebayes_varscan2`, `vcf_no_meta` and `bcf`, CGI, AncestryDNA, FTDNA and the vendor CSVs are next) · Owner: lead
+Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; the VCF `source` detector shipped 2026-10-22; checked 2026-10-18: 10 of the 39 declared formats load, the 9 rsid-table layouts and `vcf`; the VCF dialects `vcf_cgi`, `vcf_freebayes_varscan2`, `vcf_no_meta` and `bcf`, CGI, AncestryDNA, FTDNA and the vendor CSVs are next) · Owner: lead
 
 **Shipped:** content-based detection. `just_vcf.sniff` and the declarative registry in
 `just_vcf.formats` (docs/FORMATS.md). Over the PGP-HMS participants, 8 of about 1,740 files stay unknown,
@@ -32,8 +32,28 @@ invariant 3). Living DNA writes indels as run-together alleles (`CCA`); Color po
 The multi-facet participants in docs/PGP_HMS.md are the convergence tests: one person's facets, loaded
 independently, must agree where they overlap.
 
-**Also wanted: a `source` detector** naming the caller or vendor from VCF headers, because `Family`
-cannot say "array or imputed content inside a VCF" and that decides whether absent means unknown.
+**Shipped 2026-10-22: the `source` detector** (`just_vcf/source.py`), naming the caller or vendor from
+VCF headers, because `Family` cannot say "array or imputed content inside a VCF" and that decides
+whether absent means unknown. It fills `facets.vendor`, `caller`, `caller_version`, `phasing_method`
+(Eagle), the new `ploidy_statements` (RM269 half 1) and, where the header states array or imputed
+content, `callset_type`. Every row of the table below is a rule, plus `##bcftools_callVersion` and
+`##DRAGENVersion`; `##workflow_type=Illumina_WGS_CLIA`, `##source_version` and `##content` (Isaac and
+starling) were added from the PGP-HMS headers. Decisions:
+
+- `callset_type` takes only what the header states (`array`, `imputed`); rejected: inferring it from
+  the rows, which is RM4's. RM4's inference should not override a stated value.
+- `vendor` is the party the header names as delivering the file; a caller's maker is not a vendor
+  (DRAGEN and CASAVA lines do not make Illumina the vendor; `##workflow_type=Illumina_*` does). Rejected:
+  a vendor per caller, which would call a Sequencing.com delivery an Illumina one.
+- Post-processing tools (GATK SelectVariants, ApplyVQSR, VariantFiltration, bcftools view and concat)
+  are not caller evidence, and GenotypeGVCFs is HaplotypeCaller's own pipeline. Rejected: GATK as the
+  caller whenever a GATK line exists, which names GATK for a DeepVariant file run through SelectVariants.
+- Two callers, or two versions of one, leave the field null with one warning naming each line
+  (charter 8: no winner picked). A `vcf-merge` header is not a conflict; the merged file's facets
+  carry one caller each (Decision 8).
+- `ploidy_statements` keeps lines verbatim with no vocabulary, as RM269's critique recommends; an
+  option's path value is written `<path>`.
+
 Header evidence found while declaring the VCF formats:
 
 | Header line | Caller / vendor |

@@ -15,6 +15,7 @@ import polars as pl
 from platformdirs import user_cache_dir
 from pydantic import BaseModel, ConfigDict
 
+from just_vcf.formats import get_spec
 from just_vcf.loaders import rsid_table, vcf
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
@@ -31,6 +32,7 @@ from just_vcf.schema import (
     empty,
 )
 from just_vcf.sniff import Sniffed, open_payload, sniff
+from just_vcf.source import detect_source
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +200,8 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     spilled = pl.scan_parquet(spill / "calls.parquet")
     flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
     warnings += vcf.split_warnings(flagged, marker_rows, header)
+    source = detect_source(header.meta, get_spec(sniffed.format).vendor)
+    warnings += source.warnings
     facet = {
         "facet_id": facet_id,
         "source_sha256": source_sha256,
@@ -205,6 +209,13 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         "member": sniffed.member,
         "format_id": sniffed.format,
         "family": sniffed.family.value if sniffed.family else None,
+        "vendor": source.vendor,
+        "caller": source.caller,
+        "caller_version": source.caller_version,
+        "ploidy_statements": source.ploidy_statements,
+        # Only what the header states (array or imputed content); RM4 infers the rest.
+        "callset_type": source.callset_type.value if source.callset_type else None,
+        "phasing_method": source.phasing_method,
         "sample": chosen,
         "assembly_label": sniffed.build,
         "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,

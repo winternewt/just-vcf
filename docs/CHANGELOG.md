@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A 23andMe-layout table that ends in 1,000 or more rows of one other width gets a warning that it
+  looks like a second export appended, which is not read (F3, still open).
+
 - A Final Report refused for want of positions or plus-strand alleles now names the manifest that
   would supply them, as its `Content` line states it (`HumanOmni2.5-8v1_A.bpm`); `chip` gains
   `final_report_content` for that line.

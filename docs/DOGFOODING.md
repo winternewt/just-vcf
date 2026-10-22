@@ -22,6 +22,24 @@ One upload (`rsid_table_headerless`) is a 23andMe-shaped export followed by an A
 a warning, as FORMATS.md predicted. Not fixed: splitting one file into two facets needs a second format
 per file, which the loader does not have.
 
+**Measured and surfaced 2026-10-22.** Both halves are one person: of the 164,378 ids both halves call,
+164,275 have the same genotype (99.94%), and 166,047 of 166,528 shared ids sit at the same position.
+The first line is a stray 5-field row (an empty field between position and genotype, not F2's place),
+then 643,486 four-field rows, then 677,436 five-field rows to the end (chromosomes 1–26, `0` for no
+call). The load now says so: a file that ends in at least 1,000 rows of one other width gets a warning
+that it looks like a second export appended, not read. Still not loaded, and why each repair is wrong:
+
+- *Read the 5-field rows as a second facet in this loader:* the library cannot load that half even as
+  its own file (`ancestrydna` needs its header line), so it needs a new headerless two-allele format id
+  and a part option in the facet id, for one file whose halves state no vendor. Calling the second half
+  AncestryDNA would be the shape standing in for a vendor statement.
+- *Split the file into two inputs and load each:* that is routing around the loader (CLAUDE.md §7).
+
+What would close it: a headerless two-allele-column layout in `formats.rsid_tables`, and `load`
+returning one facet per layout block of a file (the shape `Loaded` already has for caller splits).
+Code of the warning: `loaders/rsid_table.py` `_appended_export`; test
+`test_an_appended_export_in_another_layout_is_named_not_read`.
+
 ## F4 — Living DNA indel genotypes cannot be split
 
 Severity: medium · Found 2026-09-30, same sweep.

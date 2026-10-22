@@ -84,6 +84,8 @@ def read_calls(data: bytes, spec: FormatSpec) -> tuple[pl.DataFrame, list[str]]:
             f"{wrong_width.height} row(s) without exactly {len(_FIELDS)} fields dropped "
             f"(widths seen: {', '.join(map(str, widths))})"
         )
+        if tail := _appended_export(rows):
+            warnings.append(tail)
     rows = rows.filter(pl.col("fields").list.len() == len(_FIELDS)).select(
         pl.col("fields").list.get(i).str.strip_chars().alias(name) for i, name in enumerate(_FIELDS)
     )
@@ -113,6 +115,29 @@ def read_calls(data: bytes, spec: FormatSpec) -> tuple[pl.DataFrame, list[str]]:
         pl.lit(EvidenceBasis.ASSAY.value).alias("evidence_basis"),
     )
     return calls, warnings
+
+
+APPENDED_EXPORT_ROWS = 1_000
+"""Rows of another width the file must end with before `read_calls` says it looks like a second export."""
+
+
+def _appended_export(rows: pl.DataFrame) -> str | None:
+    """A warning when the file ends in a run of rows of one other width (F3: a 23andMe-shaped export
+    followed by an AncestryDNA-shaped one), or None. Such a run is not read: this loader has one layout
+    per file, and a second facet from it needs a format id the file does not carry."""
+    widths = rows["fields"].list.len()
+    last = widths[-1]
+    if last == len(_FIELDS):
+        return None
+    differs = (widths != last).arg_true()
+    start = int(differs[-1]) + 1 if differs.len() else 0
+    run = rows.height - start
+    if run < APPENDED_EXPORT_ROWS or start == 0:
+        return None
+    return (
+        f"the last {run} data row(s) all have {last} fields: the file looks like a second export in another "
+        f"layout appended after the first {start} data row(s); it is not read (one layout per file, F3)"
+    )
 
 
 def to_calls_frame(calls: pl.DataFrame, facet_id: str) -> pl.LazyFrame:

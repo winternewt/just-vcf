@@ -752,6 +752,9 @@ frame stops working when its files go.
   runs (`load` for copies and load spills). No current frame reads an old version, so this is safe.
   An entry with no manifest predates the index: removed only by that sweep, where its name shows an old
   version or (a `vcf/` entry, below `REWRITE_VERSION` 7) where it must be old.
+- A manifest this version cannot read (a newer version's, with a kind or field it does not know) makes
+  its entry unknown origin: kept, never swept, and it does not stop `load`. Kinds are checked where
+  an entry is written.
 - `clear_cache` removes what the caller names, even under a live `Loaded`; that frame's next
   `collect` then fails. It skips an entry whose lock is held, and touches nothing outside `vcf/` and
   `frames/`: the reference store under `reference/` is not a cache of a genome.

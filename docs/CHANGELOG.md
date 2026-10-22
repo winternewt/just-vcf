@@ -12,7 +12,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   dry_run=False)` removes every entry derived from a source (named by path, or by sha256 once the file
   is gone; derived spills included) or unused for longer than a duration, skips an entry being
   written, never removes an entry older than the index, and never touches the reference store; it
-  returns a `CacheClearReport`. Removing an entry a live `Loaded` reads breaks its next `collect`.
+  returns a `CacheClearReport`. A manifest a newer version wrote is kept as unknown origin, never a
+  reason for `load` to fail. Removing an entry a live `Loaded` reads breaks its next `collect`.
   `REWRITE_VERSION` 6 → 7, so every copy without a manifest is known stale and swept: the first load
   of each file after upgrading rewrites its copy once. Rules in docs/SCHEMA.md ("The cache under the
   lazy frames"). Measured on three PGP-HMS VCFs in a scratch cache: 4 entries, 48.1 MB; an old-version

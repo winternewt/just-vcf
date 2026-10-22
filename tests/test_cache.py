@@ -280,6 +280,22 @@ def test_a_writer_waiting_on_a_removed_entry_takes_a_fresh_lock(tmp_path: Path) 
     cache._release(got[0])
 
 
+def test_a_manifest_a_newer_version_wrote_neither_breaks_load_nor_is_removed(tmp_path: Path) -> None:
+    root = cache.cache_dir()
+    newer = {"vcf": "c" * 32, "frames": f"{'c' * 32}-{SCHEMA_VERSION}"}
+    for directory, name in newer.items():
+        entry = legacy_entry(directory, name)
+        manifest = {"index_version": 2, "kind": "liftover_spill", "versions": {"LIFTOVER_VERSION": "1"}, "created": "2026-10-22T00:00:00Z"}
+        (entry.parent / f"{name}.json").write_text(json.dumps(manifest))
+    load(vcf_zip(tmp_path, "one"))
+    assert all((root / directory / name).exists() for directory, name in newer.items())
+    report = clear_cache()
+    assert {e.path for e in report.unknown_origin} == {f"{d}/{n}" for d, n in newer.items()}
+    assert all((root / directory / name).exists() for directory, name in newer.items())
+    with pytest.raises(ValueError):
+        write_entry("frames", f"{'8' * 32}-{SCHEMA_VERSION}", "liftover_spill", {"SCHEMA_VERSION": SCHEMA_VERSION})
+
+
 def test_manifest_json_is_iso_utc(tmp_path: Path) -> None:
     load(vcf_zip(tmp_path, "one"))
     for name in manifests():

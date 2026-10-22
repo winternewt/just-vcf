@@ -38,7 +38,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from platformdirs import user_cache_dir
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 if os.name == "nt":
     import msvcrt
@@ -95,13 +95,9 @@ class CacheEntry(BaseModel):
     last_used: datetime
     """When the entry was last written or reused. A spill is written again on every run, so for those
     it is the last run; a rewrite copy is also used when a later load reuses it."""
-
-    @field_validator("kind")
-    @classmethod
-    def _known_kind(cls, value: str) -> str:
-        if value not in CACHE_KINDS:
-            raise ValueError(f"unknown cache entry kind {value!r}; known: {sorted(CACHE_KINDS)}")
-        return value
+    # `kind` is checked against CACHE_KINDS where it is written (`writing`), not where it is read: a
+    # manifest a newer version wrote, with a kind this one does not know, is read as data and owned by
+    # no sweep here.
 
 
 class Origin(BaseModel):
@@ -175,6 +171,8 @@ class _Entry:
         self.manifest_path = root / directory / f"{name}.json"
         self.lock_path = root / directory / f"{name}.lock"
         self.manifest = _read_manifest(self.manifest_path)
+        self.unreadable = self.manifest is None and self.manifest_path.is_file()
+        """A manifest this version cannot read (a newer one wrote it): kept, never judged stale here."""
 
     def size(self) -> int:
         return _size(self.path)
@@ -203,6 +201,8 @@ def writing(entry: Path, kind: str, versions: dict[str, object], origin: Origin)
     when the block finishes, with the size and the time. `created` is kept from an earlier manifest of
     the same kind and versions.
     """
+    if kind not in CACHE_KINDS:
+        raise ValueError(f"unknown cache entry kind {kind!r}; known: {sorted(CACHE_KINDS)}")
     entry.parent.mkdir(parents=True, exist_ok=True)
     manifest_path = entry.parent / f"{entry.name}.json"
     handle = _acquire(entry.parent / f"{entry.name}.lock", blocking=True)
@@ -319,7 +319,7 @@ def _source_matcher(source: Path | str):
 def _stale(entry: _Entry, kind: str, current: dict[str, str]) -> bool:
     if entry.manifest is not None:
         return entry.manifest.kind == kind and entry.manifest.versions != current
-    if not entry.path.is_dir():
+    if entry.unreadable or not entry.path.is_dir():
         return False
     if entry.relative.startswith("vcf/"):
         return kind == REWRITE_COPY
@@ -455,7 +455,14 @@ def _unlink_if_free(lock_path: Path) -> None:
 
 
 def _read_manifest(path: Path) -> CacheEntry | None:
-    return CacheEntry.model_validate_json(path.read_bytes()) if path.is_file() else None
+    """The manifest at `path`; None when there is none, or when this version cannot read it."""
+    if not path.is_file():
+        return None
+    try:
+        return CacheEntry.model_validate_json(path.read_bytes())
+    except ValidationError as err:
+        logger.info("cache: %s is not a manifest this version reads (%d error(s)); entry kept", path.name, err.error_count())
+        return None
 
 
 def _write_manifest(path: Path, manifest: CacheEntry) -> None:

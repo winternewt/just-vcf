@@ -64,7 +64,7 @@ def read_calls(data: bytes, spec: FormatSpec) -> tuple[pl.DataFrame, list[str]]:
     # F2: a doubled delimiter right after the id (`rs15842⇥⇥1⇥948921⇥CT`). Only that place: every such
     # row in the PGP-HMS exports has it there, and its id sits at the same chromosome and position in
     # other exports. An empty field anywhere else is not read past.
-    doubled = (pl.col("fields").list.len() == len(_FIELDS) + 1) & (pl.col("fields").list.get(1) == "")
+    doubled = (pl.col("fields").list.len() == len(_FIELDS) + 1) & (pl.col("fields").list.get(1, null_on_oob=True) == "")
     collapsed = rows.filter(doubled).height
     if collapsed:
         warnings.append(

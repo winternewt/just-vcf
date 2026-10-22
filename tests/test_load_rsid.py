@@ -116,6 +116,7 @@ def test_a_doubled_tab_after_the_id_is_read_past_and_counted(tmp_path: Path) -> 
         "rs7533\t\tX\t1479333\tA\n"
         "rs548049170\t1\t69869\t\tTT\n"
         "rs9\t\t\t1\t900\tCC\n"
+        "rs10\n"
     )
     loaded = _load_text(tmp_path, PREAMBLE_23 + body)
     calls = loaded.calls.collect()
@@ -126,7 +127,7 @@ def test_a_doubled_tab_after_the_id_is_read_past_and_counted(tmp_path: Path) -> 
         "rs7533": ("X", 1479333, "A", ["A"]),
     }
     assert any(w.startswith("2 row(s) with an empty field between the id and the chromosome") for w in loaded.warnings)
-    assert any(w.startswith("2 row(s) without exactly 4 fields") and "5, 6" in w for w in loaded.warnings)
+    assert any(w.startswith("3 row(s) without exactly 4 fields") and "1, 5, 6" in w for w in loaded.warnings)
 
 
 def test_array_contig_codes_are_canonical_and_mapped(tmp_path: Path) -> None:

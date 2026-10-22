@@ -438,7 +438,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | null unless stated |
-| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`) |
+| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`, `appended_export`). `appended_export`, like `caller_split`, has no parent: a second export appended to a file after the first, in another layout (F3), loaded as its own facet beside the first's; `derived_from` stays null, since neither export was made from the other, and the two share `source_sha256` and `member` (below, "Two exports in one file") |
 | `contig_map` | `list[struct{source, chrom}]`: how this file's contig names were mapped (Decision 7) |
 | `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
@@ -446,7 +446,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9). For a delimited table, the file's own column names that no frame column carries (a Final Report's `GenCall Score`) |
 | `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, `write_vcf`'s `JUST_VCF_SPLIT`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
 | `derivation_inputs` | `list[struct{role, name, sha256}]`: the files a derived facet was made with besides its parent and its reference collection (`ref_seqcol_digest`). A liftover writes its chain (`role = chain`, the file's name, not its path, and the sha256 of its bytes). Null on a facet read from a file. just-vcf's own shape |
-| `chip`, `chip_basis` | the genotyping chip an array export came from (RM4, `just_vcf.chip`), and how it is known: `stated` (the header names it: AncestryDNA's array version, a Final Report's `Content` manifest, Living DNA's genotype chip) or `inferred` (a 23andMe export's row count and internal-id profile both point at one generation; a preamble-less table in its layout is read so when it carries 23andMe's `i…` ids). An open vocabulary: `23andme_v1_v2` (the two are not told apart), `23andme_v3`, `23andme_v4`, `23andme_v5`, `ancestrydna_v1`, `ancestrydna_v2`, `living_dna_sirius`, and `illumina:<manifest>` as a Final Report names it. Null = unknown (a statement with no entry is quoted in a warning; FTDNA exports state nothing and are not inferred) or not an array. just-vcf's own shape |
+| `chip`, `chip_basis` | the genotyping chip an array export came from (RM4, `just_vcf.chip`), and how it is known: `stated` (the header names it: AncestryDNA's array version, a Final Report's `Content` manifest, Living DNA's genotype chip) or `inferred` (a 23andMe export's row count and internal-id profile both point at one generation; a preamble-less table in its layout is read so when it carries 23andMe's `i…` ids; an FTDNA or MyHeritage export, or a Final Report that names no manifest, whose rsids one Illumina manifest clearly holds, by marker overlap). An open vocabulary: `23andme_v1_v2` (the two are not told apart), `23andme_v3`, `23andme_v4`, `23andme_v5`, `ancestrydna_v1`, `ancestrydna_v2`, `living_dna_sirius`, `illumina:<manifest>` as a Final Report names it, and the platform families `illumina_gsa` and `illumina_omniexpress`, which only marker overlap names: a stated value carries the manifest, an inferred one the family, since one manifest per family is compared with, and a GSA v2 Final Report matches the v3 manifest at 0.97: the overlap does not tell versions apart. Null = unknown (a statement with no entry is quoted in a warning; an overlap that names no chip says why in one) or not an array. just-vcf's own shape |
 | `strand_check` | `forward` or `mixed`: what `resolve_ref` found about the strand an array's genotypes are written on (F13, Decision 2). Null = not checked: not an array, REF not read yet, or too few heterozygous rows. Never read as forward |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
@@ -821,6 +821,29 @@ differ, and `derived_from` stays null on both, since neither file is made from t
 facet's `callset_type` is inferred from its rows as for a VCF (RM4); the one on disk fits no class, so
 it says `absence_means = unknown`.
 
+**Two exports in one file (F3, built 2026-10-22).** One PGP-HMS upload is a headerless 23andMe-shaped
+export followed by an export with one allele per column (AncestryDNA's data layout, without its
+preamble). Both are one person: of the 164,378 ids both call, 164,275 have the same genotype
+(99.94%). `load` returns them as two facets in one `Loaded`, as for the caller splits above: the
+first under the file's options, the second with `relation = appended_export` and `part = 1` in its
+facet id. Each is read by its own layout's rules (the second: `0` in an allele column is no call,
+`source_gt` the two fields joined, chromosome codes 23-26 read as X, Y, XY, MT), and they are never
+merged into one facet (charter 8). The second export is recognised by the rows: the file ends in at
+least 1,000 rows of one other width, after other rows, and their first five are all in the two-allele
+layout. A run of any other layout is not read, with a warning. Both facets keep the file's
+`format_id`: the format names the file `sniff` read. Rejected, each with its cost:
+
+- a registered headerless two-allele format id for the second facet: a new public id for a layout no
+  file on disk has on its own (a headerless file of that shape sniffs `unknown`), added only to name
+  half of one file; the facet's `format_id` would then name a file nobody gave;
+- `format_id = ancestrydna` for it: the shape would stand in for a vendor statement the file never
+  makes;
+- `derived_from` pointing the second facet at the first: that column is lineage, and charter 5
+  prefers a direct facet over a derived one, which would demote one export below the other for no
+  reason in the data;
+- reading the second export's chip with the 23andMe rule: that rule reads 23andMe's internal ids,
+  which the second layout does not number. Its `chip` stays null.
+
 ## Decision 9: INFO and FORMAT fields the schema does not name
 
 | Option | Cost |
@@ -1020,6 +1043,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   rules; a swapped one keeps no `gl`, `gp` or `ad` when it moves, since its `source_alleles` are not
   its new `[ref, alt]` (counted, as for any row). Normalized facets get a new `facet_id`
   (`NORMALIZE_VERSION` 3).
+
+- **No version change** (2026-10-22, RM4's marker overlap): no column changes. `chip` gains two values,
+  `illumina_gsa` and `illumina_omniexpress` (an open vocabulary stored as `str`), and is now inferred for
+  FTDNA (`ftdna`, `ftdna_space`) and MyHeritage-style (`rsid_result_csv`) exports and for Final Reports
+  that name no manifest, where it was always null. Values change on such facets.
+
+- **No version change** (2026-10-22, F3): no column changes. Rule added: a second export appended to a
+  23andMe-layout file in the two-allele layout is its own facet, `relation = appended_export`, a new
+  value of the open `relation` vocabulary (Decision 8, "Two exports in one file").
 
 - **Rule change, still 0.0.10** (2026-10-22, F15): a sequence ALT is `ACGTN` bases only, in the
   variant-class rule (`variant_classes`) and in the callset's site count (RM4). An ALT of other letters

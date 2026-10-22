@@ -182,6 +182,12 @@ def test_ancestrydna_mixed_line_endings_and_bad_rows(tmp_path: Path) -> None:
 # --- FTDNA and the RSID/RESULT table -----------------------------------------------------------------
 
 
+def _row_warnings(loaded: Loaded) -> tuple[str, ...]:
+    """The load's warnings about rows, without the line saying why a small export's chip is unknown
+    (FTDNA and MyHeritage exports are compared with the chip manifests, RM4; tests/test_chip.py)."""
+    return tuple(w for w in loaded.warnings if not w.startswith("chip unknown: "))
+
+
 def test_ftdna_half_calls_no_calls_and_hemizygous_letters(tmp_path: Path) -> None:
     body = (
         '"rs1","1","100","-A"\n'
@@ -205,7 +211,7 @@ def test_ftdna_half_calls_no_calls_and_hemizygous_letters(tmp_path: Path) -> Non
     assert by_id["rs3"]["source_gt"] == "---"
     facet = loaded.facets.collect().row(0, named=True)
     assert facet["assembly_label"] is None, "FTDNA states no build; it is never read off positions"
-    assert loaded.warnings == ()
+    assert _row_warnings(loaded) == (), "every row read as written"
 
 
 def test_ftdna_files_joined_with_their_column_line_repeated(tmp_path: Path) -> None:
@@ -213,7 +219,7 @@ def test_ftdna_files_joined_with_their_column_line_repeated(tmp_path: Path) -> N
     text = 'RSID,CHROMOSOME,POSITION,RESULT\n"rs1","1","100","AG"\nRSID,CHROMOSOME,POSITION,RESULT\n"rs2","X","200","AA"\n'
     loaded = _load_text(tmp_path, text, "joined.csv")
     assert set(_by_id(loaded)) == {"rs1", "rs2"}
-    assert loaded.warnings == ("1 repeated column line(s) inside the table skipped (the file joins several exports)",)
+    assert _row_warnings(loaded) == ("1 repeated column line(s) inside the table skipped (the file joins several exports)",)
 
 
 def test_ftdna_space_export_with_a_quoted_comma_tail(tmp_path: Path) -> None:
@@ -238,7 +244,7 @@ def test_ftdna_space_export_with_a_quoted_comma_tail(tmp_path: Path) -> None:
         "rs4": ("22", 400, ["T", "T"]),
         "rs5": ("22", 500, ["C", "G"]),
     }
-    assert loaded.warnings == ()
+    assert _row_warnings(loaded) == ()
 
 
 def test_rsid_result_table_with_a_preamble_and_unplaced_probes(tmp_path: Path) -> None:
@@ -258,7 +264,7 @@ def test_rsid_result_table_with_a_preamble_and_unplaced_probes(tmp_path: Path) -
     assert set(by_id) == {"rs1", "GSA-rs2", "rs5"}
     assert by_id["GSA-rs2"]["gt_alleles"] == ["D", "I"] and by_id["GSA-rs2"]["end_pos"] is None
     assert by_id["rs5"]["chrom"] == "XY"
-    assert loaded.warnings == ("2 row(s) on chromosome 0 (probes with no mapped position) dropped",)
+    assert _row_warnings(loaded) == ("2 row(s) on chromosome 0 (probes with no mapped position) dropped",)
     assert loaded.facets.collect()["vendor"][0] is None, "the vendor is not claimed for this layout"
 
 
@@ -268,7 +274,7 @@ def test_a_table_whose_every_row_is_dropped_loads_empty(tmp_path: Path) -> None:
     assert calls.height == 0 and calls.schema == CALLS
     facet = loaded.facets.collect()
     assert facet.height == 1 and facet["contig_map"][0].to_list() == []
-    assert loaded.warnings == ("1 row(s) on chromosome 0 (probes with no mapped position) dropped",)
+    assert _row_warnings(loaded) == ("1 row(s) on chromosome 0 (probes with no mapped position) dropped",)
 
 
 # --- Color -------------------------------------------------------------------------------------------

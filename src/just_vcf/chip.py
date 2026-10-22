@@ -13,18 +13,26 @@ Two kinds of evidence, recorded apart in `facets.chip_basis`:
   generation), re-measured; just-prs' fallback ("GSA v3" for any count it does not know) is not taken:
   a count no band holds is unknown. A table in 23andMe's layout without its preamble (a re-saved
   export) is read the same way when it carries 23andMe's internal ids.
-
-FamilyTreeDNA and MyHeritage exports state nothing and get no rule: every FamilyTreeDNA export in
-PGP-HMS is on OmniExpress (by marker overlap with Illumina's manifest), so nothing here measures what a
-later chip's export looks like, and naming one by its row count alone would be the guess this module
-refuses (RM4).
+- **Inferred by marker overlap**: FamilyTreeDNA and MyHeritage exports (`ftdna`, `ftdna_space`,
+  `rsid_result_csv`) and a Final Report whose header names no manifest state nothing, so their rsids
+  are compared with Illumina's own manifests (`chip_markers.json`, a sample of each manifest's rsids
+  derived by `scripts/chip_markers.py`; docs/PROVENANCE.md). A chip is named only when one manifest
+  holds nearly all of the export's sampled rsids, clearly more than any other does, and the export
+  holds a good part of the manifest's: an extract, an export on a chip no manifest here describes, or
+  two chips' content mixed stays unknown. Thresholds measured on PGP-HMS (docs/ROADMAP.md RM4). The
+  name is the platform's family (`illumina_omniexpress`, `illumina_gsa`), not the manifest compared
+  with: one manifest per family is on hand, and a Final Report that states GSA v2 reaches 0.97 against
+  the GSA v3 manifest, so the overlap does not tell versions apart. A row count names nothing here.
 
 The vocabulary is open (`CHIPS`, a `frozenset[str]` with a validator, stored as `str`): every vendor
 release adds a chip. A Final Report's manifest is kept as Illumina names it, `illumina:<manifest>`.
 """
 
+import json
 import re
 from enum import Enum
+from functools import cache
+from importlib import resources
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
@@ -39,11 +47,15 @@ CHIPS: frozenset[str] = frozenset(
         "23andme_v5",
         "ancestrydna_v1",
         "ancestrydna_v2",
+        "illumina_gsa",
+        "illumina_omniexpress",
         "living_dna_sirius",
     }
 )
 """Chips named by vendor and generation. `23andme_v1_v2` is either of the two HumanHap550-based
-generations: their exports are not told apart by their rows."""
+generations: their exports are not told apart by their rows. `illumina_gsa` and
+`illumina_omniexpress` are Illumina platform families, named only by marker overlap: the content of
+the Global Screening Array or of the OmniExpress BeadChip, whichever version."""
 
 ILLUMINA_PREFIX = "illumina:"
 """A chip given as the Illumina manifest a Final Report names (`illumina:GSA-24v2-0_A1`), verbatim."""
@@ -77,6 +89,11 @@ class ChipOutcome(str, Enum):
     """The row count lies in no generation's band."""
     DISAGREE = "disagree"
     """The row count and the internal-id profile point at different generations, or the id profile at none."""
+    TOO_FEW_MARKERS = "too_few_markers"
+    """Too few of the export's rsids fall in the marker sample to compare it with a manifest."""
+    NO_CLEAR_OVERLAP = "no_clear_overlap"
+    """No manifest holds nearly all of the export's sampled rsids, clearly ahead of the others, with a good
+    part of its own in the export."""
 
 
 class ChipInference(BaseModel):
@@ -183,6 +200,8 @@ def _generation_by_rows(rows: int) -> str | None:
 
 def inferred_chip(format_id: str, calls: pl.DataFrame) -> ChipInference:
     """The chip the export's probe set points at, from rows a loader read (`ids` per row)."""
+    if format_id in OVERLAP_FORMATS:
+        return overlap_chip(calls)
     profile = id_profile(calls)
     if format_id not in _23ANDME_FORMATS and not (format_id in _23ANDME_LAYOUT and profile["internal"]):
         return ChipInference(chip=None, basis=None, outcome=ChipOutcome.NO_RULE, reason=f"{format_id} states no chip and has no probe-set rule")
@@ -200,6 +219,89 @@ def inferred_chip(format_id: str, calls: pl.DataFrame) -> ChipInference:
             reason=f"{features}: the row count points at {by_rows}, the internal ids at {by_ids or 'none'}",
         )  # fmt: skip
     return ChipInference(chip=by_rows, basis=ChipBasis.INFERRED, outcome=ChipOutcome.INFERRED, reason=f"{features}: row count and internal ids both point at {by_rows}")
+
+
+# --- marker overlap with Illumina manifests ---------------------------------------------------------
+
+OVERLAP_FORMATS = frozenset({"ftdna", "ftdna_space", "rsid_result_csv", "illumina_final_report"})
+"""Formats whose chip is inferred by marker overlap: they state none (a Final Report only when its
+header names no manifest; `detect_chip` takes a statement first). 23andMe exports keep their own rule,
+which names the vendor's generation: 23andMe's v5 is a custom GSA, and the overlap would call it
+`illumina_gsa`. AncestryDNA states its version."""
+
+MARKER_MODULUS = 61
+"""The marker sample: rsids whose number is divisible by this. A prime, so no decimal or binary pattern
+in how rsids are numbered lines up with it. Applied alike to the manifests (`chip_markers.json`) and to
+an export's ids, so the two samples compare as the full sets do. Measured on 606 PGP-HMS array exports
+of 61,000 rsids or more, the sampled shares differ from the full sets' by at most 0.011 (RM4)."""
+
+MIN_SAMPLED_MARKERS = 1_000
+"""Sampled rsids an export needs before it is compared (about 61,000 rsids in the export). On PGP-HMS the
+FTDNA X-chromosome exports have 245-270, every whole export 8,964 or more."""
+
+MIN_COVERAGE = 0.90
+"""Share of the export's sampled rsids the winning manifest must hold. On PGP-HMS: 0.98-0.99 for the 57
+FTDNA exports on OmniExpress; at most 0.33 for the 2010 Affymetrix ones; 0.84 against GSA for the one
+rsid CSV (vendor unstated), which therefore reads unknown."""
+
+MIN_MARGIN = 0.30
+"""How far the winning manifest's share must stand above every other manifest's (0.73 or more on PGP-HMS
+where a chip is named: the two families share about a quarter of their rsids)."""
+
+MIN_RECALL = 0.40
+"""Share of the winning manifest's sampled rsids the export must hold: an extract of a chip is not the chip.
+0.94-0.99 for the FTDNA exports on OmniExpress. Set below the 0.51 of the one GSA Final Report on PGP-HMS
+(it states its chip, `GSA-24v2-0_A1`, and names half its probes by position, not by rsid), so a report
+like it that did not state its chip would still be read."""
+
+_RSID_NAME = r"^(?:GSA-|exm-)?rs(\d+)$"
+"""An id naming an rsid, as the manifests and the Final Reports write it (`rs123`, `GSA-rs123`)."""
+
+
+@cache
+def chip_markers() -> dict[str, pl.Series]:
+    """Each chip family's sampled rsid numbers, from the package's `chip_markers.json`."""
+    payload = json.loads(resources.files("just_vcf").joinpath("chip_markers.json").read_text())
+    if payload["modulus"] != MARKER_MODULUS:
+        raise ValueError(f"chip_markers.json samples 1 in {payload['modulus']}, this module 1 in {MARKER_MODULUS}")
+    return {chip: pl.Series(chip, entry["sample"], dtype=pl.UInt64) for chip, entry in sorted(payload["chips"].items())}
+
+
+def sampled_rsids(calls: pl.DataFrame) -> pl.Series:
+    """The distinct rsid numbers among the export's ids that fall in the marker sample."""
+    numbers = calls.select(pl.col("ids").explode(empty_as_null=False).str.extract(_RSID_NAME, 1).cast(pl.UInt64).alias("rs"))["rs"]
+    numbers = numbers.drop_nulls().unique()
+    return numbers.filter(numbers % MARKER_MODULUS == 0).sort()
+
+
+def marker_overlap(calls: pl.DataFrame) -> dict[str, tuple[float, float]]:
+    """Per chip family: the share of the export's sampled rsids in its manifest (coverage), and the
+    share of its manifest's sampled rsids in the export (recall). Empty when the export has none."""
+    sampled = sampled_rsids(calls)
+    if sampled.is_empty():
+        return {}
+    shares = {}
+    for chip, markers in chip_markers().items():
+        shared = int(sampled.is_in(markers.implode()).sum())
+        shares[chip] = (shared / sampled.len(), shared / markers.len())
+    return shares
+
+
+def overlap_chip(calls: pl.DataFrame) -> ChipInference:
+    """The chip family whose manifest the export's rsids clearly belong to, or why none is named."""
+    count = sampled_rsids(calls).len()
+    if count < MIN_SAMPLED_MARKERS:
+        return ChipInference(
+            chip=None, basis=None, outcome=ChipOutcome.TOO_FEW_MARKERS,
+            reason=f"{count} of the export's rsids are in the marker sample (1 in {MARKER_MODULUS}), fewer than {MIN_SAMPLED_MARKERS}",
+        )  # fmt: skip
+    shares = marker_overlap(calls)
+    ranked = sorted(shares.items(), key=lambda item: (-item[1][0], item[0]))
+    (best, (coverage, recall)), runner_up = ranked[0], max((share[0] for _, share in ranked[1:]), default=0.0)
+    features = f"{count} sampled rsids; " + ", ".join(f"{chip} holds {c:.1%} of them, the export {r:.1%} of its" for chip, (c, r) in ranked)
+    if coverage >= MIN_COVERAGE and coverage - runner_up >= MIN_MARGIN and recall >= MIN_RECALL:
+        return ChipInference(chip=best, basis=ChipBasis.INFERRED, outcome=ChipOutcome.INFERRED, reason=f"{features}: the overlap points at {best}")
+    return ChipInference(chip=None, basis=None, outcome=ChipOutcome.NO_CLEAR_OVERLAP, reason=f"{features}: no manifest clearly holds the export")
 
 
 def detect_chip(format_id: str, header: list[str], calls: pl.DataFrame) -> ChipInference:

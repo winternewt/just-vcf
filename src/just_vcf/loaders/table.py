@@ -30,12 +30,12 @@ from just_vcf.chip import final_report_content, header_lines
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import Coordinates, FormatSpec, HeaderMode
 from just_vcf.loaders.text import (
-    ALLELE_LETTERS,
     chrom_columns,
     ids_expr,
     lines,
     one_field_alleles,
     single_position_end,
+    two_field_alleles,
 )
 from just_vcf.loaders.vcf import MultiSampleError
 from just_vcf.schema import EvidenceBasis
@@ -363,7 +363,7 @@ def _single_site(frame: pl.DataFrame, spec: FormatSpec, table: Table) -> pl.Data
     offset = 1 if spec.coordinates is Coordinates.ZERO_BASED_HALF_OPEN else 0
     frame = _positions(frame, "position", offset, table).with_columns(pl.col("_pos").cast(pl.UInt32).alias("pos"))
     if spec.id == "ancestrydna":
-        frame = frame.with_columns(_two_field_alleles("allele1", "allele2", spec.no_call).alias("gt_alleles"),
+        frame = frame.with_columns(two_field_alleles("allele1", "allele2", spec.no_call).alias("gt_alleles"),
                                    (pl.col("allele1") + pl.col("allele2")).alias("source_gt"))
     else:
         genotype = "genotype_plus" if spec.id == "illumina_final_report" else "genotype"
@@ -377,22 +377,6 @@ def _single_site(frame: pl.DataFrame, spec: FormatSpec, table: Table) -> pl.Data
         single_position_end("gt_alleles", "pos").alias("end_pos"),
         ids_expr(rsid).alias("ids"),
     )
-
-
-def _two_field_alleles(first: str, second: str, no_call: tuple[str, ...]) -> pl.Expr:
-    """`gt_alleles` from one allele per column: always two entries, a no-call spelling null.
-
-    AncestryDNA writes a haploid call (male X and Y, MT) as the same letter twice. That is the vendor's
-    convention, and it stays two entries: the list length is what the file wrote, not a ploidy.
-    """
-    def allele(column: str) -> pl.Expr:
-        return pl.when(pl.col(column).is_in(list(no_call))).then(pl.lit(None, dtype=pl.String)).otherwise(pl.col(column))
-
-    letter = rf"^[{ALLELE_LETTERS}]$"
-    readable = pl.all_horizontal(
-        (pl.col(name).str.contains(letter) | pl.col(name).is_in(list(no_call))) for name in (first, second)
-    )
-    return pl.when(readable).then(pl.concat_list(allele(first), allele(second))).otherwise(None)
 
 
 def _plus_strand(frame: pl.DataFrame, table: Table) -> pl.DataFrame:

@@ -19,7 +19,8 @@ short:
 3. **Alleles.** On a minus-strand block every allele is reverse-complemented. An indel whose alleles
    all start with one base (VCF's padding base) then has that base at their end instead, so it is
    re-anchored: the base is dropped from every allele and the target's base before the lifted span
-   is put in front, which moves the row one base left. The indel is not left-aligned on the target.
+   is put in front, which moves the row one base left. The indel is not left-aligned on the target
+   here; `normalize` on the lifted facet does that.
    REF is then read from the target sequence over the lifted span (charter 10: never carried over).
    Where it equals the parent's REF the row keeps its alleles; where it equals one of the ALTs, REF
    and that ALT swap and the genotype indices follow (`bcftools +liftover`'s and Picard's swap);
@@ -735,7 +736,7 @@ def _warnings(counts: Counter[str], reasons: dict[str, int], blocks: int, chain:
     if counts["reanchored"]:
         lines.append(
             f"{counts['reanchored']} of them indels re-anchored on the target's base before the lifted span (one base left); "
-            "they are not left-aligned on the target"
+            "run normalize on the lifted facet to left-align them on the target"
         )
     if counts["dosage_withheld"]:
         lines.append(f"{counts['dosage_withheld']} swapped row(s): dosage withheld (it counted the other allele)")

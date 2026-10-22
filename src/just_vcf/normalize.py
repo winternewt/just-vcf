@@ -16,7 +16,8 @@ The rules are in docs/SCHEMA.md ("Normalizing"); in short:
    an ordinary biallelic row, not flagged. A site whose genotype calls `<*>`, or that holds another
    symbolic allele (`<DEL>`, a breakend), is left as written.
 2. **Left-align and trim** each biallelic sequence row whose REF matched the reference
-   (`ref_check = match`), with the standard algorithm (Tan et al. 2015, vt, `bcftools norm -f`):
+   (`ref_check = match`), or whose REF the facet's relation read from its collection (a lifted
+   facet, `REREADS_REF`), with the standard algorithm (Tan et al. 2015, vt, `bcftools norm -f`):
    drop a common last base, and when an allele runs empty, extend both to the left with the
    reference base before them; repeat; then drop common first bases while both alleles keep one. A
    row that moved or changed has `source_ref`, `ref_check`, `source_gt` and its VRS ids null: they
@@ -48,6 +49,7 @@ from pathlib import Path
 import polars as pl
 
 from just_vcf import cache
+from just_vcf.liftover import RELATION as LIFT_RELATION
 from just_vcf.loaders.vcf import DASH_DELETION
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore
@@ -55,11 +57,17 @@ from just_vcf.schema import CALLS, CONTIG_RANK, SCHEMA_VERSION, RefCheck, SplitS
 
 logger = logging.getLogger(__name__)
 
-NORMALIZE_VERSION = 2
+NORMALIZE_VERSION = 3
 """Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits."""
 
 RELATION = "normalized"
 """The derived facet's `relation`."""
+
+REREADS_REF: frozenset[str] = frozenset({LIFT_RELATION})
+"""Relations whose derived facet read every row's REF from its own collection (`ref_seqcol_digest`):
+`liftover_to` reads REF from the target over the lifted span and keeps a row only where it equals one
+of the row's alleles. Such a row's `ref_check` is null (it compared the source's REF on the source
+assembly), yet its REF is the collection's, so `normalize` aligns it as it does a `match` row."""
 
 _FIRST_WINDOW = 100
 """Reference bases read to the left of an indel on the first pass; a row that needs more is read again
@@ -108,9 +116,10 @@ def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = 
             parts: list[Path] = []
             source = pl.scan_parquet(staged)
             chroms = source.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
+            rereads = facet["relation"] in REREADS_REF
             for index, chrom in enumerate(sorted(chroms, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
                 rows = source.filter(pl.col("chrom") == chrom).collect()
-                normalized = _normalize_contig(rows.with_columns(pl.lit(facet_id).alias("facet_id")), store, contigs.get(chrom), counts)
+                normalized = _normalize_contig(rows.with_columns(pl.lit(facet_id).alias("facet_id")), store, contigs.get(chrom), counts, rereads)
                 part = spill.stage / f"calls-{index:05d}.parquet"
                 normalized.write_parquet(part, row_group_size=SPILL_ROW_GROUP)
                 parts.append(part)
@@ -150,14 +159,15 @@ def _contigs_by_chrom(store: ReferenceStore, digest: str) -> dict[str, Contig]:
     return {chrom: matches[0] for chrom, matches in found.items() if len(matches) == 1}
 
 
-def _normalize_contig(rows: pl.DataFrame, store: ReferenceStore, contig: Contig | None, counts: Counter[str]) -> pl.DataFrame:
-    """One contig's rows split, aligned, deduplicated and sorted."""
+def _normalize_contig(rows: pl.DataFrame, store: ReferenceStore, contig: Contig | None, counts: Counter[str], rereads: bool = False) -> pl.DataFrame:
+    """One contig's rows split, aligned, deduplicated and sorted. `rereads`: the facet's relation read
+    every row's REF from its collection (`REREADS_REF`)."""
     if rows.is_empty():
         return rows
     flagged = pl.col("split_signal").is_not_null()
     held = rows.filter(flagged)
     counts["flagged"] += held.height
-    work = _align(_split(rows.filter(~flagged), counts), store, contig, counts)
+    work = _align(_split(rows.filter(~flagged), counts), store, contig, counts, rereads)
     ordered = canonical_order(pl.concat([work, held], how="vertical").lazy()).collect()
     # A duplicate states what another row states: the columns a move clears describe how the source
     # wrote the row, not what it says, so they do not make two rows differ. Canonical order puts a row
@@ -292,9 +302,13 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
     return pl.concat([rows.filter(~target), pieces.select(CALLS.names())], how="vertical")
 
 
-def _align(rows: pl.DataFrame, store: ReferenceStore, contig: Contig | None, counts: Counter[str]) -> pl.DataFrame:
-    """Every biallelic sequence row whose REF matched, left-aligned and trimmed; the rest as they are,
-    counted by why they were not aligned."""
+def _align(rows: pl.DataFrame, store: ReferenceStore, contig: Contig | None, counts: Counter[str], rereads: bool = False) -> pl.DataFrame:
+    """Every biallelic sequence row whose REF was read from the collection and not contradicted,
+    left-aligned and trimmed; the rest as they are, counted by why they were not aligned.
+
+    A row qualifies when `ref_check = match`, or when the facet's relation read every row's REF from
+    its own collection (`rereads`: a lifted facet, whose `ref_check` is null because it compared the
+    source's REF on the source assembly)."""
     alt = pl.col("alts").list.first()
     written = pl.coalesce(pl.col("ref"), pl.col("source_ref"))
     # F12: ALT `-` deletes the REF bases at POS. As the empty allele it is anchored on the base before
@@ -307,8 +321,9 @@ def _align(rows: pl.DataFrame, store: ReferenceStore, contig: Contig | None, cou
             | dash
         )
     ).fill_null(False)
+    read = pl.col("ref").is_not_null() & ((pl.col("ref_check") == RefCheck.MATCH.value).fill_null(False) | pl.lit(rereads))
     reason = (
-        pl.when((pl.col("ref_check") != RefCheck.MATCH.value).fill_null(True) | pl.col("ref").is_null())
+        pl.when(~read)
         .then(pl.col("ref_check").cast(pl.String).fill_null("unchecked"))
         .when(pl.col("gt").is_null() & pl.col("gt_alleles").is_not_null())
         .then(pl.lit("unindexed"))

@@ -583,7 +583,11 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    genotype calls `<*>` (a haplotype carries some other allele, which no split row could hold), and a
    site holding any other symbolic allele (`<DEL>`, a breakend). bcftools' own `0/.` row for `<*>` was
    set aside: the loader would read it back as a reference block. `*` is split like any allele.
-2. **Left-align and trim**, only on biallelic sequence rows with `ref_check = match`: drop a common last
+2. **Left-align and trim**, only on biallelic sequence rows whose `ref` was read from the facet's own
+   collection and not contradicted: `ref_check = match`, or any row with `ref` set in a facet whose
+   relation read every row's REF from that collection (`liftover_to`: REF is read from the target over
+   the lifted span, and a row is kept only where it equals one of its alleles; its `ref_check` is null
+   because the check it would record compared the source's REF on the source assembly). Drop a common last
    base, and when an allele runs empty, prepend the reference base before both and step `pos` back;
    repeat; then drop common first bases while both alleles keep one. At position 1 an allele keeps
    its last base. On a row this changed, `ref` is the new REF (read from the reference), `gt_alleles`
@@ -645,9 +649,9 @@ holding that collection and the target.
    The new padding base is the target's, wherever it lies, even past the chain block: REF is read from
    the target, and the event is placed by the bases the block does cover. A minus-strand indel whose
    alleles share no first base (`A>T,AG`, an SNV beside an insertion; `AT>G`) needs no padding base,
-   and lifts complemented in place like an MNV. A re-anchored indel is not left-aligned on the target:
-   the shift that was leftmost on the source is rightmost on the target, and `normalize` does not
-   re-align lifted rows (their `ref_check` is null).
+   and lifts complemented in place like an MNV. A re-anchored indel is not left-aligned on the target
+   by `liftover`: the shift that was leftmost on the source is rightmost on the target. Run
+   `normalize` on the lifted facet to left-align it there ("Normalizing", step 2).
 4. **What a lifted row carries.** `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and
    `vrs_errors` are null: they described the source's representation on the source assembly. `gt`
    indexes `[ref] + alts`. `gl`, `gp`, `ad` and the order of `source_alleles` are the parent's (Decision
@@ -990,6 +994,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-22, RM6: lifted rows normalized): no column changes. Rule changed in
+  `normalize` ("Normalizing", step 2): rows of a `liftover_to` facet are left-aligned and trimmed on
+  the target, where they passed through as unchecked. A lifted row that moves follows the moved-row
+  rules; a swapped one keeps no `gl`, `gp` or `ad` when it moves, since its `source_alleles` are not
+  its new `[ref, alt]` (counted, as for any row). Normalized facets get a new `facet_id`
+  (`NORMALIZE_VERSION` 3).
 
 - **Rule change, still 0.0.10** (2026-10-22, F15): a sequence ALT is `ACGTN` bases only, in the
   variant-class rule (`variant_classes`) and in the callset's site count (RM4). An ALT of other letters

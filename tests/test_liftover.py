@@ -13,7 +13,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceMismatchError, ReferenceStore, liftover, load, mint_vrs_ids, read_chain, resolve_ref, vrs_withheld
+from just_vcf import ReferenceMismatchError, ReferenceStore, liftover, load, mint_vrs_ids, normalize, read_chain, resolve_ref, vrs_withheld, write_vcf
 from just_vcf.liftover import RELATION, REPORT, UNLIFTED_REASONS, _segments
 from just_vcf.schema import CALLS, FACETS
 
@@ -465,3 +465,56 @@ def test_refuses_a_facet_whose_ref_was_not_read(tmp_path: Path, setup) -> None:
     vcf.write_text("\n".join([*HEADER, CASES["plus_snv"]]) + "\n")
     with pytest.raises(ValueError, match="resolve_ref first"):
         liftover(load(vcf), chain, store)
+
+
+def test_normalize_left_aligns_lifted_indels_on_the_target(tmp_path: Path) -> None:
+    """A flip chain reverses the source: an indel left-aligned in a repeat on the source lands at the
+    repeat's right end on the target. `normalize` on the lifted facet moves it to the left end, read
+    from the target's own sequence; bcftools norm on the target agrees."""
+    local = random.Random(23)
+    flank, middle, tail = ("".join(local.choice("ACGT") for _ in range(n)) for n in (80, 40, 80))
+    # A T run of six between G and C, and four CA copies between T and G.
+    source_seq = flank + "G" + "T" * 6 + "C" + middle + "T" + "CA" * 4 + "G" + tail
+    target_seq = revcomp(source_seq)
+    g = len(flank) + 1  # 1-based position of the G before the T run
+    t = g + 8 + len(middle)  # 1-based position of the T before the CA copies
+    store = ReferenceStore.open(tmp_path / "store")
+    source = store.add_fasta(write_fasta(tmp_path / "s.fa", {"1": source_seq}), assembly_label="GRCh37")
+    target_fasta = write_fasta(tmp_path / "t.fa", {"1": target_seq})
+    target = store.add_fasta(target_fasta, assembly_label="GRCh38")
+    chain = tmp_path / "flip.chain"
+    size = len(source_seq)
+    chain.write_text(f"chain 100 1 {size} + 0 {size} 1 {size} - 0 {size} 1\n{size}\n\n")
+    vcf = tmp_path / "repeats.vcf"
+    lines = [
+        "##fileformat=VCFv4.2",
+        f"##contig=<ID=1,length={size}>",
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1",
+        f"1\t{g}\tdel\tGT\tG\t50\tPASS\t.\tGT\t0/1",
+        f"1\t{t}\tins\tT\tTCA\t50\tPASS\t.\tGT\t1/1",
+    ]
+    vcf.write_text("\n".join(lines) + "\n")
+    lifted = liftover(resolve_ref(load(vcf), store, collection=source), chain, store, target=target)
+    # On the target the T run reads as an A run between G and C, the CA copies as TG copies between C and A.
+    a_run, tg_run = target_seq.find("G" + "A" * 6 + "C"), target_seq.find("C" + "TG" * 4 + "A")
+    assert a_run == target_seq.rfind("G" + "A" * 6 + "C") >= 0 and tg_run == target_seq.rfind("C" + "TG" * 4 + "A") >= 0
+    leftmost = {"del": (a_run + 1, "GA", ["G"]), "ins": (tg_run + 1, "C", ["CTG"])}
+    as_lifted = {r["ids"][0]: r["pos"] for r in lifted.loaded.calls.collect().iter_rows(named=True)}
+    assert all(as_lifted[case] > leftmost[case][0] for case in leftmost)  # at the run's right end after the lift
+
+    normalized = normalize(lifted.loaded, store)
+    rows = {r["ids"][0]: r for r in normalized.calls.collect().iter_rows(named=True)}
+    assert {case: (r["pos"], r["ref"], r["alts"]) for case, r in rows.items()} == leftmost
+    assert rows["ins"]["gt_alleles"] == ["CTG", "CTG"] and sorted(rows["del"]["gt_alleles"]) == ["G", "GA"]
+    assert not any("not left-aligned or trimmed" in w for w in normalized.warnings)
+    assert any("2 row(s) left-aligned to another position" in w for w in normalized.warnings)
+
+    pysam = pytest.importorskip("pysam")
+    bcftools = pytest.importorskip("pysam.bcftools")
+    pysam.faidx(str(target_fasta))
+    exported = write_vcf(lifted.loaded, tmp_path / "lifted.vcf", compress=False)
+    theirs = tmp_path / "bcftools.vcf"
+    bcftools.norm("-f", str(target_fasta), "--no-version", "-o", str(theirs), str(exported.path), catch_stdout=False)
+    by_bcftools = {r["ids"][0]: (r["pos"], r["source_ref"], r["alts"]) for r in load(theirs).calls.collect().iter_rows(named=True)}
+    assert by_bcftools == leftmost

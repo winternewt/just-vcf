@@ -16,14 +16,17 @@ short:
    target ambiguous; blocks repeating one mapping count once, F14).
    Otherwise it is unlifted: no block at all, a span that crosses a block edge, or more than one
    target.
-3. **Alleles.** On a minus-strand block every allele is reverse-complemented. REF is then read from
-   the target sequence over the lifted span (charter 10: never carried over). Where it equals the
-   parent's REF the row keeps its alleles; where it equals one of the ALTs, REF and that ALT swap and
-   the genotype indices follow (`bcftools +liftover`'s and Picard's swap); where it equals none, the
-   row is unlifted (`ref_mismatch_after_lift`).
-4. **Withheld in this slice**, each counted: indels on minus-strand blocks (re-anchoring them is not
-   built), symbolic alleles and `*`, rows flagged as one record of a pre-split site, and the
-   `blocks` frame.
+3. **Alleles.** On a minus-strand block every allele is reverse-complemented. An indel whose alleles
+   all start with one base (VCF's padding base) then has that base at their end instead, so it is
+   re-anchored: the base is dropped from every allele and the target's base before the lifted span
+   is put in front, which moves the row one base left (bcftools +liftover and CrossMap do the same).
+   REF is then read from the target sequence over the lifted span (charter 10: never carried over).
+   Where it equals the parent's REF the row keeps its alleles; where it equals one of the ALTs, REF
+   and that ALT swap and the genotype indices follow (`bcftools +liftover`'s and Picard's swap);
+   where it equals none, the row is unlifted (`ref_mismatch_after_lift`).
+4. **Withheld in this slice**, each counted: a minus-strand indel whose lifted span starts at the
+   target contig's first base (no base before it to anchor on), symbolic alleles and `*`, rows
+   flagged as one record of a pre-split site, and the `blocks` frame.
 
 A lifted row's `source_ref`, `ref_check`, `source_gt` and VRS ids are null: they described the
 source's representation on the source assembly. `gl`, `gp` and `ad` stay indexed over
@@ -52,7 +55,7 @@ from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceM
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 1
+LIFT_VERSION = 2
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits."""
 
 RELATION = "liftover_to"
@@ -90,7 +93,7 @@ REASON_TEXT: dict[str, str] = {
     "split_across_blocks": "its REF span crosses the edge of a chain block",
     "multiple_targets": "it lies in more than one chain block (overlapping chains), so its target is ambiguous",
     "target_contig_unmatched": "the chain's target contig is not in the target collection, or its size differs",
-    "indel_minus_strand": "an indel on a minus-strand block (re-anchoring it is not built)",
+    "indel_minus_strand": "an indel on a minus-strand block lifted to the target contig's first base, with no base before it to anchor on",
     "ref_mismatch_after_lift": "the target's REF equals none of the row's alleles",
 }
 
@@ -468,13 +471,14 @@ def _lift_contig(
     if candidates.height and blocks.height:
         candidates = _place(candidates, blocks, targets)
         candidates = _read_target(candidates, store, targets)
-        work = work.join(candidates.select("_row", "_reason2", "_q_chrom", "_q0", "_minus", "_t_ref", "_swap"), on="_row", how="left", maintain_order="left")
+        work = work.join(candidates.select("_row", "_reason2", "_q_chrom", "_q0", "_minus", "_reanchor", "_t_ref", "_swap"), on="_row", how="left", maintain_order="left")
         work = work.with_columns(pl.coalesce("lift_reason", "_reason2").alias("lift_reason"))
     else:
         work = work.with_columns(
             pl.lit(None, dtype=pl.String).alias("_q_chrom"),
             pl.lit(None, dtype=pl.Int64).alias("_q0"),
             pl.lit(None, dtype=pl.Boolean).alias("_minus"),
+            pl.lit(None, dtype=pl.Boolean).alias("_reanchor"),
             pl.lit(None, dtype=pl.String).alias("_t_ref"),
             pl.lit(None, dtype=pl.Boolean).alias("_swap"),
         )
@@ -547,15 +551,24 @@ def _place(rows: pl.DataFrame, blocks: pl.DataFrame, targets: dict[str, Contig])
 
 
 def _read_target(rows: pl.DataFrame, store: ReferenceStore, targets: dict[str, Contig]) -> pl.DataFrame:
-    """The target's REF over each placed row's lifted span, and whether the row keeps or swaps its alleles."""
+    """The target's REF over each placed row's lifted span, and whether the row keeps or swaps its alleles.
+
+    A minus-strand indel whose alleles share their first base is re-anchored (`_reanchor`): its span
+    moves one base left on the target, so the base read first is the new padding base.
+    """
     alts = pl.col("alts").fill_null(pl.lit([], dtype=CALLS["alts"]))
     lengths = alts.list.eval(pl.element().str.len_chars())
     ref_length = pl.col("ref").str.len_chars()
     indel = ((lengths.list.min() != ref_length) | (lengths.list.max() != ref_length)).fill_null(False)
+    first_bases = pl.concat_list(pl.col("ref"), alts).list.eval(pl.element().str.to_uppercase().str.slice(0, 1))
+    padded = first_bases.list.n_unique() == 1
+    reanchor = pl.col("_reason2").is_null() & pl.col("_minus") & indel & padded
     rows = rows.with_columns(
-        pl.when(pl.col("_reason2").is_null() & pl.col("_minus") & indel).then(pl.lit("indel_minus_strand")).otherwise(pl.col("_reason2")).alias("_reason2"),
+        pl.when(reanchor & (pl.col("_q0") == 0)).then(pl.lit("indel_minus_strand")).otherwise(pl.col("_reason2")).alias("_reason2"),
+        (reanchor & (pl.col("_q0") > 0)).fill_null(False).alias("_reanchor"),
         pl.lit(None, dtype=pl.String).alias("_t_ref"),
     )
+    rows = rows.with_columns(pl.when(pl.col("_reanchor")).then(pl.col("_q0") - 1).otherwise(pl.col("_q0")).alias("_q0"))
     readable = rows.filter(pl.col("_reason2").is_null())
     pieces = []
     for chrom in sorted(readable["_q_chrom"].unique().to_list()):
@@ -569,8 +582,15 @@ def _read_target(rows: pl.DataFrame, store: ReferenceStore, targets: dict[str, C
         rows = rows.join(read, on="_row", how="left", maintain_order="left").with_columns(pl.col("_bases").alias("_t_ref")).drop("_bases")
     lifted_ref = _complement(pl.col("ref"), pl.col("_minus"))
     lifted_alts = _complement_list(alts, pl.col("_minus"))
-    keep = pl.col("_t_ref") == lifted_ref
-    swap = lifted_alts.list.contains(pl.col("_t_ref"))
+    # A re-anchored row's alleles are the target's first base, then each complemented allele less its
+    # last base (the old padding base). The first base read is that new padding base by construction,
+    # so the alleles are compared without it.
+    reanchored = pl.col("_reanchor")
+    target = pl.when(reanchored).then(pl.col("_t_ref").str.slice(1)).otherwise(pl.col("_t_ref"))
+    ref_body = pl.when(reanchored).then(_drop_last(lifted_ref)).otherwise(lifted_ref)
+    alts_body = pl.when(reanchored).then(lifted_alts.list.eval(_drop_last(pl.element()))).otherwise(lifted_alts)
+    keep = target == ref_body
+    swap = alts_body.list.contains(target)
     open_ = pl.col("_reason2").is_null()
     reason = (
         pl.when(open_ & pl.col("_t_ref").is_null())
@@ -580,6 +600,30 @@ def _read_target(rows: pl.DataFrame, store: ReferenceStore, targets: dict[str, C
         .otherwise(pl.col("_reason2"))
     )
     return rows.with_columns(reason.alias("_reason2"), pl.when(open_ & pl.col("_t_ref").is_not_null()).then(~keep).alias("_swap"))
+
+
+def _drop_last(allele: pl.Expr) -> pl.Expr:
+    return allele.str.slice(0, allele.str.len_chars() - 1)
+
+
+def _reanchored(rows: pl.DataFrame) -> pl.DataFrame:
+    """Re-anchored rows' alleles on the target: the new padding base (REF's first, read from the
+    target), then each complemented allele less its old padding base. Few rows, so plain Python."""
+
+    def moved(anchor: str, allele: str | None) -> str | None:
+        return None if allele is None else anchor + allele[:-1]
+
+    columns: dict[str, list] = {name: [] for name in ("_lifted_ref", "alts", "gt_alleles", "source_alleles")}
+    for ref, lifted_ref, alts, gt_alleles, source_alleles in rows.select("ref", "_lifted_ref", "alts", "gt_alleles", "source_alleles").iter_rows():
+        anchor = ref[0]
+        columns["_lifted_ref"].append(moved(anchor, lifted_ref))
+        columns["alts"].append([moved(anchor, allele) for allele in alts])
+        for name, alleles in (("gt_alleles", gt_alleles), ("source_alleles", source_alleles)):
+            columns[name].append(None if alleles is None else [moved(anchor, allele) for allele in alleles])
+    return rows.with_columns(
+        pl.Series("_lifted_ref", columns["_lifted_ref"], dtype=pl.String),
+        *[pl.Series(name, columns[name], dtype=CALLS[name]) for name in ("alts", "gt_alleles", "source_alleles")],
+    )
 
 
 def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: Counter[str]) -> pl.DataFrame:
@@ -593,6 +637,7 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
     array = pl.col("source_ref").is_null()
     counts["lifted"] += work.height
     counts["minus"] += int(work["_minus"].sum())
+    counts["reanchored"] += int(work["_reanchor"].sum())
     counts["swapped"] += int(work["_swap"].sum())
     counts["other_contig"] += int(work.select(moved_contig.sum()).item())
     counts["dosage_withheld"] += int(work.select((pl.col("_swap") & pl.col("dosage").is_not_null()).sum()).item())
@@ -616,6 +661,8 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
         *[pl.when(moved_contig).then(None).otherwise(pl.col(name)).alias(name) for name in ("phased", "phase_sets", "phase_set_kinds")],
         array.alias("_array"),
     )
+    if out["_reanchor"].any():
+        out = pl.concat([out.filter(~pl.col("_reanchor")), _reanchored(out.filter(pl.col("_reanchor")))], how="vertical")
     swapped = out.filter(pl.col("_swap") & ~pl.col("_array"))
     if swapped.height:
         out = pl.concat([out.filter(~(pl.col("_swap") & ~pl.col("_array"))), _swap(swapped)], how="vertical")
@@ -652,6 +699,11 @@ def _warnings(counts: Counter[str], reasons: dict[str, int], blocks: int, chain:
         lines.append(f"{counts['swapped']} lifted row(s) had the target's REF as an ALT: REF and that ALT swapped, the genotype re-indexed")
     if counts["minus"]:
         lines.append(f"{counts['minus']} lifted row(s) on minus-strand chain blocks: alleles reverse-complemented")
+    if counts["reanchored"]:
+        lines.append(
+            f"{counts['reanchored']} of them indels re-anchored on the target's base before the lifted span (one base left); "
+            "they are not left-aligned on the target"
+        )
     if counts["dosage_withheld"]:
         lines.append(f"{counts['dosage_withheld']} swapped row(s): dosage withheld (it counted the other allele)")
     if counts["other_contig"]:

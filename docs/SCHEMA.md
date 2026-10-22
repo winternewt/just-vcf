@@ -634,6 +634,20 @@ holding that collection and the target.
    genotype indices follow (`0/1` becomes `1/0`); where it equals none, the row is not lifted. Array rows
    (no `source_ref`) take their ALTs from the genotype against the new REF, sorted, as `resolve_ref`
    derives them.
+
+   **A minus-strand indel is re-anchored** when its alleles all start with one base (VCF's padding
+   base): reverse-complemented, that base ends every allele instead, so it is dropped from each and the
+   target's base before the lifted span is put in front, in all four allele lists alike. The row moves
+   one base left (`pos` is the lifted span's start minus one; the span keeps its length) and REF is
+   read over the moved span, its first base being the new padding base; the rest of it is compared
+   with the alleles as above. So `A>AC` at source 100, on a block reversing the contig, becomes
+   `B>BG` at the image of source 101, `B` being the target's base there.
+   The new padding base is the target's, wherever it lies, even past the chain block: REF is read from
+   the target, and the event is placed by the bases the block does cover. A minus-strand indel whose
+   alleles share no first base (`A>T,AG`, an SNV beside an insertion; `AT>G`) needs no padding base,
+   and lifts complemented in place like an MNV. A re-anchored indel is not left-aligned on the target:
+   the shift that was leftmost on the source is rightmost on the target, and `normalize` does not
+   re-align lifted rows (their `ref_check` is null).
 4. **What a lifted row carries.** `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and
    `vrs_errors` are null: they described the source's representation on the source assembly. `gt`
    indexes `[ref] + alts`. `gl`, `gp`, `ad` and the order of `source_alleles` are the parent's (Decision
@@ -653,8 +667,8 @@ Not lifted, each counted in the warnings and named in the report's `lift_reason`
 `UNLIFTED_REASONS`): `ref_unread`, `source_ref_mismatch`, `allele_not_sequence` (symbolic alleles, `*`,
 `<*>`, breakends: an SV's extent is not lifted), `split_flagged` (run `rejoin_split` first),
 `contig_not_in_chain`, `chain_contig_mismatch`, `no_chain_block`, `split_across_blocks`,
-`multiple_targets`, `target_contig_unmatched`, `indel_minus_strand` (re-anchoring an indel on a
-minus-strand block is not built) and `ref_mismatch_after_lift`. The `blocks` frame is not lifted; the
+`multiple_targets`, `target_contig_unmatched`, `indel_minus_strand` (a minus-strand indel lifted to
+the target contig's first base, with no base before it to re-anchor on) and `ref_mismatch_after_lift`. The `blocks` frame is not lifted; the
 derived facet has none, and the warnings count the parent's.
 
 **`end_pos`.** It is named apart from polars-bio's `end` because that value is wrong for symbolic SV
@@ -956,6 +970,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-22, RM6's minus-strand indels): no column changes. Rule changed in
+  `liftover` ("Lifting", step 3): minus-strand indels are re-anchored and lifted, where they were left
+  behind; `indel_minus_strand` now names only those that land at a target contig's first base. Lifted
+  facets get a new `facet_id` (`LIFT_VERSION` 2).
 
 - **No version change** (2026-10-22, RM6's gVCF output): no column changes. Rule added: writing
   blocks back out (Decision 4).

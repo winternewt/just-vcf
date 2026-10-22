@@ -355,7 +355,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, with a tabix index and gVCF blocks, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and plus-strand indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: strand, minus-strand indels and blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, with a tabix index and gVCF blocks, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: strand, blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -497,8 +497,8 @@ it stayed behind. Decisions, each with what was rejected:
   Rejected: writing the parent's REF, carried across, as `source_ref` with `ref_check = match`; it
   would let `normalize` re-align lifted indels, but no file wrote that REF, which the column means.
   So `normalize` does not re-align a lifted indel today (its rows read `unchecked`).
-- Indels on minus-strand blocks are unlifted (`indel_minus_strand`). Rejected for this slice:
-  re-anchoring them on the base before the span, which bcftools does and which wants its own tests.
+- Indels on minus-strand blocks were unlifted (`indel_minus_strand`) in this slice; since 2026-10-22
+  they are re-anchored, below.
 - The derived facet's `absence_means` is `unknown`. Rejected: the parent's `weak_reference`, which
   would read every dropped row and every uncovered region as reference.
 - Its label is the target collection's, basis `inferred` (from that collection's lengths, which the
@@ -570,11 +570,34 @@ parses it and its index finds a block from inside its span). Decisions, each wit
   to do, and `merge_sorted` over the whole genome, which needs one key across contigs and a REF
   lookup inside the lazy plan.
 
+**Shipped 2026-10-22: minus-strand indels in a lift** (rules in docs/SCHEMA.md, "Lifting", step 3).
+An indel on a minus-strand block whose alleles share their first base (VCF's padding base) is
+reverse-complemented, that base dropped from every allele (`alts`, `gt_alleles`, `source_alleles`)
+and the target's base before the lifted span put in front; REF is read over the span moved one base
+left and compared as for any row, so a swap still works. Tested on a synthetic chain against
+hand-computed alleles (an insertion, a two-base deletion, an indel at a block's edge) and against
+pyliftover's image of the source base after the span. `LIFT_VERSION` 2. Decisions, each with what was
+rejected:
+
+- The new padding base is the target's base before the lifted span, wherever it lies, past the
+  block's edge included. Rejected: requiring it inside the block, which would leave behind indels the
+  block places exactly; the base is read from the target, so the record states the target's own
+  sequence there.
+- An indel whose alleles share no first base (`A>T,AG`, `AT>G`) lifts complemented in place, as an MNV
+  does: no allele is empty, so it needs no padding base. Rejected: leaving it unlifted, which drops a
+  representable row; and padding it on the left anyway, which changes a span no allele needs changed.
+- An indel that would land at a target contig's first base stays behind as `indel_minus_strand` (the
+  reason's meaning narrows; the name is kept). Rejected: anchoring on the base after the span, as VCF
+  allows at position 1, which no chain in hand needs and no test covers.
+- Not left-aligned on the target: the shift that was leftmost on the source is rightmost there.
+  Rejected: aligning inside `liftover`, which is `normalize`'s job; `normalize` does not realign
+  lifted rows today (`ref_check` is null), which stays open below.
+
 **Left in RM6:** SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
-does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting sites that carry `<*>`;
-reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; in a liftover, indels on minus-strand
-blocks, blocks, symbolic SVs, anchoring across a small gap of one chain, and T2T (UCSC hs1 chains).
+does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); strand resolution;
+in a liftover, left-aligning lifted indels (`normalize` skips rows with no `ref_check`), blocks,
+symbolic SVs, anchoring across a small gap of one chain, and T2T (UCSC hs1 chains).
 
 
 ## RM271 — VRS allele ids

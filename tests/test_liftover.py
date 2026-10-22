@@ -28,6 +28,10 @@ def revcomp(text: str) -> str:
     return text[::-1].translate(str.maketrans("ACGT", "TGCA"))
 
 
+def comp(text: str) -> str:
+    return text.translate(str.maketrans("ACGT", "TGCA"))
+
+
 def other(*bases: str) -> str:
     return next(b for b in "ACGT" if b not in bases)
 
@@ -138,11 +142,18 @@ CASES = {
     "minus_snv": row(751, s1(751), other(s1(751)), "0|1", rsid="minus_snv"),
     "minus_mnv": row(761, s1(761, 2), other(s1(761)) + s1(762), rsid="minus_mnv"),
     "minus_indel": row(770, s1(770), s1(770) + "A", rsid="minus_indel"),
+    "minus_deletion": row(780, s1(780, 3), s1(780), "1/1", rsid="minus_deletion"),
+    "minus_mixed": row(790, s1(790), f"{other(s1(790))},{s1(790)}G", "1/2", rsid="minus_mixed"),
+    "minus_edge": row(800, s1(800), s1(800) + "A", rsid="minus_edge"),
     "source_mismatch": row(210, other(s1(210)), s1(210), rsid="source_mismatch"),
     "symbolic": row(220, s1(220), "<DEL>", rsid="symbolic", info="SVLEN=-5"),
     "unknown_target": row(855, s1(855), other(s1(855)), rsid="unknown_target"),
     "contig_2": row(20, S2[19], other(S2[19]), chrom="2", rsid="contig_2"),
 }
+REANCHORED = {"minus_indel", "minus_deletion", "minus_edge"}
+"""Minus-strand indels whose alleles share their first base: after reverse-complementing, that base is
+at their end, so the row is re-anchored on the target's base before the lifted span."""
+
 EXPECTED_REASON = {
     "plus_snv": None,
     "swap": None,
@@ -156,7 +167,10 @@ EXPECTED_REASON = {
     "ambiguous": "multiple_targets",
     "minus_snv": None,
     "minus_mnv": None,
-    "minus_indel": "indel_minus_strand",
+    "minus_indel": None,
+    "minus_deletion": None,
+    "minus_mixed": None,
+    "minus_edge": None,
     "source_mismatch": "source_ref_mismatch",
     "symbolic": "allele_not_sequence",
     "unknown_target": "target_contig_unmatched",
@@ -197,9 +211,16 @@ def test_every_row_gets_its_reason_and_lifted_rows_land_where_the_construction_p
     calls = by_case(lifted.loaded.calls.collect())
     assert set(calls) == {case for case, reason in EXPECTED_REASON.items() if reason is None}
     for case, r in calls.items():
-        chrom, pos, strand = expected_target(report[case]["pos"])
-        if strand == "-":
-            pos -= len(report[case]["ref"]) - 1  # a span's forward start is its last source base's image
+        source_pos, source_len = report[case]["pos"], len(report[case]["ref"])
+        if case == "minus_edge":
+            chrom, pos, strand = "2", MINUS_F0, "-"  # the base before the span is filler, past the block
+        elif case in REANCHORED:
+            # Re-anchored: the new first base is the image of the source base after the span.
+            chrom, pos, strand = expected_target(source_pos + source_len)
+        else:
+            chrom, pos, strand = expected_target(source_pos)
+            if strand == "-":
+                pos -= source_len - 1  # a span's forward start is its last source base's image
         assert (r["chrom"], r["pos"], report[case]["lift_strand"]) == (chrom, pos, strand), case
         assert (report[case]["lift_chrom"], report[case]["lift_pos"]) == (chrom, pos)
         # REF is read from the target over the lifted span, never carried over.
@@ -244,6 +265,68 @@ def test_strand_and_swaps(tmp_path: Path, setup) -> None:
 
     indel = calls["plus_deletion"]
     assert (indel["ref"], indel["alts"]) == (s1(450, 3), [s1(450)])
+
+
+def test_minus_strand_indels_are_reanchored_on_the_base_before(tmp_path: Path, setup) -> None:
+    """Hand-computed from the construction: source 701..800 is target 2's MINUS_F0 + 1..100, reversed."""
+    store, _, _, chain = setup
+    _, lifted = lifted_from_cases(tmp_path, store, chain)
+    calls = by_case(lifted.loaded.calls.collect())
+    report = by_case(lifted.report.collect())
+
+    # Insertion of A after source base 770: on the target, T inserted after the image of source 771.
+    ins = calls["minus_indel"]
+    assert (ins["chrom"], ins["pos"]) == ("2", MINUS_F0 + 30)
+    assert (ins["ref"], ins["alts"], ins["gt"]) == (comp(s1(771)), [comp(s1(771)) + "T"], [0, 1])
+    assert ins["end_pos"] == ins["pos"]
+    assert (report["minus_indel"]["lift_pos"], report["minus_indel"]["lift_strand"]) == (MINUS_F0 + 30, "-")
+
+    # Deletion of source 781..782 (anchored on 780): the target deletes their images, anchored on 783's.
+    deletion = calls["minus_deletion"]
+    assert (deletion["chrom"], deletion["pos"]) == ("2", MINUS_F0 + 18)
+    assert (deletion["ref"], deletion["alts"]) == (revcomp(s1(781, 3)), [comp(s1(783))])
+    assert deletion["gt_alleles"] == [comp(s1(783))] * 2 and deletion["end_pos"] == MINUS_F0 + 20
+
+    # An SNV beside an insertion shares no first base: nothing to re-anchor, every allele stays a
+    # sequence, so it lifts reverse-complemented in place like an MNV.
+    mixed = calls["minus_mixed"]
+    assert (mixed["chrom"], mixed["pos"]) == expected_target(790)[:2]
+    assert (mixed["ref"], mixed["alts"]) == (comp(s1(790)), [comp(other(s1(790))), "C" + comp(s1(790))])
+    assert mixed["gt_alleles"] == mixed["alts"]
+
+    # At the block's edge the base before the lifted span is outside the block (target filler). REF is
+    # read from the target, so the record states the target's own base there.
+    edge = calls["minus_edge"]
+    assert (edge["chrom"], edge["pos"], edge["ref"], edge["alts"]) == ("2", MINUS_F0, F2_HEAD[-1], [F2_HEAD[-1] + "T"])
+    assert any("re-anchored" in w for w in lifted.loaded.warnings)
+
+
+def test_a_minus_strand_indel_at_the_target_contigs_first_base_stays_behind(tmp_path: Path) -> None:
+    """Target 1 is source 1 reverse-complemented whole: an insertion after the last source base lands
+    at the target's first base, with nothing before it to anchor on."""
+    source_seq = random_bases(200)
+    store = ReferenceStore.open(tmp_path / "store")
+    source = store.add_fasta(write_fasta(tmp_path / "s.fa", {"1": source_seq}), assembly_label="GRCh37")
+    target = store.add_fasta(write_fasta(tmp_path / "t.fa", {"1": revcomp(source_seq)}), assembly_label="GRCh38")
+    chain = tmp_path / "flip.chain"
+    chain.write_text("chain 100 1 200 + 0 200 1 200 - 0 200 1\n200\n\n")
+    vcf = tmp_path / "flip.vcf"
+    lines = [
+        "##fileformat=VCFv4.2",
+        "##contig=<ID=1,length=200>",
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1",
+        f"1\t100\tinner\t{source_seq[99]}\t{source_seq[99]}C\t50\tPASS\t.\tGT\t0/1",
+        f"1\t200\tlast\t{source_seq[199]}\t{source_seq[199]}C\t50\tPASS\t.\tGT\t0/1",
+    ]
+    vcf.write_text("\n".join(lines) + "\n")
+    lifted = liftover(resolve_ref(load(vcf), store, collection=source), chain, store, target=target)
+    report = by_case(lifted.report.collect())
+    assert report["last"]["lift_reason"] == "indel_minus_strand"
+    assert report["inner"]["lift_reason"] is None and lifted.reasons == {"indel_minus_strand": 1}
+    inner = lifted.loaded.calls.collect().row(0, named=True)
+    # Source 100 maps to target 101; its insertion is anchored on target 100, the image of source 101.
+    assert (inner["pos"], inner["ref"], inner["alts"]) == (100, comp(source_seq[100]), [comp(source_seq[100]) + "G"])
 
 
 def test_the_derived_facet(tmp_path: Path, setup) -> None:
@@ -297,6 +380,17 @@ def test_positions_agree_with_pyliftover(tmp_path: Path, setup) -> None:
         chrom, zero, strand, _ = hits[0]
         assert (chrom, zero + 1, strand) == expected_target(pos)
     assert plain.blocks.height == 5  # two blocks in the first chain, one in each other
+
+    # A re-anchored minus-strand indel starts at the image of the source base after its span, where
+    # pyliftover puts that base (the edge case's base is past the block, so pyliftover has none).
+    store, _, _, _ = setup
+    _, lifted = lifted_from_cases(tmp_path, store, chain)
+    report = by_case(lifted.report.collect())
+    for case in REANCHORED - {"minus_edge"}:
+        after = report[case]["pos"] - 1 + len(report[case]["ref"])
+        [(chrom, zero, strand, _)] = lifter.convert_coordinate("1", after)
+        assert (report[case]["lift_chrom"], report[case]["lift_pos"], strand) == (chrom, zero + 1, "-"), case
+    assert lifter.convert_coordinate("1", 800) == []
 
 
 def test_segments_count_targets_not_blocks() -> None:

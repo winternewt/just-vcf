@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `liftover` lifts indels on minus-strand chain blocks (RM6): an indel whose alleles share their first
+  base is reverse-complemented, that base dropped from every allele and the target's base before the
+  lifted span put in front, so the row moves one base left; REF is read from the target over the moved
+  span. Positions agree with pyliftover's image of the base after the source span. An indel that would
+  land at a target contig's first base stays behind as `indel_minus_strand` (its meaning narrows); one
+  whose alleles share no first base lifts complemented in place. Re-anchored indels are not
+  left-aligned on the target. `LIFT_VERSION` 2: lifted facets get new ids.
+
 - `write_vcf(…, blocks=True, reference=…)` writes a gVCF (RM6): the `blocks` frame as reference blocks
   (ALT `<*>`, or `<NON_REF>` with `block_allele=BlockAllele.NON_REF`; INFO `END`; FORMAT GT, GQ,
   MIN_DP and GL as the frame holds them), merged with the calls by position, contig by contig. A

@@ -3,6 +3,49 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F3 — A headerless file holding two exports loses the second one
+
+Severity: low · Found 2026-09-30, same sweep.
+
+One upload (`rsid_table_headerless`) is a 23andMe-shaped export followed by an AncestryDNA-shaped one
+(5 columns). The loader keeps the 643,487 four-column rows and drops the 677,437 five-column rows with
+a warning, as FORMATS.md predicted. Not fixed: splitting one file into two facets needs a second format
+per file, which the loader does not have.
+
+**Measured and surfaced 2026-10-22.** Both halves are one person: of the 164,378 ids both halves call,
+164,275 have the same genotype (99.94%), and 166,047 of 166,528 shared ids sit at the same position.
+The first line is a stray 5-field row (an empty field between position and genotype, not F2's place),
+then 643,487 four-field rows, then 677,436 five-field rows to the end (chromosomes 1–26, `0` for no
+call). The load now says so: a file that ends in at least 1,000 rows of one other width gets a warning
+that it looks like a second export appended, not read. Still not loaded, and why each repair is wrong:
+
+- *Read the 5-field rows as a second facet in this loader:* the library cannot load that half even as
+  its own file (`ancestrydna` needs its header line), so it needs a new headerless two-allele format id
+  and a part option in the facet id, for one file whose halves state no vendor. Calling the second half
+  AncestryDNA would be the shape standing in for a vendor statement.
+- *Split the file into two inputs and load each:* that is routing around the loader (CLAUDE.md §7).
+
+What would close it: a headerless two-allele-column layout in `formats.rsid_tables`, and `load`
+returning one facet per layout block of a file (the shape `Loaded` already has for caller splits).
+Code of the warning: `loaders/rsid_table.py` `_appended_export`; test
+`test_an_appended_export_in_another_layout_is_named_not_read`.
+
+**Fixed 2026-10-22; F3 resolved.** The loader reads the second export as a facet of its own, in the
+same `Loaded` as the first: a run of at least 1,000 rows of one other width that ends the file, after
+other rows, whose first five rows are in the two-allele layout (id, chromosome, position, one allele
+per column), is read by that layout's rules (`0` is no call, 23-26 are X, Y, XY, MT) and gets
+`relation = appended_export`, `part = 1` in its facet id; both facets keep the file's `format_id`.
+The repairs listed above were wrong for the reasons given there, but the format id turned out not to
+be needed: the registry names the file, and the loader names the layout of its second half (the
+alternatives and their costs are in SCHEMA.md Decision 8, "Two exports in one file"). On the upload:
+643,487 rows in the first facet (chip `23andme_v5`, inferred as before) and 677,436 in the second
+(chip null, 26 contigs, 4,463 whole no-calls); the stray first row is still dropped and counted.
+Joined on id through the two facets' `calls`, 164,275 of the 164,378 ids both call have the same
+genotype and 166,047 of 166,528 shared ids the same position, the figures measured above by hand.
+Code: `loaders/rsid_table.py` `Appended`, `_appended_start`, `_read_appended`; `loading.py`
+`_load_rsid_table`; tests `test_an_appended_export_in_another_layout_is_its_own_facet`,
+`test_appended_exports_keep_their_disagreements`, `test_a_tail_that_is_short_or_in_no_known_layout_is_not_read`.
+
 ## F7 — Two VCF shapes `sniff` accepts but the loader cannot read
 
 Severity: low · Found 2026-09-30, same sweep.

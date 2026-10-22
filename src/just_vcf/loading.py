@@ -114,10 +114,21 @@ def _load_rsid_table(sniffed: Sniffed) -> Loaded:
     spec = rsid_table.spec_for(sniffed.format)
     with open_payload(sniffed) as handle:
         data = handle.read()
-    calls, warnings = rsid_table.read_calls(data, spec)
+    calls, warnings, appended = rsid_table.read_calls(data, spec)
     if spec.columns and rsid_table.column_line_ok(data, spec) is False:
         warnings.append("the column line does not read rsid, chromosome, position, genotype; columns taken by position")
-    return _array_loaded(sniffed, calls, warnings, build=sniffed.build, options={}, extra=_chip(sniffed.format, data, calls, warnings))
+    first = _array_facet(sniffed, calls, build=sniffed.build, options={}, extra=_chip(sniffed.format, data, calls, warnings))
+    if appended is None:
+        return _array_loaded(sniffed, first, warnings)
+    # F3: the second export is its own facet, read by its own layout's rules; the two are never merged.
+    # Its chip is not inferred: the 23andMe rule reads the first layout's rows, and no rule reads this one.
+    second = _array_facet(sniffed, appended.calls, build=sniffed.build, options={"part": 1}, extra={"relation": rsid_table.APPENDED_EXPORT})
+    warnings.append(
+        f"a second export in another layout (an allele per column) follows the first {appended.after_rows} data "
+        f"row(s): its {appended.calls.height} row(s) are their own facet (relation {rsid_table.APPENDED_EXPORT})"
+    )
+    warnings += [f"appended export facet: {w}" for w in appended.warnings]
+    return _multi_facet_loaded([first[0], second[0]], [first[1], second[1]], [empty(BLOCKS)] * 2, warnings)
 
 
 def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:
@@ -128,7 +139,7 @@ def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:
     build = read.build if read.rows_state_build else sniffed.build or _sibling_build(sniffed)
     options = {} if read.sample_index is None else {"sample_index": read.sample_index}
     extra = {"sample": read.sample, "dropped_fields": read.dropped_columns, **_chip(sniffed.format, data, read.calls, read.warnings)}
-    return _array_loaded(sniffed, read.calls, read.warnings, build=build, options=options, extra=extra)
+    return _array_loaded(sniffed, _array_facet(sniffed, read.calls, build=build, options=options, extra=extra), read.warnings)
 
 
 def _load_keyvalue(sniffed: Sniffed) -> Loaded:
@@ -350,16 +361,15 @@ def _sibling_build(sniffed: Sniffed) -> str | None:
     return stated[0] if len(stated) == 1 else None
 
 
-def _array_loaded(
+def _array_facet(
     sniffed: Sniffed,
     calls: pl.DataFrame,
-    warnings: list[str],
     *,
     build: str | None,
     options: dict,
     extra: dict,
-) -> Loaded:
-    """The three frames of a genotype table: an array-like facet, the calls, no blocks."""
+) -> tuple[dict, pl.LazyFrame]:
+    """One facet of a genotype table: an array-like facet row and its calls, in canonical order."""
     source_sha256 = file_sha256(sniffed.path)
     facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options=options)
     callset = (
@@ -385,14 +395,15 @@ def _array_loaded(
         "contig_map": contig_map(calls["source_chrom"].unique().to_list()),
         **{name: value for name, value in extra.items() if value is not None},
     }
+    return facet, canonical_order(rsid_table.to_calls_frame(calls, facet_id))
+
+
+def _array_loaded(sniffed: Sniffed, facet: tuple[dict, pl.LazyFrame], warnings: list[str]) -> Loaded:
+    """The three frames of a genotype table holding one facet: the facet, its calls, no blocks."""
+    row, calls = facet
     for warning in warnings:
-        logger.warning("%s: %s", facet_id, warning)
-    return Loaded(
-        facets=_facet_frame(facet),
-        calls=canonical_order(rsid_table.to_calls_frame(calls, facet_id)),
-        blocks=empty(BLOCKS),
-        warnings=tuple(warnings),
-    )
+        logger.warning("%s: %s", row["facet_id"], warning)
+    return Loaded(facets=_facet_frame(row), calls=calls, blocks=empty(BLOCKS), warnings=tuple(warnings))
 
 
 def _facet_frame(facet: dict) -> pl.LazyFrame:

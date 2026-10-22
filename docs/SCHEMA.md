@@ -425,7 +425,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | null unless stated |
-| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`) |
+| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`, `appended_export`). `appended_export`, like `caller_split`, has no parent: a second export appended to a file after the first, in another layout (F3), loaded as its own facet beside the first's; `derived_from` stays null, since neither export was made from the other, and the two share `source_sha256` and `member` (below, "Two exports in one file") |
 | `contig_map` | `list[struct{source, chrom}]`: how this file's contig names were mapped (Decision 7) |
 | `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
@@ -804,6 +804,29 @@ differ, and `derived_from` stays null on both, since neither file is made from t
 facet's `callset_type` is inferred from its rows as for a VCF (RM4); the one on disk fits no class, so
 it says `absence_means = unknown`.
 
+**Two exports in one file (F3, built 2026-10-22).** One PGP-HMS upload is a headerless 23andMe-shaped
+export followed by an export with one allele per column (AncestryDNA's data layout, without its
+preamble). Both are one person: of the 164,378 ids both call, 164,275 have the same genotype
+(99.94%). `load` returns them as two facets in one `Loaded`, as for the caller splits above: the
+first under the file's options, the second with `relation = appended_export` and `part = 1` in its
+facet id. Each is read by its own layout's rules (the second: `0` in an allele column is no call,
+`source_gt` the two fields joined, chromosome codes 23-26 read as X, Y, XY, MT), and they are never
+merged into one facet (charter 8). The second export is recognised by the rows: the file ends in at
+least 1,000 rows of one other width, after other rows, and their first five are all in the two-allele
+layout. A run of any other layout is not read, with a warning. Both facets keep the file's
+`format_id`: the format names the file `sniff` read. Rejected, each with its cost:
+
+- a registered headerless two-allele format id for the second facet: a new public id for a layout no
+  file on disk has on its own (a headerless file of that shape sniffs `unknown`), added only to name
+  half of one file; the facet's `format_id` would then name a file nobody gave;
+- `format_id = ancestrydna` for it: the shape would stand in for a vendor statement the file never
+  makes;
+- `derived_from` pointing the second facet at the first: that column is lineage, and charter 5
+  prefers a direct facet over a derived one, which would demote one export below the other for no
+  reason in the data;
+- reading the second export's chip with the 23andMe rule: that rule reads 23andMe's internal ids,
+  which the second layout does not number. Its `chip` stays null.
+
 ## Decision 9: INFO and FORMAT fields the schema does not name
 
 | Option | Cost |
@@ -990,6 +1013,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-22, F3): no column changes. Rule added: a second export appended to a
+  23andMe-layout file in the two-allele layout is its own facet, `relation = appended_export`, a new
+  value of the open `relation` vocabulary (Decision 8, "Two exports in one file").
 
 - **Rule change, still 0.0.10** (2026-10-22, F15): a sequence ALT is `ACGTN` bases only, in the
   variant-class rule (`variant_classes`) and in the callset's site count (RM4). An ALT of other letters

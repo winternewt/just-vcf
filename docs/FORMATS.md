@@ -117,6 +117,12 @@ entry says how.
   `ftdna_space` row is read by its own shape, and every field is stripped of surrounding double quotes.
   Seven PGP-HMS FTDNA uploads are two exports joined, the column line repeated inside; the repeat is
   skipped and counted.
+- **Two layouts in one file.** One headerless upload is a 23andMe-shaped export followed by an
+  export with one allele per column, the AncestryDNA data layout without its preamble (F3). *Closed in
+  the loader, with no new format id:* `rsid_table` reads a run of at least 1,000 rows of one other
+  width that ends the file, when its first five rows are in the two-allele layout, as a second facet
+  (`relation = appended_export`, SCHEMA.md Decision 8). A run in any other layout is warned about and
+  not read.
 - **0-based single positions.** Color positions sit one below GRCh37; `Coordinates` has only 1-based
   and 0-based half-open, so the spec says half-open and a note explains. *Closed:* the loader adds 1
   for every 0-based spec. Genos insertion sites (`begin == end`) go to the base before them, where VCF

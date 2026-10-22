@@ -63,6 +63,22 @@ def one_field_alleles(column: str, no_call: tuple[str, ...], no_call_width: int 
     )
 
 
+def two_field_alleles(first: str, second: str, no_call: tuple[str, ...]) -> pl.Expr:
+    """`gt_alleles` from one allele per column: always two entries, a no-call spelling null.
+
+    AncestryDNA writes a haploid call (male X and Y, MT) as the same letter twice. That is the vendor's
+    convention, and it stays two entries: the list length is what the file wrote, not a ploidy.
+    """
+    def allele(column: str) -> pl.Expr:
+        return pl.when(pl.col(column).is_in(list(no_call))).then(pl.lit(None, dtype=pl.String)).otherwise(pl.col(column))
+
+    letter = rf"^[{ALLELE_LETTERS}]$"
+    readable = pl.all_horizontal(
+        (pl.col(name).str.contains(letter) | pl.col(name).is_in(list(no_call))) for name in (first, second)
+    )
+    return pl.when(readable).then(pl.concat_list(allele(first), allele(second))).otherwise(None)
+
+
 def single_position_end(alleles: str, pos: str) -> pl.Expr:
     """`end_pos` of an array call: its own position when every called allele is one base.
 

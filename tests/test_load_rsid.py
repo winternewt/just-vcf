@@ -130,16 +130,86 @@ def test_a_doubled_tab_after_the_id_is_read_past_and_counted(tmp_path: Path) -> 
     assert any(w.startswith("3 row(s) without exactly 4 fields") and "1, 5, 6" in w for w in loaded.warnings)
 
 
-def test_an_appended_export_in_another_layout_is_named_not_read(tmp_path: Path) -> None:
-    """F3: a headerless 23andMe-shaped export followed by an AncestryDNA-shaped one (five fields)."""
-    first = "".join(f"rs{i}\t1\t{100 + i}\tAG\n" for i in range(1, 4))
-    second = "".join(f"rs{i}\t1\t{100 + i}\tA\tG\n" for i in range(1, 1001))
-    loaded = _load_text(tmp_path, first + second, "two.txt")
-    assert loaded.facets.collect()["format_id"].to_list() == ["rsid_table_headerless"]
-    assert loaded.calls.select(pl.len()).collect().item() == 3
-    assert any(w.startswith("the last 1000 data row(s) all have 5 fields") and "after the first 3 data row(s)" in w for w in loaded.warnings)
-    short = _load_text(tmp_path, first + second[: second.index("rs3\t")], "short.txt")
-    assert not any(w.startswith("the last") for w in short.warnings), "a few odd rows are not an export"
+def _two_exports(tail_rows: int = 1200, seed: int | None = None) -> tuple[str, list[list[str]], list[list[str]]]:
+    """F3's shape: a stray first row (an empty field before the genotype), 23andMe-shaped rows, then an
+    export with one allele per column (chromosomes 1-26, `0` for no call). Returns the text and each
+    half's rows as the test reads them."""
+    alleles = ["A", "C", "G", "T", "0"]
+    first = [[f"rs{i}", str(1 + i % 22), str(1000 + i), ["AG", "CC", "--", "TT"][i % 4]] for i in range(1, 400)]
+    second = [
+        [f"rs{i}", str(1 + i % 26), str(1000 + i), alleles[i % 5] if i % 5 else "0", alleles[(i * 3) % 5] if i % 5 else "0"]
+        for i in range(1, tail_rows + 1)
+    ]
+    if seed is not None:
+        random.Random(seed).shuffle(first)
+        random.Random(seed).shuffle(second)
+    text = "rs9\t1\t50\t\tAG\n" + "".join("\t".join(r) + "\n" for r in first + second)
+    return text, first, second
+
+
+def _facet_calls(loaded: Loaded) -> dict[str | None, pl.DataFrame]:
+    """Each facet's calls, keyed by the facet's relation."""
+    facets = loaded.facets.collect()
+    calls = loaded.calls.collect()
+    return {row["relation"]: calls.filter(pl.col("facet_id") == row["facet_id"]) for row in facets.iter_rows(named=True)}
+
+
+def test_an_appended_export_in_another_layout_is_its_own_facet(tmp_path: Path) -> None:
+    """F3: the second export is read by its own layout's rules into a facet of its own."""
+    text, first, second = _two_exports()
+    loaded = _load_text(tmp_path, text, "two.txt")
+    facets = loaded.facets.collect()
+    assert facets["format_id"].to_list() == ["rsid_table_headerless"] * 2
+    assert set(facets["relation"].to_list()) == {"appended_export", None}
+    assert facets["source_sha256"].n_unique() == 1 and facets["facet_id"].n_unique() == 2
+    assert facets["derived_from"].to_list() == [None, None], "two exports of one file, neither made from the other"
+    assert facets["callset_type"].to_list() == ["array", "array"]
+
+    by_relation = _facet_calls(loaded)
+    own = by_relation[None]
+    assert sorted(zip(own["ids"].list.first(), own["pos"], own["source_gt"])) == sorted((r[0], int(r[2]), r[3]) for r in first)
+    tail = by_relation["appended_export"]
+    expected = sorted(
+        (r[0], canonical_chrom(r[1]), int(r[2]), r[3] + r[4], tuple(None if a == "0" else a for a in r[3:5])) for r in second
+    )
+    assert sorted(
+        zip(tail["ids"].list.first(), tail["chrom"], tail["pos"], tail["source_gt"], map(tuple, tail["gt_alleles"].to_list()))
+    ) == expected
+    assert set(tail["chrom"]) >= {"X", "Y", "XY", "MT"}, "23-26 are read as the two-allele layout's codes"
+    assert any(w.startswith("1 row(s) without exactly 4 fields dropped") for w in loaded.warnings), "the stray row"
+    assert any("follows the first 400 data row(s)" in w and f"its {len(second)} row(s)" in w for w in loaded.warnings)
+
+
+def test_appended_exports_keep_their_disagreements(tmp_path: Path) -> None:
+    """Charter 8: an id both exports call, with different genotypes, stays in both facets as written."""
+    text, first, _ = _two_exports()
+    disagree = text + "rs1\t2\t1001\tC\tC\n"
+    by_relation = _facet_calls(_load_text(tmp_path, disagree, "two.txt"))
+    mine = {r[0]: r[3] for r in first}["rs1"]
+    assert by_relation[None].filter(pl.col("ids").list.first() == "rs1")["source_gt"].to_list() == [mine]
+    assert "CC" in by_relation["appended_export"].filter(pl.col("ids").list.first() == "rs1")["source_gt"].to_list()
+
+
+def test_appended_exports_load_in_canonical_order(tmp_path: Path) -> None:
+    text, _, _ = _two_exports()
+    shuffled, _, _ = _two_exports(seed=11)
+    ordered = _load_text(tmp_path, text, "a.txt")
+    other = _load_text(tmp_path, shuffled, "b.txt")
+    for relation, calls in _facet_calls(ordered).items():
+        assert calls.drop("facet_id").equals(_facet_calls(other)[relation].drop("facet_id"))
+
+
+def test_a_tail_that_is_short_or_in_no_known_layout_is_not_read(tmp_path: Path) -> None:
+    text, first, _ = _two_exports(tail_rows=999)
+    short = _load_text(tmp_path, text, "short.txt")
+    assert short.facets.collect().height == 1, "a few odd rows are not an export"
+    assert short.calls.select(pl.len()).collect().item() == len(first)
+    assert not any(w.startswith("the last") for w in short.warnings)
+    six = "".join(f"rs{i}\t1\t{100 + i}\tA\tG\t1\n" for i in range(1, 1001))
+    odd = _load_text(tmp_path, "".join("\t".join(r) + "\n" for r in first) + six, "six.txt")
+    assert odd.facets.collect().height == 1
+    assert odd.calls.select(pl.len()).collect().item() == len(first)
+    assert any(w.startswith("the last 1000 data row(s) all have 6 fields") and "does not read" in w for w in odd.warnings)
 
 
 def test_array_contig_codes_are_canonical_and_mapped(tmp_path: Path) -> None:

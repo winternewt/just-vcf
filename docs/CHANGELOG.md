@@ -4,8 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
-- A 23andMe-layout table that ends in 1,000 or more rows of one other width gets a warning that it
-  looks like a second export appended, which is not read (F3, still open).
+- A 23andMe-layout table that ends in 1,000 or more rows of one allele per column (an AncestryDNA-shaped
+  export appended after the first) loads as two facets in one `Loaded`: the first export as before,
+  and the appended one read by its own layout (`0` is no call, chromosomes 23-26 are X, Y, XY, MT) with
+  `relation = appended_export`, a new just-vcf relation (F3, resolved). The two are never merged. A run
+  of any other width still gets the warning that it is not read. No column changes.
 
 - A Final Report refused for want of positions or plus-strand alleles now names the manifest that
   would supply them, as its `Content` line states it (`HumanOmni2.5-8v1_A.bpm`); `chip` gains

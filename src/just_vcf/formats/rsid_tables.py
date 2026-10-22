@@ -448,7 +448,8 @@ RSID_TABLE_HEADERLESS = FormatSpec(
         "One real file is two exports concatenated: a stray first row with an empty "
         "fourth field, then 23andMe-shaped 4-column rows, then AncestryDNA-shaped 5-column rows "
         "(allele1, allele2; chromosomes 23-26; `0` for no call) for the whole genome again. The loader "
-        "must check the width of every row, not only the head's.",
+        "checks the width of every row and reads that second export as a facet of its own "
+        "(`relation = appended_export`, F3).",
     ),
     example=(
         "rs3094315\t1\t742429\tAG\n"

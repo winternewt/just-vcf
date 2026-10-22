@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `normalize` aligns and trims the rows `resolve_ref` gave a REF with no source REF to check, in a
+  facet read from a file: a Living DNA genotype split against the reference that spells an MNV or a
+  deletion with extra shared bases (`CTA`/`CGA`) is trimmed (`T>G` one base on). Before, such rows passed
+  through as unchecked. Array SNVs are already minimal and do not change. Normalized facets get new ids
+  (`NORMALIZE_VERSION` 4).
+
 - A Complete Genomics VCF reads its silence as reference calls: `AbsenceMeans` gains `reference`
   ("every position the file omits was called reference by its producer"), set on a VCF whose caller
   line names CGAPipeline when its rows show a whole genome, and `absence_is_reference` answers True for

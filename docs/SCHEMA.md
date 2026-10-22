@@ -105,7 +105,10 @@ same calls. A facet already read is refused rather than read again.
   the call is homozygous (`CA/CA` shows one of the site's two alleles, so it cannot say whether the
   site is `CA>C`, which makes it hom-ref, or `C>CA`, hom-alt), `ref`, `alts` and `gt` stay null with
   `gt_alleles` set. Not split at all in a facet whose strand is `mixed` (F13). `ref_check` stays null.
-  `normalize` does not align these rows (their `ref_check` is null, and the facet is not derived).
+  `normalize` aligns and trims a split row that got `ref` like any row whose REF was read (a padded
+  MNV `CTA`/`CGA` becomes `T>G` one base on). The split itself never leaves an insertion that could
+  move left: its inserted bases would end in the padding base, and the text would then fit a second
+  split.
 - Left unread, each reason counted once: I/D codes, whole no-calls (the probe's REF span is unknown),
   genotypes that could not be split, spans past the contig's end or at POS 0, and every row of a
   contig that could not be matched with the reference (below).
@@ -615,7 +618,10 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    collection and not contradicted: `ref_check = match`, or any row with `ref` set in a facet whose
    relation read every row's REF from that collection (`liftover_to`: REF is read from the target over
    the lifted span, and a row is kept only where it equals one of its alleles; its `ref_check` is null
-   because the check it would record compared the source's REF on the source assembly). Drop a common last
+   because the check it would record compared the source's REF on the source assembly), or, in a
+   facet read from a file (no `derived_from`), a row with `ref` set and no `source_ref`: `resolve_ref`
+   is the only writer of `ref` there, and it read that REF with nothing from the source to compare it
+   with (an array row, a Living DNA genotype split against the reference; F4). Drop a common last
    base, and when an allele runs empty, prepend the reference base before both and step `pos` back;
    repeat; then drop common first bases while both alleles keep one. At position 1 an allele keeps
    its last base. On a row this changed, `ref` is the new REF (read from the reference), `gt_alleles`
@@ -1022,6 +1028,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, `normalize` on resolved array rows): no column changes. Rule
+  changed in `normalize` ("Normalizing", step 2): in a facet read from a file, a row with `ref` set and
+  no `source_ref` (an array row, a split Living DNA genotype) is aligned and trimmed, where it passed
+  through as unchecked. Normalized facets get a new `facet_id` (`NORMALIZE_VERSION` 4).
 
 - **An enum member, version bump pending** (2026-10-23, RM2's CGI question): `AbsenceMeans.REFERENCE`
   (`reference`), "every position the file omits was called reference by its producer", just-vcf's own

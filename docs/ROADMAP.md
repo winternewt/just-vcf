@@ -527,7 +527,12 @@ it stayed behind. Decisions, each with what was rejected:
   is the facet's relation (`REREADS_REF`). Rejected: a row-level gate (`ref` set and `ref_check` not
   `mismatch`), which would also align array rows and a normalized facet's moved rows; equivalent on
   lifted facets, but wider than the decision, and it would quietly start aligning any future row
-  kind whose `ref_check` is null for another reason.
+  kind whose `ref_check` is null for another reason. Since 2026-10-23 (the lead's decision) array rows
+  are aligned too, by a gate of the same kind: a facet read from a file (`derived_from` null), where
+  `resolve_ref` is the only writer of `ref`, aligns its rows with `ref` set and no `source_ref` (a split
+  Living DNA genotype, F4). Rejected again: the row-level gate, which would also take in a derived
+  facet's rows that another step wrote `ref` on; and `ref_check = match` alone, which left every array
+  indel as written.
 - Indels on minus-strand blocks were unlifted (`indel_minus_strand`) in this slice; since 2026-10-22
   they are re-anchored, below.
 - The derived facet's `absence_means` is `unknown`. Rejected: the parent's `weak_reference`, which

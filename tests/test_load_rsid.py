@@ -160,7 +160,7 @@ def test_archive_member_is_loaded_and_recorded(tmp_path: Path) -> None:
 
 
 def test_formats_without_a_loader_are_refused(tmp_path: Path) -> None:
-    for name, text in {"var.tsv": get_spec("cgi_var").example, "notes.txt": "just some notes\n"}.items():
+    for name, text in {"summary.tsv": get_spec("cgi_summary").example, "notes.txt": "just some notes\n"}.items():
         path = tmp_path / name
         path.write_text(text)
         with pytest.raises(UnsupportedFormatError):

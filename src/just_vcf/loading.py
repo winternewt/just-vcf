@@ -19,7 +19,7 @@ from just_vcf import callset
 from just_vcf.assembly import infer_assembly, sorted_name_length_pairs_digest
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import Family
-from just_vcf.loaders import keyvalue, rsid_table, table, vcf
+from just_vcf.loaders import cgi, keyvalue, rsid_table, table, vcf
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
     BLOCKS,
@@ -39,7 +39,7 @@ from just_vcf.source import detect_source
 
 logger = logging.getLogger(__name__)
 
-LOADABLE_FORMATS: frozenset[str] = rsid_table.FORMATS | table.FORMATS | vcf.FORMATS | keyvalue.FORMATS
+LOADABLE_FORMATS: frozenset[str] = rsid_table.FORMATS | table.FORMATS | vcf.FORMATS | keyvalue.FORMATS | cgi.FORMATS
 """Format ids `load` can read. Grows as loaders land."""
 
 SPILL_ROW_GROUP = 200_000
@@ -92,6 +92,8 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
         return _load_table(sniffed, sample)
     if sniffed.format in keyvalue.FORMATS:
         return _load_keyvalue(sniffed)
+    if sniffed.format in cgi.FORMATS:
+        return _load_cgi(sniffed)
     return _load_rsid_table(sniffed)
 
 
@@ -164,6 +166,73 @@ def _load_keyvalue(sniffed: Sniffed) -> Loaded:
     return _multi_facet_loaded(facets, calls_parts, [empty(BLOCKS)] * len(facets), warnings)
 
 
+def _load_cgi(sniffed: Sniffed) -> Loaded:
+    """A Complete Genomics `var` or `masterVarBeta` file: one whole-genome facet, calls and blocks."""
+    source_sha256 = _sha256(sniffed.path)
+    work = _work_dir(source_sha256, sniffed.member, "cgi")
+    body = work / "body.tsv"
+    with open_payload(sniffed) as handle:
+        header = cgi.copy_body(handle, body)
+    rows = cgi.prepare(cgi.scan(body, header), sniffed.format)
+    if sniffed.format == cgi.VAR:
+        uniform, segments = cgi.var_parts(rows)
+        haplotypes = cgi.var_haplotypes(segments)
+    else:
+        uniform, haplotypes = cgi.master_var_parts(rows)
+    checks = cgi.locus_checks(haplotypes)
+    good = haplotypes.join(checks.filter(pl.col("problem").is_null()).select("locus"), on="locus", how="semi")
+    calls, none_called = cgi.call_rows(good)
+    stretches = pl.concat([uniform.select("chromosome", "begin", "end", "varType"), none_called], how="vertical")
+    blocks = cgi.block_rows(stretches)
+
+    counts = pl.collect_all(
+        [
+            rows.select(cgi.malformed(rows).sum().alias("malformed")),
+            checks.filter(pl.col("problem").is_not_null()).group_by("problem").len().sort("problem"),
+            uniform.group_by("varType").len().sort("varType"),
+            rows.filter(~cgi.malformed(rows)).select(pl.col("chromosome").unique()),
+        ]
+    )
+    warnings = []
+    if counts[0]["malformed"][0]:
+        warnings.append(f"{counts[0]['malformed'][0]} row(s) whose locus, begin or end is not a number, or whose end lies before its begin, dropped")
+    warnings += [f"{n} locus(es) with {problem} dropped" for problem, n in counts[1].iter_rows()]
+    by_type = dict(counts[2].iter_rows())
+    if by_type.get("PAR-called-in-X"):
+        warnings.append(f"{by_type['PAR-called-in-X']} chrY stretch(es) called on chrX (PAR-called-in-X) kept as no-call blocks")
+
+    facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={})
+    calls_frame, blocks_frame = cgi.to_frames(calls, blocks, facet_id)
+    spilled, contigs = _spill(facet_id, calls_frame, blocks_frame)
+    body.unlink()
+    facet = {
+        "facet_id": facet_id,
+        "source_sha256": source_sha256,
+        "source_path": str(sniffed.path),
+        "member": sniffed.member,
+        "format_id": sniffed.format,
+        "family": sniffed.family.value if sniffed.family else None,
+        "vendor": get_spec(sniffed.format).vendor,
+        "caller": cgi.CALLER,
+        "caller_version": header.first("SOFTWARE_VERSION"),
+        "sample": header.first("ASSEMBLY_ID"),
+        "assembly_label": sniffed.build,
+        "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
+        "callset_type": CallsetType.WGS.value if cgi.states_whole_genome(header) else None,
+        "absence_means": AbsenceMeans.BLOCKS.value,
+        "contig_map": contig_map(counts[3]["chromosome"].to_list()),
+        "dropped_fields": cgi.dropped_fields(sniffed.format, header),
+    }
+    for warning in warnings:
+        logger.warning("%s: %s", facet_id, warning)
+    return Loaded(
+        facets=_facet_frame(facet),
+        calls=canonical_order_per_contig(spilled, contigs),
+        blocks=_spilled_blocks(facet_id, contigs),
+        warnings=tuple(warnings),
+    )
+
+
 def _work_dir(source_sha256: str, member: str | None, kind: str) -> Path:
     """A cache directory for one source's intermediate copies."""
     path = cache_dir() / kind / hashlib.sha256(f"{source_sha256}!{member}".encode()).hexdigest()[:32]
@@ -187,6 +256,10 @@ def _spill(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame) -> tuple[pl
         [spilled.select("chrom").unique(), pl.scan_parquet(spill / "blocks.parquet").select("chrom").unique()]
     ).unique().collect()["chrom"].to_list()
     return spilled, contigs
+
+
+def _spilled_blocks(facet_id: str, contigs: list[str]) -> pl.LazyFrame:
+    return canonical_order_per_contig(pl.scan_parquet(cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}" / "blocks.parquet"), contigs)
 
 
 def _multi_facet_loaded(

@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Complete Genomics' native callsets load (RM2): `cgi_var` and `cgi_master_var` become one facet each,
+  caller `CGAPipeline` at the file's `#SOFTWARE_VERSION`, `sample` its `#ASSEMBLY_ID`, `absence_means
+  = blocks`, `callset_type = wgs` where `#TITLE` says whole-genome sequencing. Uniform loci become
+  `ref` and `no_call` blocks; a variant locus becomes one call, its haplotypes joined from `var`'s
+  sub-rows or read from `masterVarBeta`'s two allele columns. Indels stay unpadded (CGI writes no
+  anchor base and REF only comes from the sequence): a deleted allele is `""`, and an insertion point
+  sits at the base before it with `end_pos` null and `source_ref = ""`. Partial calls (`?A`) are kept
+  verbatim; `phased`, `gl` and `gq` stay null (the allele scores are no likelihood, and `hapLink` is
+  not read). No column changes, so `SCHEMA_VERSION` is unchanged.
+
 - `just_vcf.table_samples(path)` lists the sample ids of a genotype table with a sample column (an
   Illumina Final Report of several samples, Color) in the order they first appear, the table
   counterpart of `vcf_samples`; `[]` for a table format without one. The refusal of a several-sample

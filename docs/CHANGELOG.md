@@ -4,6 +4,18 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- New `sex_chromosome_evidence(loaded)` (RM269): for each facet, what its calls say about X and Y, and
+  an estimate of the karyotype. It measures GT ploidy as written per group (autosomes, non-PAR X,
+  non-PAR Y, PAR, MT), the het share of non-PAR X calls written diploid with their AD allele balance,
+  and the median DP of ALT calls on non-PAR X and on the X-degenerate Y (from GIAB v3.6
+  stratifications, carried in `assets/`) over chr20's. It answers `x_copies` (one, two or more) and
+  `y_present`, and from them a GA4GH Phenopackets `KaryotypicSex` value (`XX`, `XY`, `XO`, `XXY`,
+  or `UNKNOWN_KARYOTYPE` with a reason), on GRCh37 and GRCh38 whole-genome facets only. Thresholds sit
+  in the middle of the gaps the lead measured on 16 local genomes. A karyotype, not a sex, estimated
+  from variant calls; not a cytogenetic result. Haploid genotypes and `ploidy_statements` are carried
+  as the caller's assertion and never counted. Computed, not stored: no schema change. Minor: new
+  exports (`sex_chromosome_evidence`, `SexChromosomeEvidence`, `KaryotypicSex`, `XCopies`).
+
 - Schema 0.0.6 (RM2's VCF side): `facets.ploidy_statements` is new, and the caller, its version, the
   vendor and the phasing method are filled from VCF headers. `REWRITE_VERSION` 6 and the schema bump
   orphan earlier cache entries (RM268).

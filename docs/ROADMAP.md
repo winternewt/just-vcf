@@ -193,7 +193,7 @@ Options, not decided: sweep stale-version entries on each load; an explicit `cle
 API (and in the CLI once it exists); a size cap with least-recently-used eviction.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer and an XX/XY/XO/XXY estimate per WGS facet built 2026-10-22; XXX, XYY and arrays left) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -279,3 +279,64 @@ Legality: minor. Filling `caller`/`caller_version`, a new nullable facet field a
 finding are all additive. Where the finding lives (a new frame or columns on an existing one) is a
 schema decision for the lead. just-prs builds a stopgap now (karyotype from its normalized parquet,
 caller and version as parquet metadata) and moves to this when it exists.
+
+**Depth measured 2026-10-22 (lead), on the same 16 local private single-sample WGS VCFs** (aggregates
+only, no file named). Medians of the calls' own FORMAT DP, each over the median DP of PASS calls on
+chr20:
+
+- non-PAR X, PASS calls: 0.42–0.50 in the low-X-het cluster (11 files), 0.89–1.00 in the high one (5).
+  Nothing between.
+- X-degenerate Y (GIAB v3.6 chrY nonPAR minus XTR minus ampliconic), PASS calls carrying an ALT:
+  0.56–0.82 in the low-X-het cluster, 0.35–0.40 in the high one. Nothing between. Every row with DP in
+  that region, PASS or not, overlaps less cleanly (0.68–1.06 against 0.35–0.57), so the ALT-call
+  median is the one used.
+- One sex-aware caller's file writes X haploid; its X depth ratio (0.48) agrees with its haploid calls,
+  the independent check the critique asked for.
+- Liftovers that dropped FORMAT carry no DP and give no depth line.
+
+So X copies have two independent lines (X depth and the diploid X het share) that agree on all 16
+files, and Y presence has one (the X-degenerate Y depth). Y-region ALT calls with DP were in the
+thousands per file.
+
+**Built 2026-10-22: the evidence layer** (`just_vcf.karyotype`, exported `sex_chromosome_evidence`,
+`SexChromosomeEvidence`, `KaryotypicSex`, `XCopies`; docs/SCHEMA.md "Sex-chromosome evidence"). Per
+facet: GT ploidy counts per group, the X het share on diploid-written calls with the AD allele balance,
+the X and X-degenerate Y depth ratios against chr20, and the facet's `ploidy_statements` carried
+verbatim. The estimate gives `x_copies` and `y_present` separately, then `XX`, `XY`, `XO`, `XXY` or
+`UNKNOWN_KARYOTYPE` with a reason (`no_build`, `unsupported_build`, `not_wgs`, `too_few_sites`,
+`intermediate`, `lines_disagree`, `caller_asserted_only`, `no_depth`, `y_unusable`).
+
+Thresholds: each unknown band is the central half of the measured gap, so every class edge keeps a
+quarter of the gap as margin. X het share: one X at most 0.23, two at least 0.46 (gap 0.115–0.580).
+X depth ratio: one X at most 0.60, two from 0.79 to 1.25 (gap 0.50–0.89; above 1.25 fits three copies
+better than two, so it is unknown, not `XX`). Y depth ratio: absent at most 0.44, present at least 0.52
+(gap 0.40–0.56). Minimum sites: 1,000 diploid X ALT calls for the share, 1,000 X and 1,000 chr20 ALT
+calls with DP for the X ratio, 300 X-degenerate Y ALT calls with DP for the Y ratio. Where the het share
+and the X depth both decide, they must agree; with too few diploid X calls (a sex-aware caller), depth
+alone decides.
+
+Decisions, each with what was rejected:
+
+- Computed on demand, one result per facet. Rejected: a struct column on `facets` (a calls scan at
+  every load, a schema bump that orphans the cache, thresholds frozen into data) and a person-level
+  verdict (no person in the schema; the critique's advice).
+- A `Loaded` with several facets (a freeBayes+VarScan2 merge) gets one answer per facet, in `facets`
+  order. Rejected: a `facet_id` argument, which makes the common case a lookup.
+- "Not failed" is `filters` null or `["PASS"]`, and the same for FORMAT `FT`. Rejected: literal PASS
+  only, which leaves a GATK file whose every FILTER is `.` with no rows.
+- The depth denominator is chr20, because the thresholds were measured against it. Rejected: all
+  autosomes, which would move every ratio off its calibration.
+- Rows carrying a `split_signal` stay out of the het share (a `0` there can be another ALT, RM270).
+- The allele balance is reported, not used: no calibration says where a mosaic begins.
+- X copies stay known when the karyotype is not (`y_unusable`, `no_depth`): what just-prs needs for
+  dosage (S1).
+- T2T-CHM13 answers `unsupported_build`, not `no_build`: it has a label but no region set here.
+- The header's ploidy lines are carried and the caller's haploid genotypes counted, never as evidence.
+
+**Left:** XXX, XYY and the other classes need a coverage facet (the Y depth at called sites does not
+separate one Y from two, and the X depth band above two copies only says unknown). Arrays (no `gt`
+before RM3, no depth) and exomes answer unknown; an array's own lines (female Y probes no-calls,
+AncestryDNA's doubled X letters) are not built. Liftovers of one callset are not yet weighed as one
+piece of evidence (`facets_disagree` belongs to the person-level layer). GRCh37's last X-degenerate
+interval may reach about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md). The somalier question in the
+critique is not answered.

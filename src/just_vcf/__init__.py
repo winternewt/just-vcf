@@ -2,6 +2,7 @@
 
 from importlib.metadata import version
 
+from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.loading import (
     LOADABLE_FORMATS,
     Loaded,
@@ -45,17 +46,21 @@ __all__ = [
     "MultiSampleError",
     "NoSampleError",
     "EvidenceBasis",
+    "KaryotypicSex",
     "PhaseSetKind",
     "RefCheck",
+    "SexChromosomeEvidence",
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
     "TableLayoutError",
     "UnsupportedFormatError",
+    "XCopies",
     "__version__",
     "load",
     "open_payload",
     "rejoin_split",
+    "sex_chromosome_evidence",
     "sniff",
     "vcf_samples",
 ]

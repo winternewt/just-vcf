@@ -1,0 +1,392 @@
+"""Sex-chromosome evidence and the karyotype estimate it supports (RM269)."""
+
+from pathlib import Path
+
+import polars as pl
+import pytest
+
+from just_vcf import BLOCKS, FACETS, KaryotypicSex, Loaded, XCopies, load, sex_chromosome_evidence
+from just_vcf.karyotype import (
+    MIN_X_SITES,
+    MIN_Y_SITES,
+    ONE_X_MAX_HET_SHARE,
+    PAR_BOUNDS,
+    TWO_X_MAX_DEPTH_RATIO,
+    TWO_X_MIN_HET_SHARE,
+    UNKNOWN_REASONS,
+    X_DEGENERATE_Y,
+    SexChromosomeEvidence,
+    estimate,
+    measure,
+)
+from just_vcf.schema import CALLS, CallsetType, conform, empty
+
+GIAB = Path(__file__).resolve().parent.parent / "assets" / "giab_stratifications_v3.6_xy"
+
+# --- The regions, re-derived from the GIAB files ---------------------------------------------------
+
+
+def bed(build: str, name: str) -> list[tuple[int, int]]:
+    """A GIAB BED as 0-based half-open `(start, end)` pairs, sorted."""
+    lines = (GIAB / f"{build}_{name}.bed").read_text().splitlines()
+    return sorted((int(start), int(end)) for _, start, end, *_ in (line.split("\t") for line in lines if line.strip()))
+
+
+def subtract(keep: list[tuple[int, int]], cut: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Half-open interval difference."""
+    out = []
+    for start, end in keep:
+        pieces = [(start, end)]
+        for cut_start, cut_end in cut:
+            pieces = [
+                part
+                for piece_start, piece_end in pieces
+                for part in (
+                    [(piece_start, piece_end)]
+                    if cut_end <= piece_start or cut_start >= piece_end
+                    else [(piece_start, cut_start)] * (cut_start > piece_start) + [(cut_end, piece_end)] * (cut_end < piece_end)
+                )
+            ]
+        out += pieces
+    return sorted(out)
+
+
+def to_closed(start: int, end: int) -> tuple[int, int]:
+    """BED (0-based, half-open) to 1-based closed `pos` bounds: the one conversion, tested below."""
+    return start + 1, end
+
+
+def test_bed_conversion_keeps_the_bases() -> None:
+    # BED `chrY 10000 10001` is one base, POS 10001.
+    assert to_closed(10000, 10001) == (10001, 10001)
+    start, end = to_closed(2_781_479, 3_050_044)
+    assert end - start + 1 == 3_050_044 - 2_781_479
+
+
+@pytest.mark.parametrize("build", sorted(PAR_BOUNDS))
+def test_par_bounds_are_the_giab_par_arms(build: str) -> None:
+    for chrom in ("X", "Y"):
+        intervals = bed(build, f"chr{chrom}_PAR")
+        middle = 30_000_000
+        par1 = [i for i in intervals if i[0] < middle]
+        par2 = [i for i in intervals if i[0] >= middle]
+        expected = (to_closed(par1[0][0], max(e for _, e in par1)), to_closed(par2[0][0], max(e for _, e in par2)))
+        assert PAR_BOUNDS[build][chrom] == expected
+
+
+@pytest.mark.parametrize("build", sorted(X_DEGENERATE_Y))
+def test_x_degenerate_y_is_nonpar_minus_xtr_minus_ampliconic(build: str) -> None:
+    derived = subtract(bed(build, "chrY_nonPAR"), bed(build, "chrY_XTR") + bed(build, "chrY_ampliconic"))
+    (_, par1_end), (par2_start, _) = PAR_BOUNDS[build]["Y"]
+    closed = tuple(to_closed(s, e) for s, e in derived)
+    kept = tuple(i for i in closed if i[0] > par1_end and i[1] < par2_start)
+    assert X_DEGENERATE_Y[build] == kept
+    # Only GRCh38's single base before PAR1 falls outside the PARs' span.
+    assert len(closed) - len(kept) == (1 if build == "GRCh38" else 0)
+    for start, end in kept:
+        assert not any(s < end and start <= e for s, e in (to_closed(*i) for i in bed(build, "chrY_XTR") + bed(build, "chrY_ampliconic")))
+
+
+# --- Synthetic calls ----------------------------------------------------------------------------
+
+ALLELES = ["A", "G", "T"]
+
+
+def rows(chrom: str, start: int, n: int, gt: list[int | None], dp: int | None, *, step: int = 10, ad: list[int] | None = None,
+         filters: list[str] | None = ["PASS"], split: str | None = None) -> pl.DataFrame:  # noqa: B006 - read only
+    return pl.DataFrame(
+        {
+            "facet_id": "f",
+            "chrom": chrom,
+            "pos": pl.int_range(0, n, eager=True) * step + start,
+            "source_ref": "A",
+            "alts": [ALLELES[1:]] * n,
+            "source_alleles": [ALLELES] * n,
+            "gt": [gt] * n,
+            "gt_alleles": [[None if i is None else ALLELES[i] for i in gt]] * n,
+            "dp": [dp] * n,
+            "ad": [ad] * n,
+            "filters": [filters] * n,
+            "evidence_basis": "assay",
+            "split_signal": split,
+        },
+        schema_overrides={"gt": pl.List(pl.UInt8), "dp": pl.UInt32, "ad": pl.List(pl.UInt32), "pos": pl.UInt32, "filters": pl.List(pl.String)},
+    )
+
+
+def frame(*parts: pl.DataFrame) -> pl.LazyFrame:
+    return conform(pl.concat(parts, how="diagonal_relaxed").lazy(), CALLS)
+
+
+REF_DP = 30
+X_START = 5_000_000  # non-PAR X on both builds
+Y_START = 2_790_000  # inside GRCh38's first X-degenerate interval (2,781,480–3,050,044)
+
+
+def chr20(n: int = 2000, dp: int | None = REF_DP) -> pl.DataFrame:
+    return rows("20", 1_000_000, n, [0, 1], dp)
+
+
+def x_calls(het: int, hom: int, dp: int | None) -> pl.DataFrame:
+    return pl.concat([rows("X", X_START, het, [0, 1], dp, ad=[15, 15, 0] if dp else None), rows("X", X_START + 1_000_000, hom, [1, 1], dp)])
+
+
+def y_calls(n: int, dp: int | None, gt: list[int | None] = [1, 1]) -> pl.DataFrame:  # noqa: B006 - read only
+    return rows("Y", Y_START, n, gt, dp, step=20)
+
+
+def evidence(calls: pl.LazyFrame, build: str | None = "GRCh38", kind: CallsetType | None = CallsetType.WGS) -> SexChromosomeEvidence:
+    return estimate(measure(calls, build), "f", build, kind)
+
+
+XX = (x_calls(1200, 800, REF_DP), y_calls(1000, 6))
+XY = (x_calls(40, 1960, REF_DP // 2), y_calls(1000, 18))
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "expected", "copies"),
+    [
+        (XX[0], XX[1], KaryotypicSex.XX, XCopies.TWO_OR_MORE),
+        (XY[0], XY[1], KaryotypicSex.XY, XCopies.ONE),
+        (XY[0], XX[1], KaryotypicSex.XO, XCopies.ONE),
+        (XX[0], XY[1], KaryotypicSex.XXY, XCopies.TWO_OR_MORE),
+    ],
+)
+def test_the_four_classes(x: pl.DataFrame, y: pl.DataFrame, expected: KaryotypicSex, copies: XCopies) -> None:
+    found = evidence(frame(chr20(), x, y))
+    assert (found.inferred_karyotypic_sex, found.x_copies, found.reason) == (expected, copies, None)
+    assert bool(found)
+    assert found.y_present is (expected in (KaryotypicSex.XY, KaryotypicSex.XXY))
+
+
+def test_measurements_are_what_the_rows_hold() -> None:
+    found = evidence(frame(chr20(), *XX))
+    het = found.x_heterozygosity
+    assert (het.diploid_alt_sites, het.het_sites, het.het_share) == (2000, 1200, 0.6)
+    assert (het.balance_sites, het.median_het_allele_balance) == (1200, 0.5)
+    assert (found.depth.reference_sites, found.depth.x_sites, found.depth.y_sites) == (2000, 2000, 1000)
+    assert (found.depth.x_ratio, found.depth.y_ratio) == (1.0, 6 / REF_DP)
+    assert found.ploidy["x_nonpar"].two == 2000 and found.ploidy["y_nonpar"].two == 1000
+    assert found.rows_counted == 5000
+
+
+def test_par_rows_count_as_par_not_as_x() -> None:
+    # Hets across PAR1 on both arms would push a one-X sample's het share into the two-X band.
+    (par1_start, _), (par2_start, _) = PAR_BOUNDS["GRCh38"]["X"]
+    par = pl.concat([rows("X", par1_start, 3000, [0, 1], REF_DP), rows("X", par2_start, 3000, [0, 1], REF_DP), rows("XY", 100, 50, [0, 1], REF_DP)])
+    found = evidence(frame(chr20(), *XY, par))
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XY
+    assert found.ploidy["par"].two == 6050
+    assert found.x_heterozygosity.diploid_alt_sites == 2000
+
+
+def test_the_par_bounds_follow_the_build() -> None:
+    # X:2,700,000 is PAR1 on GRCh38 (it ends at 2,781,479) and non-PAR on GRCh37 (it ends at 2,699,520).
+    calls = frame(rows("X", 2_700_000, 10, [0, 1], REF_DP))
+    assert evidence(calls, "GRCh38").ploidy["par"].two == 10
+    assert evidence(calls, "GRCh37").ploidy["x_nonpar"].two == 10
+
+
+def test_y_depth_counts_only_the_x_degenerate_region() -> None:
+    # The same Y depth in the X-transposed region (GRCh38 3,050,045–6,235,111) is not counted.
+    xtr = rows("Y", 4_000_000, 1000, [1, 1], 18, step=20)
+    found = evidence(frame(chr20(), XY[0], xtr))
+    assert found.depth.y_sites == 0
+    assert (found.y_present, found.y_reason, found.reason) == (None, "too_few_sites", "y_unusable")
+    assert found.x_copies is XCopies.ONE
+
+
+def test_a_sex_aware_callers_haploid_x_is_decided_by_depth_alone() -> None:
+    x = rows("X", X_START, 2000, [1], REF_DP // 2)
+    found = evidence(frame(chr20(), x, y_calls(1000, 18, gt=[1])))
+    assert found.x_heterozygosity.haploid_alt_sites == 2000
+    assert found.x_heterozygosity.diploid_alt_sites == 0
+    assert found.ploidy["x_nonpar"].one == 2000
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XY
+
+
+def test_haploid_genotypes_alone_are_the_callers_assertion() -> None:
+    x = rows("X", X_START, 2000, [1], None)
+    found = evidence(frame(chr20(dp=None), x))
+    assert (found.x_copies, found.x_copies_reason) == (None, "caller_asserted_only")
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+
+
+def test_without_dp_the_het_share_still_gives_x_copies_and_the_karyotype_waits() -> None:
+    found = evidence(frame(chr20(dp=None), x_calls(1200, 800, None), y_calls(1000, None)))
+    assert found.x_copies is XCopies.TWO_OR_MORE
+    assert (found.y_reason, found.reason, found.inferred_karyotypic_sex) == ("no_depth", "no_depth", KaryotypicSex.UNKNOWN_KARYOTYPE)
+
+
+def test_too_few_x_sites_is_unknown() -> None:
+    few = MIN_X_SITES - 1
+    found = evidence(frame(chr20(), rows("X", X_START, few, [0, 1], REF_DP), y_calls(1000, 6)))
+    assert (found.x_copies, found.reason) == (None, "too_few_sites")
+    assert found.depth.x_ratio is None
+
+
+def test_too_few_y_sites_is_unknown() -> None:
+    found = evidence(frame(chr20(), XY[0], y_calls(MIN_Y_SITES - 1, 18)))
+    assert (found.y_reason, found.reason) == ("too_few_sites", "y_unusable")
+    assert found.x_copies is XCopies.ONE
+
+
+def test_a_share_between_the_bands_is_intermediate_not_the_nearest_class() -> None:
+    share = (ONE_X_MAX_HET_SHARE + TWO_X_MIN_HET_SHARE) / 2
+    het = round(2000 * share)
+    found = evidence(frame(chr20(), x_calls(het, 2000 - het, REF_DP), y_calls(1000, 6)))
+    assert (found.x_copies_reason, found.reason) == ("intermediate", "intermediate")
+
+
+def test_lines_that_disagree_are_unknown() -> None:
+    # A two-X het share at one-X depth.
+    found = evidence(frame(chr20(), x_calls(1200, 800, REF_DP // 2), y_calls(1000, 6)))
+    assert (found.x_copies, found.reason) == (None, "lines_disagree")
+
+
+def test_depth_above_two_copies_is_not_called_xx() -> None:
+    # Three X copies would put the X depth near 1.5 times the autosomes', with a two-X het share.
+    dp = round(REF_DP * 1.5)
+    assert dp / REF_DP > TWO_X_MAX_DEPTH_RATIO
+    found = evidence(frame(chr20(), x_calls(1200, 800, dp), y_calls(1000, 6)))
+    assert (found.x_copies, found.reason) == (None, "intermediate")
+
+
+def test_a_y_ratio_between_the_bands_is_y_unusable() -> None:
+    found = evidence(frame(chr20(), *XX[:1], y_calls(1000, 14)))  # 14/30 = 0.47
+    assert (found.y_reason, found.reason) == ("intermediate", "y_unusable")
+    assert found.x_copies is XCopies.TWO_OR_MORE
+
+
+def test_failed_filters_are_left_out_and_unapplied_ones_kept() -> None:
+    noise = rows("X", X_START + 3_000_000, 5000, [0, 1], REF_DP // 2, filters=["LowQual"])
+    found = evidence(frame(chr20(), *XY, noise))
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XY
+    unapplied = [part.with_columns(pl.lit(None, dtype=pl.List(pl.String)).alias("filters")) for part in (chr20(), *XY)]
+    assert evidence(frame(*unapplied)).inferred_karyotypic_sex is KaryotypicSex.XY
+
+
+def test_split_rows_do_not_count_as_hets() -> None:
+    # A `1/2` written one row per ALT reads `0/1` twice; flagged rows stay out of the het share.
+    split = rows("X", X_START + 3_000_000, 5000, [0, 1], REF_DP // 2, split="slot_pattern")
+    found = evidence(frame(chr20(), *XY, split))
+    assert found.x_heterozygosity.diploid_alt_sites == 2000
+    assert found.x_copies is XCopies.ONE
+
+
+def test_allele_balance_reads_ad_at_the_called_alt() -> None:
+    x = pl.concat([rows("X", X_START, 1200, [0, 2], REF_DP, ad=[20, 0, 10]), rows("X", X_START + 1_000_000, 800, [1, 1], REF_DP)])
+    found = evidence(frame(chr20(), x))
+    assert found.x_heterozygosity.median_het_allele_balance == pytest.approx(10 / 30)
+
+
+@pytest.mark.parametrize(
+    ("build", "kind", "reason"),
+    [
+        (None, CallsetType.WGS, "no_build"),
+        ("T2T-CHM13", CallsetType.WGS, "unsupported_build"),
+        ("GRCh38", CallsetType.WES, "not_wgs"),
+        ("GRCh38", None, "not_wgs"),
+    ],
+)
+def test_no_estimate_without_a_build_or_a_genome(build: str | None, kind: CallsetType | None, reason: str) -> None:
+    found = evidence(frame(chr20(), *XX), build, kind)
+    assert (found.inferred_karyotypic_sex, found.reason, found.x_copies) == (KaryotypicSex.UNKNOWN_KARYOTYPE, reason, None)
+    assert found.ploidy["autosomes"].two == 2000
+    assert ("x_nonpar" in found.ploidy) is (build == "GRCh38")
+    if reason == "not_wgs":
+        assert found.x_heterozygosity.het_share == 0.6
+
+
+def test_reasons_are_a_closed_list_checked_on_the_model() -> None:
+    found = evidence(frame(chr20(), *XX), None)
+    with pytest.raises(ValueError, match="unknown reason"):
+        SexChromosomeEvidence(**{**found.model_dump(), "reason": "nearest_class"})
+    assert {"no_build", "y_unusable", "caller_asserted_only", "too_few_sites", "intermediate", "not_wgs"} <= UNKNOWN_REASONS
+
+
+def test_karyotypic_sex_is_the_phenopackets_vocabulary() -> None:
+    assert [member.value for member in KaryotypicSex] == [
+        "UNKNOWN_KARYOTYPE", "XX", "XY", "XO", "XXY", "XXX", "XXYY", "XXXY", "XXXX", "XYY", "OTHER_KARYOTYPE",
+    ]
+
+
+# --- Through `load` -----------------------------------------------------------------------------
+
+GRCH38_LENGTHS = {"20": 64_444_167, "X": 156_040_895, "Y": 57_227_415, "1": 248_956_422, "2": 242_193_529}
+
+
+def write_vcf(path: Path, parts: list[pl.DataFrame], prefix: str = "chr", meta: tuple[str, ...] = ()) -> Path:
+    header = [
+        "##fileformat=VCFv4.2",
+        *meta,
+        *[f"##contig=<ID={prefix}{name},length={length}>" for name, length in GRCH38_LENGTHS.items()],
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+        '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Depth">',
+        '##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">',
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1",
+    ]
+    body = (
+        pl.concat(parts, how="diagonal_relaxed")
+        .select(
+            (pl.lit(prefix) + pl.col("chrom")).alias("chrom"),
+            pl.col("pos").cast(pl.String),
+            pl.lit(".").alias("id"),
+            pl.lit("A").alias("ref"),
+            pl.lit("G,T").alias("alt"),
+            pl.lit("50").alias("qual"),
+            pl.col("filters").list.join(";").fill_null(".").alias("filter"),
+            pl.lit(".").alias("info"),
+            pl.lit("GT:DP:AD").alias("format"),
+            pl.concat_str(
+                pl.col("gt").list.eval(pl.element().cast(pl.String)).list.join("/"),
+                pl.col("dp").cast(pl.String).fill_null("."),
+                pl.col("ad").list.eval(pl.element().cast(pl.String)).list.join(",").fill_null("."),
+                separator=":",
+            ).alias("S1"),
+        )
+        .sort("chrom", pl.col("pos").cast(pl.Int64))
+    )
+    path.write_text("\n".join(header) + "\n")
+    with path.open("a") as handle:
+        body.write_csv(handle, separator="\t", include_header=False, quote_style="never")
+    return path
+
+
+def test_through_load_a_small_vcf_is_measured_but_not_estimated(tmp_path: Path) -> None:
+    path = write_vcf(tmp_path / "small.vcf", [chr20(), *XY])
+    loaded = load(path)
+    facet = loaded.facets.collect().row(0, named=True)
+    assert facet["assembly_label"] == "GRCh38"
+    (found,) = sex_chromosome_evidence(loaded)
+    assert (found.facet_id, found.reason) == (facet["facet_id"], "not_wgs")
+    # `chrX`, `chrY` and `chr20` reach the groups through the loader's canonical names.
+    assert found.x_heterozygosity.diploid_alt_sites == 2000
+    assert (found.depth.x_ratio, found.depth.y_ratio) == (0.5, 0.6)
+    assert found.x_heterozygosity.median_het_allele_balance == 0.5
+
+
+def test_through_load_a_genome_shaped_vcf_is_estimated(tmp_path: Path) -> None:
+    # 1,000,000+ autosomal sites spread over two chromosomes make the facet `wgs` (RM4).
+    spread = [rows(chrom, 1, 520_000, [0, 1], REF_DP, step=400) for chrom in ("1", "2")]
+    # The header's karyotype line is the caller's statement: carried verbatim, and it does not decide.
+    path = write_vcf(tmp_path / "genome.vcf", [*spread, chr20(), *XX], prefix="", meta=("##referenceSexKaryotype=XY",))
+    (found,) = sex_chromosome_evidence(load(path))
+    assert found.callset_type is CallsetType.WGS
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XX
+    assert found.ploidy_statements == ["##referenceSexKaryotype=XY"]
+
+
+def test_each_facet_of_a_load_gets_its_own_answer() -> None:
+    # Two facets in one `Loaded` (a freeBayes+VarScan2 merge loads so): one XX, one XY, never blended.
+    first, second = frame(chr20(), *XX), frame(chr20(), *XY).with_columns(pl.lit("g").alias("facet_id"))
+    facets = conform(
+        pl.LazyFrame({"facet_id": ["f", "g"], "assembly_label": ["GRCh38"] * 2, "callset_type": ["wgs"] * 2, "caller": ["freeBayes", "VarScan2"]}),
+        FACETS,
+    )
+    loaded = Loaded(facets=facets, calls=pl.concat([first, second]), blocks=empty(BLOCKS))
+    found = sex_chromosome_evidence(loaded)
+    assert [(e.facet_id, e.caller, e.inferred_karyotypic_sex) for e in found] == [
+        ("f", "freeBayes", KaryotypicSex.XX),
+        ("g", "VarScan2", KaryotypicSex.XY),
+    ]

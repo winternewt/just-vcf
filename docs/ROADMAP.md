@@ -87,7 +87,7 @@ Header evidence found while declaring the VCF formats:
 Not identifiable from the header: 23andMe's exome VCF, the Dante- and Nebula-named uploads (generic GATK).
 
 ## RM3 — REF lookup and padding
-Severity: high · Status: in progress (2026-10-22: the FASTA tier shipped as `resolve_ref` on a gtars refget store, for VCF and array rows; indel anchor bases and reference-supported positions are left) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the FASTA tier shipped as `resolve_ref` on a gtars refget store, for VCF and array rows, an array without a stated build inferred from its rows (F9); indel anchor bases and reference-supported positions are left) · Owner: lead
 
 Port just-prs `reference_allele.py` (reference-panel tier, FASTA tier, FASTA build check). New work:
 ALT derivation from genotype against REF, indel anchor bases, chr-prefixed FASTA support, emitting
@@ -137,8 +137,29 @@ carry no `ref` while the facet keeps `ref_seqcol_digest`, and `resolve_ref` refu
 Left: indel anchor bases (no loaded format lacks them: 23andMe I/D codes need the chip manifest, and
 Living DNA's run-together `CCA` cannot be split without the site's alleles); emitting
 reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither
-`##contig` lengths nor a build hint, and an array without a stated build, are refused: nothing can
-show which assembly they are on.
+`##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array
+without a stated build has it inferred from its rows (F9, below).
+
+**Shipped 2026-10-22: an array's build from its own rows (F9).** `resolve_ref` scores a facet that
+states neither a label nor contig lengths against every collection it considers
+(`just_vcf.assembly.infer_assembly_from_rows`, called from `reference._infer_from_rows`); the rule
+is in docs/SCHEMA.md Decision 2. Choices, each with the alternative rejected:
+
+- **The scores go in a warning line**, and the label into the existing `assembly_label` with basis
+  `inferred`. Rejected: a `facets` column for the scores, which is a schema change for a value only a
+  reader of the inference needs; and a new `AssemblyLabelBasis` member (`rows`), which retypes the
+  `pl.Enum` dtype, when `header_contigs` already tells the two `inferred` sources apart.
+- **Inside `resolve_ref`, not at load.** Scoring needs the reference's bases, and loading reads no
+  reference. Rejected: a separate public `infer_build(loaded, store)` step before a consumer asks for
+  one; the function stays internal, as RM4's inference does.
+- **Margin against another label, not another collection.** hg19 and Ensembl GRCh37 score alike, and
+  are one assembly. An unlabelled collection counts as a rival (it could be another build). With one
+  collection, chance is the rival: the mean number of distinct called alleles over four.
+- **Arrays only.** A VCF without lengths or a build hint could be scored by its source REF, and would
+  then pass a `ref_check` chosen by that same comparison. It stays refused.
+- **MT is never scored**: the GRCh37 label covers two mitochondrial sequences (hg19 chrM and rCRS).
+- **A sample, not every row**: at most 2,000 rows per chromosome, every k-th by position, so the
+  same file always scores the same rows.
 
 **Measured 2026-09-30: gtars RefgetStore as the sequence source** (gtars 0.10, Ensembl GRCh38
 primary-assembly FASTA, 3.15 GB, 194 sequences):
@@ -161,7 +182,7 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; left: chip generation, array build, gVCF `END` expansion) · Owner: lead
+Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); left: chip generation, gVCF `END` expansion) · Owner: lead
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
@@ -184,8 +205,7 @@ every pair of classes. Decisions taken, each with what was rejected:
 - The classifier and the inference stay internal (`just_vcf.callset`, `just_vcf.assembly`, not in
   `__all__`); the facet columns are the contract. Rejected: exporting them before a consumer asks.
 
-**Left:** just-prs chip generation detection; array build inference (just-prs has none, it defaults
-to GRCh37, which is not ported); contigs named by RefSeq accession (`NC_000001.11`), which the label
+**Left:** just-prs chip generation detection; contigs named by RefSeq accession (`NC_000001.11`), which the label
 inference does not read yet; gVCF `END` expansion; an SNV-only or indel-only split of a genome
 (`bcftools view -v snps`) reads as `wgs`, so its absences read as weak reference for the other
 variant class too. Unmarked imputation output with read-evidence keys would read as `wgs`.

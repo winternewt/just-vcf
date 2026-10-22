@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref` infers an array's build from its own rows when the facet states none (F9): the share
+  of sampled SNV rows whose genotype carries each collection's reference base names the build, with
+  basis `inferred` and the scores in a warning, or the facet is refused with the scores. No column
+  changed.
+
 - Schema 0.0.7 (RM3): `facets.ref_seqcol_digest` is new; `resolve_ref` fills `ref`, `ref_check`, and an
   array row's `alts` and `gt` from a reference.
 

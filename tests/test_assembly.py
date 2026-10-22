@@ -4,15 +4,22 @@ import json
 from itertools import combinations
 from pathlib import Path
 
+import polars as pl
 import pytest
 import refget
 
 from just_vcf import load
 from just_vcf.assembly import (
     ASSEMBLY_LENGTHS,
+    MIN_MARGIN,
     MIN_MATCHING_CONTIGS,
+    MIN_SCORED_ROWS,
+    MIN_SHARE,
     AssemblyOutcome,
+    RowsOutcome,
     infer_assembly,
+    infer_assembly_from_rows,
+    sample_snv_rows,
     sorted_name_length_pairs_digest,
 )
 
@@ -165,3 +172,100 @@ def test_load_leaves_mixed_missing_or_thin_headers_unknown(tmp_path: Path) -> No
     row, _ = facet(tmp_path / "thin", vcf_with_contigs(contigs({"1": GRCH38["1"]})))
     assert row["assembly_label"] is None and row["sorted_name_length_pairs_digest"] is not None
     assert row["sorted_name_length_pairs_digest"] == sorted_name_length_pairs_digest(contigs({"1": GRCH38["1"]}))
+
+
+# F9: an array's build from its own rows. The scorer is a pure function over sampled rows and bases.
+
+
+def calls_frame(rows: list[tuple[str, int, list[str | None] | None, str | None]]) -> pl.LazyFrame:
+    """`(chrom, pos, gt_alleles, source_ref)` rows, the only columns the sampler reads."""
+    return pl.LazyFrame(
+        rows, schema={"chrom": pl.String, "pos": pl.UInt32, "gt_alleles": pl.List(pl.String), "source_ref": pl.String}, orient="row"
+    )
+
+
+def test_the_sample_keeps_scorable_array_snvs_only() -> None:
+    rows = [
+        ("1", 10, ["G", "A"], None),  # het, kept as the sorted distinct alleles
+        ("1", 11, ["C", None], None),  # half-call: the called base is enough
+        ("1", 12, [None, None], None),  # whole no-call
+        ("1", 13, ["I", "D"], None),  # indel codes
+        ("1", 14, ["A", "A"], "A"),  # a VCF row: it has a source REF
+        ("MT", 15, ["A"], None),  # MT is never scored
+        ("XY", 16, ["A", "A"], None),  # the PAR code, not a primary chromosome
+        ("X", 17, ["T"], None),
+        ("1", 18, None, None),  # genotype that could not be split
+    ]
+    sample = sample_snv_rows(calls_frame(rows))
+    assert sample.rows() == [("1", 10, ["A", "G"]), ("1", 11, ["C"]), ("X", 17, ["T"])]
+
+
+def test_the_sample_is_spread_bounded_and_order_independent() -> None:
+    rows = [(chrom, pos, ["A", "C"], None) for chrom in ("1", "2") for pos in range(1, 1001)] + [("3", 5, ["G"], None)]
+    shuffled = calls_frame(rows).collect().sample(fraction=1.0, shuffle=True, seed=5).lazy()
+    sample = sample_snv_rows(shuffled, per_contig=300)
+    assert sample.equals(sample_snv_rows(calls_frame(rows), per_contig=300))
+    per_chrom = dict(sample.group_by("chrom").len().iter_rows())
+    assert per_chrom == {"1": 250, "2": 250, "3": 1}  # every 4th of 1000 rows, at most 300
+    assert sample.filter(pl.col("chrom") == "1")["pos"].to_list() == list(range(1, 1001, 4))
+
+
+def scored(alleles: list[list[str]], bases: dict[str, list[str | None]], labels: dict[str, str | None]):
+    sample = pl.DataFrame({"chrom": ["1"] * len(alleles), "pos": list(range(1, len(alleles) + 1)), "alleles": alleles})
+    return infer_assembly_from_rows(sample, {d: pl.Series(b, dtype=pl.String) for d, b in bases.items()}, labels)
+
+
+def test_rows_name_the_build_that_clears_floor_and_margin() -> None:
+    n = MIN_SCORED_ROWS
+    alleles = [["A", "G"]] * n
+    right = ["A"] * int(n * 0.85) + ["C"] * (n - int(n * 0.85))
+    wrong = ["A"] * int(n * 0.40) + ["T"] * (n - int(n * 0.40))
+    inferred = scored(alleles, {"d37": right, "d38": wrong}, {"d37": "GRCh37", "d38": "GRCh38"})
+    assert inferred and (inferred.label, inferred.digest) == ("GRCh37", "d37")
+    assert inferred.outcome is RowsOutcome.INFERRED
+    assert inferred.shares == {"d37": pytest.approx(0.85), "d38": pytest.approx(0.40)}
+    assert inferred.chance == pytest.approx(0.5)  # two distinct alleles of four bases
+
+
+def test_a_row_past_the_contig_end_counts_against_and_a_missing_contig_is_not_scored() -> None:
+    n = MIN_SCORED_ROWS
+    alleles = [["A"]] * (2 * n)
+    past_end = ["A"] * n + [""] * n  # half the rows past the end: 50%, below the floor
+    missing = ["A"] * n + [None] * n  # half the rows on a contig it lacks: 100% of n
+    inferred = scored(alleles, {"short": past_end, "partial": missing}, {"short": "GRCh37", "partial": "GRCh38"})
+    assert inferred.scored == {"short": 2 * n, "partial": n}
+    assert inferred.shares == {"short": pytest.approx(0.5), "partial": pytest.approx(1.0)}
+    assert inferred.label == "GRCh38"
+
+
+@pytest.mark.parametrize(
+    ("right", "rival", "rival_label", "outcome"),
+    [
+        (MIN_SHARE - 0.05, 0.30, "GRCh38", RowsOutcome.NO_FIT),
+        (0.90, 0.90 - MIN_MARGIN + 0.05, "GRCh38", RowsOutcome.NO_MARGIN),
+        (0.90, 0.30, None, RowsOutcome.INFERRED),  # an unlabelled rival far below does not block
+        (0.30, 0.90, None, RowsOutcome.UNLABELLED),
+        (0.90, 0.90 - MIN_MARGIN + 0.05, None, RowsOutcome.NO_MARGIN),  # an unlabelled rival may be another build
+    ],
+)
+def test_the_rows_withhold_a_label_they_do_not_settle(right: float, rival: float, rival_label: str | None, outcome: RowsOutcome) -> None:
+    n = 2 * MIN_SCORED_ROWS
+    alleles = [["A"]] * n
+    bases = {"a": ["A"] * round(n * right) + ["C"] * (n - round(n * right)), "b": ["A"] * round(n * rival) + ["C"] * (n - round(n * rival))}
+    inferred = scored(alleles, bases, {"a": "GRCh37", "b": rival_label})
+    assert inferred.outcome is outcome
+    assert bool(inferred) is (outcome is RowsOutcome.INFERRED)
+    assert (inferred.label is None) is (outcome is not RowsOutcome.INFERRED)
+
+
+def test_chance_is_the_rival_when_one_build_is_scored() -> None:
+    n = MIN_SCORED_ROWS
+    four = [["A", "C", "G", "T"]] * n  # four alleles called: any base is in them, so chance is 100%
+    assert scored(four, {"a": ["A"] * n}, {"a": "GRCh37"}).outcome is RowsOutcome.NO_MARGIN
+    assert scored([["A"]] * n, {"a": ["A"] * n}, {"a": "GRCh37"}).label == "GRCh37"
+
+
+def test_too_few_scored_rows_are_their_own_answer() -> None:
+    n = MIN_SCORED_ROWS - 1
+    inferred = scored([["A"]] * n, {"a": ["A"] * n}, {"a": "GRCh37"})
+    assert inferred.outcome is RowsOutcome.TOO_FEW_ROWS and not inferred

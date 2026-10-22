@@ -290,6 +290,18 @@ def test_a_resolved_facet_is_not_resolved_again(tmp_path: Path, store: Reference
         resolve_ref(resolved, store)
 
 
+def test_a_vcf_without_contig_lengths_is_matched_by_its_stated_build(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    records = [("1", 10, base("1", 10), "N", "0/1"), ("MT", 5, base("MT", 5), "N", "1")]
+    contigs = ["##reference=file:///refs/human_g1k_v37.fasta", "##contig=<ID=1>", "##contig=<ID=MT>"]
+    loaded = load(vcf(tmp_path, records, contigs))
+    assert loaded.facets.collect()["assembly_label"].to_list() == ["GRCh37"]
+    resolved = resolve_ref(loaded, grch37_store)
+    _, calls = frames(resolved)
+    assert calls["ref"].to_list() == [base("1", 10), None]
+    assert calls["ref_check"].cast(pl.String).to_list() == ["match", "not_run"]
+    assert any("GRCh37 label cannot vouch for without a stated length: MT" in w for w in resolved.warnings)
+
+
 # Arrays: no stated lengths, so the facet's assembly label must agree with the reference's.
 
 PREAMBLE_23 = (

@@ -105,6 +105,9 @@ on PGP-HMS files read from the Krypton share, aggregates only:
   were refused: no GRCh36 reference in the store.
 - `resolve_ref` on the 1.4M-row export: 11.4 s (load 1.3 s), of which 1.3 s reading bases.
 
+Order with `rejoin_split`: re-join first, then `resolve_ref`. The other way round, the re-joined rows
+carry no `ref` while the facet keeps `ref_seqcol_digest`, and `resolve_ref` refuses it as already read.
+
 Left: indel anchor bases (no loaded format lacks them: 23andMe I/D codes need the chip manifest, and
 Living DNA's run-together `CCA` cannot be split without the site's alleles); emitting
 reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither

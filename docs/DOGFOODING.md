@@ -38,7 +38,7 @@ per file, which the loader does not have.
 **Measured and surfaced 2026-10-22.** Both halves are one person: of the 164,378 ids both halves call,
 164,275 have the same genotype (99.94%), and 166,047 of 166,528 shared ids sit at the same position.
 The first line is a stray 5-field row (an empty field between position and genotype, not F2's place),
-then 643,486 four-field rows, then 677,436 five-field rows to the end (chromosomes 1–26, `0` for no
+then 643,487 four-field rows, then 677,436 five-field rows to the end (chromosomes 1–26, `0` for no
 call). The load now says so: a file that ends in at least 1,000 rows of one other width gets a warning
 that it looks like a second export appended, not read. Still not loaded, and why each repair is wrong:
 

@@ -944,6 +944,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **Rule change, still 0.0.10** (2026-10-22, F15): a sequence ALT is `ACGTN` bases only, in the
+  variant-class rule (`variant_classes`) and in the callset's site count (RM4). An ALT of other letters
+  (`CNV`, an ambiguity code) gets no class and is no site, counted in a load warning. Values change on
+  files with such ALTs; no column changed, so no version bump.
+
 - **Three facet columns, version bump pending** (2026-10-22, RM4's chip detection and F13):
   `facets.chip`, `facets.chip_basis` and `facets.strand_check`, all nullable and additive, which by
   the rule above is a minor bump. `SCHEMA_VERSION` was deliberately left at 0.0.9 on this branch,

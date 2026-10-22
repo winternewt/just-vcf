@@ -298,11 +298,13 @@ def _manifest_hint(data: bytes, spec: FormatSpec, missing: list[str]) -> str:
     in for them (a HumanOmni2.5 report on PGP-HMS has SNP names and Forward/Design alleles only)."""
     if spec.id != "illumina_final_report":
         return ""
-    manifest = final_report_content(header_lines(data))
     needs = " and ".join(
         part for part, names in (("positions", ("chromosome", "position")), ("plus-strand alleles", ("genotype_plus",)))
         if any(name in missing for name in names)
     )
+    if not needs:
+        return ""
+    manifest = final_report_content(header_lines(data))
     if manifest is None:
         return f"; the {needs} would come from the chip's manifest, which the header does not name"
     return f"; the {needs} would come from the chip's manifest, {manifest} by the header's Content line"

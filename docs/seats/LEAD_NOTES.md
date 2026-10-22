@@ -76,5 +76,14 @@ status lines say what exists. Schema at 0.0.4.
   detection + F13. Open: should `ids` leave the dedup key (one upload keeps 9,213 same-allele pairs
   because of it); `resolve_ref`, `normalize` and `mint_vrs_ids` rewrite their spill, so running one twice
   on a facet breaks the first result's frame.
+- **Wave 4** (2026-10-22): merged RM6 liftover (047f0f2, 0.0.8), filtered genomes (3dfeaad, 0.0.9), spill
+  safety (59f2a58), RM2 rest: CGI native + key=value (aa095fd; 25 of 39 formats), RM4 chip + F13 (9d18bcb,
+  0.0.10). Running: cache safety for load/liftover/CGI (also: the CGI and key=value work dirs were outside
+  RM268's index, so `clear_cache` could not remove them), open loader findings F1–F4/F7 + Omni2.5 + the
+  starling BGZF failure, RM6 remainder (tabix, gVCF output, minus-strand lift indels). Open for later:
+  vcf_cgi's `absence_means` (vcfBeta's silence is a reference call: `blocks` understates it, a new enum
+  member is a schema change); the empty allele is `""` in CGI and `-` in Genos; just-prs lists AncestryDNA v2
+  as GSA v3, but the 16 stated V2.0 exports overlap OmniExpress (0.64–0.67) far more than GSA (0.26–0.28):
+  a FEEDBACK item for just-prs once checked.
 - **Open, not started**: CLI (MVP row 18; not decided), the rest of Part 2 of docs/MVP_READINESS.md (the
   interview).

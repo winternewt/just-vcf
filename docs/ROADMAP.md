@@ -17,7 +17,7 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; the VCF `source` detector, `bcf` and `vcf_no_meta` shipped 2026-10-22; checked 2026-10-18: 10 of the 39 declared formats load, the 9 rsid-table layouts and `vcf`, and `bcf` and `vcf_no_meta` since; the VCF dialects `vcf_cgi` and `vcf_freebayes_varscan2`, CGI, AncestryDNA, FTDNA and the vendor CSVs are next) · Owner: lead
+Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; the VCF `source` detector, `bcf`, `vcf_no_meta` and `vcf_cgi` shipped 2026-10-22; checked 2026-10-18: 10 of the 39 declared formats load, the 9 rsid-table layouts and `vcf`, and `bcf`, `vcf_no_meta` and `vcf_cgi` since; the VCF dialect `vcf_freebayes_varscan2`, CGI, AncestryDNA, FTDNA and the vendor CSVs are next) · Owner: lead
 
 **Shipped:** content-based detection. `just_vcf.sniff` and the declarative registry in
 `just_vcf.formats` (docs/FORMATS.md). Over the PGP-HMS participants, 8 of about 1,740 files stay unknown,
@@ -53,6 +53,12 @@ starling) were added from the PGP-HMS headers. Decisions:
   carry one caller each (Decision 8).
 - `ploidy_statements` keeps lines verbatim with no vocabulary, as RM269's critique recommends; an
   option's path value is written `<path>`.
+
+**Open from `vcf_cgi` (2026-10-22):** a vcfBeta lists its no-called spans and half-calls but, in the
+rows counted, never a reference-called record, which suggests an absent position was called
+reference. The loader keeps `absence_means = blocks` (absent is not reference) until CGI's own
+documentation or a comparison with the same genome's `var` file settles it; `weak_reference` or a
+stronger value would be the change.
 
 Header evidence found while declaring the VCF formats:
 

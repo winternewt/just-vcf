@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load` reads Complete Genomics' VCF (`vcf_cgi`, RM2). Its `<CGA_NOCALL>` spans and its ALT `.`
+  records with no allele called go to `blocks` as `no_call` (to END, or over REF); its `<CGA_CNVWIN>`
+  copy-number windows are left out with a count; half-calls keep their called allele. GL is read in
+  phred units (gl = GL / 10) wherever the header names CGAPipeline: in every one of 126,604 rows with
+  GQ in a PGP-HMS vcfBeta, GQ was the gap between the two best GL values. CGI's AD (`Number=2`, per GT
+  slot) is not carried. The rules follow the declared alleles, so a CGI VCF that lost its `##center`
+  line and sniffs as `vcf` loads the same way.
 - A VCF's `ad`, `gl` and `gp` are now withheld where they cannot be indexed over the row's alleles:
   a row whose AD is not one value per allele, or whose PL, GL, GP or PP is not one per genotype of its
   ploidy, gets null there, with one warning per key and a count. A key declared with a fixed count

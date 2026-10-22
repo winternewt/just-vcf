@@ -229,6 +229,12 @@ included), or when it has no ALT (`.`) and an `INFO/END` extent, which is how Il
 reference block. Either way its GT must assert reference or nothing; a GT calling `<*>` stays a call. A record with `ALT=TC,<*>` is a variant call that also carries the `<*>` allele, and it
 stays in `calls` with `<*>` in `alts`. A monomorphic record (ALT `.`) stays in `calls` too.
 
+Complete Genomics' VCF (`vcf_cgi`, or any VCF declaring its alleles) adds two block kinds, both
+`no_call`: a `<CGA_NOCALL>` record spans POS to INFO `END`, and, where the header declares
+`CGA_NOCALL`, a record with ALT `.`, no `END` and no allele called (`./.`, `.|.`) spans its REF. Its
+`<CGA_CNVWIN>` records are 2 kb copy-number windows, not genotypes, and are left out with a count. A
+half-called reference span (`0|.`, ALT `.`) stays a call.
+
 A 4.5 block states its length per sample in FORMAT `LEN`. INFO `END` is deprecated and only a fallback
 when `LEN` is missing. Blocks keep the source's `MIN_DP` as `dp_min`, and not the block's average `DP`.
 A block with an average depth of 25 can still hold an uncovered base.

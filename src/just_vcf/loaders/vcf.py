@@ -35,7 +35,7 @@ from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKin
 
 logger = logging.getLogger(__name__)
 
-FORMATS: frozenset[str] = frozenset({"vcf", "bcf", "vcf_no_meta"})
+FORMATS: frozenset[str] = frozenset({"vcf", "bcf", "vcf_no_meta", "vcf_cgi"})
 """Format ids this loader reads. The dialects with their own ids join as their quirks are handled."""
 
 BCF = "bcf"
@@ -72,6 +72,12 @@ SPLIT_MARKER_ID = "OLD_MULTIALLELIC"
 BCFTOOLS_OLD_REC = "Original variant. Format: CHR|POS|REF|ALT|USED_ALT_IDX"
 """The Description bcftools norm writes for its `--old-rec-tag` key, whatever the key is named
 (vcfnorm.c). Only a split record gets the fifth, `USED_ALT_IDX`, field; a realigned one has four."""
+
+CGI_NOCALL = "<CGA_NOCALL>"
+"""Complete Genomics' no-called span: INFO END gives its extent. It goes to `blocks` as `no_call`."""
+
+CGI_CNV_WINDOW = "<CGA_CNVWIN>"
+"""Complete Genomics' 2 kb copy-number window: coverage, not a genotype. Left out of the frames."""
 
 _SV_LENGTH_TYPES = ("DEL", "DUP", "INV", "CNV")
 """Symbolic allele types whose extent is `SVLEN` bases after POS. INS and breakends end at POS."""
@@ -146,6 +152,8 @@ class Header:
     sample_meta: list[str] = field(default_factory=list)
     format_first: bool = True
     split_markers: dict[str, str] = field(default_factory=dict)
+    alt_ids: set[str] = field(default_factory=set)
+    """Symbolic alleles the header declares with `##ALT` (`CGA_NOCALL`, `NON_REF`, `DEL`…)."""
     """Declared INFO keys that mark split records → `vt` or `bcftools` (`_split_marker_kind`)."""
 
     @property
@@ -242,6 +250,8 @@ def _parse_header(meta: list[str], columns: list[str]) -> Header:
                 header.split_markers[attrs["ID"]] = marker
         elif kind == "FORMAT" and "ID" in attrs:
             header.format[attrs["ID"]] = attrs.get("Number", ".")
+        elif kind == "ALT" and "ID" in attrs:
+            header.alt_ids.add(attrs["ID"])
         elif kind == "contig" and "ID" in attrs:
             length = attrs.get("length")
             header.contigs.append(
@@ -518,6 +528,7 @@ def scan_stats(records: pl.LazyFrame) -> dict:
         *out_of_range,
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.max().max().alias("gp_max"),
         _is_block_record(alts).any().alias("any_block"),
+        (alts.list.len().eq(1) & alts.list.first().eq(CGI_CNV_WINDOW)).sum().alias("cnv_windows"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).is_not_null().sum().alias("gp_rows"),
         (pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.sum() - 1.0).abs().gt(0.02).sum().alias("gp_off_one"),
         pl.col("chrom").unique().implode().alias("chroms"),
@@ -664,12 +675,19 @@ def _alts_expr() -> pl.Expr:
 
 
 def to_rows(
-    records: pl.LazyFrame, header: Header, stats: dict, text_gt: bool = True
+    records: pl.LazyFrame, header: Header, stats: dict, text_gt: bool = True, gl_phred: bool = False
 ) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str]]:
     """Lazy `calls` and `blocks` rows (without `facet_id`) from `read_records` output, plus warnings.
 
     `text_gt` is False for a BCF: its genotypes are binary, so the GT text polars-bio renders is
-    not something the file wrote, and `source_gt` stays null.
+    not something the file wrote, and `source_gt` stays null. `gl_phred` is True for Complete
+    Genomics' CGAPipeline, which writes GL as integers in phred units (GQ is the gap between the two
+    best values), so `gl` is GL / 10.
+
+    Complete Genomics' record classes are read by their declared alleles, whatever the format id:
+    `<CGA_CNVWIN>` rows are copy-number windows and are left out; `<CGA_NOCALL>` rows are no-called
+    spans to END; and where the header declares `CGA_NOCALL`, a record with ALT `.`, no END and a GT
+    with no allele called is a no-called span over its REF, so it goes to `blocks` too.
     """
     warnings = [
         f"{stats[f'out_{key}']} {key} value(s) outside 0..{top} set to null"
@@ -688,6 +706,9 @@ def to_rows(
     # The file's REF goes to `source_ref` only. `ref` is read from the assembly sequence or stays null
     # (charter 10), so polars-bio's `ref` column must not reach the frame under that name.
     rows = records.with_columns(_alts_expr().alias("alts"), pl.col("ref").alias("source_ref")).drop("ref")
+    if stats.get("cnv_windows"):
+        warnings.append(f"{stats['cnv_windows']} {CGI_CNV_WINDOW} record(s) left out: copy-number windows, not genotypes")
+        rows = rows.filter(~(pl.col("alts").list.len().eq(1) & pl.col("alts").list.first().eq(CGI_CNV_WINDOW)))
     rows = rows.with_columns(
         _end_pos(sv_declared="SVLEN" in header.info).alias("end_pos"),
         _is_block_record(pl.col("alts")).alias("_block"),
@@ -705,6 +726,14 @@ def to_rows(
     # A record is a block only when it asserts reference or nothing: a GT calling `<*>` stays a call.
     reference_or_nothing = pl.col("gt").is_null() | pl.col("gt").list.eval(pl.element().is_null() | (pl.element() == 0)).list.all()
     rows = rows.with_columns((pl.col("_block") & reference_or_nothing).alias("_block"))
+    if CGI_NOCALL.strip("<>") in header.alt_ids:
+        no_call_span = (
+            pl.col("alts").list.len().eq(0)
+            & pl.col("info_END").is_null()
+            & pl.col("gt").list.len().gt(0)
+            & pl.col("gt").list.eval(pl.element().is_null()).list.all()
+        )
+        rows = rows.with_columns((pl.col("_block") | no_call_span.fill_null(False)).alias("_block"))
     # RM270: a marker tags its own row here; the patterns need whole positions, read from the spill.
     rows = rows.with_columns(
         pl.when(_marker_expr(header)).then(pl.lit(SplitSignal.MARKER.value)).alias("split_signal")
@@ -722,7 +751,7 @@ def to_rows(
     )
     rows = rows.with_columns(
         pl.coalesce(
-            pl.col("fmt_GL").cast(pl.List(pl.Float32), strict=False),
+            pl.col("fmt_GL").cast(pl.List(pl.Float32), strict=False).list.eval(pl.element() / (10.0 if gl_phred else 1.0)),
             pl.col("fmt_PL").cast(pl.List(pl.Float32), strict=False).list.eval(pl.element() / -10.0),
         ).alias("gl"),
         gp.alias("gp"),
@@ -767,10 +796,12 @@ def to_rows(
 
 def _is_block_record(alts: pl.Expr) -> pl.Expr:
     """A reference-block record, before its GT is looked at: every ALT is `<*>` (GATK, VCF 4.5), or
-    there is no ALT and INFO/END gives an extent (Illumina's gVCF: `ALT .` with `END`)."""
+    there is no ALT and INFO/END gives an extent (Illumina's gVCF: `ALT .` with `END`), or it is
+    Complete Genomics' `<CGA_NOCALL>` span with END."""
     all_star = alts.list.len().gt(0) & alts.list.eval(pl.element() == "<*>").list.all()
     illumina = alts.list.len().eq(0) & pl.col("info_END").is_not_null()
-    return all_star | illumina
+    cgi = alts.list.len().eq(1) & alts.list.first().eq(CGI_NOCALL) & pl.col("info_END").is_not_null()
+    return all_star | illumina | cgi
 
 
 def _dtype(number: str, kind: str) -> pl.DataType:
@@ -798,6 +829,7 @@ def _end_pos(sv_declared: bool) -> pl.Expr:
     return pl.max_horizontal(
         ref_end,
         pl.when(pl.col("alts").list.contains("<*>")).then(block_end).otherwise(None),
+        pl.when(pl.col("alts").list.contains(CGI_NOCALL)).then(pl.col("info_END").cast(pl.UInt32)).otherwise(None),
         pl.when(pl.col("alts").list.len() == 0).then(pl.col("info_END").cast(pl.UInt32)).otherwise(None),
         pl.when(has_sv).then(sv_end).otherwise(None),
     ).cast(pl.UInt32)

@@ -188,7 +188,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         stats = vcf.scan_stats(records)
     else:
         records, stats = _read_text_records(sniffed, header, missing, data, cache, chosen, warnings)
-    calls, blocks, row_warnings = vcf.to_rows(records, header, stats, text_gt=not binary)
+    source = detect_source(header.meta, get_spec(sniffed.format).vendor)
+    gl_phred = source.caller == "CGAPipeline"
+    if gl_phred:
+        warnings.append("CGAPipeline writes GL in phred units (GQ is the gap between the two best): read as GL / 10")
+    calls, blocks, row_warnings = vcf.to_rows(records, header, stats, text_gt=not binary, gl_phred=gl_phred)
     warnings += row_warnings
     if (header.version_tuple or (0, 0)) >= (4, 4):
         warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
@@ -209,7 +213,6 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     spilled = pl.scan_parquet(spill / "calls.parquet")
     flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
     warnings += vcf.split_warnings(flagged, marker_rows, header)
-    source = detect_source(header.meta, get_spec(sniffed.format).vendor)
     warnings += source.warnings
     facet = {
         "facet_id": facet_id,

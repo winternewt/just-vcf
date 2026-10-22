@@ -69,6 +69,12 @@ VCF_CGI = FormatSpec(
         "`##source_*` lines record the annotation database versions, not tools.",
         "PGP-HMS holds one per CGI genome beside the native var/masterVar files of the same assembly; the "
         "var file is the fuller callset (it states reference-called spans too).",
+        "FORMAT GL is declared `Type=Integer` and written in phred units, best genotype 0: in 126,604 of "
+        "126,604 rows with GQ in one file, GQ was the gap between the two best. The loader reads gl = GL / 10.",
+        "FORMAT AD is declared `Number=2` and counts reads per GT slot (`1/1` writes `3,3`), not per allele: "
+        "not carried.",
+        "No ALT `.` record is called reference (`0/0`) in the first 400k rows: reference-called positions "
+        "are absent. Whether absence means reference here is not settled, so `absence_means` stays `blocks`.",
     ),
     example=(
         "##fileformat=VCFv4.1\n"

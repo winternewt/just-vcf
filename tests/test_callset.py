@@ -190,6 +190,27 @@ def loaded_facet(path: Path) -> dict:
     return load(path).facets.collect().row(0, named=True)
 
 
+def test_load_types_a_genome_vcf_and_reads_its_absences_as_weak_reference(tmp_path: Path) -> None:
+    rows = genome_shaped(MIN_WGS_SITES + 22).collect()
+    path = tmp_path / "calls.vcf"
+    path.write_text("\n".join([*HEADER, COLUMNS]) + "\n")
+    with path.open("a") as handle:
+        rows.select(
+            "chrom",
+            "pos",
+            pl.lit(".").alias("id"),
+            pl.lit("A").alias("ref"),
+            pl.lit("G").alias("alt"),
+            pl.lit("50").alias("qual"),
+            pl.lit("PASS").alias("filter"),
+            pl.lit(".").alias("info"),
+            pl.lit("GT:DP").alias("format"),
+            pl.lit("0/1:30").alias("S1"),
+        ).write_csv(handle, separator="\t", include_header=False)
+    row = loaded_facet(path)
+    assert (row["callset_type"], row["absence_means"]) == ("wgs", "weak_reference")
+
+
 def test_load_types_an_exome_vcf(tmp_path: Path) -> None:
     row = loaded_facet(write_vcf(tmp_path, exome_shaped()))
     assert (row["callset_type"], row["absence_means"]) == ("wes", "unknown")
@@ -239,8 +260,10 @@ def test_real_exome_uploads_are_wes(pgp_participants: Path) -> None:
                 exomes.append(path)
     if not exomes:
         pytest.skip("no Genos exome upload on disk")
+    checked = 0
     for path in exomes:
         if sniff(path).format != "vcf":
             continue
-        row = loaded_facet(path)
-        assert row["callset_type"] == "wes"
+        assert loaded_facet(path)["callset_type"] == "wes"
+        checked += 1
+    assert checked > 0

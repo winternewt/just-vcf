@@ -51,4 +51,10 @@ status lines say what exists. Schema at 0.0.4.
   writer, RM5 ancestry, RM269 evidence (handed the depth result: X/auto 0.42–0.50 vs 0.89–1.00, X-degenerate
   Y ALT DP/auto 0.56–0.82 vs 0.35–0.40). Open from the array builder: `dropped_fields` is `[]` for the new
   table formats and null for the rsid tables; aligning them changes values on files that already load.
+  Merged next: RM2 VCF side (bd5c02e, 0.0.6), RM3 (db67f83, 0.0.7). Running: RM6 writer, RM5, RM269
+  evidence, RM2 rest (CGI native, fbvs key=value). Held for the person or later, from RM3: a
+  caller-asserted `assembly=` in `resolve_ref` (a label would stand in for evidence: declined for now);
+  the `[reference]` extra's pysam backs nothing since RM3 (removing it is a surface change); UCSC
+  `chr*_random`/`chrUn_*` names do not meet Ensembl accessions (1% of GRCh38 rows unread); one PGP
+  VCF under 150 MB raised ValueError in `load` (not yet identified).
 - **Open, not started**: RM2's next loaders, RM3, RM4, RM6, RM268 (cache eviction).

@@ -42,4 +42,9 @@ status lines say what exists. Schema at 0.0.4.
   header's contig lengths, as INFERRED) → facts on the facet → X evidence (diploid-written calls only;
   a haploid GT is the caller's assertion, its own line) → the Y region set (time-boxed to an hour; if
   nothing citable exists for GRCh38, back to the desk) → calibration on PGP-HMS with self-reported sex.
+- **Builder run** (the person, 2026-10-22: "use opus subagent builders + worktrees pattern on decided items
+  until I cancel"): Opus builders in worktrees, the lead reviews, merges, bumps the schema and pushes.
+  Wave 1: RM3 (REF lookup, FASTA tier), RM4 + assembly label and seqcol, RM2 VCF side (source detector,
+  dialects), RM2 array loaders. Next waves: RM269 build, RM6 writer, then the rest of Part 1 of
+  docs/MVP_READINESS.md. Part 2 waits for the interview.
 - **Open, not started**: RM2's next loaders, RM3, RM4, RM6, RM268 (cache eviction).

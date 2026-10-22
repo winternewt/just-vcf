@@ -210,6 +210,18 @@ vcflib and `bcftools --multi-overlaps .` do (S2, from just-dna-lite). `rejoin_sp
 such input today.
 
 
+## RM271 — VRS allele ids
+Severity: high · Status: in progress (a builder, 2026-10-22) · Owner: lead
+
+Charter invariant 4: a call's identity is the VRS Allele id of its fully justified allele on a
+refget-addressed sequence, and that id is the join key between facets on the same assembly. Today
+`calls.vrs_allele_ids` is filled nowhere, though gtars (a core dependency) mints VRS ids and normalizes
+alleles. It became possible with RM3: `resolve_ref` reads REF from a refget store and records the
+collection on `facets.ref_seqcol_digest`, so each allele can be placed on a sequence with a refget
+accession. An id that cannot be minted conformantly (an allele that cannot be justified, a contig with
+no refget accession, an unresolved REF, an array I/D code) is withheld with a counted reason in
+`vrs_errors`, never approximated. vrs-python is a test oracle only (CLAUDE.md §5).
+
 ## RM268 — Cache eviction
 Severity: medium · Status: open · Owner: lead
 

@@ -144,19 +144,21 @@ XY = (x_calls(40, 1960, REF_DP // 2), y_calls(1000, 18))
 
 
 @pytest.mark.parametrize(
-    ("x", "y", "expected", "copies"),
+    ("x", "y", "expected", "copies", "reason"),
     [
-        (XX[0], XX[1], KaryotypicSex.XX, XCopies.TWO_OR_MORE),
-        (XY[0], XY[1], KaryotypicSex.XY, XCopies.ONE),
-        (XY[0], XX[1], KaryotypicSex.XO, XCopies.ONE),
-        (XX[0], XY[1], KaryotypicSex.XXY, XCopies.TWO_OR_MORE),
+        (XY[0], XY[1], KaryotypicSex.XY, XCopies.ONE, None),
+        (XX[0], XY[1], KaryotypicSex.XXY, XCopies.TWO_OR_MORE, None),
+        # A low Y depth does not show a Y absent, so XX and XO are not named; X copies still are.
+        (XX[0], XX[1], KaryotypicSex.UNKNOWN_KARYOTYPE, XCopies.TWO_OR_MORE, "y_unusable"),
+        (XY[0], XX[1], KaryotypicSex.UNKNOWN_KARYOTYPE, XCopies.ONE, "y_unusable"),
     ],
 )
-def test_the_four_classes(x: pl.DataFrame, y: pl.DataFrame, expected: KaryotypicSex, copies: XCopies) -> None:
+def test_the_classes(x: pl.DataFrame, y: pl.DataFrame, expected: KaryotypicSex, copies: XCopies, reason: str | None) -> None:
     found = evidence(frame(chr20(), x, y))
-    assert (found.inferred_karyotypic_sex, found.x_copies, found.reason) == (expected, copies, None)
-    assert bool(found)
-    assert found.y_present is (expected in (KaryotypicSex.XY, KaryotypicSex.XXY))
+    assert (found.inferred_karyotypic_sex, found.x_copies, found.reason) == (expected, copies, reason)
+    assert bool(found) is (reason is None)
+    assert found.y_present is (True if reason is None else None)
+    assert found.y_reason == (None if reason is None else "y_not_shown")
 
 
 def test_measurements_are_what_the_rows_hold() -> None:
@@ -167,6 +169,7 @@ def test_measurements_are_what_the_rows_hold() -> None:
     assert (found.depth.reference_sites, found.depth.x_sites, found.depth.y_sites) == (2000, 2000, 1000)
     assert (found.depth.x_ratio, found.depth.y_ratio) == (1.0, 6 / REF_DP)
     assert found.ploidy["x_nonpar"].two == 2000 and found.ploidy["y_nonpar"].two == 1000
+    assert (found.y_heterozygosity.diploid_alt_sites, found.y_heterozygosity.het_share) == (1000, 0.0)
     assert found.rows_counted == 5000
 
 
@@ -192,8 +195,19 @@ def test_y_depth_counts_only_the_x_degenerate_region() -> None:
     xtr = rows("Y", 4_000_000, 1000, [1, 1], 18, step=20)
     found = evidence(frame(chr20(), XY[0], xtr))
     assert found.depth.y_sites == 0
+    assert found.y_heterozygosity.diploid_alt_sites == 0
+    assert found.ploidy["y_nonpar"].two == 1000
     assert (found.y_present, found.y_reason, found.reason) == (None, "too_few_sites", "y_unusable")
     assert found.x_copies is XCopies.ONE
+
+
+def test_a_sex_aware_callers_own_diploid_minority_is_not_a_het_share() -> None:
+    # PGP-HMS huBE0518 (DRAGEN): 103,154 haploid X ALT calls and 1,315 diploid ones, all hets. The
+    # caller picked those; read as a share they say two X against a one-X depth.
+    x = pl.concat([rows("X", X_START, 20_000, [1], REF_DP // 2), rows("X", X_START + 1_000_000, 1500, [0, 1], REF_DP // 2)])
+    found = evidence(frame(chr20(), x, y_calls(1000, 18, gt=[1])))
+    assert found.x_heterozygosity.het_share == 1.0
+    assert (found.x_copies, found.inferred_karyotypic_sex) == (XCopies.ONE, KaryotypicSex.XY)
 
 
 def test_a_sex_aware_callers_haploid_x_is_decided_by_depth_alone() -> None:
@@ -252,10 +266,22 @@ def test_depth_above_two_copies_is_not_called_xx() -> None:
     assert (found.x_copies, found.reason) == (None, "intermediate")
 
 
-def test_a_y_ratio_between_the_bands_is_y_unusable() -> None:
-    found = evidence(frame(chr20(), *XX[:1], y_calls(1000, 14)))  # 14/30 = 0.47
-    assert (found.y_reason, found.reason) == ("intermediate", "y_unusable")
-    assert found.x_copies is XCopies.TWO_OR_MORE
+def test_a_low_y_depth_never_reads_as_no_y() -> None:
+    # PGP-HMS hu3BDC4B, self-reported male, GATK on bowtie2 (GRCh37): one X, X-degenerate Y ratio
+    # 0.433, above every two-X genome measured (at most 0.400). Depth at called sites cannot say a Y
+    # is absent, so this must not read XO, and an XX facet must not read XX either.
+    dp = 13  # 13/30 = 0.433
+    found = evidence(frame(chr20(), XY[0], y_calls(1000, dp)))
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+    assert (found.x_copies, found.y_present, found.y_reason, found.reason) == (XCopies.ONE, None, "y_not_shown", "y_unusable")
+    assert evidence(frame(chr20(), *XX)).inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+
+
+def test_the_y_present_band_starts_at_its_threshold() -> None:
+    # 16/30 = 0.533 is present, 15/30 = 0.5 is not shown (Y_PRESENT_MIN_DEPTH_RATIO = 0.52).
+    assert evidence(frame(chr20(), XX[0], y_calls(1000, 16))).inferred_karyotypic_sex is KaryotypicSex.XXY
+    found = evidence(frame(chr20(), XX[0], y_calls(1000, 15)))
+    assert (found.y_reason, found.reason, found.x_copies) == ("y_not_shown", "y_unusable", XCopies.TWO_OR_MORE)
 
 
 def test_failed_filters_are_left_out_and_unapplied_ones_kept() -> None:
@@ -370,16 +396,16 @@ def test_through_load_a_genome_shaped_vcf_is_estimated(tmp_path: Path) -> None:
     # 1,000,000+ autosomal sites spread over two chromosomes make the facet `wgs` (RM4).
     spread = [rows(chrom, 1, 520_000, [0, 1], REF_DP, step=400) for chrom in ("1", "2")]
     # The header's karyotype line is the caller's statement: carried verbatim, and it does not decide.
-    path = write_vcf(tmp_path / "genome.vcf", [*spread, chr20(), *XX], prefix="", meta=("##referenceSexKaryotype=XY",))
+    path = write_vcf(tmp_path / "genome.vcf", [*spread, chr20(), XX[0], XY[1]], prefix="", meta=("##referenceSexKaryotype=XY",))
     (found,) = sex_chromosome_evidence(load(path))
     assert found.callset_type is CallsetType.WGS
-    assert found.inferred_karyotypic_sex is KaryotypicSex.XX
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XXY
     assert found.ploidy_statements == ["##referenceSexKaryotype=XY"]
 
 
 def test_each_facet_of_a_load_gets_its_own_answer() -> None:
-    # Two facets in one `Loaded` (a freeBayes+VarScan2 merge loads so): one XX, one XY, never blended.
-    first, second = frame(chr20(), *XX), frame(chr20(), *XY).with_columns(pl.lit("g").alias("facet_id"))
+    # Two facets in one `Loaded` (a freeBayes+VarScan2 merge loads so): one XXY, one XY, never blended.
+    first, second = frame(chr20(), XX[0], XY[1]), frame(chr20(), *XY).with_columns(pl.lit("g").alias("facet_id"))
     facets = conform(
         pl.LazyFrame({"facet_id": ["f", "g"], "assembly_label": ["GRCh38"] * 2, "callset_type": ["wgs"] * 2, "caller": ["freeBayes", "VarScan2"]}),
         FACETS,
@@ -387,6 +413,6 @@ def test_each_facet_of_a_load_gets_its_own_answer() -> None:
     loaded = Loaded(facets=facets, calls=pl.concat([first, second]), blocks=empty(BLOCKS))
     found = sex_chromosome_evidence(loaded)
     assert [(e.facet_id, e.caller, e.inferred_karyotypic_sex) for e in found] == [
-        ("f", "freeBayes", KaryotypicSex.XX),
+        ("f", "freeBayes", KaryotypicSex.XXY),
         ("g", "VarScan2", KaryotypicSex.XY),
     ]

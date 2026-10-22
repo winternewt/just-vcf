@@ -193,7 +193,7 @@ Options, not decided: sweep stale-version entries on each load; an explicit `cle
 API (and in the CLI once it exists); a size cap with least-recently-used eviction.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer and an XX/XY/XO/XXY estimate per WGS facet built 2026-10-22; XXX, XYY and arrays left) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO wait for a coverage facet, as do XXX, XYY and arrays) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -296,24 +296,72 @@ chr20:
 
 So X copies have two independent lines (X depth and the diploid X het share) that agree on all 16
 files, and Y presence has one (the X-degenerate Y depth). Y-region ALT calls with DP were in the
-thousands per file.
+thousands per file. Rerun through `sex_chromosome_evidence` on the 17 local single-sample VCFs it can
+load: 12 facets read one X (X depth 0.419–0.500, Y depth 0.560–0.824) and 5 two X (het share
+0.580–0.626, X depth 0.892–1.000, Y depth 0.351–0.400); no facet fell in an unknown band.
+
+**PGP-HMS calibration, 2026-10-22** (consented-public, CC0, so per-file values are kept). 27 uploaded
+single-sample VCFs with DP, read from the Krypton copy; labels are the participants' self-reported
+`Sex/Gender` in `PGP_Participant_Survey.csv` of the HU-PGP-DB-2021-06-18 Arvados snapshot (14 files
+labelled male, 4 female, 9 unlabelled; unverified). The profile pages could not be read: the site's
+certificate names another host. Shipped rules, file by file (`x` and `y` are the depth ratios):
+
+| Participant / upload | Label | Build, caller | X evidence | Y ratio | Answer |
+|---|---|---|---|---|---|
+| huE0F0CE/4084 | female | GRCh38 DRAGEN | share 0.593, x 0.926 | 0.222 | two X, Y not shown |
+| huF7A4DE/3936 | female | GRCh38 GATK HC | share 0.618, x 0.938 | 0.125 | two X, Y not shown |
+| hu21731A/2058, huAA16BD/825 | female | GRCh37 exomes | share 0.588, 0.467 | - | `not_wgs` |
+| hu6ABACE/3885 | male | GRCh37 DRAGEN | share 0.041, x 0.446 | 0.607 | XY |
+| huE18D82/3910 | male | GRCh37 DRAGEN | share 0.043, x 0.474 | 0.842 | XY |
+| hu0486D6/1048 | male | GRCh37 Isaac | haploid X, x 0.560 | 0.560 | XY |
+| huA2692E/2816 | male | GRCh37 Isaac | share 0.058, x 0.552 | 0.862 | XY |
+| hu3BDC4B/3479, /3481 | male | GRCh37 GATK HC (bwa, bowtie2) | share 0.016, 0.012; x 0.484, 0.500 | 0.484, 0.433 | one X, Y not shown |
+| hu2B76CC/2104, huF06AD0/1506 | male | GRCh37 freeBayes (no AD) | share 0.396, 0.378; x 0.500 | 1.450, 1.188 | share intermediate |
+| hu80855C/1126, /1128 | male | GRCh37 Isaac | haploid X, x 0.552 | 162 sites | one X, Y too few sites |
+| hu832966/3674, hu6ABACE/3884 | male | GRCh38 Helix | haploid X, x 0.500, 0.517 | 286, 251 sites | one X, Y too few sites |
+| huFD37C8/3255 | male | GRCh37 exome | share 0.088 | - | `not_wgs` |
+| huE2F2FC/2771 | male | starling | - | - | load failed: polars-bio "invalid BGZF ISIZE" |
+| huBEF5E2, hu24385B, hu1C1368, huC39675, huBE0518, hu416394, hu2BA77F | unlabelled | GATK, DRAGEN, Isaac, bcftools | one X each | 0.548–1.970 | XY |
+| hu876E3D/4118 | unlabelled | GRCh37 DRAGEN | haploid X, x 0.471 | 0.471 | one X, Y not shown |
+| huCDFB7C/3206 | unlabelled | GRCh37 GATK UG | 33 diploid X calls | 0 sites | too few sites |
+
+What it changed:
+
+- **No Y threshold says absent.** Self-reported women read 0.125 and 0.222, the local two-X genomes
+  0.351–0.400, but one man's GATK genome read 0.433 and 0.484 (two alignments of the same reads). The
+  first build of this layer had an absent band at 0.44 and below and called him `XO`. Y presence is
+  now only ever `True` (ratio 0.52 or more, which every labelled or clustered two-X genome stays 0.12
+  under), and `XX` and `XO`, which need a Y shown absent, are not emitted.
+- **A sex-aware caller's few diploid X calls are no het share.** huBE0518's DRAGEN wrote 103,154
+  haploid X ALT calls and 1,315 diploid ones, all hets; read as a share they said two X against a
+  one-X depth. The share now counts only where most X ALT calls were written diploid. Its header's
+  `##referenceSexKaryotype=XY` agrees with the depth-based answer, an independent check.
+- **freeBayes males read an intermediate het share** (0.378, 0.396; those files have no AD). The share
+  fell in the unknown band, so they answer unknown although their X depth (0.500) says one X: a share
+  in the band is not overruled by the other line. Whether freeBayes needs its own band is open.
+- Isaac males sit at X depth 0.548–0.560, above the local 0.42–0.50 and under the 0.60 edge.
+- The X-degenerate Y het share, also measured, does not transfer: 0.40–1.00 in local one-X facets,
+  0.06–0.12 in hu3BDC4B's GATK files. It is reported, not used.
+- Two Helix uploads labelled exome read `callset_type = wgs` (RM4), with only 3,211 and 4,214 chr20
+  ALT calls; their Y line had too few sites anyway.
 
 **Built 2026-10-22: the evidence layer** (`just_vcf.karyotype`, exported `sex_chromosome_evidence`,
 `SexChromosomeEvidence`, `KaryotypicSex`, `XCopies`; docs/SCHEMA.md "Sex-chromosome evidence"). Per
 facet: GT ploidy counts per group, the X het share on diploid-written calls with the AD allele balance,
 the X and X-degenerate Y depth ratios against chr20, and the facet's `ploidy_statements` carried
-verbatim. The estimate gives `x_copies` and `y_present` separately, then `XX`, `XY`, `XO`, `XXY` or
+verbatim. The estimate gives `x_copies` and `y_present` separately, then `XY`, `XXY` or
 `UNKNOWN_KARYOTYPE` with a reason (`no_build`, `unsupported_build`, `not_wgs`, `too_few_sites`,
-`intermediate`, `lines_disagree`, `caller_asserted_only`, `no_depth`, `y_unusable`).
+`intermediate`, `lines_disagree`, `caller_asserted_only`, `no_depth`, `y_unusable`; `y_reason` may also
+be `y_not_shown`). `XX` and `XO` are not emitted (above).
 
 Thresholds: each unknown band is the central half of the measured gap, so every class edge keeps a
 quarter of the gap as margin. X het share: one X at most 0.23, two at least 0.46 (gap 0.115–0.580).
 X depth ratio: one X at most 0.60, two from 0.79 to 1.25 (gap 0.50–0.89; above 1.25 fits three copies
-better than two, so it is unknown, not `XX`). Y depth ratio: absent at most 0.44, present at least 0.52
-(gap 0.40–0.56). Minimum sites: 1,000 diploid X ALT calls for the share, 1,000 X and 1,000 chr20 ALT
+better than two, so it is unknown, not two). Y depth ratio: present at 0.52 or more, otherwise not
+shown, never absent (PGP-HMS, above). Minimum sites: 1,000 diploid X ALT calls for the share, 1,000 X and 1,000 chr20 ALT
 calls with DP for the X ratio, 300 X-degenerate Y ALT calls with DP for the Y ratio. Where the het share
-and the X depth both decide, they must agree; with too few diploid X calls (a sex-aware caller), depth
-alone decides.
+and the X depth both decide, they must agree. The share counts only where most X ALT calls were written
+diploid; otherwise (a sex-aware caller) depth alone decides.
 
 Decisions, each with what was rejected:
 
@@ -332,9 +380,14 @@ Decisions, each with what was rejected:
   dosage (S1).
 - T2T-CHM13 answers `unsupported_build`, not `no_build`: it has a label but no region set here.
 - The header's ploidy lines are carried and the caller's haploid genotypes counted, never as evidence.
+- Y presence is never `False`. Rejected: an absent band under a threshold, which named a man `XO`
+  (above); and dropping the Y line altogether, which would lose `XY` and `XXY` where Y depth is high
+  and the women measured sit far below.
 
-**Left:** XXX, XYY and the other classes need a coverage facet (the Y depth at called sites does not
-separate one Y from two, and the X depth band above two copies only says unknown). Arrays (no `gt`
+**Left:** `XX` and `XO` need a Y shown absent, and XXX, XYY and the other classes a copy count:
+both wait for a coverage facet (depth at called sites cannot show a region empty, and does not
+separate one Y from two). An array's female Y probes are no-calls, which may be the absence signal
+arrays have and genomes lack. Arrays (no `gt`
 before RM3, no depth) and exomes answer unknown; an array's own lines (female Y probes no-calls,
 AncestryDNA's doubled X letters) are not built. Liftovers of one callset are not yet weighed as one
 piece of evidence (`facets_disagree` belongs to the person-level layer). GRCh37's last X-degenerate

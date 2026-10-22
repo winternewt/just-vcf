@@ -599,6 +599,7 @@ null is VCF's "filters not applied"):
 - `x_heterozygosity`: on non-PAR X, the het share of fully called two-allele genotypes with an ALT
   (rows with a `split_signal` left out), the count of one-allele ALT genotypes (the caller's
   assertion, never counted as evidence), and the median het allele balance from `ad`.
+  `y_heterozygosity`: the same on the X-degenerate Y, reported only.
 - `depth`: the median `dp` of ALT-carrying rows on non-PAR X and on the X-degenerate Y, each over the
   same median on chr20.
 - `caller` and `ploidy_statements`, the facet's own columns, carried through unread.
@@ -606,8 +607,10 @@ null is VCF's "filters not applied"):
 It answers `x_copies` (`one`, `two_or_more`) and `y_present` separately, so a facet whose Y line is
 unusable still says how many X copies it holds, and `inferred_karyotypic_sex`, a GA4GH Phenopackets
 `KaryotypicSex` value (charter invariant 2: the vocabulary is the standard's, the field is
-just-vcf's, since Phenopackets has no place for an inference). Only `XX`, `XY`, `XO`, `XXY` and
-`UNKNOWN_KARYOTYPE` are estimated, the last always with a reason. The PAR bounds and the X-degenerate
+just-vcf's, since Phenopackets has no place for an inference). Only `XY`, `XXY` and
+`UNKNOWN_KARYOTYPE` are estimated, the last always with a reason: `y_present` is `True` or unknown,
+never `False`, because depth at called sites cannot show a Y absent (a man's GATK genome read below the
+present band, close to the two-X range), so `XX` and `XO` wait for a coverage facet. The PAR bounds and the X-degenerate
 Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
 unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 

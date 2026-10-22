@@ -9,12 +9,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   non-PAR Y, PAR, MT), the het share of non-PAR X calls written diploid with their AD allele balance,
   and the median DP of ALT calls on non-PAR X and on the X-degenerate Y (from GIAB v3.6
   stratifications, carried in `assets/`) over chr20's. It answers `x_copies` (one, two or more) and
-  `y_present`, and from them a GA4GH Phenopackets `KaryotypicSex` value (`XX`, `XY`, `XO`, `XXY`,
-  or `UNKNOWN_KARYOTYPE` with a reason), on GRCh37 and GRCh38 whole-genome facets only. Thresholds sit
-  in the middle of the gaps the lead measured on 16 local genomes. A karyotype, not a sex, estimated
-  from variant calls; not a cytogenetic result. Haploid genotypes and `ploidy_statements` are carried
-  as the caller's assertion and never counted. Computed, not stored: no schema change. Minor: new
-  exports (`sex_chromosome_evidence`, `SexChromosomeEvidence`, `KaryotypicSex`, `XCopies`).
+  `y_present` (true, or unknown: call-site depth cannot show a Y absent), and from them a GA4GH
+  Phenopackets `KaryotypicSex` value (`XY`, `XXY`, or `UNKNOWN_KARYOTYPE` with a reason), on GRCh37
+  and GRCh38 whole-genome facets only; `XX` and `XO` wait for a coverage facet. X thresholds sit in the
+  middle of the gaps the lead measured on 16 local genomes; checked on 27 PGP-HMS VCFs with
+  self-reported sex, where every labelled man with a decided answer read `XY` and no woman read a Y
+  (table in docs/ROADMAP.md RM269). A karyotype, not a sex, estimated from variant calls; not a
+  cytogenetic result. Haploid genotypes and `ploidy_statements` are carried as the caller's assertion
+  and never counted. Computed, not stored: no schema change. Minor: new exports
+  (`sex_chromosome_evidence`, `SexChromosomeEvidence`, `KaryotypicSex`, `XCopies`).
 
 - Schema 0.0.6 (RM2's VCF side): `facets.ploidy_statements` is new, and the caller, its version, the
   vendor and the phasing method are filled from VCF headers. `REWRITE_VERSION` 6 and the schema bump

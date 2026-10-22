@@ -13,33 +13,39 @@ is VCF's "filters not applied"; FORMAT `FT` likewise; `evidence_basis = assay`):
 1. **GT ploidy as written** per group (autosomes, non-PAR X, non-PAR Y, PAR, MT): rows whose genotype
    holds one, two or more haplotypes. A one-allele genotype on X is the caller's (or vendor's) decision
    that the sample has one X. It is recorded as that assertion and never counted as evidence.
-2. **X heterozygosity on calls written diploid**: the share of heterozygous genotypes among the
+2. **Heterozygosity on calls written diploid**: the share of heterozygous genotypes among the
    non-PAR X calls that carry an ALT, and the median allele balance of those hets from AD (a
-   contamination or mosaic signal; reported, not used in the estimate).
+   contamination or mosaic signal; reported, not used in the estimate). The same for the
+   X-degenerate Y, reported only: it does not separate samples consistently across callers.
 3. **Depth from the calls' own FORMAT DP**: the median DP of ALT-carrying calls on non-PAR X and on
    the X-degenerate male-specific Y (`X_DEGENERATE_Y`), each divided by the same median on chr20.
 
 The estimate:
 
 - **X copies** (one, or two or more) from two independent lines, the het share and the X depth ratio.
-  Where both are measured they must agree. Where the caller wrote too few diploid X calls to measure a
-  het share (a sex-aware caller writes a one-X sample's X haploid), depth alone decides. A facet with
-  neither line answers unknown.
-- **Y present** from the X-degenerate Y depth ratio only. Y calls, even in that region, occur in
-  samples with and without a Y (mismapped reads), so their presence says nothing; their depth does.
-- **Karyotype** from the two: one X and Y is `XY`, one X without Y `XO`, two X without Y `XX`, two X
-  and Y `XXY`. XXX, XYY and the rarer classes are not separated by this evidence (a Y ratio above the
-  usual range still reads as one Y present); they wait for a coverage facet. A value in an unknown band,
-  lines that disagree, too few sites, a facet that is not a whole genome or a build without a region
-  set all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
+  Where both are measured they must agree. The het share counts only where the caller wrote most X
+  ALT calls diploid: a sex-aware caller writes a one-X sample's X haploid and keeps a few diploid
+  calls it chose itself (all hets, in PGP-HMS huBE0518), which are no sample of anything. Then depth
+  alone decides. A facet with neither line answers unknown.
+- **Y present** from the X-degenerate Y depth ratio, and only ever `True`. Y calls, even in that
+  region, occur in samples with and without a Y (mismapped reads), so their presence says nothing. A
+  high depth there shows a Y; a low one does not show its absence: one man's GATK genome read 0.433,
+  above the 0.400 the highest two-X genome read (PGP-HMS calibration, docs/ROADMAP.md RM269).
+- **Karyotype** from the two: one X and Y present is `XY`, two X and Y present `XXY`. `XX` and `XO`
+  need a Y shown absent, which call-site depth cannot do, so they wait for a coverage facet with
+  XXX, XYY and the rarer classes (a Y ratio above the usual range still reads as one Y present). A
+  value in an unknown band, lines that disagree, too few sites, a facet that is not a whole genome or a
+  build without a region set all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
+  `x_copies` is still answered wherever the X lines settle it.
 
-The estimate names a karyotype, not a sex: a person with an XX karyotype and a male phenotype is `XX`
-here. It is read from variant calls; it is not a cytogenetic result and not a diagnosis.
+The estimate names a karyotype, not a sex: a person with an XX karyotype and a male phenotype has
+`x_copies = two_or_more`, and would be `XX` once Y absence can be shown. It is read from variant
+calls; it is not a cytogenetic result and not a diagnosis.
 
-Thresholds come from the lead's measurement of 2026-10-22 on 16 single-sample whole-genome VCFs
-(docs/ROADMAP.md, RM269): every line separated the samples into two clusters with a gap, and each
-unknown band below is the central half of its gap, so every class edge keeps a quarter of the gap as
-margin.
+The X thresholds come from the lead's measurement of 2026-10-22 on 16 local single-sample whole-genome
+VCFs (docs/ROADMAP.md, RM269): each line separated them into two clusters with a gap, and each unknown
+band below is the central half of its gap, so every class edge keeps a quarter of the gap as margin.
+The Y threshold was checked against 27 PGP-HMS VCFs with self-reported sex (same section).
 """
 
 from enum import Enum
@@ -112,11 +118,12 @@ TWO_X_MIN_DEPTH_RATIO = 0.79
 
 TWO_X_MAX_DEPTH_RATIO = 1.25
 """Above it the depth fits more than two X better than two (three copies would sit near 1.5): unknown,
-not `XX`. The midpoint between two and three copies, from copy number alone."""
+not two. The midpoint between two and three copies, from copy number alone."""
 
-Y_ABSENT_MAX_DEPTH_RATIO = 0.44
 Y_PRESENT_MIN_DEPTH_RATIO = 0.52
-"""Measured clusters 0.35–0.40 (two X) and 0.56–0.82 (one X); gap 0.40–0.56."""
+"""Local genomes: 0.35–0.40 with two X, 0.56–0.82 with one. PGP-HMS: self-reported women 0.125 and
+0.222, men 0.433–1.970. 0.52 keeps 0.12 above every two-X genome; the two male GATK files below it
+answer unknown. There is no absent threshold: men reach the two-X range."""
 
 MIN_X_SITES = 1_000
 """Diploid-written non-PAR X ALT calls needed for a het share, and X ALT calls with DP for a depth
@@ -134,8 +141,8 @@ _AUTOSOMES = [str(n) for n in range(1, 23)]
 
 
 class KaryotypicSex(str, Enum):
-    """GA4GH Phenopackets v2 `KaryotypicSex`, values verbatim. Only XX, XY, XO, XXY and
-    UNKNOWN_KARYOTYPE are ever estimated here; the rest are listed so the vocabulary is the standard's."""
+    """GA4GH Phenopackets v2 `KaryotypicSex`, values verbatim. Only XY, XXY and UNKNOWN_KARYOTYPE are
+    estimated here so far; the rest are listed so the vocabulary is the standard's."""
 
     UNKNOWN_KARYOTYPE = "UNKNOWN_KARYOTYPE"
     XX = "XX"
@@ -168,6 +175,7 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
         "caller_asserted_only",
         "no_depth",
         "y_unusable",
+        "y_not_shown",
     }
 )
 """Why an answer is unknown. An open vocabulary: a new kind of evidence brings new reasons.
@@ -181,8 +189,10 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
 - `caller_asserted_only`: the only X evidence is the caller's own haploid genotypes.
 - `no_depth`: the calls carry no DP (a liftover that dropped FORMAT, for one), so no depth line can be
   measured; the karyotype then waits even where the het share gives X copies, since Y needs depth.
-- `y_unusable`: X copies are known but the Y line has too few sites or falls in its unknown band (the
-  karyotype only; `y_reason` says which).
+- `y_unusable`: X copies are known but the Y line does not settle (the karyotype only; `y_reason`
+  says why).
+- `y_not_shown`: the Y depth ratio is below the present band. It does not mean no Y: call-site depth
+  cannot show a Y absent (`y_reason` only).
 """
 
 
@@ -197,8 +207,8 @@ class GtPloidyCounts(BaseModel):
     more: int
 
 
-class XHeterozygosity(BaseModel):
-    """Non-PAR X genotypes carrying an ALT. Only calls written diploid are evidence of X copies."""
+class Heterozygosity(BaseModel):
+    """Genotypes carrying an ALT in one region. Only calls written diploid are evidence of copies."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -208,7 +218,7 @@ class XHeterozygosity(BaseModel):
     het_share: float | None
     """`het_sites / diploid_alt_sites`; None with no site."""
     haploid_alt_sites: int
-    """One-allele genotypes with an ALT: the caller's assertion of one X, not evidence of it."""
+    """One-allele genotypes with an ALT: the caller's assertion of one copy, not evidence of it."""
     balance_sites: int
     """`0/k` hets with an AD covering the site's alleles and some depth on the two of them."""
     median_het_allele_balance: float | None
@@ -259,11 +269,15 @@ class SexChromosomeEvidence(BaseModel):
     ploidy: dict[str, GtPloidyCounts]
     """By group: `autosomes`, `x_nonpar`, `y_nonpar`, `par`, `mt` (the sex-chromosome groups only with
     a supported build)."""
-    x_heterozygosity: XHeterozygosity | None
+    x_heterozygosity: Heterozygosity | None
+    """Non-PAR X."""
+    y_heterozygosity: Heterozygosity | None
+    """The X-degenerate Y. Reported, not used in the estimate."""
     depth: DepthRatios | None
     x_copies: XCopies | None
     x_copies_reason: str | None
     y_present: bool | None
+    """`True` when the Y depth shows a Y; otherwise None, never `False` (module docstring)."""
     y_reason: str | None
     inferred_karyotypic_sex: KaryotypicSex
     """A Phenopackets `KaryotypicSex` value, estimated from calls: not a cytogenetic result."""
@@ -290,7 +304,8 @@ def sex_chromosome_evidence(loaded: Loaded) -> tuple[SexChromosomeEvidence, ...]
     `loaded.facets`, in that order: a freeBayes+VarScan2 merge loads as two facets and gets two
     answers, never one blended from both callers. The calls are read lazily, a few columns at a time.
 
-    The answer is a karyotype, not a sex: an XX male is `XX`. It is an estimate from variant calls,
+    The answer is a karyotype, not a sex: an XX male reads two X copies (and `XX` once Y absence can
+    be shown), never `XY` for his phenotype. It is an estimate from variant calls,
     never a cytogenetic or clinical result.
     """
     facets = loaded.facets.select("facet_id", "assembly_label", "callset_type", "caller", "ploidy_statements").collect()
@@ -358,6 +373,11 @@ def measure(calls: pl.LazyFrame, assembly_label: str | None) -> dict:
             dp.filter(depth_row & reference).median().alias("reference_median_dp"),
             (depth_row & xdeg).sum().alias("xdeg_sites"),
             dp.filter(depth_row & xdeg).median().alias("xdeg_median_dp"),
+            (diploid_alt & xdeg).sum().alias("xdeg_diploid_alt"),
+            (het & xdeg).sum().alias("xdeg_het"),
+            ((n_haplotypes == 1) & has_alt & xdeg).sum().alias("xdeg_haploid_alt"),
+            (balance_row & xdeg).sum().alias("xdeg_balance_sites"),
+            (ad_alt / (ad_ref + ad_alt)).filter(balance_row & xdeg).median().alias("xdeg_balance"),
         )
         .collect()
     )
@@ -424,7 +444,7 @@ def estimate(
     }
 
     def unknown(reason: str, detail: str, **known) -> SexChromosomeEvidence:
-        fields = {"region_set": None, "x_heterozygosity": None, "depth": None, "x_copies": None, "x_copies_reason": reason, "y_present": None, "y_reason": reason}
+        fields = {"region_set": None, "x_heterozygosity": None, "y_heterozygosity": None, "depth": None, "x_copies": None, "x_copies_reason": reason, "y_present": None, "y_reason": reason}
         return SexChromosomeEvidence(**base, **{**fields, **known}, inferred_karyotypic_sex=KaryotypicSex.UNKNOWN_KARYOTYPE, reason=reason, detail=detail)
 
     if assembly_label is None:
@@ -433,16 +453,8 @@ def estimate(
         return unknown("unsupported_build", f"no PAR bounds or Y region set for {assembly_label} (only {', '.join(sorted(ESTIMATE_BUILDS))})")
 
     x, y, auto = groups.get("x_nonpar", {}), groups.get("y_nonpar", {}), groups.get("autosomes", {})
-    diploid = int(x.get("diploid_alt", 0))
-    het = int(x.get("het", 0))
-    x_het = XHeterozygosity(
-        diploid_alt_sites=diploid,
-        het_sites=het,
-        het_share=het / diploid if diploid else None,
-        haploid_alt_sites=int(x.get("haploid_alt", 0)),
-        balance_sites=int(x.get("balance_sites", 0)),
-        median_het_allele_balance=x.get("balance"),
-    )
+    x_het = _heterozygosity(x, "")
+    y_het = _heterozygosity(y, "xdeg_")
     ref_sites, ref_dp = int(auto.get("reference_sites", 0)), auto.get("reference_median_dp")
     x_sites, x_dp = int(x.get("depth_sites", 0)), x.get("median_dp")
     y_sites, y_dp = int(y.get("xdeg_sites", 0)), y.get("xdeg_median_dp")
@@ -457,7 +469,7 @@ def estimate(
         x_ratio=x_dp / ref_dp if reference_ok and x_sites >= MIN_X_SITES and x_dp is not None else None,
         y_ratio=y_dp / ref_dp if reference_ok and y_sites >= MIN_Y_SITES and y_dp is not None else None,
     )
-    known = {"region_set": REGION_SET, "x_heterozygosity": x_het, "depth": depth}
+    known = {"region_set": REGION_SET, "x_heterozygosity": x_het, "y_heterozygosity": y_het, "depth": depth}
     if callset_type is not CallsetType.WGS:
         kind = callset_type.value if callset_type else "unknown"
         return unknown("not_wgs", f"callset type {kind}; the thresholds were measured on whole genomes", **known)
@@ -471,18 +483,26 @@ def estimate(
         return unknown(x_reason, detail, **known, **{**lines})
     if y_present is None:
         return unknown("no_depth" if y_reason == "no_depth" else "y_unusable", detail, **known, **lines)
-    karyotype = {
-        (XCopies.ONE, True): KaryotypicSex.XY,
-        (XCopies.ONE, False): KaryotypicSex.XO,
-        (XCopies.TWO_OR_MORE, False): KaryotypicSex.XX,
-        (XCopies.TWO_OR_MORE, True): KaryotypicSex.XXY,
-    }[(x_copies, y_present)]
+    karyotype = {XCopies.ONE: KaryotypicSex.XY, XCopies.TWO_OR_MORE: KaryotypicSex.XXY}[x_copies]
     return SexChromosomeEvidence(**base, **known, **lines, inferred_karyotypic_sex=karyotype, reason=None, detail=detail)
 
 
-def _x_copies(x_het: XHeterozygosity, depth: DepthRatios, no_dp: bool) -> tuple[XCopies | None, str | None, str]:
+def _heterozygosity(group: dict, prefix: str) -> Heterozygosity:
+    diploid, het = int(group.get(f"{prefix}diploid_alt", 0)), int(group.get(f"{prefix}het", 0))
+    return Heterozygosity(
+        diploid_alt_sites=diploid,
+        het_sites=het,
+        het_share=het / diploid if diploid else None,
+        haploid_alt_sites=int(group.get(f"{prefix}haploid_alt", 0)),
+        balance_sites=int(group.get(f"{prefix}balance_sites", 0)),
+        median_het_allele_balance=group.get(f"{prefix}balance"),
+    )
+
+
+def _x_copies(x_het: Heterozygosity, depth: DepthRatios, no_dp: bool) -> tuple[XCopies | None, str | None, str]:
     """X copies from the het share and the X depth ratio; both must agree where both are measured."""
-    share = x_het.het_share if x_het.diploid_alt_sites >= MIN_X_SITES else None
+    written_diploid = x_het.diploid_alt_sites >= MIN_X_SITES and x_het.diploid_alt_sites > x_het.haploid_alt_sites
+    share = x_het.het_share if written_diploid else None
     by_share = _band(share, ONE_X_MAX_HET_SHARE, TWO_X_MIN_HET_SHARE, None)
     by_depth = _band(depth.x_ratio, ONE_X_MAX_DEPTH_RATIO, TWO_X_MIN_DEPTH_RATIO, TWO_X_MAX_DEPTH_RATIO)
     said = (
@@ -502,17 +522,15 @@ def _x_copies(x_het: XHeterozygosity, depth: DepthRatios, no_dp: bool) -> tuple[
 
 
 def _y_present(depth: DepthRatios, no_dp: bool) -> tuple[bool | None, str | None, str]:
-    """Y present from the X-degenerate Y depth ratio."""
+    """Y present from the X-degenerate Y depth ratio: `True` or unknown, never `False`."""
     said = f"X-degenerate depth ratio {_fmt(depth.y_ratio)} over {depth.y_sites:,} call(s) with DP"
     if no_dp:
         return None, "no_depth", said
     if depth.y_ratio is None:
         return None, "too_few_sites", said
-    if depth.y_ratio <= Y_ABSENT_MAX_DEPTH_RATIO:
-        return False, None, said
     if depth.y_ratio >= Y_PRESENT_MIN_DEPTH_RATIO:
         return True, None, said
-    return None, "intermediate", said
+    return None, "y_not_shown", said
 
 
 def _band(value: float | None, one_max: float, two_min: float, two_max: float | None) -> str | None:

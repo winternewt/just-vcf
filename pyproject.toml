@@ -45,6 +45,7 @@ packages = ["src/just_vcf"]
 [dependency-groups]
 # httpx is dev-only: the PGP-HMS sample leecher is a script in scripts/, not a library feature.
 dev = [
+    "ga4gh-vrs>=2.3",
     "httpx>=0.28",
     "pytest>=9.1.1",
 ]

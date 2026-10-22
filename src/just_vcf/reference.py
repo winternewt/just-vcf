@@ -188,6 +188,19 @@ class ReferenceStore:
             found.append(Contig(name=name, length=int(length), md5=meta.md5 if meta else "", digest=bare))
         return found
 
+    def contigs_by_chrom(self, digest: str) -> dict[str, list[Contig]]:
+        """The collection's sequences under the canonical `chrom` each serves, in collection order.
+
+        A canonical name served by more than one sequence (`1` and `chr1`) lists them all; a caller
+        reads none of them. `XY` (array code 25) is served by X (`_REF_SPAN_FOR`).
+        """
+        by_canonical: dict[str, list[Contig]] = {}
+        for contig in self.contigs(digest):
+            by_canonical.setdefault(canonical_chrom(contig.name), []).append(contig)
+        for chrom, served_by in _REF_SPAN_FOR.items():
+            by_canonical[chrom] = by_canonical.get(served_by, [])
+        return by_canonical
+
     def assembly_label(self, digest: str) -> str | None:
         """The collection's assembly: from contig 1's length, else the one label asserted for it."""
         measured = self._label_from_lengths(digest)
@@ -367,11 +380,8 @@ def _store_for(reference: "ReferenceStore | Path | str | None") -> tuple[Referen
 
 def _plan(store: ReferenceStore, digest: str, facet: dict, rows_per_chrom: dict[str, int]) -> _Plan:
     """Check every contig the facet's calls use against one collection."""
-    contigs = store.contigs(digest)
     label = store.assembly_label(digest)
-    by_canonical: dict[str, list[Contig]] = {}
-    for contig in contigs:
-        by_canonical.setdefault(canonical_chrom(contig.name), []).append(contig)
+    by_canonical = store.contigs_by_chrom(digest)
     stated: dict[str, list[dict]] = {}
     sources = {entry["source"]: entry["chrom"] for entry in facet["contig_map"] or []}
     for entry in facet["header_contigs"] or []:
@@ -384,7 +394,7 @@ def _plan(store: ReferenceStore, digest: str, facet: dict, rows_per_chrom: dict[
     detail: dict[str, str] = {}
     refusal = None
     for chrom in rows_per_chrom:
-        matches = by_canonical.get(_REF_SPAN_FOR.get(chrom, chrom), [])
+        matches = by_canonical.get(chrom, [])
         if not matches:
             checks[chrom] = ContigCheck.NOT_IN_REFERENCE
             continue

@@ -32,6 +32,7 @@ from just_vcf.schema import (
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
 from just_vcf.writing import ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
+from just_vcf.vrs import mint_vrs_ids, vrs_withheld
 
 __version__ = version("just-vcf")
 
@@ -67,6 +68,7 @@ __all__ = [
     "XCopies",
     "__version__",
     "load",
+    "mint_vrs_ids",
     "normalize",
     "open_payload",
     "reference_dir",
@@ -75,5 +77,6 @@ __all__ = [
     "sex_chromosome_evidence",
     "sniff",
     "vcf_samples",
+    "vrs_withheld",
     "write_vcf",
 ]

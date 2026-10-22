@@ -393,8 +393,8 @@ With Decisions 1–5 as recommended:
 | `ref_check` | `Enum` | there is no `source_ref` to compare. `not_run`, `match` or `mismatch` (Decision 2) |
 | `alts` | `list[str]` | the source did not say (a non-VCF row before RM3). `[]` = a stated monomorphic record (ALT `.`). Symbolic alleles and `*` kept verbatim, except `<NON_REF>`, which is written `<*>` |
 | `source_alleles` | `list[str]` | the source gave no vector to index (Decision 2) |
-| `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention. An element is null when it was withheld (charter 4); the whole list is null when nothing could be minted. Minting rule below ("When an id is minted") |
-| `vrs_errors` | `list[str]` | parallel to `vrs_allele_ids`: what minting itself reported for an allele it tried and could not mint (`not_justifiable`, `no_contig`, …). Null where minting succeeded or never ran. Only facts that minting alone learns go here; see "Why an id is missing" below |
+| `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention: the REF slot first, then one per ALT in `alts` order. An element is null when it was withheld (charter 4); the whole list is null when nothing was minted. Minting rule below ("When an id is minted") |
+| `vrs_errors` | `list[str]` | parallel to `vrs_allele_ids`: what minting itself reported for an allele it tried and could not mint (`no_contig`, `refused`). Null where minting succeeded or never ran. Only facts that minting alone learns go here; see "Why an id is missing" below |
 | `gt_alleles` | `list[str]` | the genotype text cannot be split into haplotypes without the site's alleles (Living DNA writes an indel's two allele sequences back to back, `CCA`); `source_gt` keeps the text. Entries null per uncalled haplotype |
 | `gt` | `list[u8]` | there is no allele list to index yet. Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
 | `source_gt` | `str` | the source wrote no genotype text (a BCF encodes GT in binary). The file's raw text, not polars-bio's rewrite of it |
@@ -520,39 +520,53 @@ counted in a warning.
 Where REF is not known yet (an array `I`/`D` row) `end_pos` is null. A single-position array call has
 `end_pos = pos`.
 
-**When an id is minted.** A VRS Allele id for a substitution does not encode REF. It needs only the
-contig's refget accession, the position and the allele, so it is minted without reading any bases.
-An indel id needs the sequence around it (VRS normalises it against that sequence), so it waits for
-bases. Per allele:
+**When an id is minted (RM271, `mint_vrs_ids`).** An id is the VRS 2.x Allele id of the fully
+justified allele, on the refget sequence (`SQ.…`) of the contig in the collection REF was read from
+(`facets.ref_seqcol_digest`). Every slot of `[ref] + alts` gets one: the REF slot is the reference
+allele, which VRS writes as a `ReferenceLengthExpression` over REF's span (length and
+`repeatSubunitLength` both `len(ref)`), as vrs-python does for REF = ALT. An ALT is normalized as the
+spec says: trimmed of shared bases; a substitution keeps a `LiteralSequenceExpression` on the trimmed
+span; an insertion or deletion is rolled over its whole region of ambiguity and becomes a
+`ReferenceLengthExpression` when it is a deletion or an insertion that continues a repeat, and a
+`LiteralSequenceExpression` otherwise. Inside VRS objects coordinates are 0-based interbase; `pos`
+stays 1-based, and `reference._span` is the one conversion (charter 13).
 
-- **Substitution** (REF and allele the same length): minted as soon as the facet's assembly is
-  identified and the contig has an accession, from a small table of contig accessions per assembly.
-  No sequence is read. `ref_check = not_run` does not block it. `ref_check = mismatch` withholds it,
-  because a mismatch is evidence that the position or the build is wrong.
-- **Indel or MNV with a length change**: minted only after bases have been read and
-  `ref_check = match`.
-- **Array rows**: minted once RM3 has derived `alts`, under the same two rules.
+An allele is minted only when its row's `ref` was read from the sequence (`resolve_ref`) and the
+source did not contradict it (`ref_check` is `match`, or null on an array row). Substitutions too:
+`mint_vrs_ids` refuses a facet whose REF was never read. The rule the draft had, minting a
+substitution from a table of contig accessions per assembly without reading bases, was not built:
+no such table exists, and a contig `resolve_ref` could not match has no accession that was shown to
+be the facet's own. Array rows mint once `resolve_ref` has derived their `alts`. Minting has been
+compared with vrs-python on the same store for every kind of allele (tests) and on real PGP-HMS VCFs
+(docs/ROADMAP.md, RM271).
 
-So loading a VCF needs no reference download. The table of contig accessions is derived by gtars from
-each assembly's sequence collection and checked by a test, never typed in by hand. Where the bases come
-from when they are needed (a local store, or a hosted one read lazily) is RM3's decision; the
-measurements are in docs/ROADMAP.md, RM3.
+gtars 0.10 rolls the allele (`normalize_allele`) and computes sha512t24u, but its Python surface
+digests a `LiteralSequenceExpression` only, and its normalization never returns a
+`ReferenceLengthExpression`. So the choice of state and the canonical JSON (keys sorted, no
+whitespace, inherent properties only: an RLE's `sequence` is not digested) are just-vcf's, in one
+place (`just_vcf.vrs`), and tested against vrs-python.
 
 **Why an id is missing** is not a stored column. Most of the reasons are already facts in the frame,
 and a stored copy of them drifts: RM3 fills `ref`, and a stored reason still says "unchecked". So the
-reason is computed by one function, `vrs_withheld()`, a lazy Polars expression over the frame. It
-returns one reason per allele, parallel to `vrs_allele_ids`, and null where an id exists. It checks in
-this fixed order and the first hit wins:
+reason is computed by one function, `vrs_withheld(calls)`, which returns the lazy `calls` frame with a
+`vrs_withheld` column: one reason per slot of `[ref] + alts`, parallel to `vrs_allele_ids`, null where
+an id exists. A row with neither `ref` nor `alts` (an array row whose REF was not read) has one slot.
+It checks in this fixed order and the first hit wins:
 
-1. **What the allele is**, read from the allele string: `symbolic` (`<DEL>`, `<CNV:TR>`, breakends),
-   `unspecified` (`<*>`), `spanning_deletion` (`*`), `array_code` (23andMe `I`/`D`), `partial_call`
-   (CGI `?`).
-2. **Pipeline state**, read from other columns: `ref_unresolved` (`ref` and `source_ref` both null),
-   `ref_unchecked` (`ref_check = not_run`, indels only; substitutions mint without the check),
-   `ref_mismatch` (`ref_check = mismatch`), `no_seqcol`
-   (`facets.seqcol_digest` null), `telomere` (`pos` 0, or past the contig's length).
-3. **What minting reported**: the `vrs_errors` element.
+1. **What the allele is**, read from the allele string: `unspecified` (`<*>`), `spanning_deletion`
+   (`*`), `symbolic` (`<DEL>`, `<CNV:TR>`, breakends, `.`-anchored single breakends), `partial_call`
+   (CGI `?`), `array_code` (23andMe `I`/`D` where the source wrote no REF), `not_sequence` (anything
+   else outside `ACGTN`, such as an ambiguity code in ALT).
+2. **Pipeline state**, read from the row: `array_code` (an array row with an `I`/`D` genotype, whose
+   REF stays unread), `telomere` (`pos` 0), `ref_unresolved` (`ref` and `source_ref` both null),
+   `ref_unchecked` (a source REF, but `ref` not read: a contig the reference could not match, or a
+   span past the contig's end), `ref_mismatch` (`ref_check = mismatch`).
+3. **What minting reported**, the `vrs_errors` element: `no_contig` (the collection has no single
+   sequence for the contig) or `refused` (gtars refused the allele; its message is counted in the
+   warnings). After `resolve_ref` neither is expected: `ref` was read from that very sequence.
 4. Otherwise `not_run`: nothing forbids minting and it has not happened yet.
+
+`mint_vrs_ids` counts the withheld slots per reason in the facet's warnings, one line per reason.
 
 The reasons form an open vocabulary (a `frozenset[str]` with a validator, stored as `str`), not a
 `pl.Enum`: every new kind of facet brings reasons, and an Enum would change the frame's dtype each
@@ -682,9 +696,10 @@ lifted to GRCh38. How the draft holds up:
   a gap. The derived facet has no row for it. **Open:** a lift that drops a row has to be counted on
   the derived facet (the Glow-style liftover status in LANDSCAPE). Otherwise "absent in the lifted
   facet" reads as "absent in the person".
-- **A GRCh38 REF that is `N`.** A site inside the gap has no base to compare, and `ref_check` would
-  compare against `N`. Whether gtars mints on an `N` reference has not been checked. If it refuses,
-  the refusal lands in `vrs_errors`.
+- **A GRCh38 REF that is `N`.** A site inside the gap has no base to compare, and `ref_check`
+  compares against `N`. Where the source REF is `N` too, the id is minted: gtars and vrs-python both
+  justify an allele over `N` bases and agree on the id (tested, RM271). Were gtars to refuse, the
+  refusal would land in `vrs_errors` as `refused`.
 
 None of this changes a column today. It marks where the person-level layer and the coverage facet have
 to connect.
@@ -730,6 +745,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **0.0.7, continued** (2026-10-22, RM271; no version bump: no column or dtype changed):
+  `mint_vrs_ids` fills `vrs_allele_ids` and `vrs_errors`, and `vrs_withheld` computes why an id is
+  missing. Substitutions now wait for `resolve_ref` like every allele; `no_seqcol` left the reasons
+  (a read `ref` implies its collection); `not_sequence`, `no_contig` and `refused` joined them;
+  `telomere` covers POS 0 only (a span past the contig's end reads as `ref_unchecked`).
+
 - **No version change** (2026-10-22, RM6's second slice): `normalize` emits the `normalized` relation
   the facets table already listed, and no column changes. Rules added: the normalizing rules above;
   on a row `normalize` moved or trimmed, `ref_check` and `source_ref` are null although `ref` is set
@@ -771,13 +792,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 - Coordinates: `pos` and `end_pos` are 1-based and inclusive. VRS objects keep 0-based interbase coordinates
   internally, and nothing else does.
 - REF: `ref` only from the assembly sequence; `source_ref` is what the file wrote; `ref_check` compares
-  them. Substitution ids mint without bases and are withheld on a mismatch; indel ids wait for a match.
+  them. VRS ids wait for `ref` to be read, and are withheld on a mismatch.
 - Genotype: literal `gt_alleles` always; `gt` indices into the file's own allele list; `source_gt` is
   the raw text.
   Vectors are indexed over `source_alleles` and never reordered.
 - Evidence: `gl` (likelihoods), `gp` (posteriors) and `dosage` never mixed, and a row can have more
   than one. `evidence_basis` is the origin only (`assay`, `ref_block`, `absence`). Array calls have no
   vector until concordance can measure one.
-- Identity: `vrs_allele_ids` parallel to `[ref] + alts`. `vrs_errors` stores only what minting
-  reported; why an id is missing is computed by `vrs_withheld()`. `seqcol_digest` per facet.
+- Identity: `vrs_allele_ids` parallel to `[ref] + alts`, minted by `mint_vrs_ids` once REF is read.
+  `vrs_errors` stores only what minting reported; why an id is missing is computed by
+  `vrs_withheld()`. `seqcol_digest` per facet.
 - Absence: a facet property (`absence_means`), turned into a row only on request.

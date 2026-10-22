@@ -68,7 +68,9 @@ spellings. Columns the frames do not carry are listed by their file names in `fa
 (deCODEme's `Variation`, a Final Report's GenCall score and intensities). A file whose columns lack what
 its format needs is refused with `TableLayoutError`. MyHeritage exports load as `rsid_result_csv`
 (the `ftdna` spec excludes them), with the vendor left unclaimed; no MyHeritage file was available to
-check that against.
+check that against. A table with a sample column (a Final Report of several samples, Color) loads one
+sample at a time: `load(path, sample=…)`, with `just_vcf.table_samples(path)` listing the ids in the
+order they first appear, as `vcf_samples` does for a VCF.
 
 Not loadable yet: the CGI native files (`cgi_var`, `cgi_master_var`) and the other tables. Geno 2.0
 (`genographic_geno2`, its headerless variant) and the headerless Final Report name markers without

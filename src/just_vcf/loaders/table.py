@@ -184,6 +184,21 @@ def read_table(data: bytes, spec: FormatSpec, sample: str | None = None) -> Tabl
     return table
 
 
+def samples(data: bytes, spec: FormatSpec) -> list[str]:
+    """The sample ids in a table's sample column, in the order they first appear; `[]` for a format
+    without one. They can be real names: treat them as identifying."""
+    if spec.id not in FORMATS:
+        raise ValueError(f"{spec.id} is not a vendor table this loader reads")
+    names, rows, _ = _split(data, spec)
+    index = _columns(names, spec).get("sample_id")
+    if index is None:
+        return []
+    values = rows.select(pl.col("fields").list.get(index, null_on_oob=True).alias("sample_id"))
+    if names is not None:
+        values = values.filter(pl.col("sample_id").str.to_lowercase() != names[index].lower())
+    return [value for value in values["sample_id"].unique(maintain_order=True).to_list() if value]
+
+
 def spec_for(format_id: str) -> FormatSpec:
     """The registered spec for a format this loader reads."""
     if format_id not in FORMATS:
@@ -289,7 +304,9 @@ def _choose_sample(frame: pl.DataFrame, spec: FormatSpec, sample: str | None, me
         return frame
     samples = frame["sample_id"].unique(maintain_order=True).to_list()
     if len(samples) > 1 and sample is None:
-        raise MultiSampleError(f"{spec.id}: {len(samples)} samples in the sample column; pass sample= to load one")
+        raise MultiSampleError(
+            f"{spec.id}: {len(samples)} samples in the sample column; pass sample= to load one (just_vcf.table_samples lists them)"
+        )
     if sample is not None and sample not in samples:
         raise MultiSampleError(f"{spec.id}: the requested sample is not in the sample column")
     chosen = sample if sample is not None else (samples[0] if samples else None)

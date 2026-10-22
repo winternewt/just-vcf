@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `just_vcf.table_samples(path)` lists the sample ids of a genotype table with a sample column (an
+  Illumina Final Report of several samples, Color) in the order they first appear, the table
+  counterpart of `vcf_samples`; `[]` for a table format without one. The refusal of a several-sample
+  table now names it.
+
 - `freebayes_varscan2_keyvalue` loads (RM2, SCHEMA Decision 8): PGP's `-orig` key=value table
   becomes one `caller_split` facet per caller, rows where that caller's genotype is not `NULL`, with
   `gt` over `[REF] + ALT`, the genotype text in `source_gt` and the caller's total depth in `dp`. Its

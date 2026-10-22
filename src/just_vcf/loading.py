@@ -278,6 +278,18 @@ def vcf_samples(source: Path | str | Sniffed) -> list[str]:
     return header.samples
 
 
+def table_samples(source: Path | str | Sniffed) -> list[str]:
+    """The sample ids of a genotype table with a sample column (an Illumina Final Report, Color), in
+    the order they first appear; `[]` for a table format without one. They can be real names: treat
+    them as identifying."""
+    sniffed = source if isinstance(source, Sniffed) else sniff(Path(source))
+    if not sniffed or sniffed.format not in table.FORMATS:
+        raise UnsupportedFormatError(sniffed)
+    with open_payload(sniffed) as handle:
+        data = handle.read()
+    return table.samples(data, table.spec_for(sniffed.format))
+
+
 def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     binary = sniffed.format == vcf.BCF
     with open_payload(sniffed) as handle:

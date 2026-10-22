@@ -9,6 +9,7 @@ from just_vcf.loading import (
     NoSampleError,
     UnsupportedFormatError,
     load,
+    table_samples,
     vcf_samples,
 )
 from just_vcf.loaders.table import TableLayoutError
@@ -57,5 +58,6 @@ __all__ = [
     "open_payload",
     "rejoin_split",
     "sniff",
+    "table_samples",
     "vcf_samples",
 ]

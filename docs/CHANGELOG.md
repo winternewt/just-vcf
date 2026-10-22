@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A damaged BGZF input makes `load` raise `DamagedBgzfError` (exported) with the facet's id, the
+  compressed byte offset of the first block that does not read back and what is wrong with it, in
+  place of polars-bio's raw `ComputeError`; no path in it (F16). The damaged PGP-HMS starling upload
+  now names offset 473,789,118. `just_vcf.bgzf.find_damage` is the block walker behind it.
+
 - A VCF re-saved by a spreadsheet loads when a field is longer than 128 KiB: the re-save is undone
   without Python's `csv`, whose reader refused such a field with `csv.Error` (F7 follow-up).
 

@@ -117,7 +117,8 @@ record per file: outcome, path, reason, and what a duplicate duplicates).
 - **One damaged upload: huE2F2FC download 2771** (an Illumina starling genome VCF, 886,854,046 bytes,
   the size the listing states). Walked block by block, one 163,477-byte span at offsets
   473,789,118–473,952,595 does not inflate ("invalid distance code"), and every block before and after
-  it is intact, so `load` fails in polars-bio with "invalid BGZF ISIZE", which is right. The companion
+  it is intact, so `load` fails, which is right: since 2026-10-22 with `DamagedBgzfError` naming the
+  facet and offset 473,789,118 (F16), before that with polars-bio's "invalid BGZF ISIZE". The companion
   index (download 2772) points at nine block starts inside that span, none of them a valid block in this
   copy, while 2,000 of 2,000 checked outside it are: the index was built on bytes this copy does not have.
   So the damage came after indexing, in the upload, at PGP or in the download; a re-fetch to tell which

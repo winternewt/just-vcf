@@ -51,6 +51,30 @@ unclosed quote swallowing the rest of a file. Code: `loaders/vcf.py` `undo_resav
 `test_a_resaved_vcf_with_a_field_past_the_csv_limit_loads` (about 200 KiB of EFF) and
 `test_undo_resave_reads_quotes_as_csv_does` (the same output as `csv` on the shapes it reads).
 
+## F16 — A damaged BGZF input fails with polars-bio's raw error
+
+Severity: low · Found 2026-10-22 on the damaged starling upload ([PGP_HMS.md](PGP_HMS.md)).
+
+One block of the upload does not inflate. `load` failed with a `polars.exceptions.ComputeError`
+whose text depends on how the block is broken ("invalid BGZF ISIZE" on the real file; a checksum
+or libdeflater message on synthetic ones) and says neither which facet nor where in the file.
+
+Resolved 2026-10-22: when a read fails (polars-bio's `ComputeError`, or zlib's or `gzip`'s from a copy
+made in Python) and the input's outer layer is BGZF, `load` walks the file block by block
+(`bgzf.find_damage`: header, `BC` size, inflate, CRC32, ISIZE) and raises `DamagedBgzfError` with the
+facet's id, the first bad block's compressed offset and what is wrong with it; a failure whose blocks
+all read is re-raised unchanged. The error carries no path. Damage that keeps `sniff` from reading the
+first blocks names the source's sha256 instead of a facet. The check costs nothing on a file that
+reads: it runs only after a failure, and every read of the records happens inside `load` (the stats
+pass reads the whole file), so the lazy frames never meet the damage. On the real upload: offset
+473,789,118, `inflate`, found by a 4-second walk, as the hand walk in PGP_HMS.md had it. Rejected: a
+block check before every BGZF load, a full extra decompression of every input; and matching
+polars-bio's message texts, which differ by kind of damage and by release. Not covered: damage under
+another layer (a BGZF inside a zip, a plain gzip), which keeps the reader's own error, since only an
+outer BGZF has block offsets to name. Code: `bgzf.py` `find_damage`; `loading.py` `DamagedBgzfError`,
+`_damage_named`; tests in `tests/test_bgzf.py` (`test_load_names_the_facet_and_the_block_never_the_path`
+and the walker's cases).
+
 ## F15 — An ALT that is no VCF allele counted as an indel
 
 Severity: low · Found 2026-10-22 loading the Veritas CNV upload F7's fix made readable.

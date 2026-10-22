@@ -1,4 +1,5 @@
-"""A BGZF writer on the standard library, for the loader's cached copies.
+"""A BGZF writer on the standard library, for the loader's cached copies, and a block walker that
+finds where a BGZF file is damaged.
 
 BGZF (SAM spec §4.1) is gzip written as independent blocks of at most 64 KiB, each carrying its own
 size in a `BC` extra subfield, and ended by a fixed empty block. polars-bio reads it as fast as plain
@@ -9,6 +10,8 @@ on a thread pool; `zlib` releases the GIL while it works.
 import struct
 import zlib
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO
 
@@ -94,3 +97,78 @@ class BgzfWriter:
             self.close()
         else:
             self._pool.shutdown(cancel_futures=True)
+
+
+@dataclass(frozen=True)
+class BlockDamage:
+    """The first block of a BGZF file that does not read back."""
+
+    offset: int
+    """The block's compressed byte offset in the file (where its gzip header starts)."""
+    reason: str
+    """What is wrong with it: `not_a_block` (no gzip header with a `BC` subfield where a block must
+    start), `truncated` (the file ends inside the block), `inflate` (the deflate data is invalid),
+    `crc32` or `isize` (it inflates, to other bytes or another length than the block states)."""
+    detail: str
+    """The specifics, for the message: zlib's text, or the stated and found values."""
+
+
+_FIXED = struct.Struct("<4BI2BH")
+"""A gzip member's first 12 bytes: ID1, ID2, CM, FLG, MTIME, XFL, OS, XLEN (when FLG has FEXTRA)."""
+
+
+def find_damage(path: Path, chunk: int = 1 << 20) -> BlockDamage | None:
+    """Walk `path` block by block and return the first block that does not read back, or None.
+
+    Each block's header must be gzip's, with FEXTRA and a `BC` subfield giving the block's size; its
+    deflate data must inflate to exactly ISIZE bytes whose CRC32 is the one stated. A file that ends
+    cleanly after a block is not damaged, whether or not it carries the empty end block. Reads the
+    whole file, so it is for the failure path, not for every load.
+    """
+    with path.open("rb", buffering=chunk) as handle:
+        offset = 0
+        while True:
+            head = handle.read(_FIXED.size)
+            if not head:
+                return None
+            if len(head) < _FIXED.size:
+                return BlockDamage(offset, "truncated", f"{len(head)} byte(s) where a block header starts")
+            id1, id2, method, flags, _, _, _, xlen = _FIXED.unpack(head)
+            if (id1, id2, method) != (0x1F, 0x8B, 8) or not flags & 4:
+                return BlockDamage(offset, "not_a_block", "no gzip header with an extra field")
+            extra = handle.read(xlen)
+            if len(extra) < xlen:
+                return BlockDamage(offset, "truncated", "the file ends inside the block header")
+            bsize = _block_size(extra)
+            if bsize is None:
+                return BlockDamage(offset, "not_a_block", "no BC subfield in the gzip extra field")
+            rest = bsize + 1 - _FIXED.size - xlen
+            if rest < 8:
+                return BlockDamage(offset, "not_a_block", f"a block size of {bsize + 1} bytes is too short")
+            body = handle.read(rest)
+            if len(body) < rest:
+                return BlockDamage(offset, "truncated", f"the file ends {rest - len(body)} byte(s) short of the block's end")
+            crc, isize = struct.unpack("<II", body[-8:])
+            inflater = zlib.decompressobj(-15)
+            try:
+                data = inflater.decompress(body[:-8]) + inflater.flush()
+            except zlib.error as err:
+                return BlockDamage(offset, "inflate", str(err))
+            if not inflater.eof:
+                return BlockDamage(offset, "inflate", "the deflate stream does not end inside the block")
+            if len(data) != isize:
+                return BlockDamage(offset, "isize", f"inflates to {len(data)} bytes, the block states {isize}")
+            if zlib.crc32(data) != crc:
+                return BlockDamage(offset, "crc32", f"CRC32 {zlib.crc32(data):08x}, the block states {crc:08x}")
+            offset += bsize + 1
+
+
+def _block_size(extra: bytes) -> int | None:
+    """BSIZE (the block's total size less one) from a gzip extra field, or None without a `BC` subfield."""
+    at = 0
+    while at + 4 <= len(extra):
+        si1, si2, length = extra[at], extra[at + 1], struct.unpack_from("<H", extra, at + 2)[0]
+        if (si1, si2, length) == (66, 67, 2) and at + 6 <= len(extra):
+            return struct.unpack_from("<H", extra, at + 4)[0]
+        at += 4 + length
+    return None

@@ -3,6 +3,25 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F2 — 23andMe rows with a doubled tab are dropped
+
+Severity: low · Found 2026-09-30 by loading the 503 PGP-HMS 23andMe-layout files.
+
+Two 2012–2014 23andMe exports carry rows with an empty field between the rsid and the chromosome
+(`rs15842⇥⇥1⇥948921⇥CT`): 14 and 35 rows out of about 960,000. The loader drops them and says so in
+`Loaded.warnings`. Not fixed: accepting "exactly one empty field after the id" is a guess about what the
+vendor meant, and the rows are few. Revisit if another vendor shows the same shape.
+
+Resolved 2026-10-22. The rows were checked rather than the vendor's intent guessed: in both exports
+every such row (49 distinct ids, all rsids of four or five digits) has its one empty field right after
+the id, and each of the 49 sits at the same chromosome and position in other PGP-HMS 23andMe exports
+(the first 120 checked), with none placed elsewhere. It is not tab-stop alignment: most ids of the
+same length are written with one tab. So a row of exactly five fields whose second field is empty is
+read without that field, and counted in its own warning line; an empty field anywhere else still drops
+the row (the stray first row of the F3 file, empty between position and genotype, stays dropped). Both
+exports now load 960,613 rows, the same count. Code: `just_vcf/loaders/rsid_table.py` `read_calls`;
+test `test_a_doubled_tab_after_the_id_is_read_past_and_counted`.
+
 ## F12 — Some VCF uploads write a deletion as ALT `-`
 
 Severity: low · Found 2026-10-22 running `normalize` against `bcftools norm` on PGP-HMS uploads (RM6).

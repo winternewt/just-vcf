@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A 23andMe-layout row with a doubled tab right after the id (`rs15842⇥⇥1⇥948921⇥CT`) is read without
+  the empty field and counted in a warning, instead of being dropped (F2). Two 2012–2014 PGP-HMS exports
+  gain 35 and 14 rows; an empty field anywhere else still drops the row.
+
 - Schema 0.0.10: `facets.chip`, `chip_basis` (array chip, stated or inferred) and `strand_check` (set by
   `resolve_ref`; a `mixed` facet withholds the alleles that read differently on the two strands).
 

@@ -13,15 +13,6 @@ The standard library cannot read it, so `sniff` reports `unreadable` and names t
 needs a third-party inflater (the `zipfile-deflate64` package, or `7z` as a subprocess) behind an extra.
 Not fixed: one file, and the same person's VCF may exist unzipped elsewhere.
 
-## F2 — 23andMe rows with a doubled tab are dropped
-
-Severity: low · Found 2026-09-30 by loading the 503 PGP-HMS 23andMe-layout files.
-
-Two 2012–2014 23andMe exports carry rows with an empty field between the rsid and the chromosome
-(`rs15842⇥⇥1⇥948921⇥CT`): 14 and 35 rows out of about 960,000. The loader drops them and says so in
-`Loaded.warnings`. Not fixed: accepting "exactly one empty field after the id" is a guess about what the
-vendor meant, and the rows are few. Revisit if another vendor shows the same shape.
-
 ## F3 — A headerless file holding two exports loses the second one
 
 Severity: low · Found 2026-09-30, same sweep.

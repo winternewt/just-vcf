@@ -15,12 +15,32 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from test_cache import SEQ, manifests, size_on_disk, vcf_zip, write_entry
 
-from just_vcf import Loaded, ReferenceStore, load, mint_vrs_ids, normalize, rejoin_split, resolve_ref
-from just_vcf import cache
+from just_vcf import (
+    Loaded,
+    ReferenceStore,
+    cache,
+    load,
+    mint_vrs_ids,
+    normalize,
+    rejoin_split,
+    resolve_ref,
+)
 from just_vcf.reference import RESOLVE_VERSION
 from just_vcf.schema import SCHEMA_VERSION
-from test_cache import default_store, manifests, size_on_disk, vcf_zip, write_entry  # noqa: F401  (default_store is a fixture)
+
+
+@pytest.fixture
+def default_store(tmp_path: Path) -> ReferenceStore:
+    """The reference store at its default place inside the cache dir, holding `SEQ` as contig 1: a
+    child process opens it with `ReferenceStore.open()`."""
+    fasta = tmp_path / "ref.fa"
+    fasta.write_text(">1\n" + "\n".join(SEQ[i : i + 60] for i in range(0, len(SEQ), 60)) + "\n")
+    store = ReferenceStore.open()
+    store.add_fasta(fasta)
+    return store
+
 
 Step = Callable[[Loaded, ReferenceStore], Loaded]
 
@@ -55,7 +75,8 @@ def file_stamps(entry: Path) -> dict[Path, tuple[int, int]]:
 @pytest.mark.parametrize("name", STEPS)
 def test_the_same_input_again_reuses_the_spill_and_touches_no_file(name: str, tmp_path: Path, default_store: ReferenceStore) -> None:
     kind, resolved, step = STEPS[name]
-    given = step_input(vcf_zip(tmp_path, "one"), default_store, resolved)
+    path = vcf_zip(tmp_path, "one")
+    given = step_input(path, default_store, resolved)
     first = step(given, default_store)
     entry = entry_of(kind)
     before = file_stamps(entry)
@@ -72,6 +93,10 @@ def test_the_same_input_again_reuses_the_spill_and_touches_no_file(name: str, tm
     again = manifests(kind)[f"frames/{entry.name}"]
     assert again.created == manifest.created and again.last_used > manifest.last_used
     assert again.size_bytes == size_on_disk(entry)
+    # A fresh load of the same file, as another session would make, finds the same generation.
+    fresh = step(step_input(path, default_store, resolved), default_store)
+    assert fresh.calls.collect().equals(rows) and fresh.warnings == first.warnings
+    assert len(generations(entry)) == 1 and file_stamps(entry) == before
 
 
 @pytest.mark.parametrize("name", STEPS)

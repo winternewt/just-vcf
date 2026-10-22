@@ -31,7 +31,12 @@ def compress_block(payload: bytes, level: int = 1) -> bytes:
 
 
 class BgzfWriter:
-    """A write-only binary stream that writes BGZF to `raw`. Closing it writes the end block."""
+    """A write-only binary stream that writes BGZF to `raw`. Closing it writes the end block.
+
+    Every block but the last holds exactly `BLOCK_PAYLOAD` uncompressed bytes, so the uncompressed
+    offset of any byte written names its block; `block_starts` records where each block begins in
+    the compressed stream, which is all a tabix index needs (`virtual_offset`).
+    """
 
     def __init__(self, raw: BinaryIO, level: int = 1, threads: int = 8) -> None:
         self._raw = raw
@@ -39,8 +44,13 @@ class BgzfWriter:
         self._pool = ThreadPoolExecutor(threads)
         self._buffer = bytearray()
         self._pending: list[bytes] = []
+        self._compressed = 0
+        self._written = 0
+        self.block_starts: list[int] = []
+        """Compressed offset of each block written, the end block last once closed."""
 
     def write(self, data: bytes) -> int:
+        self._written += len(data)
         self._buffer += data
         while len(self._buffer) >= BLOCK_PAYLOAD:
             self._pending.append(bytes(self._buffer[:BLOCK_PAYLOAD]))
@@ -54,12 +64,26 @@ class BgzfWriter:
             self._pending.append(bytes(self._buffer))
             self._buffer.clear()
         self._flush_pending()
+        self.block_starts.append(self._compressed)
         self._raw.write(EOF_BLOCK)
+        self._compressed += len(EOF_BLOCK)
         self._pool.shutdown()
+
+    def virtual_offset(self, offset: int) -> int:
+        """The BGZF virtual offset (SAM spec §4.1.1) of uncompressed byte `offset`, once closed:
+        the compressed start of its block, shifted 16 bits, plus the offset inside the block. The end
+        of a block is the start of the next, as htslib's reader reports it, so the offset just past
+        the last byte written is the end block's start."""
+        if offset == self._written:
+            return self.block_starts[-1] << 16
+        block, within = divmod(offset, BLOCK_PAYLOAD)
+        return (self.block_starts[block] << 16) | within
 
     def _flush_pending(self) -> None:
         for block in self._pool.map(lambda chunk: compress_block(chunk, self._level), self._pending):
+            self.block_starts.append(self._compressed)
             self._raw.write(block)
+            self._compressed += len(block)
         self._pending.clear()
 
     def __enter__(self) -> "BgzfWriter":

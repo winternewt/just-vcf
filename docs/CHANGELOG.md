@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf` writes a tabix index, `<path>.tbi`, beside BGZF output (RM6), built from the offsets it
+  wrote rather than by a second pass: `index=None` (the default) indexes every BGZF write, `index=False`
+  skips it, and a plain-text write has none. A write without an index removes a `<path>.tbi` left
+  from an earlier one. `VcfWritten.index_path` names it. htslib (pysam, opt-in test) answers region
+  queries through it as the frame does, and builds the same linear index for the same file.
+  `BgzfWriter` records its blocks' compressed offsets (`block_starts`, `virtual_offset`).
+
 - Schema 0.0.10: `facets.chip`, `chip_basis` (array chip, stated or inferred) and `strand_check` (set by
   `resolve_ref`; a `mixed` facet withholds the alleles that read differently on the two strands).
 

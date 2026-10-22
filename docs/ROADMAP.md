@@ -355,7 +355,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and plus-strand indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: gVCF blocks, strand, minus-strand indels and blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, with a tabix index, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and plus-strand indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: gVCF blocks, strand, minus-strand indels and blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -525,7 +525,29 @@ hg38ToHg19 chain it lifts 5,724,577 (UCSC's chain is netted, one target per base
 ambiguous; its chrM is hg19's, so MT is `target_contig_unmatched`). Found on the way: F14 (resolved).
 No bcftools on this machine, so the opt-in bcftools comparison was not run.
 
-**Left in RM6:** writing gVCF blocks (after RM3); a tabix index beside the output; SVLEN for symbolic
+**Shipped 2026-10-22: a tabix index beside the output** (`just_vcf.tabix`, `write_vcf(index=…)`). The
+writer hands each line's contig, interval and byte offsets to an indexer as it writes them, and
+`BgzfWriter` records where each compressed block starts, so the `.tbi` costs no second pass. Checked
+by htslib (pysam, opt-in): region queries through our index return the rows the frame says overlap
+each window (305 windows, every bin level, symbolic deletions found by their END), and htslib's own
+index of the same file has the same linear index and the same per-contig counts. Decisions, each with
+what was rejected:
+
+- Our own indexer, in the core. Rejected: `pysam.tabix_index` after the write, which needs the
+  `[reference]` extra (pysam, not on Windows) and reads the whole file again.
+- An interval runs to INFO `END` where the line writes one, else over REF, which is how htslib's VCF
+  preset reads the line back. Rejected: always the REF span, which would leave a gVCF block or a
+  symbolic deletion out of a query over its middle.
+- A window no record overlaps takes the next window's offset, and the end of a BGZF block is written as
+  the next block's start, both as htslib writes them (found by comparing with its index). Rejected:
+  the previous window's offset, valid but looser and not byte-equal to htslib's.
+- Not done: htslib's folding of small bins into their parents (`compress_binning`), which only makes
+  the index smaller; and CSI, for contigs past 2^29 bases, which the writer refuses to index (pass
+  `index=False`).
+- On by default for BGZF output. Rejected: off by default, which leaves the default export unqueryable
+  by region for a cost of one small file.
+
+**Left in RM6:** writing gVCF blocks (after RM3); SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
 does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting sites that carry `<*>`;
 reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; in a liftover, indels on minus-strand

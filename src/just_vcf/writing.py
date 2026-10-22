@@ -36,6 +36,12 @@ What is written, and the rules it follows:
   `chrM`), or as the source spelled them (`contig_map`). The header's `##contig` lines follow the same
   names and the rows' order.
 
+- **A tabix index** (`<path>.tbi`) is written beside BGZF output by default, from the byte offsets
+  the writer itself produced (`just_vcf.tabix`), so the file is region-queryable by htslib without a
+  second pass over it. Each record's interval is the one htslib's VCF preset reads back: from `POS`,
+  to INFO `END` where the line writes one, else over REF. A plain-text write has no index, and a
+  write without one removes a stale `<path>.tbi`.
+
 The header names the facet (`facet_id`, `source_sha256`, `format_id`, the parent of a derived facet)
 and this package's version. It never names `source_path` or the source's `##SAMPLE` lines, which can
 carry a real name; the sample column is the facet's `sample`, as given.
@@ -58,6 +64,7 @@ from just_vcf.bgzf import BgzfWriter
 from just_vcf.loaders.vcf import FORMAT_KEYS, SPLIT_INFO_KEY
 from just_vcf.loading import Loaded
 from just_vcf.schema import CONTIG_RANK, SCHEMA_VERSION, RefCheck, canonical_chrom
+from just_vcf.tabix import TabixIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +144,8 @@ class VcfWritten(BaseModel):
     """Rows left out under `resolved_only=True`, per reason. Empty when nothing was left out."""
     blocks_not_written: int
     warnings: tuple[str, ...] = ()
+    index_path: Path | None = None
+    """The tabix index written beside a BGZF file (`<path>.tbi`); None when none was written."""
 
 
 class _Hashing:
@@ -159,6 +168,7 @@ def write_vcf(
     sample: str | None = None,
     resolved_only: bool = False,
     compress: bool = True,
+    index: bool | None = None,
 ) -> VcfWritten:
     """Write `loaded`'s one facet to `path` as a VCF 4.3 (BGZF unless `compress=False`).
 
@@ -167,8 +177,17 @@ def write_vcf(
     `UnwritableRowsError` unless `resolved_only=True`. The rows must be in the order `load` emits
     them (grouped by contig, positions ascending); otherwise `UnsortedRowsError`. The same frames and
     options give the same bytes.
+
+    `index` writes a tabix index, `<path>.tbi`, beside the file; the default is to write one whenever
+    the output is BGZF. A plain-text file cannot be indexed (`index=True` with `compress=False` is
+    refused), and a write without an index removes a `<path>.tbi` left from an earlier write, which
+    would no longer describe the file.
     """
     path = Path(path)
+    if index and not compress:
+        raise ValueError("a tabix index needs BGZF output; pass compress=True or leave index unset")
+    indexed = compress if index is None else index
+    index_path = path.with_name(path.name + ".tbi")
     facets = loaded.facets.collect()
     if facets.height != 1:
         raise ValueError(f"write_vcf takes one facet; this Loaded has {facets.height}")
@@ -213,23 +232,38 @@ def write_vcf(
     declared = [key for key in _FORMAT_DESCRIPTIONS if stats[f"has_{key}"]]
     header = _header(facet, sample_name, names, declared, stats)
     rows = calls.filter(pl.col("_unwritable").is_null()) if skipped else calls
-    lines = rows.select(_line(names.mapping, stats["ploidy"]).alias("line"), "chrom", "pos")
+    lines = rows.select(
+        _line(names.mapping, stats["ploidy"]).alias("line"),
+        "chrom",
+        "pos",
+        *_index_columns(names.mapping),
+    )
 
     # Written beside the target and moved over it at the end, so a refused or failed write leaves no
-    # half-written VCF behind under the requested name.
+    # half-written VCF (or index) behind under the requested name.
     partial = path.with_name(path.name + ".partial")
+    index_partial = index_path.with_name(index_path.name + ".partial")
+    indexer = TabixIndexer() if indexed else None
     try:
         with partial.open("wb") as raw:
             sink = _Hashing(raw)
             if compress:
                 with BgzfWriter(sink, level=6) as out:
-                    written = _write_body(out, header, lines)
+                    written = _write_body(out, header, lines, indexer)
+                if indexer is not None:
+                    with index_partial.open("wb") as raw_index, BgzfWriter(raw_index, level=6) as index_out:
+                        index_out.write(indexer.build(out.virtual_offset))
             else:
-                written = _write_body(sink, header, lines)
+                written = _write_body(sink, header, lines, None)
     except BaseException:
         partial.unlink(missing_ok=True)
+        index_partial.unlink(missing_ok=True)
         raise
     os.replace(partial, path)
+    if indexer is not None:
+        os.replace(index_partial, index_path)
+    else:
+        index_path.unlink(missing_ok=True)
 
     for warning in warnings:
         logger.warning("%s: %s", facet_id, warning)
@@ -240,21 +274,50 @@ def write_vcf(
         rows_skipped=skipped,
         blocks_not_written=blocks,
         warnings=tuple(warnings),
+        index_path=index_path if indexer is not None else None,
     )
 
 
-def _write_body(out: BinaryIO | BgzfWriter | _Hashing, header: str, lines: pl.LazyFrame) -> int:
-    """The header, then every line batch by batch, checking the order as it goes. Returns the row count."""
-    out.write(header.encode())
+def _write_body(out: BinaryIO | BgzfWriter | _Hashing, header: str, lines: pl.LazyFrame, indexer: TabixIndexer | None) -> int:
+    """The header, then every line batch by batch, checking the order as it goes and handing each
+    record's interval and byte offsets to `indexer`. Returns the row count."""
+    head = header.encode()
+    out.write(head)
+    offset = len(head)
     order = _OrderCheck()
     written = 0
     for batch in lines.collect_batches():
         order.check(batch)
         buffer = io.BytesIO()
         batch.select("line").write_csv(buffer, include_header=False, quote_style="never", line_terminator="\n")
-        out.write(buffer.getvalue())
+        data = buffer.getvalue()
+        out.write(data)
+        if indexer is not None:
+            size = pl.col("line").str.len_bytes().cast(pl.Int64) + 1
+            located = batch.select(
+                pl.col("_ix_name").alias("name"),
+                pl.col("_ix_beg").alias("beg"),
+                pl.col("_ix_end").alias("end"),
+                (offset + size.cum_sum()).alias("u_end"),
+            ).with_columns((pl.col("u_end") - batch.select(size).to_series()).alias("u_start"))
+            if batch.height and located["u_end"][-1] != offset + len(data):
+                raise RuntimeError("the written lines' sizes do not add up to the bytes written; the index would be wrong")
+            indexer.add(located)
+        offset += len(data)
         written += batch.height
     return written
+
+
+def _index_columns(mapping: dict[str, str]) -> list[pl.Expr]:
+    """Each record's contig as written and its interval as htslib's VCF preset reads it back: 0-based
+    from `POS - 1`, to INFO `END` where the line writes one, else to `POS - 1 + len(REF)`."""
+    ref_span_end = pl.col("pos").cast(pl.Int64) + _written_ref().str.len_chars().cast(pl.Int64) - 1
+    end = pl.col("end_pos").cast(pl.Int64)
+    return [
+        pl.col("chrom").replace(mapping).alias("_ix_name"),
+        (pl.col("pos").cast(pl.Int64) - 1).alias("_ix_beg"),
+        pl.when((end != ref_span_end).fill_null(False)).then(end).otherwise(ref_span_end).alias("_ix_end"),
+    ]
 
 
 def _written_ref() -> pl.Expr:

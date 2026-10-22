@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.6.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.7.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -73,6 +73,43 @@ that checks it.
 
 Array exports write no REF at all (charter 10: REF never comes from the genotype), so a VCF-style index
 genotype (`0/1`) cannot be assigned to them until RM3 has read REF and derived the alts.
+
+**How RM3 fills these slots (`resolve_ref`).** It returns the same facet, same `facet_id`, with the
+slots above filled, and leaves the `Loaded` it was given unchanged. That is not an overwrite in the
+charter's sense (invariant 5): every column it writes is one this schema defines as "not read yet"
+until the sequence is read (`ref` null, `ref_check = not_run`, an array row's `alts` and `gt` null),
+nothing the source wrote is touched, and the result is fixed by the facet and its assembly's
+sequence, not by a choice. The alternative, a derived facet (`relation = ref_checked`), was rejected:
+every facet would then stay `not_run` for ever and its checked twin would be a second identity for the
+same calls. A facet already read is refused rather than read again.
+
+- A row with `source_ref`: `ref` is the reference over the same span, `pos` to
+  `pos + len(source_ref) - 1`. `ref_check` compares case-insensitively (VCF REF bases are), so a
+  lowercase `source_ref` matches; a reference ambiguity code against a concrete source base (VCF 4.5
+  writes `R` as `A`) is a `mismatch` and counted apart. A mismatch keeps both values.
+- An array row whose alleles are all single bases with at least one called: `ref` is the base at
+  `pos`; `alts` are the called alleles other than REF, **sorted by allele string** (an array states
+  no ALT order, so two files of one chip agree); `gt` indexes `[ref] + alts`, with null for an
+  uncalled haplotype. A hom-ref row gets `alts = []`. `ref_check` stays null: there is no source REF.
+- Left unread, each reason counted once: I/D codes, whole no-calls (the probe's REF span is unknown),
+  genotypes that could not be split, spans past the contig's end or at POS 0, and every row of a
+  contig that could not be matched with the reference (below).
+
+**Matching the reference to the facet.** Per contig the calls use, read through `canonical_chrom` on
+both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X):
+
+- the facet stated the contig's length (`header_contigs`): the reference's length must equal it, and
+  its md5 too where the header gives one;
+- it did not (arrays): the facet's `assembly_label` must equal the reference's. The reference's label
+  comes from its contig 1 length (GRCh37, GRCh38, T2T-CHM13), or from one the caller asserted when
+  adding the FASTA. `GRCh37` cannot vouch for MT, since it covers hg19's chrM (16,571 bases) as well
+  as rCRS (16,569), so an array's MT stays unread.
+
+A primary contig (1–22, X, Y) whose stated length or md5 differs refuses the whole facet
+(`ReferenceMismatchError`): it is another assembly. Any other contig that does not match (hg19's chrM
+against GRCh37's MT, an alt contig the reference lacks, a name the reference holds twice) leaves its
+rows unread. A facet of which nothing matches is refused. When a store holds several collections, the
+one that matches the most rows is used; a tie is refused unless the caller names one.
 
 | Option | Cost |
 |---|---|
@@ -269,6 +306,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `assembly_label`, `assembly_label_basis` | e.g. `GRCh37`; basis is `stated` (header), `inferred` (contig lengths) or null. A stated label is kept when the lengths disagree, with a warning (RM4, below) |
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
+| `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
 | `phasing_method` | null unless stated |
@@ -318,7 +356,7 @@ type, null included, `unknown`. Measured on PGP-HMS uploads: four Genos exomes a
 and 13.6% breadth, about 400 Mb reached.
 
 There is no `ref_basis` column. A non-null `ref` always came from the facet's assembly sequence
-(charter 10), so the basis would have one value.
+(charter 10), so the basis would have one value. Which collection it came from is `ref_seqcol_digest`.
 
 ## Decision 6: the `calls` columns
 
@@ -586,6 +624,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **0.0.7** (2026-10-22, RM3): `facets.ref_seqcol_digest` names the collection
+  `resolve_ref` read REF from. Additive. `resolve_ref` fills `ref`, `ref_check`, and an array row's
+  `alts` and `gt` (Decision 2).
 
 - **0.0.6** (2026-10-22, RM2's VCF side): `facets.ploidy_statements` (the header's ploidy lines
   verbatim); `vendor`, `caller`, `caller_version`, `phasing_method` now filled from the header; BCF rows

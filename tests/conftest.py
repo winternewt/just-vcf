@@ -14,6 +14,8 @@ def isolated_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest
     """Loader cache under a temporary directory, never the user's real cache."""
     path = tmp_path_factory.mktemp("cache")
     monkeypatch.setenv("JUST_VCF_CACHE_DIR", str(path))
+    # No configured reference store: a test that wants one passes it or sets the variable itself.
+    monkeypatch.setenv("JUST_VCF_REFERENCE_DIR", "")
     return path
 
 

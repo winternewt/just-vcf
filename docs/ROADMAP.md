@@ -87,11 +87,58 @@ Header evidence found while declaring the VCF formats:
 Not identifiable from the header: 23andMe's exome VCF, the Dante- and Nebula-named uploads (generic GATK).
 
 ## RM3 — REF lookup and padding
-Severity: high · Status: open (checked 2026-10-18: nothing built; every row's `ref_check` is `not_run`) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the FASTA tier shipped as `resolve_ref` on a gtars refget store, for VCF and array rows; indel anchor bases and reference-supported positions are left) · Owner: lead
 
 Port just-prs `reference_allele.py` (reference-panel tier, FASTA tier, FASTA build check). New work:
 ALT derivation from genotype against REF, indel anchor bases, chr-prefixed FASTA support, emitting
 reference-supported positions.
+
+**Shipped 2026-10-22: `resolve_ref` (`just_vcf.reference`).** The rules are in docs/SCHEMA.md
+(Decision 2, "How RM3 fills these slots"). Choices made, each with the alternative rejected:
+
+- **Same facet, filled, not a derived facet.** Every column it writes is one the schema defines as
+  "not read yet", and the result is fixed by the facet and its assembly's sequence. A derived facet
+  (`relation = ref_checked`) would leave every loaded facet `not_run` for ever beside a checked twin
+  with a second id. The consequence: a resolved and an unresolved frame of one `facet_id` can both
+  exist in a session, so a consumer must not join a resolved `facets` with an unresolved `calls`;
+  `ref_seqcol_digest` (null before) and `ref` tell them apart. The lead may still prefer the derived
+  facet; nothing else depends on the choice.
+- **The reference is a gtars `RefgetStore` on disk** (`JUST_VCF_REFERENCE_DIR`, default
+  `reference/` under the cache dir), over pysam faidx: it is a core dependency, exact, and gives the
+  seqcol digest the facet records. A FASTA is added once; a fingerprint alias (path, size, mtime)
+  keeps it from being digested again.
+- **Assembly matching per contig, by stated length and md5, else by label.** The reference's label
+  comes from its contig 1 length (the just-prs fingerprint idea), or a label the caller asserts when
+  adding a FASTA, which its lengths must not contradict. Rejected: matching by label alone (hg19 and
+  GRCh37 share it and differ on MT), and refusing a facet over any one unmatched contig (an hg19 VCF
+  would lose every autosome over chrM).
+- **Array ALTs sorted by allele string**, not in genotype order, so two exports of one chip agree.
+- **A store holding several collections** picks the one matching the most rows; a tie is refused
+  unless `collection=` names one.
+
+**Dogfooded 2026-10-22** against Ensembl GRCh37 and GRCh38 primary assemblies in one store (built
+from the gzipped FASTAs in 103 s and 25 s, 2.2 GB; each assembly named by its own contig 1 length),
+on PGP-HMS files read from the Krypton share, aggregates only:
+
+- Six plain VCFs (73–142 MB). Five resolved: 34.1M rows read, all but 2 matching their source REF, and
+  both of those against an IUPAC code in the reference. One stated lengths for 194 GRCh38 contigs in
+  UCSC names; its `chr*_random` and `chrUn_*` contigs (44,594 rows, 1%) stayed unread, because
+  Ensembl names them by accession (`KI270721.1`) and `canonical_chrom` does not map the two. One VCF
+  with neither `##contig` lines nor a build hint was refused. A sixth failed to load (not RM3's).
+- Four build-37 23andMe exports (1.0–1.4M rows): 97.5–99.4% of rows read; the rest are I/D codes,
+  no-calls and MT. 14.7–19.4% of the rows read carry no REF allele, the range expected for
+  homozygous non-reference calls on a chip, not for a wrong build or strand. Four build-36 exports
+  were refused: no GRCh36 reference in the store.
+- `resolve_ref` on the 1.4M-row export: 11.4 s (load 1.3 s), of which 1.3 s reading bases.
+
+Order with `rejoin_split`: re-join first, then `resolve_ref`. The other way round, the re-joined rows
+carry no `ref` while the facet keeps `ref_seqcol_digest`, and `resolve_ref` refuses it as already read.
+
+Left: indel anchor bases (no loaded format lacks them: 23andMe I/D codes need the chip manifest, and
+Living DNA's run-together `CCA` cannot be split without the site's alleles); emitting
+reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither
+`##contig` lengths nor a build hint, and an array without a stated build, are refused: nothing can
+show which assembly they are on.
 
 **Measured 2026-09-30: gtars RefgetStore as the sequence source** (gtars 0.10, Ensembl GRCh38
 primary-assembly FASTA, 3.15 GB, 194 sequences):

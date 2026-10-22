@@ -2,7 +2,10 @@
 
 from importlib.metadata import version
 
+from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
+from just_vcf.callset import absence_is_reference
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
+from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.loading import (
     LOADABLE_FORMATS,
     Loaded,
@@ -26,11 +29,14 @@ from just_vcf.schema import (
     BlockKind,
     CallsetType,
     ChipBasis,
+    ContentFilter,
+    ContentFilterBasis,
     EvidenceBasis,
     PhaseSetKind,
     RefCheck,
     SplitSignal,
     StrandCheck,
+    VariantClass,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
 from just_vcf.writing import ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
@@ -47,9 +53,15 @@ __all__ = [
     "AbsenceMeans",
     "AssemblyLabelBasis",
     "BlockKind",
+    "CacheClearReport",
+    "CacheEntryInfo",
     "CallsetType",
     "ChipBasis",
+    "Chain",
+    "ContentFilter",
+    "ContentFilterBasis",
     "ContigNames",
+    "Lifted",
     "Loaded",
     "MultiSampleError",
     "NoSampleError",
@@ -68,13 +80,18 @@ __all__ = [
     "UnsortedRowsError",
     "UnsupportedFormatError",
     "UnwritableRowsError",
+    "VariantClass",
     "VcfWritten",
     "XCopies",
     "__version__",
+    "absence_is_reference",
+    "clear_cache",
+    "liftover",
     "load",
     "mint_vrs_ids",
     "normalize",
     "open_payload",
+    "read_chain",
     "reference_dir",
     "rejoin_split",
     "resolve_ref",

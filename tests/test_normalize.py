@@ -150,14 +150,55 @@ def test_vectors_are_sliced_exactly_or_withheld(tmp_path: Path, store: Reference
 def test_symbolic_sites_are_left_as_written(tmp_path: Path, store: ReferenceStore) -> None:
     p = 120
     ref = at("1", p)
-    records = [record("1", p, ref, f"{other(ref)},<*>", "0/1"), record("1", p + 5, at("1", p + 5), f"{other(at('1', p + 5))},*", "1/2")]
+    records = [record("1", p, ref, f"{other(ref)},<DEL>", "0/1"), record("1", p + 5, at("1", p + 5), f"{other(at('1', p + 5))},*", "1/2")]
     parent, out = normalized(tmp_path, store, records)
     calls = out.calls.collect()
-    assert calls.filter(pl.col("pos") == p)["alts"].to_list() == [[other(ref), "<*>"]]
+    assert calls.filter(pl.col("pos") == p)["alts"].to_list() == [[other(ref), "<DEL>"]]
     assert calls.filter(pl.col("pos") == p)["split_signal"].to_list() == [None]
     # `*` is an allele like any other here, as bcftools splits it.
     assert sorted(calls.filter(pl.col("pos") == p + 5)["alts"].to_list()) == sorted([[other(at("1", p + 5))], ["*"]])
     assert any("1 multi-allelic row(s) left as written: a symbolic allele" in w for w in out.warnings)
+
+
+def test_the_unspecified_allele_is_dropped_from_split_rows(tmp_path: Path, store: ReferenceStore) -> None:
+    # DeepVariant writes `<*>` (gVCF) or `<NON_REF>` (its VCF) beside the ALTs of every variant record.
+    # `<*>` names no allele: the concrete ALTs are split, `<*>` gets no row, and the vectors are sliced
+    # to [REF, ALT] where that is exact.
+    end_t = HOMOPOLYMER + 7
+    p, q, r = 130, 140, 150
+    a, b = [x for x in "ACGT" if x != at("1", q)][:2]
+    records = [
+        record("1", p, at("1", p), f"{other(at('1', p))},<*>", "0/1"),
+        record("1", q, at("1", q), f"{a},{b},<*>", "1/2"),
+        record("1", r, at("1", r), f"{other(at('1', r))},<NON_REF>", "0/2"),  # the genotype calls `<*>`
+        record("1", end_t - 1, at("1", end_t - 1, 2), f"{at('1', end_t - 1)},<*>", "1/1"),  # an indel at a run's end
+    ]
+    parent, out = normalized(tmp_path, store, records)
+    calls = out.calls.collect()
+    source = {row["pos"]: row for row in parent.calls.collect().iter_rows(named=True)}
+    rows = {row["pos"]: row for row in calls.iter_rows(named=True)}
+
+    single = calls.filter(pl.col("pos") == p).row(0, named=True)
+    assert calls.filter(pl.col("pos") == p).height == 1
+    assert single["alts"] == [other(at("1", p))] and single["gt"] == [0, 1]
+    assert single["gl"] == source[p]["gl"][:3] and single["ad"] == source[p]["ad"][:2]
+    assert single["source_alleles"] == [at("1", p), other(at("1", p))]
+    assert single["gp"] is None
+    # One concrete ALT left: an ordinary biallelic row, not one record of a split site.
+    assert single["split_signal"] is None
+
+    split = calls.filter(pl.col("pos") == q)
+    assert sorted(split["alts"].to_list()) == sorted([[a], [b]])
+    assert set(split["split_signal"].to_list()) == {"marker"}
+
+    # A genotype that calls `<*>` says a haplotype carries some other allele; no split row could hold it.
+    assert rows[r]["alts"] == [other(at("1", r)), "<*>"] and rows[r]["gt"] == source[r]["gt"]
+
+    # The indel, freed of `<*>`, is left-aligned like any other.
+    assert (HOMOPOLYMER - 1, "CT", ("C",)) in {(row["pos"], row["ref"], tuple(row["alts"])) for row in calls.iter_rows(named=True)}
+    assert not any("<*>" in row["alts"] for row in calls.iter_rows(named=True) if row["pos"] != r)
+    assert any(w.startswith("3 site(s) held `<*>` beside their ALTs: `<*>` dropped") for w in out.warnings), out.warnings
+    assert any("1 multi-allelic row(s) left as written: the genotype calls `<*>`" in w for w in out.warnings), out.warnings
 
 
 # --- left-alignment and trimming ----------------------------------------------------------------
@@ -267,11 +308,40 @@ def test_unchecked_rows_pass_through_counted(tmp_path: Path, store: ReferenceSto
     assert any("1 row(s) not left-aligned or trimmed: REF differs from the reference" in w for w in out.warnings)
 
 
-def test_a_dash_alt_is_counted_not_passed_over(tmp_path: Path, store: ReferenceStore) -> None:
-    # Some uploads write a deletion as ALT `-` (F12). It is no VCF allele, so nothing aligns it.
-    _, out = normalized(tmp_path, store, [record("1", 30, at("1", 30), "-", "0/1", vectors=False)])
-    assert out.calls.collect()["alts"].to_list() == [["-"]]
-    assert any("1 row(s) not left-aligned or trimmed: an ALT that is not a VCF allele" in w for w in out.warnings)
+def test_a_dash_deletion_is_anchored_on_the_base_before(tmp_path: Path, store: ReferenceStore) -> None:
+    # F12: ALT `-` deletes the REF bases at POS. Anchored on the base before, it is a VCF deletion, and
+    # then left-aligned like any other: the last T of the run lands on the C before the run.
+    end_t = HOMOPOLYMER + 7
+    wrong = other(at("1", 60))
+    records = [
+        record("1", 1, at("1", 1), "-", "0/1", vectors=False),  # nothing before position 1 to anchor on
+        record("1", 30, at("1", 30, 2), "-", "0/1"),
+        record("1", 60, wrong, "-", "0/1", vectors=False),  # REF does not match: not anchored
+        record("1", end_t, at("1", end_t), "-", "1/1"),
+    ]
+    parent, out = normalized(tmp_path, store, records)
+    calls = out.calls.collect()
+    # What each row states: the source's REF where it kept it, else the new REF from the reference.
+    got = {(row["pos"], row["source_ref"] or row["ref"], row["alts"][0]) for row in calls.iter_rows(named=True)}
+    assert (29, at("1", 29, 3), at("1", 29)) in got
+    assert (HOMOPOLYMER - 1, "CT", "C") in got
+    assert (1, at("1", 1), "-") in got and (60, wrong, "-") in got
+    for pos, ref, alt in [(29, at("1", 29, 3), at("1", 29)), (HOMOPOLYMER - 1, "CT", "C")]:
+        assert is_normalized(pos, ref, alt)
+    # The haplotype is the one the source stated: its REF bases removed.
+    assert apply("1", 29, at("1", 29, 3), at("1", 29)) == SEQ1[:29] + SEQ1[31:]
+    anchored = calls.filter(pl.col("pos") == 29).row(0, named=True)
+    source = parent.calls.filter(pl.col("pos") == 30).collect().row(0, named=True)
+    assert anchored["gt"] == [0, 1] and anchored["gt_alleles"] == [at("1", 29, 3), at("1", 29)]
+    assert anchored["gl"] == source["gl"] and anchored["ad"] == source["ad"]
+    assert anchored["source_alleles"] == [at("1", 29, 3), at("1", 29)]
+    assert anchored["source_ref"] is None and anchored["ref_check"] is None
+    assert any(w.startswith("2 deletion(s) written as ALT `-` anchored on the base before") for w in out.warnings), out.warnings
+    assert any("1 row(s) not left-aligned or trimmed: a `-` deletion at a contig's first base" in w for w in out.warnings)
+    assert any("1 row(s) not left-aligned or trimmed: REF differs from the reference" in w for w in out.warnings)
+    # What could not be anchored is still no VCF allele: write_vcf leaves it out, counted.
+    written = write_vcf(out, tmp_path / "out.vcf.gz", resolved_only=True)
+    assert written.rows_skipped == {"alt_not_an_allele": 1, "ref_mismatch": 1}
 
 
 # --- dedup, determinism, the derived facet ------------------------------------------------------
@@ -294,6 +364,33 @@ def test_exact_duplicates_drop_and_conflicts_stay(tmp_path: Path, store: Referen
     conflict = calls.filter(pl.col("pos") == HOMOPOLYMER - 1)
     assert sorted(conflict["gt"].to_list()) == [[0, 1], [1, 1]]
     assert any(w == "1 exact duplicate row(s) dropped" for w in out.warnings)
+    assert any(w.startswith("2 row(s) at 1 position(s) state the same allele and differ otherwise") for w in out.warnings)
+
+
+def test_a_moved_indel_and_its_unmoved_twin_are_one_row(tmp_path: Path, store: ReferenceStore) -> None:
+    # The source writes one deletion twice: already left-aligned, and at the run's end. After the move
+    # both state the same allele, genotype and evidence; only what the move clears (source_ref,
+    # ref_check, source_gt) tells them apart, and that is not a disagreement. The unmoved row is kept.
+    end_t = HOMOPOLYMER + 7
+    left = (HOMOPOLYMER - 1, at("1", HOMOPOLYMER - 1, 2), at("1", HOMOPOLYMER - 1))
+    right = (end_t - 1, at("1", end_t - 1, 2), at("1", end_t - 1))
+    records = [
+        record("1", left[0], left[1], left[2], "0/1"),
+        record("1", right[0], right[1], right[2], "0/1"),
+        # The same SNV twice with other ids: what the rows state differs, so both stay.
+        record("1", 40, at("1", 40), other(at("1", 40)), "0/1").replace("\t.\t", "\trs1\t", 1),
+        record("1", 40, at("1", 40), other(at("1", 40)), "0/1").replace("\t.\t", "\trs2\t", 1),
+    ]
+    parent, out = normalized(tmp_path, store, records)
+    calls = out.calls.collect()
+    twin = calls.filter(pl.col("pos") == left[0])
+    assert twin.height == 1
+    kept = twin.row(0, named=True)
+    source = parent.calls.filter(pl.col("pos") == left[0]).collect().row(0, named=True)
+    assert (kept["source_ref"], kept["ref_check"], kept["source_gt"]) == (source["source_ref"], "match", "0/1")
+    assert kept["gl"] == source["gl"] and kept["ad"] == source["ad"]
+    assert calls.filter(pl.col("pos") == 40).height == 2
+    assert "1 exact duplicate row(s) dropped" in out.warnings
     assert any(w.startswith("2 row(s) at 1 position(s) state the same allele and differ otherwise") for w in out.warnings)
 
 
@@ -370,6 +467,14 @@ def test_written_output_reloads_as_held(tmp_path: Path, store: ReferenceStore) -
     view = lambda frame: [(r["chrom"], r["pos"], r["alts"], r["gt"]) for r in frame.iter_rows(named=True)]  # noqa: E731
     assert view(reloaded) == view(held)
     assert reloaded["source_ref"].to_list() == held.select(pl.coalesce("ref", "source_ref"))["ref"].to_list()
+    # The split rows keep their flag through the file: write_vcf tags them, load reads the tag as a marker.
+    assert held["split_signal"].drop_nulls().len() >= 4
+    assert reloaded["split_signal"].to_list() == held["split_signal"].to_list()
+    again = load(written.path)
+    assert again.facets.collect()["split_marker"].item() == "JUST_VCF_SPLIT"
+    assert not any("INFO/JUST_VCF_SPLIT" in field for field in again.facets.collect()["dropped_fields"].item())
+    site = rejoin_split(again).calls.filter((pl.col("chrom") == "1") & (pl.col("pos") == 90)).collect()
+    assert site.height == 1 and len(site["alts"].item()) == 3
 
 
 # --- against bcftools norm (htslib's, bundled in pysam) -----------------------------------------
@@ -422,9 +527,8 @@ def test_agrees_with_bcftools_norm(tmp_path: Path, store: ReferenceStore) -> Non
     gl = lambda path: {(r["chrom"], r["pos"], tuple(r["alts"])): r["gl"] for r in load(path).calls.collect().iter_rows(named=True)}  # noqa: E731
     their_gl, my_gl = gl(theirs_path), gl(ours.path)
     carried = {key: value for key, value in my_gl.items() if value is not None}
-    # Within one f32 step: the loader's PL -> GL lands one step off the nearest f32 for some values (F11),
-    # and bcftools re-prints the GL it read at its own precision.
-    differ = {key: (value, their_gl[key]) for key, value in carried.items() if their_gl[key] != pytest.approx(value, rel=1e-6, abs=1e-6)}
+    # Exactly: PL -> GL lands on the Float32 nearest the decimal value (F11), the one bcftools' GL reads as.
+    differ = {key: (value, their_gl[key]) for key, value in carried.items() if their_gl[key] != value}
     assert carried and not differ, differ
 
 

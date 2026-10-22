@@ -5,7 +5,9 @@ each reset.
 
 ## Open
 
-1. **The data cache holds whole private genomes** (RM268): eviction is owed.
+1. **The data cache holds whole private genomes** (RM268, shipped 731d38c): stale versions are swept on each
+   step, and `clear_cache(source=...)` removes every copy of a deleted genome. Entries written before the
+   index (REWRITE_VERSION 7) are swept as stale.
 2. **The leak gate is on** (2026-10-18, the person's yes), installed by the kit's `bin/leak-gate`
    (v0.1.68): a hook in `.git/hooks/` that runs the pinned kit copy's gate, which `move-to-tag`
    re-points; `leak-gate status` says which copy. `.leak_words` (git-ignored, 4ff8393) holds the VCF sample names of the
@@ -62,4 +64,17 @@ status lines say what exists. Schema at 0.0.4.
   unattended. `docs/ANCESTRY_PANELS.md` stays out of CLAUDE.md's read-first list (the lead's call: it
   matters only to ancestry work). Merged since: RM5 (4c6c9c1), RM6 writer (a1f3317), F10 + SV END
   (ec95596), RM6 normalize (9469c6b).
-- **Open, not started**: RM2's next loaders, RM3, RM4, RM6, RM268 (cache eviction).
+- **Wave 3** (2026-10-22): merged F9 (2ff9b00; strand finding renumbered F13), RM269 evidence layer
+  (7384428: XY/XXY or unknown; XX and XO wait for a coverage facet), RM271 VRS ids (b41bda5; 19,000
+  alleles equal vrs-python; `vrs_allele_ids` follows SCHEMA's `[ref] + alts` layout, not one per ALT).
+  The lead decided RM268's outline (cache index, stale-version sweep, `clear_cache`, no LRU). Running:
+  RM2 CGI loaders, RM6 follow-ups, RM268, RM6 liftover, RM4 chip detection + F13. Open from RM269:
+  freeBayes males read an X het share of 0.38–0.40 (inside the unknown band; depth says one X);
+  two Helix exomes read `wgs` (RM4); a starling upload fails in polars-bio ("invalid BGZF ISIZE").
+- **Merged since wave 3:** RM6 follow-ups (16277e8: split tag read back, dedup on what a row states, ALT
+  `-` anchored, `<*>` dropped on split), RM268 (731d38c). Running: RM2 CGI loaders, RM6 liftover, RM4 chip
+  detection + F13. Open: should `ids` leave the dedup key (one upload keeps 9,213 same-allele pairs
+  because of it); `resolve_ref`, `normalize` and `mint_vrs_ids` rewrite their spill, so running one twice
+  on a facet breaks the first result's frame.
+- **Open, not started**: CLI (MVP row 18; not decided), the rest of Part 2 of docs/MVP_READINESS.md (the
+  interview).

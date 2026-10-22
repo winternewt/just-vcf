@@ -254,7 +254,7 @@ are read from env vars with sensible defaults, documented in `.env.template`, an
 | Variable | Default | Meaning |
 |---|---|---|
 | `JUST_VCF_SAMPLES_DIR` | unset | directory of real genomes for opt-in tests and dogfooding; tests skip without it |
-| `JUST_VCF_CACHE_DIR` | platform user cache (`platformdirs`) | rewritten copies of VCFs polars-bio cannot read as they are; tests point it at `tmp_path` |
+| `JUST_VCF_CACHE_DIR` | platform user cache (`platformdirs`) | rewritten copies of VCFs polars-bio cannot read as they are, and the parquet spills the lazy frames read, each with a manifest; `clear_cache` removes them (RM268); tests point it at `tmp_path` |
 | `JUST_VCF_REFERENCE_DIR` | `reference/` under the cache dir | the gtars refget store `resolve_ref` reads REF from; a FASTA given to it is added there once |
 | `JUST_VCF_ANCESTRY_DIR` | unset | directory of ancestry reference panels (docs/ANCESTRY_PANELS.md) for the opt-in panel tests; they skip without it. The library itself takes a panel path as an argument |
 
@@ -307,6 +307,8 @@ are read from env vars with sensible defaults, documented in `.env.template`, an
   Distinguish "the source did not say" from "the source said something we cannot represent".
 - **Derive a guard from the model's rule, not beside it.** Test the guard against the model case by
   case rather than asserting a message.
+- **Polars `explode` on a list column that can be empty:** pass `empty_as_null=False` where an empty list
+  must stay empty (the bare call is deprecated and turns `[]` into a null row; met 2026-10-22).
 - **Heed terminal warnings, deprecations especially.** A deprecation in code you touched is a
   **blocker**: find the current upstream API, fix it, and update this file.
 - **Refactor internals aggressively** — no dead code, no old API kept for nostalgia. The contract —
@@ -536,6 +538,12 @@ same applies when the user corrects a preference: it goes below, in their words,
   has". The tooling seat may commit, push `main` as a fast-forward, push patch tags, and delete its own
   merged `fix/<n>` branches and worktrees, as the kit's tooling seat does. Triage and
   upstream-liaison still never push.
+
+- 2026-10-22, filtered genome files: "If [the file] is filtered (indirect evidence is file extension) and snv
+  only, indel-only, it can't be treated same as WGS anymore, or it can, but with a caveat that ref
+  restoration is additionally gated (needs force)". A whole-genome file that kept one variant class stays
+  `wgs`; the facet records which classes it carries, absence reads as reference only for those, and any
+  hom-ref restoration refuses a filtered facet without `force=True`.
 
 ## 11. Learned workspace facts
 

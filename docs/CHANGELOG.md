@@ -22,6 +22,92 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   and OmniExpress manifests (docs/ROADMAP.md RM4). New columns are additive, nullable; exports
   `ChipBasis`. A 23andMe export too small for any band now carries one `chip unknown` warning.
 
+- Schema 0.0.9: `facets.variant_classes`, `content_filter`, `content_filter_basis` (a genome file that
+  kept one variant class is still `wgs`, but absence reads as reference only for the classes it carries;
+  `absence_is_reference` answers it for consumers).
+
+- A VCF facet now says which variant classes its rows carry and whether it was cut down to one:
+  `facets.variant_classes` counts the ALT alleles per class (`snv`, `mnv`, `indel`, `sv`), and
+  `content_filter` (`snv_only`, `indel_only`, `sv_only`) with `content_filter_basis` (`rows`,
+  `stated`, `file_name`) names the cut. The rows decide first, then a bcftools or GATK SelectVariants
+  command line in the header, then the file name's words (`.snp.`, `.indel.`, `.sv.`); a weaker piece
+  that disagrees is a warning. The `.snp.` half of a split genome stays `callset_type = wgs` with
+  `absence_means = weak_reference`, and the new public `absence_is_reference(facet_row, variant_class,
+  force=False)` answers `True` or `None` (never `False`): `None` for a class the facet does not carry
+  or that a filter cut, and for the kept class of a filtered facet unless `force=True`. Consumers that
+  restore hom-ref from absence (just-prs, just-dna-lite) can gate on it; before, an SNV-only genome's
+  absences read as weak reference for indels too. Three additive facet columns; the schema version
+  is left for the merge.
+
+- Running `rejoin_split`, `resolve_ref`, `normalize` or `mint_vrs_ids` again on a facet no longer
+  breaks the frame an earlier run returned. Each run stages its spill and commits it as a generation
+  named by the content it came from: the same input again reuses it (warnings included) and writes
+  nothing, other rows under the same `facet_id` get a generation of their own, and two processes on
+  one facet wait on the entry's lock and share one generation. Before, a second run removed and
+  rewrote the files, and the first frame's next `collect` failed (`Invalid thrift`) when the rows
+  differed or another process was mid-write. The derived spills' manifests carry `SPILL_LAYOUT` 2, so
+  the next run of each step sweeps the entries written the old way. `load`'s own spill is unchanged.
+
+- `normalize` drops `<*>` (and `<NON_REF>`) from the ALTs it splits: DeepVariant's variant records,
+  `A>G,<*>`, become plain biallelic rows (no split flag) with `ad` and `gl` sliced exactly, and are
+  then left-aligned like any other. Sites with two or more concrete ALTs beside `<*>` split as before,
+  each row `split_signal = marker`. A site whose genotype calls `<*>`, and sites holding another
+  symbolic allele, stay as written, counted. Before, every site holding `<*>` was left multi-allelic.
+
+- `normalize` judges a duplicate on what the row states: the columns a move clears (`source_ref`,
+  `ref_check`, `source_gt`, the VRS ids) no longer make two rows differ, so an indel the source wrote
+  twice, once already left-aligned, with the same genotype and evidence, is one row (the unmoved one)
+  rather than a reported conflict. Rows of one allele with other genotypes, evidence, filters or ids
+  are all kept, with the warning, as before.
+
+- A deletion written as ALT `-` (F12, about 8,080 rows in each of five PGP-HMS uploads) is now read as
+  an unanchored deletion of the REF bases: the loader keeps it verbatim and counts it, `normalize`
+  anchors it on the base before once REF has matched and then left-aligns it, and `write_vcf` refuses
+  any ALT that is no VCF allele as `alt_not_an_allele` (a new `UnwritableRowsError` reason). Before,
+  `write_vcf` wrote `-` and htslib refused the file. `NORMALIZE_VERSION` is now 2, which changes every
+  normalized `facet_id`; the one bump also covers the dedup and `<*>` changes of the same day. No
+  schema version change.
+
+- `load` reads `write_vcf`'s own `INFO/JUST_VCF_SPLIT` back as a split marker: those rows get
+  `split_signal = marker` and the facet's `split_marker` names the key, so a normalized facet written
+  and reloaded keeps its split rows flagged and `rejoin_split` joins them again. Before, the tag was
+  dropped as an unknown INFO key and the loader's patterns flagged some of the rows as `slot_pattern`.
+  `writing.SPLIT_INFO_KEY` now lives in `loaders.vcf` (still importable from `writing`). No schema
+  version change.
+
+- PL now loads as the Float32 nearest `-PL/10`, divided in Float64 and rounded once, so a PL file and a
+  GL file stating one likelihood compare equal on `gl` (F11). Complete Genomics' phred-unit GL is
+  divided the same way. This changes `gl` by one Float32 step on some entries of files that already
+  load. No schema version change (a rule change, no column).
+
+- Cache eviction (RM268). Every cache entry now has a manifest beside it (`<name>.json`: kind, version
+  keys, the root source's sha256 and path, the facet it holds and its parent, size, created and last
+  used, ISO-8601 UTC) and a lock file its writer holds while it writes. `load` and each derived step
+  (`rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids`) first remove the entries of their own
+  kind an older version wrote, logging the bytes freed. New `clear_cache(source=None, older_than=None,
+  dry_run=False)` removes every entry derived from a source (named by path, or by sha256 once the file
+  is gone; derived spills included) or unused for longer than a duration, skips an entry being
+  written, never removes an entry older than the index, and never touches the reference store; it
+  returns a `CacheClearReport`. A manifest a newer version wrote is kept as unknown origin, never a
+  reason for `load` to fail. Removing an entry a live `Loaded` reads breaks its next `collect`.
+  `REWRITE_VERSION` 6 → 7, so every copy without a manifest is known stale and swept: the first load
+  of each file after upgrading rewrites its copy once. Rules in docs/SCHEMA.md ("The cache under the
+  lazy frames"). Measured on three PGP-HMS VCFs in a scratch cache: 4 entries, 48.1 MB; an old-version
+  orphan of 34.8 MB was swept by the next load; `clear_cache(source)` removed one file's 2 entries,
+  10.2 MB. Minor: new exports (`clear_cache`, `CacheClearReport`, `CacheEntryInfo`).
+
+- Liftover as a derived facet (RM6, third slice): `liftover(loaded, chain, reference)` lifts a facet
+  `resolve_ref` has read to another assembly through a UCSC chain file (`read_chain`, plain or gzipped)
+  and returns a `Lifted`: the derived facet (`relation = liftover_to`, the Cat-VRS term) and a report
+  with every parent row's target or its reason for staying behind. The chain's contig sizes are checked
+  against both collections first (a primary contig of another size refuses it). A row's REF span must
+  lie in one ungapped block of one chain; REF is read from the target, never carried over; minus-strand
+  blocks reverse-complement the alleles; a target REF equal to an ALT swaps the two and re-indexes the
+  genotype, one equal to no allele leaves the row unlifted. Indels on minus-strand blocks, symbolic
+  alleles, pre-split rows and blocks are not lifted yet, each counted. Schema 0.0.8:
+  `facets.derivation_inputs` names the chain by file name and sha256 (additive; spills from 0.0.7 are
+  not reused). Minor: new exports (`liftover`, `read_chain`, `Lifted`, `Chain`).
+
 - New `sex_chromosome_evidence(loaded)` (RM269): for each facet, what its calls say about X and Y, and
   an estimate of the karyotype. It measures GT ploidy as written per group (autosomes, non-PAR X,
   non-PAR Y, PAR, MT), the het share of non-PAR X calls written diploid with their AD allele balance,

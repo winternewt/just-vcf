@@ -50,27 +50,3 @@ one needs its own format id, as `23andme_csv` has. Not fixed: three files.
 
 A third failure in the sweep is a corrupt upload (`gzip -t` fails too), and its error is correct.
 
-## F11 — PL to `gl` lands one float step off the nearest value
-
-Severity: low · Found 2026-10-22 by comparing `normalize` with `bcftools norm` (RM6).
-
-The loader turns PL into `gl` as `PL / -10` in Float32, and Polars computes that division so that PL 21
-gives -2.1000001, while the nearest Float32 to -2.1 is -2.0999999. A file that writes the same
-likelihood as GL (`-2.1`) therefore loads one step away from one that writes PL 21. Deterministic, so no
-digest or test of ours moves, and the size is far below any PHRED rounding; but two facets of one
-genome, one with PL and one with GL, do not compare equal on `gl`, and a test comparing against an
-outside tool needs a tolerance (`test_agrees_with_bcftools_norm`). Not fixed here: it is the loader's
-PL rule (RM2). The repair is to divide in Float64 and cast the result to Float32 once.
-
-## F12 — Some VCF uploads write a deletion as ALT `-`
-
-Severity: low · Found 2026-10-22 running `normalize` against `bcftools norm` on PGP-HMS uploads (RM6).
-
-Five of 25 PGP-HMS VCF uploads of 5–60 MB hold about 8,080 rows each whose ALT is `-`, the dash
-notation for a deletion that VCF does not have. The loader keeps it verbatim as an allele, `normalize`
-leaves those rows as they are and counts them, and `write_vcf` writes them back out, so the export is a
-file htslib refuses ("Non-ACGTN alternate allele"). Nothing in the frame says the allele is not one.
-
-Not fixed here. Reading `-` as a deletion needs the anchor base and its REF span, which the row does
-not state, so it is not a spelling to rewrite; the options are for the loader (RM2: flag or refuse
-such rows, counted) and the writer (refuse them as unwritable, as it does a row without REF).

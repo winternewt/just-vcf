@@ -193,7 +193,7 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); chip from the header or, for 23andMe, the rows (`facets.chip`); left: chip by marker overlap for FTDNA and MyHeritage, gVCF `END` expansion) · Owner: lead
+Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); a facet says which variant classes it carries and whether it was cut to one (`content_filter`); chip from the header or, for 23andMe, the rows (`facets.chip`); left: chip by marker overlap for FTDNA and MyHeritage, gVCF `END` expansion) · Owner: lead
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
@@ -275,9 +275,40 @@ Report did not load: `TableLayoutError`, its manifest `HumanOmni2.5-8v1_A` there
 Reports), which needs the manifests at run time or a derived marker list in `assets/`; GRCh36 in
 `ASSEMBLY_LENGTHS`, so a build-36 VCF's `##contig` lengths name it (the reference side knows GRCh36's
 contig 1 since F9; the header side reads those lengths as matching no assembly); contigs named by RefSeq accession (`NC_000001.11`), which the label
-inference does not read yet; gVCF `END` expansion; an SNV-only or indel-only split of a genome
-(`bcftools view -v snps`) reads as `wgs`, so its absences read as weak reference for the other
-variant class too. Unmarked imputation output with read-evidence keys would read as `wgs`.
+inference does not read yet; gVCF `END` expansion. Unmarked imputation output with read-evidence keys
+would read as `wgs`.
+
+**Answered 2026-10-22: an SNV-only or indel-only split of a genome.** The person: "it can [be
+treated as WGS], but with a caveat that ref restoration is additionally gated (needs force)". It
+stays `wgs`; `facets.variant_classes` and `content_filter` say what it carries, and
+`absence_is_reference` holds its absences back (SCHEMA.md Decision 4). Decisions, each with what was
+rejected:
+
+- The assay class stays `wgs` and the cut is its own column. Rejected: a new `callset_type` member
+  (`wgs_snv`), which mixes what was sequenced with what was kept and changes the `pl.Enum` dtype.
+- The rows decide first, with a residue allowed. Rejected: zero tolerance, which `bcftools view -v
+  snps` defeats (it keeps a multi-allelic site with an indel ALT); and the file name first, which a
+  renamed or concatenated file defeats.
+- `##source=DRAGEN_SNV` is not a filter statement. Rejected: reading it as `snv_only`, as first
+  proposed; a PGP-HMS DRAGEN `hard-filtered` upload carries indels under that very line.
+- `variant_classes` counts alleles per class rather than listing the classes, so a residue stays
+  visible. Rejected: a bare list of names, where one stray indel and a million look the same.
+- `sv` is a symbolic ALT or a breakend; a deletion written out base by base is an `indel` at any
+  length. Rejected: a 50 bp cut-off, which would split one caller's indels across two classes.
+- The helper answers at facet level and says `None` for `blocks`. Rejected: answering per position
+  here, which belongs with the materialising function that does not exist yet.
+
+Dogfooded 2026-10-22 on PGP-HMS (hu1C1368, hu6ABACE, huBE0518) and one local DeepVariant genome:
+each `.snp.` half is `wgs` + `snv_only` (rows), `absence_is_reference` `None` for `snv` until forced
+and `None` for `indel` either way; the unsplit DRAGEN and DeepVariant genomes have no filter and
+answer `True` for `snv` and `indel`, `None` for `sv`; a `.snp.` half reached under a name saying
+`.indel.` keeps `snv_only` from the rows, with one warning quoting the word.
+
+Left from it: an indel-only genome half reads as `callset_type` null, so its absences are unknown
+anyway. Four PGP-HMS indel halves of 0.32M–1.05M ALT alleles did; the two DRAGEN ones reach 91% of
+the span but hold 953,506 and 958,046 sites, just under `MIN_WGS_SITES`. Whether an indel half
+should read as `wgs` (and so be gated by its filter instead) is open. A genotype table's classes are
+not counted.
 
 ## RM5 — Population inference
 Severity: medium · Status: in progress (2026-10-22: PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped as `just_vcf.ancestry`; panels in docs/ANCESTRY_PANELS.md) · Owner: lead
@@ -293,7 +324,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, and normalization, `normalize`: split, left-align, trim, dedup, sort; left: gVCF blocks, splitting `<*>` sites, strand, liftover, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and plus-strand indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: gVCF blocks, strand, minus-strand indels and blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -321,8 +352,8 @@ with what was rejected:
   `source_alleles` is the written `[REF] + ALTs`; elsewhere they are left out and counted.
 - FORMAT is listed per row, keys with a value only. Rejected: one FORMAT string per file with `.` for
   missing, which turns a GT the source left out into an uncalled `.` on reload.
-- REF is `ref`, else `source_ref`. Unwritable rows (no REF, a REF mismatch, no ALTs, a genotype not
-  indexed or indexed past its ALTs) raise `UnwritableRowsError` with a count per reason, unless
+- REF is `ref`, else `source_ref`. Unwritable rows (no REF, a REF mismatch, no ALTs, an ALT that is
+  no VCF allele such as F12's `-`, a genotype not indexed or indexed past its ALTs) raise `UnwritableRowsError` with a count per reason, unless
   `resolved_only=True`. Rejected: writing them with a placeholder REF, or quietly leaving them out.
 - Split-flagged rows (RM270) are written as held, tagged `INFO/JUST_VCF_SPLIT=<signal>`, with a
   warning and the count. Rejected: refusing until `rejoin_split` runs, which would block exporting a
@@ -367,9 +398,12 @@ rejected:
 - Split rows carry `split_signal = marker`, as vt's output does once loaded, so `rejoin_split` can
   join them. Rejected: a new `SplitSignal` value (a new Enum category changes the column's dtype, a
   schema bump), and no flag at all (the row would not say it is one part of a site). In a written file
-  the tag is `write_vcf`'s `JUST_VCF_SPLIT`, which the loader does not read back as a marker yet; vt's
-  `OLD_MULTIALLELIC` and bcftools' `--old-rec-tag` were rejected because their values are the original
-  record, which the frame does not keep per row.
+  the tag is `write_vcf`'s `JUST_VCF_SPLIT`, and since 2026-10-22 the loader reads it back as a marker
+  (any value), so a written normalized facet keeps its flag. Rejected for reading it back: restoring
+  the signal the value names (`slot_pattern`, `all_zero_beside_alt`), since the loader finds those
+  patterns again from the rows and the file now carries a marker key. vt's `OLD_MULTIALLELIC` and
+  bcftools' `--old-rec-tag` were rejected for writing because their values are the original record,
+  which the frame does not keep per row.
 - `gl` on a split row only where no GT slot holds another ALT. Rejected: bcftools' slice on every row,
   which on `1/2` leaves a `1/.` row whose likelihoods point at `0/0`. `gp` withheld on split rows.
   Rejected: bcftools' unrescaled slice (it does not sum to 1, and the loader drops such GP, F10) and a
@@ -377,20 +411,94 @@ rejected:
 - On a moved or trimmed row, `source_ref`, `ref_check`, `source_gt` and the VRS ids are null and `ref`
   carries the new REF. Rejected: `ref_check = match` on the new bases, which would compare the sequence
   with itself; and keeping the old `source_ref`, which no longer describes the row's span.
-- Sites with a symbolic allele (`<*>`, `<DEL>`, breakends) are left as written. bcftools splits `<*>`
-  off as its own `0/.` row, which our loader would read back as a reference block; a DeepVariant gVCF
-  writes `<*>` on every variant record, so these stay multi-allelic for now.
+- Sites with a symbolic allele (`<DEL>`, breakends) are left as written. Since 2026-10-22 `<*>` beside
+  concrete ALTs (every variant record of a DeepVariant gVCF) is dropped from the split rows: the
+  concrete ALTs are split, the vectors sliced over the parent's alleles where exact, and a site left
+  with one ALT is an ordinary biallelic row with no split flag. A site whose genotype calls `<*>` stays
+  as written, counted. Dogfooded on a local DeepVariant gVCF: every one of its 6,079,801
+  variant records carried `<*>`, none remains after `normalize` (173 s), 82,113 sites with two
+  concrete ALTs split into 164,466 flagged rows, no genotype called `<*>`, and htslib reads all
+  6,162,154 rows of the export. Rejected: bcftools' own `0/.` row for `<*>`, which our loader would read back as
+  a reference block; dropping `<*>` where the genotype calls it, which loses a haplotype's stated
+  non-reference allele; and flagging every row of a `<*>` site, which would make each DeepVariant
+  variant record look pre-split, so a second `normalize` would hold it and `rejoin_split` would try to
+  join a lone row.
 - Only `ref_check = match` rows are aligned or trimmed. Rejected: trimming unchecked rows, which needs
   no bases but rewrites a REF nobody has shown to be right.
+- A deletion written as ALT `-` (F12) is anchored by `normalize`, on the base before, once REF has
+  matched; the loader keeps it verbatim and counts it, and `write_vcf` refuses it as
+  `alt_not_an_allele`. Rejected: anchoring in `resolve_ref`, which fills slots of the same facet and
+  touches nothing the source wrote, while anchoring moves `pos` and rewrites REF and ALT; rewriting
+  it in the loader, which has no reference base to anchor on; and the loader refusing such rows,
+  which would drop calls whose REF matches the reference everywhere it was checked.
 - Pre-split input (RM270 flags) passes through. Rejected: aligning those rows, which would move one
   row of a site away from the other and keep `rejoin_split` from finding it.
 - Exact duplicates are dropped; rows stating one allele with other values are all kept (charter 8).
-  Rejected: bcftools `-d`, which keeps the first.
+  Rejected: bcftools `-d`, which keeps the first. Since 2026-10-22 a duplicate is judged on what the
+  row states: the columns a move clears (`source_ref`, `ref_check`, `source_gt`, the VRS ids) are left
+  out of the comparison, so a moved indel and its unmoved twin are one row, the unmoved one kept.
+  Every other column still counts, `ids`, `filters` and `qual` included, so the upload whose 9,213
+  positions hold two records of one allele that differ in `ids` keeps both. Rejected: keying on
+  `(chrom, pos, ref, alts, gt, phased)` and the vectors alone, which would drop a row whose filters,
+  quality or ids differ and so lose what the source said.
+
+**Shipped 2026-10-22: liftover** (`just_vcf.liftover.liftover`, `read_chain`; rules in docs/SCHEMA.md,
+"Lifting"). A derived facet, `relation = liftover_to`, from a facet `resolve_ref` has read, through a
+UCSC chain file, with REF re-read from the target collection of the same store. It returns `Lifted`:
+the facet, and a report of every parent row with its target position, strand and swap, or the reason
+it stayed behind. Decisions, each with what was rejected:
+
+- Our own chain reader and block lookup in Polars (the axis cut at every block edge, two as-of joins
+  per row), in the core, no extra. Rejected: pyliftover per position, as just-prs does: one Python call
+  per row, and it does not say which block it used, so a span crossing a gap is only seen by lifting
+  both ends. pyliftover stays the test oracle.
+- The chain's own contig sizes are the assembly check (charter 3), both sides, against the store's
+  collections; a primary contig of another size refuses the lift, any other contig leaves its rows
+  unlifted. Rejected: trusting the chain's file name or the facet's label.
+- A span in more than one chain's block is unlifted (`multiple_targets`), not given the best-scoring
+  chain's target. Rejected: pyliftover's and just-prs's first hit, which picks a target the data does
+  not choose (charter 8).
+- A target REF equal to an ALT swaps it with the old REF in place and re-indexes `gt`; one equal to no
+  allele leaves the row unlifted (`ref_mismatch_after_lift`). Rejected: bcftools' SWAP=-1, which adds
+  the target REF as a new allele and shifts the genotype: a REF matching none of the alleles is also
+  how a wrong mapping looks, and nothing in the row tells the two apart.
+- A lifted row's `source_ref`, `ref_check` and `source_gt` are null, as on a row `normalize` moved.
+  Rejected: writing the parent's REF, carried across, as `source_ref` with `ref_check = match`; it
+  would let `normalize` re-align lifted indels, but no file wrote that REF, which the column means.
+  So `normalize` does not re-align a lifted indel today (its rows read `unchecked`).
+- Indels on minus-strand blocks are unlifted (`indel_minus_strand`). Rejected for this slice:
+  re-anchoring them on the base before the span, which bcftools does and which wants its own tests.
+- The derived facet's `absence_means` is `unknown`. Rejected: the parent's `weak_reference`, which
+  would read every dropped row and every uncovered region as reference.
+- Its label is the target collection's, basis `inferred` (from that collection's lengths, which the
+  chain's target side matched). Rejected: `stated`, since no header stated it; and a new basis value,
+  a dtype change for one case.
+- The chain is recorded on the facet in a new column, `derivation_inputs` (schema 0.0.8), by file name
+  and sha256. Rejected: only inside the `facet_id` digest, which says a chain was used but not which;
+  and the chain's path, which is a label and can name a person.
+- A row lifted to another contig than its source's loses its phase sets (a PS set is keyed per
+  contig); VRS ids are not carried (re-mint with `mint_vrs_ids`, tested on lifted rows).
+
+Compared on anton (docs/LIVE_SAMPLES.md: one GRCh38 DeepVariant callset, 6,079,744 rows, lifted to
+GRCh37 by CrossMap 0.6.3 in two settings and by Picard with and without swap recovery; counts only).
+With the Ensembl chain CrossMap used, `liftover` lifted 5,578,476 rows in 281 s (plus 175 s for
+`resolve_ref`), swapped 13,098 and lifted 20,424 on minus-strand blocks. Every position it lifted is
+in CrossMap's first output; 5,561,478 rows have the same REF, ALT and genotype there. Against Picard
+with swap recovery, 5,578,457 of its rows are the same in position, REF, ALT and genotype, and 19 are
+ours only. The tools lifted 28,000 to 30,000 positions this did not; the slice withholds 108,776 rows
+under chains with different targets, 2,865 minus-strand indels and 342 REFs matching no allele (which
+rows the tools' extra positions came from cannot be told: their output keeps no source position).
+Unlifted: 271,958 in no block, 90,071 on contigs the chain does not name (unplaced GRCh38 contigs),
+26,244 whose target contig the GRCh37 collection lacks, 1,012 across a block edge. With UCSC's
+hg38ToHg19 chain it lifts 5,724,577 (UCSC's chain is netted, one target per base, so nothing is
+ambiguous; its chrM is hg19's, so MT is `target_contig_unmatched`). Found on the way: F14 (resolved).
+No bcftools on this machine, so the opt-in bcftools comparison was not run.
 
 **Left in RM6:** writing gVCF blocks (after RM3); a tabix index beside the output; SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
 does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting sites that carry `<*>`;
-reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; liftover.
+reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; in a liftover, indels on minus-strand
+blocks, blocks, symbolic SVs, anchoring across a small gap of one chain, and T2T (UCSC hs1 chains).
 
 
 ## RM271 — VRS allele ids
@@ -448,35 +556,6 @@ store:
   s wall with the cache under `data/interim/` on the NTFS disk, which `dd` measured at 2.5 MB/s during
   the runs (other sessions were writing to it; the workspace note says about 350 MB/s). Peak RSS of the
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
-
-## RM268 — Cache eviction
-Severity: medium · Status: open · Owner: lead
-
-Nothing ever removes anything from `JUST_VCF_CACHE_DIR`. It holds two kinds of entry:
-
-- `vcf/<key>/`: rewritten copies of inputs polars-bio cannot read as they are
-  (`loaders/vcf.py` `readable_path`), plus a `structural/` copy for a file polars-bio refused. The key
-  hashes the source digest, the archive member and `REWRITE_VERSION`.
-- `frames/<facet_id>-<SCHEMA_VERSION>/`: the calls and blocks parquet spill from `load`, and since
-  RM270 the calls spill of a `rejoin_split` facet, under the derived `facet_id`. Nothing in the cache
-  ties that id to its parent, so an eviction that keys on a source file does not see it.
-
-Because the version is part of each key, every bump of `REWRITE_VERSION` or `SCHEMA_VERSION` orphans
-every earlier entry, and nothing collects them. Measured 2026-10-03: after the 2026-09-30 dogfooding
-runs, the cache under `data/interim/cache` had reached 32 GB in 36 `vcf/` entries. Most of it was
-orphans: the two largest were plain `input.vcf` copies of 14.5 GB and 7.4 GB, from before the rewrite
-switched to BGZF `input.vcf.gz`. The user deleted it by hand.
-
-Constraints on a fix:
-
-- A copy has to outlive the lazy frames that read it, so evicting the entry a live `Loaded` points at
-  breaks a later `collect`. Orphans by version are always safe to remove; current entries need an age
-  or size policy.
-- The copies are whole private genomes. Deleting a source under `/data/genomes` leaves its copy in the
-  cache, so eviction is also how a removed genome actually goes away.
-
-Options, not decided: sweep stale-version entries on each load; an explicit `clear_cache()` in the
-API (and in the CLI once it exists); a size cap with least-recently-used eviction.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
 Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO wait for a coverage facet, as do XXX, XYY and arrays) · Owner: lead

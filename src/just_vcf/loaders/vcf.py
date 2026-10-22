@@ -30,6 +30,7 @@ import polars as pl
 import polars_bio as pb
 from polars_bio.sql import SQL
 
+from just_vcf import cache as cache_index
 from just_vcf.bgzf import BgzfWriter
 from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
 
@@ -83,12 +84,21 @@ INFO_KEYS: dict[str, tuple[str, str]] = {"END": ("1", "Integer"), "SVLEN": ("A",
 SPLIT_MARKER_ID = "OLD_MULTIALLELIC"
 """The INFO key vt decompose and Glow write on a record split off a multi-allelic site."""
 
+SPLIT_INFO_KEY = "JUST_VCF_SPLIT"
+"""The INFO key `write_vcf` puts on a row flagged as one record of a split multi-allelic site
+(`normalize`'s split rows, and rows RM270 flagged). Read back as a marker, whatever its value."""
+
 BCFTOOLS_OLD_REC = "Original variant. Format: CHR|POS|REF|ALT|USED_ALT_IDX"
 """The Description bcftools norm writes for its `--old-rec-tag` key, whatever the key is named
 (vcfnorm.c). Only a split record gets the fifth, `USED_ALT_IDX`, field; a realigned one has four."""
 
 CGI_NOCALL = "<CGA_NOCALL>"
 """Complete Genomics' no-called span: INFO END gives its extent. It goes to `blocks` as `no_call`."""
+
+DASH_DELETION = "-"
+"""An ALT some uploads write for a deletion (F12): the REF bases at POS deleted, with no anchor base.
+VCF has no such allele. The loader keeps it verbatim, since anchoring it needs the reference base
+before POS; `normalize` anchors it, and `write_vcf` refuses it until then."""
 
 CGI_CNV_WINDOW = "<CGA_CNVWIN>"
 """Complete Genomics' 2 kb copy-number window: coverage, not a genotype. Left out of the frames."""
@@ -102,8 +112,9 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 6
-"""Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused."""
+REWRITE_VERSION = 7
+"""Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
+7: every copy has a manifest beside it (RM268), so a copy without one is from an older version."""
 
 _HEADER_READ_CAP = 64 << 20
 _DATA_LINES_CHECKED = 1000
@@ -145,9 +156,11 @@ def _attrs(body: str) -> dict[str, str]:
 
 
 def _split_marker_kind(attrs: dict[str, str]) -> str | None:
-    """`vt` or `bcftools` when a declared INFO key marks records split off a multi-allelic site."""
+    """`vt`, `just_vcf` or `bcftools` when a declared INFO key marks records split off a multi-allelic site."""
     if attrs.get("ID") == SPLIT_MARKER_ID:
         return "vt"
+    if attrs.get("ID") == SPLIT_INFO_KEY:
+        return "just_vcf"
     if attrs.get("Description", "").strip('"') == BCFTOOLS_OLD_REC:
         return "bcftools"
     return None
@@ -171,7 +184,7 @@ class Header:
     split_markers: dict[str, str] = field(default_factory=dict)
     alt_ids: set[str] = field(default_factory=set)
     """Symbolic alleles the header declares with `##ALT` (`CGA_NOCALL`, `NON_REF`, `DEL`…)."""
-    """Declared INFO keys that mark split records → `vt` or `bcftools` (`_split_marker_kind`)."""
+    """Declared INFO keys that mark split records → `vt`, `just_vcf` or `bcftools` (`_split_marker_kind`)."""
 
     @property
     def version_tuple(self) -> tuple[int, int] | None:
@@ -386,7 +399,14 @@ def unfit_keys(header: Header) -> dict[str, str]:
 
 
 def readable_path(
-    path: Path, layers: tuple[str, ...], opener, header: Header, missing: list[str], cache: Path, structural_only: bool = False
+    path: Path,
+    layers: tuple[str, ...],
+    opener,
+    header: Header,
+    missing: list[str],
+    cache: Path,
+    origin: cache_index.Origin,
+    structural_only: bool = False,
 ) -> Path:
     """A path polars-bio can read: the file itself when possible, else a rewritten copy under `cache`.
 
@@ -396,11 +416,18 @@ def readable_path(
     lines polars-bio needs and the INFO and FORMAT keys the frames carry, for a file it refused (P7, P8):
     polars-bio skips a key its header does not declare (P1), so a malformed value in a key the frames
     do not carry is never parsed.
+
+    `cache` is the entry (`vcf/<key>`); it is written, or reused, under its lock, with `origin` in its
+    manifest (`just_vcf.cache.writing`).
     """
     if layers in ((), ("gzip",), ("bgzf",)) and header.format_first and not missing and not structural_only:
         return path
-    if structural_only:
-        cache = cache / "structural"
+    with cache_index.writing(cache, cache_index.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION}, origin):
+        return _write_copy(opener, header, missing, cache / "structural" if structural_only else cache, structural_only)
+
+
+def _write_copy(opener, header: Header, missing: list[str], cache: Path, structural_only: bool) -> Path:
+    """The copy `readable_path` describes, in the directory `cache`; reused when it is complete."""
     target = cache / "input.vcf.gz"
     done = cache / "input.vcf.gz.complete"
     if done.exists():
@@ -449,13 +476,18 @@ def readable_path(
     return target
 
 
-def readable_bcf_path(path: Path, layers: tuple[str, ...], opener, cache: Path) -> Path:
+def readable_bcf_path(path: Path, layers: tuple[str, ...], opener, cache: Path, origin: cache_index.Origin) -> Path:
     """A path polars-bio reads as BCF: it picks BCF by the `.bcf` name and refuses any other name
     ("empty input", probed with 0.36). The file itself when it is named so and not wrapped in another
     layer, else a copy under `cache` named `input.bcf`: the bytes as they are when only BGZF wraps
-    them, else the decompressed payload written as BGZF."""
+    them, else the decompressed payload written as BGZF. Written under the entry's lock, as `readable_path`."""
     if layers in ((), ("bgzf",)) and path.name.lower().endswith(".bcf"):
         return path
+    with cache_index.writing(cache, cache_index.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION}, origin):
+        return _write_bcf_copy(path, layers, opener, cache)
+
+
+def _write_bcf_copy(path: Path, layers: tuple[str, ...], opener, cache: Path) -> Path:
     target = cache / "input.bcf"
     done = cache / "input.bcf.complete"
     if done.exists():
@@ -624,6 +656,7 @@ def scan_stats(records: pl.LazyFrame) -> dict:
         *_end_stats(alts, pl.col("ref")),
         _is_block_record(alts).any().alias("any_block"),
         (alts.list.len().eq(1) & alts.list.first().eq(CGI_CNV_WINDOW)).sum().alias("cnv_windows"),
+        alts.list.contains(DASH_DELETION).sum().alias("dash_alts"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).is_not_null().sum().alias("gp_rows"),
         (pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.sum() - 1.0).abs().gt(0.02).sum().alias("gp_off_one"),
         pl.col("chrom").unique().implode().alias("chroms"),
@@ -680,10 +713,10 @@ def _gt_expr() -> pl.Expr:
 
 
 def _tagged(key: str, kind: str) -> pl.Expr:
-    """True on a record INFO `key` tags as split off a multi-allelic site: any vt value, or a
-    bcftools value with its fifth, `USED_ALT_IDX`, field."""
+    """True on a record INFO `key` tags as split off a multi-allelic site: any vt or just-vcf value, or
+    a bcftools value with its fifth, `USED_ALT_IDX`, field."""
     column = pl.col(f"info_{key}")
-    return column.is_not_null() if kind == "vt" else column.str.count_matches(r"\|").fill_null(0) == 4
+    return column.str.count_matches(r"\|").fill_null(0) == 4 if kind == "bcftools" else column.is_not_null()
 
 
 def _marker_expr(header: Header) -> pl.Expr:
@@ -809,6 +842,12 @@ def to_rows(
             f"{stats['end_not_read']} record(s) carry an INFO END that is not their extent (an <INS>, a breakend, "
             "a sequence allele or a symbolic allele of no known span): end_pos does not read it"
         )
+    if stats.get("dash_alts"):
+        warnings.append(
+            f"{stats['dash_alts']} record(s) write a deletion as ALT `-`, which VCF has no allele for (F12): kept as "
+            "written, read as a deletion of the REF bases with no anchor base; normalize anchors it on the base "
+            "before, and write_vcf refuses it until then"
+        )
     v44 = (header.version_tuple or (0, 0)) >= (4, 4)
     # The file's REF goes to `source_ref` only. `ref` is read from the assembly sequence or stays null
     # (charter 10), so polars-bio's `ref` column must not reach the frame under that name.
@@ -858,9 +897,15 @@ def to_rows(
         for key in VECTOR_NUMBERS
     )
     rows = rows.with_columns(
+        # Divided in Float64 and rounded to Float32 once, so PL 21 gives the Float32 nearest -2.1, the
+        # value a file writing GL -2.1 loads as (F11); a Float32 division lands one step off.
         pl.coalesce(
-            pl.col("fmt_GL").cast(pl.List(pl.Float32), strict=False).list.eval(pl.element() / (10.0 if gl_phred else 1.0)),
-            pl.col("fmt_PL").cast(pl.List(pl.Float32), strict=False).list.eval(pl.element() / -10.0),
+            (
+                pl.col("fmt_GL").cast(pl.List(pl.Float64), strict=False).list.eval(pl.element() / 10.0).cast(pl.List(pl.Float32))
+                if gl_phred
+                else pl.col("fmt_GL").cast(pl.List(pl.Float32), strict=False)
+            ),
+            pl.col("fmt_PL").cast(pl.List(pl.Float64), strict=False).list.eval(pl.element() / -10.0).cast(pl.List(pl.Float32)),
         ).alias("gl"),
         gp.alias("gp"),
         pl.when(allele_list.list.len() == 2)

@@ -15,7 +15,7 @@ import polars as pl
 
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.7"
+SCHEMA_VERSION = "0.0.9"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -87,6 +87,44 @@ class SplitSignal(str, Enum):
     """A fully called all-`0` row beside a non-reference row at the same position."""
 
 
+class VariantClass(str, Enum):
+    """The kind of change one ALT allele makes against its REF."""
+
+    SNV = "snv"
+    MNV = "mnv"
+    INDEL = "indel"
+    SV = "sv"
+    """A symbolic ALT (`<DEL>`, `<DUP:TANDEM>`, `<CNV>`) or a breakend. A deletion written out base
+    by base is an `indel` whatever its length: the class follows how the file writes the allele."""
+
+
+class ContentFilter(str, Enum):
+    """The one variant class a facet's rows were cut down to (SCHEMA.md Decision 4). Null: none found."""
+
+    SNV_ONLY = "snv_only"
+    INDEL_ONLY = "indel_only"
+    SV_ONLY = "sv_only"
+
+
+CONTENT_FILTER_KEEPS: dict[ContentFilter, VariantClass] = {
+    ContentFilter.SNV_ONLY: VariantClass.SNV,
+    ContentFilter.INDEL_ONLY: VariantClass.INDEL,
+    ContentFilter.SV_ONLY: VariantClass.SV,
+}
+"""The class each content filter keeps; every other class was cut."""
+
+
+class ContentFilterBasis(str, Enum):
+    """What `content_filter` rests on, strongest first."""
+
+    ROWS = "rows"
+    """The rows themselves: one class, the others a residue."""
+    STATED = "stated"
+    """A header line records the filtering command (`bcftools view -v snps`, GATK SelectVariants)."""
+    FILE_NAME = "file_name"
+    """Only the file name (`.snp.`, `.indel.`): indirect evidence."""
+
+
 class AssemblyLabelBasis(str, Enum):
     """How a facet's `assembly_label` was obtained."""
 
@@ -141,6 +179,9 @@ FACETS = pl.Schema(
         "ref_seqcol_digest": pl.String,
         "callset_type": enum_dtype(CallsetType),
         "absence_means": enum_dtype(AbsenceMeans),
+        "variant_classes": pl.List(pl.Struct({"variant_class": enum_dtype(VariantClass), "alleles": pl.UInt64})),
+        "content_filter": enum_dtype(ContentFilter),
+        "content_filter_basis": enum_dtype(ContentFilterBasis),
         "phasing_method": pl.String,
         "derived_from": pl.String,
         "relation": pl.String,
@@ -150,6 +191,7 @@ FACETS = pl.Schema(
         "sample_meta": pl.List(pl.String),
         "dropped_fields": pl.List(pl.String),
         "split_marker": pl.String,
+        "derivation_inputs": pl.List(pl.Struct({"role": pl.String, "name": pl.String, "sha256": pl.String})),
         "chip": pl.String,
         "chip_basis": enum_dtype(ChipBasis),
         "strand_check": enum_dtype(StrandCheck),

@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A symbolic SV's `end_pos` now reads INFO END: `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes
+  end at END where the record gives one, else at POS + |SVLEN|, as SCHEMA.md's `end_pos` rule now says.
+  Before, END was ignored there, so an SV with END and no SVLEN (a caller that writes none, and
+  `write_vcf`'s own output) got `end_pos = pos`. An SVLEN declared `Number=1` is read too. This changes
+  values on files that already load. END and SVLEN that disagree, and an END that is not read (`<INS>`,
+  breakends, Delly's `<TRA>`), are counted in warnings. The per-row Python call that read SVLEN is now a
+  Polars expression. No schema version change (a rule change, no column).
+
 - GP within [0, 1] that does not sum to 1 on every row is now read as probabilities under a VCF 4.3+
   header, which defines GP so, with the rows counted in a warning (F10). Before, it was withheld as
   ambiguous, so just-vcf lost `gp` reloading its own `write_vcf` output of a phred GP. This changes

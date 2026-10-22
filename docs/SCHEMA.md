@@ -442,14 +442,26 @@ left-alignment moved to another POS.
 **`end_pos`.** It is named apart from polars-bio's `end` because that value is wrong for symbolic SV
 alleles (P3), so the two must not share a name. The rule follows VCF 4.5's computed END:
 
-1. Take `abs(SVLEN)` for each allele (the spec says to read a negative SVLEN as positive).
+1. Take `abs(SVLEN)` for each allele (the spec says to read a negative SVLEN as positive). An SVLEN
+   declared `Number=1` is read as the one-ALT list it is; one that is not one value per ALT cannot be
+   matched to its alleles and is not read.
 2. For each allele compute an end:
-   - `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes: `pos + abs(SVLEN)`. POS is the base before
-     the event, so `<DEL>` at 200 with `SVLEN=30` ends at 230;
-   - `<INS>` and breakend alleles: the anchor, `pos`;
-   - `<*>`: `pos + LEN - 1`, because a block includes POS;
+   - `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes: the record's INFO `END` where it gives one,
+     else `pos + abs(SVLEN)`. POS is the base before the event, so `<DEL>` at 200 with `SVLEN=30` ends
+     at 230. END is the record's stated end (VCF 4.5 deprecates it but defines it as this very
+     maximum, and a missing SVLEN is to be inferred from it); where the two disagree, END is followed
+     and the records are counted in a warning. SVLEN first, as FORMAT `LEN` comes before END for a
+     block, was set aside: END is a coordinate the writer stated, while `pos + abs(SVLEN)` depends on
+     POS being the base before the event, which a caller counting POS as the first base breaks;
+   - `<INS>` and breakend alleles: the anchor, `pos`, whatever END says;
+   - `<*>`: `pos + LEN - 1`, because a block includes POS, else END;
    - a sequence allele: `pos + len(source_ref) - 1`.
 3. `end_pos` is the largest of these over the site.
+
+END is read only for those SV types, `<*>`, `<CGA_NOCALL>` and ALT `.` blocks. Another symbolic
+allele's END is not known to lie on this contig (Delly's `<TRA>` writes the partner's position on CHR2
+there), so it keeps its REF span. A record whose END is not read and differs from the REF span is
+counted in a warning.
 
 Where REF is not known yet (an array `I`/`D` row) `end_pos` is null. A single-position array call has
 `end_pos = pos`.
@@ -628,6 +640,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **Rule changes, still 0.0.7** (2026-10-22, F10 and the SV read side): GP values within [0, 1] that do
+  not sum to 1 are probabilities under a 4.3+ header (Decision 3); a symbolic SV's `end_pos` reads INFO
+  END (the `end_pos` rule). Values change on files that already load; no column changed, so no version
+  bump.
 
 - **0.0.7** (2026-10-22, RM3): `facets.ref_seqcol_digest` names the collection
   `resolve_ref` read REF from. Additive. `resolve_ref` fills `ref`, `ref_check`, and an array row's

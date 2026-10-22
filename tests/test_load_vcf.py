@@ -485,3 +485,44 @@ def test_a_vector_key_declared_with_a_fixed_count_is_not_carried(tmp_path: Path)
     assert loaded.calls.collect()["ad"].to_list() == [None]
     assert "FORMAT/AD" in loaded.facets.collect()["dropped_fields"][0].to_list()
     assert any("not carried: AD (Number=2)" in w for w in loaded.warnings)
+
+
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.5"])
+def test_symbolic_sv_end_pos_reads_end_then_svlen(tmp_path: Path, version: str) -> None:
+    """SCHEMA.md `end_pos`: a length-type symbolic SV ends at INFO END where the record gives one, else at
+    POS + |SVLEN|; `<INS>`, breakends and other symbolic alleles stay at the anchor, whatever END says."""
+    records = [
+        "1\t200\t.\tT\t<DEL>\t.\t.\tEND=230\tGT\t0/1",  # END only
+        "1\t300\t.\tT\t<DUP:TANDEM>\t.\t.\tSVLEN=12\tGT\t0/1",  # SVLEN only
+        "1\t400\t.\tG\t<DEL>\t.\t.\tEND=450;SVLEN=-50\tGT\t0/1",  # both, agreeing
+        "1\t500\t.\tA\t<CNV>\t.\t.\tEND=600;SVLEN=101\tGT\t0/1",  # both, disagreeing: END wins, counted
+        "1\t700\t.\tC\t<INS>\t.\t.\tEND=760;SVLEN=60\tGT\t0/1",  # an insertion spans no reference
+        "1\t800\t.\tG\t<TRA>\t.\t.\tEND=5000\tGT\t0/1",  # Delly: END is the partner's position on CHR2
+        "1\t900\t.\tA\t<DEL>,<INS>\t.\t.\tSVLEN=10,4\tGT\t1/2",  # the largest end over the site
+        "1\t1000\t.\tC\t<*>\t.\t.\tEND=1050\tGT\t0/0",  # a gVCF block, unchanged
+        "1\t1100\t.\tCTTT\tC\t.\t.\t.\tGT\t0/1",  # a sequence allele: the REF span
+    ]
+    path = write(tmp_path, vcf_text(records, version=version, info=("END", "SVLEN")))
+    calls, blocks, warnings = frames(path)
+    ends = dict(zip(calls["pos"].to_list(), calls["end_pos"].to_list(), strict=True))
+    assert ends == {200: 230, 300: 312, 400: 450, 500: 600, 700: 700, 800: 800, 900: 910, 1100: 1103}
+    assert blocks["end_pos"].to_list() == [1050]
+    assert "1 symbolic SV record(s) whose INFO END disagrees with POS + |SVLEN|: end_pos follows END" in warnings
+    assert any(w.startswith("2 record(s) carry an INFO END that is not their extent") for w in warnings), warnings
+
+
+@pytest.mark.parametrize("number", ["1", "."])
+def test_svlen_declared_with_another_number_still_sets_end_pos(tmp_path: Path, number: str) -> None:
+    """Older SV callers declare SVLEN `Number=1` (polars-bio then returns a scalar) or `Number=.`."""
+    records = ["1\t200\t.\tT\t<DEL>\t.\t.\tSVLEN=-30\tGT\t0/1", "1\t300\t.\tT\t<DUP>\t.\t.\tSVLEN=12\tGT\t0/1"]
+    svlen = f'##INFO=<ID=SVLEN,Number={number},Type=Integer,Description="SV length">'
+    calls, _, _ = frames(write(tmp_path, vcf_text(records, extra_meta=(svlen,))))
+    assert calls["end_pos"].to_list() == [230, 312]
+
+
+def test_symbolic_sv_extent_survives_its_own_export(tmp_path: Path) -> None:
+    """`write_vcf` writes a symbolic SV's extent as END and no SVLEN, so the reload has to read END."""
+    records = ["1\t200\t.\tT\t<DEL>\t.\t.\tSVLEN=-30\tGT\t0/1", "1\t300\t.\tA\tG\t.\t.\t.\tGT\t0/1"]
+    first = load(write(tmp_path, vcf_text(records, info=("SVLEN",))))
+    back = load(write_vcf(first, tmp_path / "out.vcf.gz").path).calls.collect()
+    assert back["end_pos"].to_list() == first.calls.collect()["end_pos"].to_list() == [230, 300]

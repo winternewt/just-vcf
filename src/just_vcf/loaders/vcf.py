@@ -960,30 +960,35 @@ def _phase_sets(rows: pl.LazyFrame) -> pl.LazyFrame:
 
 
 def _gp(header: Header, stats: dict) -> tuple[pl.Expr, str | None]:
-    """`gp` from GP or PP. GP's scale is read from the values when they settle it, else withheld.
+    """`gp` from GP or PP. GP's scale is read from the values where they settle it, else from the
+    header's VCF version where it defines one, else withheld.
 
     VCF before 4.3 wrote GP phred-scaled, and 4.3 made it a probability. Real files do not follow the
     version: imputation tools wrote probabilities under 4.1 and 4.2 headers. So values above 1 mean
     phred, and values that are all within [0, 1] and sum to 1 per row mean probabilities, whatever
-    the header says; the warnings name a header that disagreed. Anything else is ambiguous, and GP
-    is not used.
+    the header says; the warnings name a header that disagreed. Values within [0, 1] that do not sum
+    to 1 (posteriors converted from rounded phred, as just-vcf's own 4.3 export writes them) are
+    probabilities under a 4.3+ header, which defines GP so, with the rows counted in a warning. Under
+    an older header, or one that states no version, they settle nothing, and GP is not used.
     """
     from_pp = pl.col("fmt_PP").cast(pl.List(pl.Float32), strict=False).list.eval(pl.lit(10.0) ** (pl.element() / -10.0))
     largest = stats["gp_max"]
     if largest is None:
         return from_pp, None
     raw = pl.col("fmt_GP").cast(pl.List(pl.Float32), strict=False)
-    header_says = "phred" if (header.version_tuple or (4, 3)) < (4, 3) else "probabilities"
+    version = header.version_tuple
+    defined = None if version is None else ("phred" if version < (4, 3) else "probabilities")
+    off_one = f"{stats['gp_off_one']} of {stats['gp_rows']} rows do not sum to 1"
     if largest > 1.0 + 1e-6:
         found, gp = "phred", raw.list.eval(pl.lit(10.0) ** (pl.element() / -10.0))
     elif stats["gp_off_one"] == 0:
         found, gp = "probabilities", raw
+    elif defined == "probabilities":
+        return pl.coalesce(raw, from_pp), f"GP read as probabilities, as the {header.version} header defines it: {off_one}"
     else:
-        return from_pp, (
-            f"GP is ambiguous: every value is within [0, 1] but {stats['gp_off_one']} of {stats['gp_rows']} "
-            "rows do not sum to 1; GP not used"
-        )
-    note = None if found == header_says else f"GP written as {found} under a {header.version} header; read as {found}"
+        stated = "states no VCF version" if version is None else f"is {header.version}, where GP was phred-scaled"
+        return from_pp, f"GP is ambiguous: every value is within [0, 1] but {off_one}, and the header {stated}; GP not used"
+    note = None if defined in (None, found) else f"GP written as {found} under a {header.version} header; read as {found}"
     return pl.coalesce(gp, from_pp), note
 
 

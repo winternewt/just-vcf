@@ -4,6 +4,33 @@ Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with it
 code pointer. Check here before re-investigating something that looks fixed.
 
 
+## F10 — A GP that does not sum to 1 is lost when just-vcf reloads its own export
+
+Severity: low · Found 2026-10-22 by round-tripping a PGP-HMS VCF upload through `write_vcf` and `load`
+(RM6).
+
+The upload writes GP phred-scaled (values above 1), so the loader converts it and every row gets `gp`.
+Phred values rounded to integers do not convert to posteriors that sum to 1: 57,259 of its 956,057 GP
+rows are more than 0.02 short. `write_vcf` writes `gp` as probabilities under a VCF 4.3 header, where
+the spec defines GP as a probability. Reloading that output, the loader reads the scale from the values
+alone: all within [0, 1], and not all summing to 1, so it calls GP ambiguous and drops it from every
+row. Everything else in the file came back byte for byte.
+
+Not the writer's to fix: normalizing the posteriors would change the evidence, and writing them back as
+phred under a 4.2 header would not read back bit for bit.
+
+Resolved 2026-10-22 in the loader's GP rule: values the numbers cannot settle (all within [0, 1], not
+all summing to 1) are read as probabilities under a VCF 4.3+ header, which defines GP so, and the rows
+that do not sum to 1 are counted in a warning. A phred GP whose every value is at most 1 would mean
+genotypes all but equally likely, which is not what any caller writes. Under 4.2 or earlier, or a header
+with no version, they stay withheld as before; values above 1 are phred and values summing to 1 are
+probabilities, whatever the header. The FORMAT line's Description was considered as a second header
+signal and set aside: it is free text, not a declaration. On the upload that found it: the reload keeps
+`gp` on all 956,057 rows, equal to the first load's (largest difference 0.0), with one warning counting
+the 57,259 rows that do not sum to 1. Code: `loaders/vcf.py` `_gp`; tests:
+`tests/test_load_vcf.py` `test_gp_from_phred_survives_its_own_export` and the 4.3, 4.5 and no-version
+cases of `test_gp_scale_is_read_from_decisive_values`.
+
 ## F8 — A sites-only VCF does not load
 
 Severity: medium · Found 2026-10-19 while testing `rejoin_split` (RM270).

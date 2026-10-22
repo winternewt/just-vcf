@@ -211,7 +211,11 @@ probability. Real files do not follow the version: imputation tools write probab
 4.2 headers (9 of the 124 PGP-HMS VCFs). So the values decide when they can: any value above 1 means
 phred (`gp = 10^(-GP/10)`), and values all within [0, 1] that sum to 1 on every row mean probabilities.
 The warnings name a header that disagreed. Values that settle neither (within [0, 1] but not summing to
-1) leave `gp` null, with a warning. The loader never guesses the scale.
+1) are left to the header: under VCF 4.3 or later, which defines GP as a probability, they are read as
+probabilities and the rows that do not sum to 1 are counted in a warning (posteriors converted from
+rounded phred, as just-vcf's own 4.3 export writes them, F10). Under 4.2 or earlier, or a header that
+states no version, they leave `gp` null, with a warning. The FORMAT line's Description is not read: it
+is free text, not a declaration. The loader never guesses the scale.
 
 `dp` and `ad` come from FORMAT (this sample), never from INFO (all samples combined). INFO/DP and
 FORMAT/DP are different quantities with the same name. The loader resolves each key by the header's

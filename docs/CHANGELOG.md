@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- GP within [0, 1] that does not sum to 1 on every row is now read as probabilities under a VCF 4.3+
+  header, which defines GP so, with the rows counted in a warning (F10). Before, it was withheld as
+  ambiguous, so just-vcf lost `gp` reloading its own `write_vcf` output of a phred GP. This changes
+  values on files that already load: such 4.3+ files now get `gp`, and `source_alleles` on those rows.
+  A 4.2 or older header, or none, still withholds it; a header without a version no longer counts as
+  4.3 for the warnings. No schema version change (a rule change, no column).
+
 - Schema 0.0.7 (RM3): `facets.ref_seqcol_digest` is new; `resolve_ref` fills `ref`, `ref_check`, and an
   array row's `alts` and `gt` from a reference.
 

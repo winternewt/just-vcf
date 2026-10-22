@@ -33,7 +33,7 @@ Status: **shipped**, **partial**, or **not started**.
 | 13 | Sex chromosomes and caller ploidy | inv. 9 | partial | `sex_chromosome_evidence` (RM269): X copies, Y presence, XY/XXY or unknown; `ploidy_statements` on the facet | XX and XO need a coverage facet (E3) |
 | 14 | Normalize: chrom names, left-align, split, dedup, sort, strand | minimal shape | shipped | `normalize` (RM6): split with `.` for the other ALT, left-align, dedup, `<*>` dropped; array strand checked (`strand_check`, F13) | dedup on record ids (desk #80) |
 | 15 | Write VCF back out | minimal shape (export) | shipped | `write_vcf`: VCF 4.3, BGZF, tabix index, gVCF blocks; deterministic bytes | PSL phase sets (no loader reads PSL yet) |
-| 16 | Liftover with a `liftover_to` link | inv. 5 | shipped | `liftover` (RM6): chain read in Polars, REF re-read, swaps, minus-strand indels re-anchored; anton: all lifted positions in CrossMap's output | blocks and symbolic SVs are not lifted |
+| 16 | Liftover with a `liftover_to` link | inv. 5 | shipped | `liftover` (RM6): chain read in Polars, REF re-read, swaps, minus-strand indels re-anchored, and `normalize` left-aligns lifted rows on the target; anton: all lifted positions in CrossMap's output | blocks and symbolic SVs are not lifted |
 | 17 | Deterministic output | inv. 12 | shipped | canonical order per contig; `write_vcf` gives the same bytes for the same frames (tested) | — |
 | 18 | CLI | (CLAUDE.md §4) | not started | no `[project.scripts]` | Typer |
 | 19 | Cache eviction | — | shipped | RM268: index, stale-version sweep, `clear_cache(source=...)`; every step writes generations, so reruns never break a live frame | — |

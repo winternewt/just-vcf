@@ -178,7 +178,8 @@ Order with `rejoin_split`: re-join first, then `resolve_ref`. The other way roun
 carry no `ref` while the facet keeps `ref_seqcol_digest`, and `resolve_ref` refuses it as already read.
 
 Left: indel anchor bases (no loaded format lacks them: 23andMe I/D codes need the chip manifest, and
-Living DNA's run-together `CCA` cannot be split without the site's alleles); emitting
+Living DNA's run-together `CCA` is split against the reference since 2026-10-22, F4, and gets REF on 4
+of 83 rows; the rest need the site's alleles, F17); emitting
 reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither
 `##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array
 without a stated build has it inferred from its rows (F9, below).
@@ -508,7 +509,12 @@ it stayed behind. Decisions, each with what was rejected:
 - A lifted row's `source_ref`, `ref_check` and `source_gt` are null, as on a row `normalize` moved.
   Rejected: writing the parent's REF, carried across, as `source_ref` with `ref_check = match`; it
   would let `normalize` re-align lifted indels, but no file wrote that REF, which the column means.
-  So `normalize` does not re-align a lifted indel today (its rows read `unchecked`).
+  Since 2026-10-22 `normalize` re-aligns lifted rows anyway: a `liftover_to` facet read every row's REF
+  from its target collection, which is what `normalize` needs (SCHEMA "Normalizing", step 2). The gate
+  is the facet's relation (`REREADS_REF`). Rejected: a row-level gate (`ref` set and `ref_check` not
+  `mismatch`), which would also align array rows and a normalized facet's moved rows; equivalent on
+  lifted facets, but wider than the decision, and it would quietly start aligning any future row
+  kind whose `ref_check` is null for another reason.
 - Indels on minus-strand blocks were unlifted (`indel_minus_strand`) in this slice; since 2026-10-22
   they are re-anchored, below.
 - The derived facet's `absence_means` is `unknown`. Rejected: the parent's `weak_reference`, which

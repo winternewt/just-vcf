@@ -39,6 +39,80 @@ text's. Code: `loaders/vcf.py` `is_resaved`, `undo_resave`; `loading.py` `_vcf_t
 
 The third failure in the sweep, a corrupt upload (`gzip -t` fails too), keeps its correct error.
 
+**Follow-up 2026-10-22: a field over 128 KiB.** The re-save was undone with Python's `csv`, whose
+reader refuses a field over `csv.field_size_limit()` (131,072 bytes by default) with `csv.Error`, and
+a VCF field has no such limit (SnpEff's EFF on a busy site, quoted for its commas). The limit is
+process-wide, and the reader is consumed lazily while the copy is written, so it cannot be raised for
+this reader alone. The re-save is now undone without `csv`: lines by universal newlines, cut at tabs,
+a field wrapped in quotes unwrapped with its doubled quotes made single. A VCF field holds no tab and
+no line break, so nothing carries across fields or lines. Rejected: raising the process-wide limit,
+which widens every other `csv` reader in the caller's process and removes the guard against an
+unclosed quote swallowing the rest of a file. Code: `loaders/vcf.py` `undo_resave`, `_unquote`; tests
+`test_a_resaved_vcf_with_a_field_past_the_csv_limit_loads` (about 200 KiB of EFF) and
+`test_undo_resave_reads_quotes_as_csv_does` (the same output as `csv` on the shapes it reads).
+
+## F4 — Living DNA indel genotypes cannot be split
+
+Severity: medium · Found 2026-09-30, same sweep.
+
+Living DNA writes an indel's two allele sequences back to back (`CCA`, and up to 52 letters in one
+file). 83 rows in the one real file keep the text in `source_gt` with `gt_alleles` null. Splitting needs
+the site's alleles, from a chip manifest or from REF once RM3 reads the sequence.
+
+**Anatomy, 2026-10-22.** Of the 83 texts (3 to 52 letters), 59 are a sequence written twice
+(`GTTGTT`), so homozygous if split in half, and 24 are not. If both alleles share their first base,
+as VCF's anchored alleles do, 58 have exactly one split (`CCA` → `C`/`CA`, `GCCTG` → `GCCT`/`G`) and 25
+have several (`AAAAGAAAAG` splits four ways). Splitting at the one anchored point was rejected: the
+shared anchor is VCF's convention, Living DNA states no encoding beyond "both allele sequences
+concatenated", and a quarter of the rows stay ambiguous even under it. The honest path is
+`resolve_ref`: read the sequence at `pos` and keep only the splits in which one allele is the
+reference over its own span. Even that leaves a repeat ambiguous (`C`/`CA` where the base after is
+`A` fits an insertion and a deletion alike), so the split may be known while REF and ALT are not.
+Not built: it needs the reference, which the loader does not read.
+
+**Resolved 2026-10-22, the split.** `resolve_ref` splits a `living_dna` facet's run-together texts
+(bases only, three or more) where exactly one split fits: both pieces start with the same base and one
+equals the reference over its own span from `pos` (rule in SCHEMA.md Decision 2). On the real file,
+against GRCh37: 58 of the 83 split (`gt_alleles` set), 24 fit at several splits and 1 at none, and those
+25 stay as loaded, counted. The 58 are not quite the 58 with one anchored split above: 57 of those fit
+the reference and one does not (a doubled text whose one split matches no reference span), and one of
+the 25 with several anchored splits fits at exactly one. REF and ALT follow on 4 of the 58, all
+heterozygous insertions (`C/CA` where the base after `C` is not `A`); on the other 54 the split is known
+and REF is not: 38 homozygous calls (`CA/CA` cannot say whether the site is `CA>C` or `C>CA`, so
+whether the call is reference), and 16 hets whose two alleles both equal the reference over their own
+spans (every het deletion is one: its one-base ALT always does). Those 54 and the 25 unsplit rows need
+the chip's own site alleles, which is F17. Rejected: reading a homozygous call as hom-ref when its
+allele equals the reference, which picks one of two sites the text fits; splitting other formats' long
+texts, whose encoding no vendor states; splitting in a `mixed`-strand facet, where a text may be written on the minus strand, and a split
+fitting the forward reference would then fit by chance. The 4 rows with REF are not left-aligned by `normalize`
+(their `ref_check` is null and the facet is not derived). Code: `reference.py` `_split_concatenated`,
+`CONCATENATED_ALLELES`; tests `test_living_dna_indel_genotypes_split_against_the_reference`,
+`test_only_living_dna_texts_are_split`, `test_a_mixed_strand_living_dna_file_splits_nothing`.
+
+## F16 — A damaged BGZF input fails with polars-bio's raw error
+
+Severity: low · Found 2026-10-22 on the damaged starling upload ([PGP_HMS.md](PGP_HMS.md)).
+
+One block of the upload does not inflate. `load` failed with a `polars.exceptions.ComputeError`
+whose text depends on how the block is broken ("invalid BGZF ISIZE" on the real file; a checksum
+or libdeflater message on synthetic ones) and says neither which facet nor where in the file.
+
+Resolved 2026-10-22: when a read fails (polars-bio's `ComputeError`, or zlib's or `gzip`'s from a copy
+made in Python) and the input's outer layer is BGZF, `load` walks the file block by block
+(`bgzf.find_damage`: header, `BC` size, inflate, CRC32, ISIZE) and raises `DamagedBgzfError` with the
+facet's id, the first bad block's compressed offset and what is wrong with it; a failure whose blocks
+all read is re-raised unchanged. The error carries no path. Damage that keeps `sniff` from reading the
+first blocks names the source's sha256 instead of a facet. The check costs nothing on a file that
+reads: it runs only after a failure, and every read of the records happens inside `load` (the stats
+pass reads the whole file), so the lazy frames never meet the damage. On the real upload: offset
+473,789,118, `inflate`, found by a 4-second walk, as the hand walk in PGP_HMS.md had it. Rejected: a
+block check before every BGZF load, a full extra decompression of every input; and matching
+polars-bio's message texts, which differ by kind of damage and by release. Not covered: damage under
+another layer (a BGZF inside a zip, a plain gzip), which keeps the reader's own error, since only an
+outer BGZF has block offsets to name. Code: `bgzf.py` `find_damage`; `loading.py` `DamagedBgzfError`,
+`_damage_named`; tests in `tests/test_bgzf.py` (`test_load_names_the_facet_and_the_block_never_the_path`
+and the walker's cases).
+
 ## F15 — An ALT that is no VCF allele counted as an indel
 
 Severity: low · Found 2026-10-22 loading the Veritas CNV upload F7's fix made readable.

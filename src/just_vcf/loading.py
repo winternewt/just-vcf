@@ -5,9 +5,11 @@ that format. A format without a loader is refused with `UnsupportedFormatError`,
 loader for a look-alike format.
 """
 
+import gzip
 import hashlib
 import json
 import logging
+import zlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,7 +18,7 @@ from typing import BinaryIO
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
-from just_vcf import cache, callset
+from just_vcf import bgzf, cache, callset
 from just_vcf.assembly import infer_assembly, sorted_name_length_pairs_digest
 from just_vcf.chip import ChipOutcome, detect_chip, header_lines
 from just_vcf.cache import cache_dir, file_sha256
@@ -37,7 +39,7 @@ from just_vcf.schema import (
     contig_map,
     empty,
 )
-from just_vcf.sniff import Sniffed, open_payload, sniff
+from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
 from just_vcf.source import detect_source
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,49 @@ class UnsupportedFormatError(ValueError):
         super().__init__(f"{sniffed.path}: no loader for {what} ({sniffed.outcome.value})")
 
 
+class DamagedBgzfError(ValueError):
+    """The input is BGZF and one of its blocks does not read back (`just_vcf.bgzf.find_damage`).
+
+    Raised by `load` in place of the reader's own failure (polars-bio's `ComputeError`, or zlib's from
+    a copy), which names neither the block nor the facet. Carries no path: a path is a label and can
+    carry a person's name."""
+
+    def __init__(self, damage: bgzf.BlockDamage, facet_id: str | None, source_sha256: str) -> None:
+        self.offset = damage.offset
+        """Compressed byte offset of the first damaged block."""
+        self.reason = damage.reason
+        """`BlockDamage.reason`: `not_a_block`, `truncated`, `inflate`, `crc32` or `isize`."""
+        self.facet_id = facet_id
+        """The facet being read, or None when the damage stopped the load before a facet was named (a
+        VCF's header, a table read whole, the blocks `sniff` reads); the message then names the source."""
+        self.source_sha256 = source_sha256
+        what = f"facet {facet_id}" if facet_id is not None else f"source sha256 {source_sha256}"
+        super().__init__(
+            f"{what}: the BGZF input is damaged at compressed byte {damage.offset}, the first block that does "
+            f"not read back ({damage.reason}: {damage.detail}); the file itself has to be replaced"
+        )
+
+
+_READ_FAILURES = (pl.exceptions.ComputeError, zlib.error, gzip.BadGzipFile, EOFError)
+"""How a damaged compressed input fails a read: polars-bio's error at collect, or the standard
+library's when the payload is read or copied in Python."""
+
+
+@contextmanager
+def _damage_named(sniffed: Sniffed, facet_id: str | None, source_sha256: str | None = None) -> Iterator[None]:
+    """Re-raise a read failure as `DamagedBgzfError` when the input's outer layer is BGZF and a block
+    of it does not read back; any other failure, and a BGZF input whose blocks all read, unchanged.
+
+    The walk reads the whole file, so it runs only once a read has failed."""
+    try:
+        yield
+    except _READ_FAILURES as err:
+        damage = bgzf.find_damage(sniffed.path) if sniffed.layers[:1] == ("bgzf",) else None
+        if damage is None:
+            raise
+        raise DamagedBgzfError(damage, facet_id, source_sha256 or file_sha256(sniffed.path)) from err
+
+
 class Loaded(BaseModel):
     """One loaded input: its facet and its rows. The frames are lazy."""
 
@@ -84,7 +129,8 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
     Final Report); several samples and no choice is refused with `MultiSampleError`, and a sites-only
     VCF, which holds no sample, with `NoSampleError`. A table whose columns lack what its format needs (a
     Final Report without positions or plus-strand alleles) is refused with `TableLayoutError`. `sample`
-    is ignored for formats that hold one person by construction.
+    is ignored for formats that hold one person by construction. A BGZF input with a block that does
+    not read back is refused with `DamagedBgzfError`, naming the facet and the block's offset.
 
     A VCF's or Complete Genomics or key=value table's rows are spilled to parquet under `cache_dir()`,
     as a generation the same rows find again (`just_vcf.cache.Spill`), so a load run again never
@@ -97,17 +143,22 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
     cache.sweep_stale(cache.FRAMES_SPILL, _FRAMES_VERSIONS)
     cache.sweep_stale(cache.WORK_COPY, _WORK_VERSIONS)
     sniffed = source if isinstance(source, Sniffed) else sniff(Path(source))
+    if sniffed.outcome is SniffOutcome.UNREADABLE and sniffed.layers[:1] == ("bgzf",) and (damage := bgzf.find_damage(sniffed.path)):
+        # The first blocks did not read back, so sniff could not say what the file is.
+        raise DamagedBgzfError(damage, None, file_sha256(sniffed.path))
     if not sniffed or sniffed.format not in LOADABLE_FORMATS:
         raise UnsupportedFormatError(sniffed)
-    if sniffed.format in vcf.FORMATS:
-        return _load_vcf(sniffed, sample)
-    if sniffed.format in table.FORMATS:
-        return _load_table(sniffed, sample)
-    if sniffed.format in keyvalue.FORMATS:
-        return _load_keyvalue(sniffed)
-    if sniffed.format in cgi.FORMATS:
-        return _load_cgi(sniffed)
-    return _load_rsid_table(sniffed)
+    # A damaged block hit before a facet is named (a VCF's header, a table read whole) names the source.
+    with _damage_named(sniffed, None):
+        if sniffed.format in vcf.FORMATS:
+            return _load_vcf(sniffed, sample)
+        if sniffed.format in table.FORMATS:
+            return _load_table(sniffed, sample)
+        if sniffed.format in keyvalue.FORMATS:
+            return _load_keyvalue(sniffed)
+        if sniffed.format in cgi.FORMATS:
+            return _load_cgi(sniffed)
+        return _load_rsid_table(sniffed)
 
 
 def _load_rsid_table(sniffed: Sniffed) -> Loaded:
@@ -520,22 +571,25 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     blocks_parts: list[pl.LazyFrame] = []
     for part in parts:
         part_warnings: list[str] = []
-        if binary:
-            # A BCF declares every key it uses, and its header cannot be rewritten without re-encoding
-            # the records, so a refusal from polars-bio is final here.
-            path = vcf.readable_bcf_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), copy, origin)
-            records = part.select(vcf.read_records(path, header, part.sample, first_record, extra_info=part.info))
-            stats = vcf.scan_stats(records)
-        else:
-            records, stats = _read_text_records(sniffed, header, missing, data, copy, origin, part, part_warnings)
-        calls, blocks, row_warnings = vcf.to_rows(records, header, stats, text_gt=not binary, gl_phred=gl_phred)
-        part_warnings += row_warnings
-
         facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options=part.options)
-        calls_frame, blocks_frame = vcf.to_frames(calls, blocks, facet_id)
-        # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
-        # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
-        calls_path, blocks_path = _spill_files(facet_id, calls_frame, blocks_frame, origin)
+        # Every read of the records (the first-record check, the stats pass, the spill) is where a
+        # damaged block fails: named here, with the facet, before any lazy frame is handed out.
+        with _damage_named(sniffed, facet_id, source_sha256):
+            if binary:
+                # A BCF declares every key it uses, and its header cannot be rewritten without re-encoding
+                # the records, so a refusal from polars-bio is final here.
+                path = vcf.readable_bcf_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), copy, origin)
+                records = part.select(vcf.read_records(path, header, part.sample, first_record, extra_info=part.info))
+                stats = vcf.scan_stats(records)
+            else:
+                records, stats = _read_text_records(sniffed, header, missing, data, copy, origin, part, part_warnings)
+            calls, blocks, row_warnings = vcf.to_rows(records, header, stats, text_gt=not binary, gl_phred=gl_phred)
+            part_warnings += row_warnings
+
+            calls_frame, blocks_frame = vcf.to_frames(calls, blocks, facet_id)
+            # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
+            # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
+            calls_path, blocks_path = _spill_files(facet_id, calls_frame, blocks_frame, origin)
         contigs = [canonical_chrom(name) for name in stats["chroms"]]
         spilled = pl.scan_parquet(calls_path)
         flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)

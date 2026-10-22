@@ -4,6 +4,26 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref` splits Living DNA's run-together indel genotypes (`CCA`) against the reference where
+  exactly one split fits (both pieces start with one base, one equals the reference over its span),
+  and sets REF and ALT where only one allele is the reference. On the real file: 58 of 83 rows split, 4
+  with REF and ALT; 25 stay unsplit, counted (F4 resolved; the rest is F17). Values change for
+  `living_dna` facets (`gt_alleles`, and on those 4 rows `ref`, `alts`, `gt`, `end_pos`);
+  `RESOLVE_VERSION` 4.
+
+- A damaged BGZF input makes `load` raise `DamagedBgzfError` (exported) with the facet's id, the
+  compressed byte offset of the first block that does not read back and what is wrong with it, in
+  place of polars-bio's raw `ComputeError`; no path in it (F16). The damaged PGP-HMS starling upload
+  now names offset 473,789,118. `just_vcf.bgzf.find_damage` is the block walker behind it.
+
+- A VCF re-saved by a spreadsheet loads when a field is longer than 128 KiB: the re-save is undone
+  without Python's `csv`, whose reader refused such a field with `csv.Error` (F7 follow-up).
+
+- `normalize` left-aligns and trims the rows of a lifted facet (`relation = liftover_to`), whose REF
+  `liftover` read from the target: an indel that a minus-strand block left at a repeat's right end
+  moves to its left end, as `bcftools norm -f` on the target puts it. Before, lifted rows passed through
+  as unchecked. Normalized facets get new ids (`NORMALIZE_VERSION` 3).
+
 - A 23andMe-layout table that ends in 1,000 or more rows of one other width gets a warning that it
   looks like a second export appended, which is not read (F3, still open).
 

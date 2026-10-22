@@ -8,6 +8,7 @@ from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, se
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.loading import (
     LOADABLE_FORMATS,
+    DamagedBgzfError,
     Loaded,
     MultiSampleError,
     NoSampleError,
@@ -63,6 +64,7 @@ __all__ = [
     "ContentFilter",
     "ContentFilterBasis",
     "ContigNames",
+    "DamagedBgzfError",
     "Lifted",
     "Loaded",
     "MultiSampleError",

@@ -93,18 +93,25 @@ _READ_FAILURES = (pl.exceptions.ComputeError, zlib.error, gzip.BadGzipFile, EOFE
 """How a damaged compressed input fails a read: polars-bio's error at collect, or the standard
 library's when the payload is read or copied in Python."""
 
+_WALKED = "_just_vcf_bgzf_walked"
+"""The attribute `_damage_named` sets on a read failure it walked the file for and found no damage."""
+
 
 @contextmanager
 def _damage_named(sniffed: Sniffed, facet_id: str | None, source_sha256: str | None = None) -> Iterator[None]:
     """Re-raise a read failure as `DamagedBgzfError` when the input's outer layer is BGZF and a block
     of it does not read back; any other failure, and a BGZF input whose blocks all read, unchanged.
 
-    The walk reads the whole file, so it runs only once a read has failed."""
+    The walk reads the whole file, so it runs only once a read has failed, and once per failure: a
+    failure an inner block already walked for is marked, and an outer block re-raises it unwalked."""
     try:
         yield
     except _READ_FAILURES as err:
+        if getattr(err, _WALKED, False):
+            raise
         damage = bgzf.find_damage(sniffed.path) if sniffed.layers[:1] == ("bgzf",) else None
         if damage is None:
+            setattr(err, _WALKED, True)
             raise
         raise DamagedBgzfError(damage, facet_id, source_sha256 or file_sha256(sniffed.path)) from err
 

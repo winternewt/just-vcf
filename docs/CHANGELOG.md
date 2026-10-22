@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A read of an intact BGZF input that fails for another reason walks the file's blocks once, where it
+  walked them twice (once at the facet, once at the source) before re-raising the reader's error.
+
 - The cache sweep removes only entries an older version wrote, comparing version keys numerically
   (`0.0.9` is behind `0.0.11`). An entry a newer just-vcf wrote is kept, so two installs sharing the
   platform user cache no longer delete each other's live spills on every load; before, any version

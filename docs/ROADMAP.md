@@ -355,7 +355,7 @@ Privé's sums); the consensus multiplies methods from one panel as if independen
 another assembly waits for RM6's liftover.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, with a tabix index, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and plus-strand indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: gVCF blocks, strand, minus-strand indels and blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, with a tabix index and gVCF blocks, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and plus-strand indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: strand, minus-strand indels and blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -390,8 +390,8 @@ with what was rejected:
   warning and the count. Rejected: refusing until `rejoin_split` runs, which would block exporting a
   pre-split file as it came; and writing them untagged, which loses the marker signal (the marker INFO
   key is not in the frame).
-- Blocks are counted in the result and the warnings, not written. A gVCF block record needs the REF
-  base at its start, and the `blocks` frame has none before RM3 reads the sequence.
+- Blocks are counted in the result and the warnings, not written, unless `blocks=True` (the gVCF slice
+  below): a gVCF block record needs the REF base at its start, and the `blocks` frame holds none.
 - Contig names: `stored` (canonical), `chr` (a listed map, `MT` → `chrM`, nothing by pattern; other
   contigs unchanged), or `source` (the facet's `contig_map`, and its `header_contigs` for a declared
   contig with no rows; refused where the source spelled one contig two ways). `##contig` lines are sorted in the rows' canonical order, so a tool that checks
@@ -547,7 +547,30 @@ what was rejected:
 - On by default for BGZF output. Rejected: off by default, which leaves the default export unqueryable
   by region for a cost of one small file.
 
-**Left in RM6:** writing gVCF blocks (after RM3); SVLEN for symbolic
+**Shipped 2026-10-22: gVCF output** (`write_vcf(…, blocks=True, reference=…)`; rules in docs/SCHEMA.md,
+Decision 4, "Writing blocks back out"). The `blocks` frame goes out as reference blocks interleaved
+with the calls, REF read from the collection `resolve_ref` read, and `load` reads the file back to
+equal `blocks` and `calls` frames (synthetic gVCF with diploid, haploid and no-call blocks; htslib
+parses it and its index finds a block from inside its span). Decisions, each with what was rejected:
+
+- REF from the reference store, never from the frame or the source: the loader keeps no block REF.
+  A facet whose REF was not read is refused, and a block the collection cannot vouch for is counted
+  `block_ref_unread` (refused, or skipped under `resolved_only`). Rejected: `N` as REF, which htslib
+  accepts but which states a base nobody read.
+- ALT `<*>` by default, `<NON_REF>` on request (`BlockAllele`). Rejected: `<NON_REF>` only, GATK's
+  spelling, where VCF 4.3 defines `<*>`; `load` reads both alike.
+- GT `0/0` for a `ref` block and `./.` for `no_call`, at the ploidy the block's GL implies, else the
+  contig's calls'. The frame keeps no block GT and `load` reads only whether one called anything.
+  Rejected: always diploid, which writes a haploid X block of a male sample as `0/0` beside its
+  haploid calls.
+- FORMAT GT, GQ, MIN_DP and GL, the values the frame holds. Rejected: PL by rounding, for the reason
+  calls write GL; and DP, which the frame does not hold for a block (it keeps `MIN_DP`, Decision 4).
+- Blocks and calls merged one contig at a time, by position, calls first at a shared position, after
+  both frames' order is checked as a stream. Rejected: a global sort, which the writer already refuses
+  to do, and `merge_sorted` over the whole genome, which needs one key across contigs and a REF
+  lookup inside the lazy plan.
+
+**Left in RM6:** SVLEN for symbolic
 SVs (the writer writes END, which the loader does not read for symbolic SVs yet, so their `end_pos`
 does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL); splitting sites that carry `<*>`;
 reading `JUST_VCF_SPLIT` back as a split marker; strand resolution; in a liftover, indels on minus-strand

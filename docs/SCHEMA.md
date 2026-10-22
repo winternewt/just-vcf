@@ -333,6 +333,19 @@ A 4.5 block states its length per sample in FORMAT `LEN`. INFO `END` is deprecat
 when `LEN` is missing. Blocks keep the source's `MIN_DP` as `dp_min`, and not the block's average `DP`.
 A block with an average depth of 25 can still hold an uncovered base.
 
+**Writing blocks back out** (`write_vcf(…, blocks=True)`, RM6). The frame holds no REF base, so a
+block record takes the base at `pos` from the collection `resolve_ref` read the facet's REF from
+(charter 10); a facet whose REF was not read is refused, and a block on a contig that collection
+cannot vouch for (not in it, named twice, a stated length that differs) or past its end is counted
+`block_ref_unread`, never written with a made-up base. The record is `REF <*>` (or GATK's
+`<NON_REF>`), INFO `END = end_pos`, and FORMAT GT, GQ, MIN_DP (`dp_min`) and GL (`gl`) where the row
+has them. The frame keeps no block GT, only whether it called anything (`kind`), so GT is written
+`0/0` for `ref` and `./.` for `no_call`, at the ploidy the block's GL implies (k + 1 values for
+ploidy k), else the ploidy of the contig's calls, else of the facet's; that ploidy is the writer's
+choice, and `load` drops it again. Blocks and calls are merged by position one contig at a time,
+calls first where both start at one position. `load` reads the file back to equal `blocks` and
+`calls` frames.
+
 **Recommendation: B.** The charter's "one frame out" is amended to name the three frames (facets,
 calls, blocks): a gVCF cannot fit in one calls frame. Every format lands in the same `calls` schema, and
 a format that has blocks also fills `blocks`.
@@ -943,6 +956,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-22, RM6's gVCF output): no column changes. Rule added: writing
+  blocks back out (Decision 4).
 
 - **Three facet columns, version bump pending** (2026-10-22, RM4's chip detection and F13):
   `facets.chip`, `facets.chip_basis` and `facets.strand_check`, all nullable and additive, which by

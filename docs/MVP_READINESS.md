@@ -31,7 +31,7 @@ Status: **shipped**, **partial**, or **not started**.
 | 12 | Pre-split multi-allelic input | inv. 8 | shipped | `split_signal`, `rejoin_split` (RM270) | not run on files split by bcftools itself, Hail or GATK |
 | 13 | Sex chromosomes and caller ploidy | inv. 9 | in progress | RM269, full label chosen (desk #61); paused at step 1 of 5 (f77a324) | the whole build |
 | 14 | Normalize: chrom names, left-align, split, dedup, sort, strand | minimal shape | in progress | RM6 second slice (a builder): split, left-align, dedup as a derived facet | strand for arrays; liftover |
-| 15 | Write VCF back out | minimal shape (export) | shipped | `write_vcf` (RM6, a1f3317): VCF 4.3, BGZF, deterministic bytes; 6.4M-call round trip with 0 key mismatches; a tabix index beside BGZF output | gVCF blocks, SVLEN, PSL phase sets |
+| 15 | Write VCF back out | minimal shape (export) | shipped | `write_vcf` (RM6, a1f3317): VCF 4.3, BGZF, deterministic bytes; 6.4M-call round trip with 0 key mismatches; a tabix index beside BGZF output; gVCF blocks with `blocks=True` | SVLEN, PSL phase sets |
 | 16 | Liftover with a `liftover_to` link | inv. 5 | not started | RM6 (port from just-prs) | `bcftools +liftover` per LANDSCAPE |
 | 17 | Deterministic output | inv. 12 | shipped | canonical order per contig; `write_vcf` gives the same bytes for the same frames (tested) | — |
 | 18 | CLI | (CLAUDE.md §4) | not started | no `[project.scripts]` | Typer |

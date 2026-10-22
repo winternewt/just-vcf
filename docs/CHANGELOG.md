@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf(…, blocks=True, reference=…)` writes a gVCF (RM6): the `blocks` frame as reference blocks
+  (ALT `<*>`, or `<NON_REF>` with `block_allele=BlockAllele.NON_REF`; INFO `END`; FORMAT GT, GQ,
+  MIN_DP and GL as the frame holds them), merged with the calls by position, contig by contig. A
+  block's REF base is read from the collection `resolve_ref` read; a facet whose REF was not read is
+  refused, and a block the collection cannot vouch for counts as `block_ref_unread`. `load` reads the
+  output back to equal frames. `VcfWritten.blocks_written` is new, `blocks_not_written` counts only
+  blocks left out, and `rows_written` counts calls only. Exports `BlockAllele`.
+
 - `write_vcf` writes a tabix index, `<path>.tbi`, beside BGZF output (RM6), built from the offsets it
   wrote rather than by a second pass: `index=None` (the default) indexes every BGZF write, `index=False`
   skips it, and a plain-text write has none. A write without an index removes a `<path>.tbi` left

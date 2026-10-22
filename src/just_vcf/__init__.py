@@ -40,7 +40,7 @@ from just_vcf.schema import (
     VariantClass,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
-from just_vcf.writing import ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
+from just_vcf.writing import BlockAllele, ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
 from just_vcf.vrs import mint_vrs_ids, vrs_withheld
 
 __version__ = version("just-vcf")
@@ -53,6 +53,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "AbsenceMeans",
     "AssemblyLabelBasis",
+    "BlockAllele",
     "BlockKind",
     "CacheClearReport",
     "CacheEntryInfo",

@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A guard against merge seams in the loaders (`tests/test_load_seams.py`): every loadable format's
+  spec example, a BCF written from the `vcf` one and the appended-export table are loaded from a zip
+  through `load`, and any `facets` column left null fails unless the test states why null is right for
+  that format, caller, family or every facet. A reason has to hold for every facet it covers, so a
+  family-wide excuse cannot hide one loader that drops a column another fills. A new `FACETS` column
+  fails for every format until its reasons are written. The same loads check that each load path
+  returns `links` of the `LINKS` schema that agree with its facets, and that `subject` reaches every
+  facet. One gap it found is held as a known gap: a BCF's header build hints are never read, so it
+  gets no `assembly_label` where the same header as text gets GRCh37.
+
 - In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
   probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
   (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or

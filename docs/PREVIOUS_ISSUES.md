@@ -3,6 +3,23 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F18 — A Canvas CNV file loads its copy-neutral segments as reference blocks
+
+Severity: medium · Found 2026-10-23 loading the PGP-HMS SV and CNV files for RM282.
+
+Canvas writes each copy-neutral segment as ALT `.` with INFO END, `GT 0/0` and FORMAT `CN 2`, which
+is the shape of an Illumina gVCF reference block. 90 of the file's 182 records loaded as `ref`
+blocks, and the facet got `absence_means = blocks`, so a consumer reading the blocks would take a
+segment's whole span as called reference for small variants, which a copy-number caller never said.
+Its `<CN0>`, `<CN2>`… calls also had no extent: `end_pos = pos` on all 92, since END was read only
+for `<DEL>`, `<DUP>`, `<INV>` and `<CNV>`.
+
+Resolved 2026-10-23: an `ALT .` record to END that carries a copy number (FORMAT or INFO CN) is a
+`calls` row with `alts = []` and `copy_number`, never a block; `<CNn>` alleles end at END. The file
+now loads 182 calls, no blocks, every `end_pos` past `pos`, and `absence_means = unknown`. Code:
+`loaders/vcf.py` `_is_block_record`, `_SV_LENGTH_TYPES`; test
+`test_sv_columns_are_read_as_written`.
+
 ## F3 — A headerless file holding two exports loses the second one
 
 Severity: low · Found 2026-09-30, same sweep.

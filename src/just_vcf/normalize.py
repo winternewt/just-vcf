@@ -21,7 +21,8 @@ The rules are in docs/SCHEMA.md ("Normalizing"); in short:
    source REF to check (an array row, a split Living DNA genotype), with the standard algorithm (Tan et al. 2015, vt, `bcftools norm -f`):
    drop a common last base, and when an allele runs empty, extend both to the left with the
    reference base before them; repeat; then drop common first bases while both alleles keep one. A
-   row that moved or changed has `source_ref`, `ref_check`, `source_gt` and its VRS ids null: they
+   row that moved or changed has `source_ref`, `ref_check`, `source_gt`, its VRS ids and its confidence
+   intervals (`cipos`, `ciend`, offsets from the POS the source wrote) null: they
    described the representation the source wrote, at the position it wrote it, and keeping
    `ref_check = match` on bases read from the very sequence it checks would be a check agreeing with
    itself. `ref` holds the new REF, read from the reference. Rows whose REF was not shown to match
@@ -52,6 +53,7 @@ import polars as pl
 
 from just_vcf import cache
 from just_vcf.liftover import RELATION as LIFT_RELATION
+from just_vcf.links import NORMALIZED, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore
 from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, RefCheck, SplitSignal, canonical_chrom, canonical_order, empty
@@ -61,7 +63,7 @@ logger = logging.getLogger(__name__)
 NORMALIZE_VERSION = 5
 """Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits."""
 
-RELATION = "normalized"
+RELATION = NORMALIZED
 """The derived facet's `relation`."""
 
 REREADS_REF: frozenset[str] = frozenset({LIFT_RELATION})
@@ -75,7 +77,7 @@ _FIRST_WINDOW = 100
 with a window `_WINDOW_GROWTH` times wider, until it reaches the contig's start."""
 _WINDOW_GROWTH = 16
 
-_POSITIONAL = ("source_ref", "ref_check", "source_gt", "vrs_allele_ids", "vrs_errors")
+_POSITIONAL = ("source_ref", "ref_check", "source_gt", "vrs_allele_ids", "vrs_errors", "cipos", "ciend")
 """Columns that describe the source's representation at the source's position: null on a row that
 left-alignment or trimming changed."""
 
@@ -141,6 +143,7 @@ def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = 
         facets=facets,
         calls=pl.scan_parquet(parts) if parts else empty(CALLS),
         blocks=loaded.blocks.with_columns(pl.lit(facet_id).alias("facet_id")),
+        links=derived_links(loaded.links, facet["facet_id"], facet_id, RELATION, step="normalize", step_version=str(NORMALIZE_VERSION)),
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )
@@ -280,6 +283,9 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
         pair("vrs_allele_ids").alias("vrs_allele_ids"),
         pair("vrs_errors").alias("vrs_errors"),
         pl.when(pl.col("_indexable")).then(pair("ad")).alias("ad"),
+        # The SV columns that are per ALT follow their ALT: two interval values each, one copy number.
+        *[pl.when(pl.col(name).list.len() == 2 * n).then(pl.col(name).list.slice(2 * (k - 1), 2)).alias(name) for name in ("cipos", "ciend")],
+        pl.when(pl.col("alt_copy_numbers").list.len() == n).then(pl.concat_list(pl.col("alt_copy_numbers").list.get(k - 1))).alias("alt_copy_numbers"),
         sliced_gl.alias("gl"),
         pl.lit(None, dtype=CALLS["gp"]).alias("gp"),
         pl.lit(None, dtype=CALLS["dosage"]).alias("dosage"),

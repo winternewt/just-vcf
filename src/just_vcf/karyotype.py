@@ -35,7 +35,8 @@ The estimate:
   need a Y shown absent, which call-site depth cannot do, so they wait for a coverage facet with
   XXX, XYY and the rarer classes (a Y ratio above the usual range still reads as one Y present). A
   value in an unknown band, lines that disagree, too few sites, a facet that is not a whole genome or a
-  build without a region set all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
+  build without a region set, or one whose thresholds were never measured (T2T-CHM13, measured and
+  reported only), all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
   `x_copies` is still answered wherever the X lines settle it.
 
 The estimate names a karyotype, not a sex: a person with an XX karyotype and a male phenotype has
@@ -57,9 +58,10 @@ from just_vcf.loading import Loaded
 from just_vcf.schema import CallsetType
 
 # --- Regions -----------------------------------------------------------------------------------
-# Derived from GIAB genome stratifications v3.6, `XY` group (docs/PROVENANCE.md), converted from BED
-# (0-based, half-open) to 1-based closed `pos` ranges; tests/test_karyotype.py re-derives them from the
-# BED files when they are on disk. The derivation is just-vcf's own, not a GIAB product.
+# Derived from GIAB genome stratifications v3.6, `XY` group, and for T2T-CHM13's X-degenerate Y from the
+# T2T consortium's sequence classes (docs/PROVENANCE.md), converted from BED (0-based, half-open) to
+# 1-based closed `pos` ranges; tests/test_karyotype.py re-derives them from the BED files carried in
+# assets/. The derivation is just-vcf's own, not a GIAB or T2T product.
 
 PAR_BOUNDS: dict[str, dict[str, tuple[tuple[int, int], tuple[int, int]]]] = {
     "GRCh37": {
@@ -69,6 +71,10 @@ PAR_BOUNDS: dict[str, dict[str, tuple[tuple[int, int], tuple[int, int]]]] = {
     "GRCh38": {
         "X": ((10_001, 2_781_479), (155_701_384, 156_030_895)),
         "Y": ((10_002, 2_781_479), (56_887_903, 57_217_415)),
+    },
+    "T2T-CHM13": {
+        "X": ((1, 2_394_410), (153_925_835, 154_259_566)),
+        "Y": ((1, 2_458_320), (62_122_810, 62_460_029)),
     },
 }
 """PAR1 and PAR2 per build and chromosome, 1-based closed: from the first to the last base of GIAB's
@@ -95,12 +101,34 @@ X_DEGENERATE_Y: dict[str, tuple[tuple[int, int], ...]] = {
         (15_905_215, 16_159_795), (16_425_966, 17_456_266), (18_870_335, 20_207_793), (20_257_794, 21_305_953),
         (26_415_436, 26_673_214), (56_673_215, 56_771_509), (56_821_510, 56_887_902),
     ),
+    "T2T-CHM13": (
+        (2_458_321, 2_727_072), (6_400_876, 7_234_999), (12_656_464, 14_891_106), (14_964_928, 16_781_335),
+        (16_811_394, 17_066_094), (17_332_347, 18_362_331), (19_776_672, 20_961_203), (21_226_264, 22_270_252),
+    ),
 }
-"""The X-degenerate male-specific Y, 1-based closed: GIAB's `chrY_nonPAR` minus `chrY_XTR` minus
-`chrY_ampliconic`, kept between PAR1 and PAR2 (GRCh38's `chrY_nonPAR` also lists the single base before
-PAR1, which is dropped). Sequence here has no close copy on X, so reads that land in it come from a Y."""
+"""The X-degenerate male-specific Y, 1-based closed. Sequence here has no close copy on X, so reads that
+land in it come from a Y.
 
-REGION_SET = "GIAB genome stratifications v3.6 XY, derived by just-vcf"
+GRCh37 and GRCh38: GIAB's `chrY_nonPAR` minus `chrY_XTR` minus `chrY_ampliconic`, kept between PAR1
+and PAR2 (GRCh38's `chrY_nonPAR` also lists the single base before PAR1, which is dropped). On those
+builds the rest of the male-specific Y (heterochromatin, centromere) is an assembly gap, which GIAB's
+nonPAR leaves out.
+
+T2T-CHM13: the T2T consortium's `X-DEG` sequence class (`chm13v2.0_chrXY_sequence_class_v1.bed`, on
+the complete Y of HG002), less GIAB's `chrY_XTR` and `chrY_PAR`. The class file's second X-DEG interval
+starts two bases inside XTR2, and those two bases are dropped. GIAB's CHM13 set has no ampliconic file,
+and on a gapless Y its nonPAR minus XTR would keep the ampliconic sequence, the heterochromatin, the
+centromere and the satellites, so the GRCh37/38 derivation does not carry over."""
+
+REGION_SET: dict[str, str] = {
+    "GRCh37": "GIAB genome stratifications v3.6 XY, derived by just-vcf",
+    "GRCh38": "GIAB genome stratifications v3.6 XY, derived by just-vcf",
+    "T2T-CHM13": (
+        "GIAB genome stratifications v3.6 XY (PAR, XTR) and T2T chm13v2.0 chrXY sequence classes v1 "
+        "(X-degenerate Y), derived by just-vcf"
+    ),
+}
+"""Where each build's PAR bounds and X-degenerate Y come from, as `region_set` reports it."""
 
 DEPTH_REFERENCE_CHROM = "20"
 """The autosome whose median DP is the denominator of both depth ratios. The thresholds were measured
@@ -135,7 +163,14 @@ MIN_REFERENCE_SITES = 1_000
 MIN_Y_SITES = 300
 """X-degenerate Y ALT calls with DP needed for the Y ratio; the measured files had thousands each."""
 
-ESTIMATE_BUILDS = frozenset(PAR_BOUNDS)
+REGION_BUILDS = frozenset(PAR_BOUNDS)
+"""Builds whose sex chromosomes can be grouped and measured."""
+
+ESTIMATE_BUILDS = frozenset({"GRCh37", "GRCh38"})
+"""Builds the thresholds were measured on, and so the only ones estimated. T2T-CHM13 is measured and
+reported, but its estimate waits for T2T callsets of known karyotype: its X-degenerate Y is another
+region set, and no T2T genome was among the calibration files. Rejected: applying the GRCh37/38 bands
+to it unmeasured."""
 
 _AUTOSOMES = [str(n) for n in range(1, 23)]
 
@@ -168,6 +203,7 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
     {
         "no_build",
         "unsupported_build",
+        "uncalibrated_build",
         "not_wgs",
         "too_few_sites",
         "intermediate",
@@ -181,7 +217,9 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
 """Why an answer is unknown. An open vocabulary: a new kind of evidence brings new reasons.
 
 - `no_build`: the facet has no `assembly_label`, so the PARs cannot be placed.
-- `unsupported_build`: a label with no region set here (T2T-CHM13).
+- `unsupported_build`: a label with no region set here (GRCh36).
+- `uncalibrated_build`: a build with a region set but no measured thresholds (T2T-CHM13): the
+  measurements are reported, the estimate is withheld.
 - `not_wgs`: `callset_type` is not `wgs`; the thresholds were measured on whole genomes.
 - `too_few_sites`: a line had fewer sites than its minimum.
 - `intermediate`: a value fell in the unknown band between two classes, or outside every band.
@@ -324,7 +362,7 @@ def sex_chromosome_evidence(loaded: Loaded) -> tuple[SexChromosomeEvidence, ...]
 
 def measure(calls: pl.LazyFrame, assembly_label: str | None) -> dict:
     """The raw measurements of a `calls` frame, per group, as plain numbers (one small collect)."""
-    supported = assembly_label in ESTIMATE_BUILDS
+    supported = assembly_label in REGION_BUILDS
     counted = (
         calls.filter(
             (pl.col("evidence_basis") == "assay")
@@ -395,7 +433,7 @@ def _group(assembly_label: str | None) -> pl.Expr:
     sex chromosomes have no group, since their PARs cannot be placed."""
     chrom = pl.col("chrom")
     expr = pl.when(chrom.is_in(_AUTOSOMES)).then(pl.lit("autosomes")).when(chrom == "MT").then(pl.lit("mt"))
-    if assembly_label in ESTIMATE_BUILDS:
+    if assembly_label in REGION_BUILDS:
         bounds = PAR_BOUNDS[assembly_label]
         expr = (
             expr.when(chrom == "XY")
@@ -450,7 +488,7 @@ def estimate(
     if assembly_label is None:
         return unknown("no_build", "the facet has no assembly label, so the pseudo-autosomal regions cannot be placed")
     if not measured["supported"]:
-        return unknown("unsupported_build", f"no PAR bounds or Y region set for {assembly_label} (only {', '.join(sorted(ESTIMATE_BUILDS))})")
+        return unknown("unsupported_build", f"no PAR bounds or Y region set for {assembly_label} (only {', '.join(sorted(REGION_BUILDS))})")
 
     x, y, auto = groups.get("x_nonpar", {}), groups.get("y_nonpar", {}), groups.get("autosomes", {})
     x_het = _heterozygosity(x, "")
@@ -469,10 +507,17 @@ def estimate(
         x_ratio=x_dp / ref_dp if reference_ok and x_sites >= MIN_X_SITES and x_dp is not None else None,
         y_ratio=y_dp / ref_dp if reference_ok and y_sites >= MIN_Y_SITES and y_dp is not None else None,
     )
-    known = {"region_set": REGION_SET, "x_heterozygosity": x_het, "y_heterozygosity": y_het, "depth": depth}
+    known = {"region_set": REGION_SET[assembly_label], "x_heterozygosity": x_het, "y_heterozygosity": y_het, "depth": depth}
     if callset_type is not CallsetType.WGS:
         kind = callset_type.value if callset_type else "unknown"
         return unknown("not_wgs", f"callset type {kind}; the thresholds were measured on whole genomes", **known)
+    if assembly_label not in ESTIMATE_BUILDS:
+        measured_here = (
+            f"X het share {_fmt(x_het.het_share)}, X depth ratio {_fmt(depth.x_ratio)}, "
+            f"X-degenerate Y depth ratio {_fmt(depth.y_ratio)}"
+        )
+        calibrated = " and ".join(sorted(ESTIMATE_BUILDS))
+        return unknown("uncalibrated_build", f"the thresholds were measured on {calibrated} genomes, none on {assembly_label}; measured: {measured_here}", **known)
 
     no_dp = int(auto.get("depth_sites", 0)) + x_sites + int(y.get("depth_sites", 0)) == 0
     x_copies, x_reason, x_detail = _x_copies(x_het, depth, no_dp)

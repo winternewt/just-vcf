@@ -1,4 +1,4 @@
-"""The frames every loader emits: `facets`, `calls` and `blocks` (docs/SCHEMA.md).
+"""The frames every loader emits: `facets`, `calls` and `blocks`, and the `links` between facets (docs/SCHEMA.md).
 
 This module is the contract in code: column names, dtypes, the closed vocabularies, contig naming
 (SCHEMA.md Decision 7) and the canonical row order (Decision 11). It does no I/O. A test compares the
@@ -15,7 +15,7 @@ import polars as pl
 
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.11"
+SCHEMA_VERSION = "0.0.14"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -208,6 +208,7 @@ FACETS = pl.Schema(
         "chip": pl.String,
         "chip_basis": enum_dtype(ChipBasis),
         "strand_check": enum_dtype(StrandCheck),
+        "subject": pl.String,
     }
 )
 """One row per facet (SCHEMA.md Decision 5)."""
@@ -243,6 +244,11 @@ CALLS = pl.Schema(
         "filters": pl.List(pl.String),
         "sample_filters": pl.List(pl.String),
         "split_signal": enum_dtype(SplitSignal),
+        "sv_type": pl.String,
+        "cipos": pl.List(pl.Int32),
+        "ciend": pl.List(pl.Int32),
+        "copy_number": pl.Float32,
+        "alt_copy_numbers": pl.List(pl.Float32),
     }
 )
 """One row per site per facet (SCHEMA.md Decision 6)."""
@@ -261,6 +267,18 @@ BLOCKS = pl.Schema(
 )
 """Reference and no-call intervals, for formats that have them (SCHEMA.md Decision 4)."""
 
+_DERIVATION_INPUTS = pl.List(pl.Struct({"role": pl.String, "name": pl.String, "sha256": pl.String}))
+
+LINKS = pl.Schema(
+    {
+        "from_facet_id": pl.String,
+        "to_facet_id": pl.String,
+        "relation": pl.String,
+        "provenance": pl.Struct({"step": pl.String, "step_version": pl.String, "derivation_inputs": _DERIVATION_INPUTS}),
+    }
+)
+"""One row per link between two facets: the facet graph's edges (SCHEMA.md Decision 12, `just_vcf.links`)."""
+
 
 # Contig names (Decision 7). Every accepted spelling is listed; nothing is stripped by pattern, so
 # `chrM` cannot turn into `M` and fall out of a join against `MT`.
@@ -277,6 +295,21 @@ CONTIG_ALIASES: dict[str, str] = {
     "XY": "XY",
 }
 """Source spelling → canonical `chrom`. A name not listed keeps its source spelling."""
+
+CHM13_ACCESSIONS: dict[str, str] = {
+    # GenBank, GCA_009914755.4: chr1 is CP068277.2 counting down to chr22 CP068256.2 and chrX CP068255.2.
+    **{f"CP0682{77 - index:02d}.2": name for index, name in enumerate([*_PRIMARY[:22], "X"])},
+    "CP086569.2": "Y",
+    "CP068254.1": "MT",
+    # RefSeq, GCF_009914755.1: NC_060925.1 (chr1) to NC_060948.1 (chrY). RefSeq has no mitochondrion.
+    **{f"NC_0609{25 + index}.1": name for index, name in enumerate(_PRIMARY)},
+}
+"""T2T-CHM13v2.0's sequence accessions → canonical `chrom`, versions verbatim, from NCBI's assembly
+report for GCA_009914755.4 (docs/PROVENANCE.md). An accession names one sequence of one assembly, so
+mapping it is safe in a way a bare `chr` strip is not. GRCh37's and GRCh38's accessions are not
+listed yet (docs/ROADMAP.md, RM286)."""
+
+CONTIG_ALIASES.update(CHM13_ACCESSIONS)
 
 CONTIG_RANK: dict[str, int] = {name: rank for rank, name in enumerate([*_PRIMARY, "MT", "XY"])}
 """Sort rank of the canonical names; any other contig sorts after them, by name."""

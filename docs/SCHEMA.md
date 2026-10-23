@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.11.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.14.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -141,7 +141,9 @@ both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X):
   comes from its contig 1 length (GRCh36, GRCh37, GRCh38, T2T-CHM13), or from one the caller asserted
   when adding the FASTA. `GRCh37` cannot vouch for MT, since it covers hg19's chrM (16,571 bases) as
   well as rCRS (16,569), and `GRCh36` neither (NCBI36 and hg18 carry the 16,571-base chrM), so an
-  array's MT stays unread.
+  array's MT stays unread. `T2T-CHM13` neither: `chm13v2.0.fa` carries the CHM13 cell line's own
+  mitochondrion and the T2T analysis set's `chm13v2.0_maskedY_rCRS.fa.gz` carries rCRS, both 16,569
+  bases.
 - it stated neither lengths nor a label (an FTDNA export, a headerless table): the label is inferred
   from the rows (F9), and then matched as above. Per collection in the store, a deterministic sample
   of the facet's array SNV rows (at most 2,000 per chromosome on 1–22, X and Y, every k-th row by
@@ -288,7 +290,8 @@ its own phase set. So:
   to its chromosome's one implicit set (VCF 4.5: "All phased genotypes that do not contain a PS
   subfield are assumed to belong to the same phased set"), key `(facet_id, chrom, ps, null)`.
 
-The VRS CisPhasedBlock is built from `phase_sets` at export. It is not stored per row.
+The VRS CisPhasedBlock is built from `phase_sets` at export, by `cis_phased_blocks` ("CisPhasedBlock
+export" below). It is not stored per row.
 
 ## Decision 3: graded evidence (charter 7)
 
@@ -374,6 +377,11 @@ millions of them.
 included), or when it has no ALT (`.`) and an `INFO/END` extent, which is how Illumina's gVCF writes a
 reference block. Either way its GT must assert reference or nothing; a GT calling `<*>` stays a call. A record with `ALT=TC,<*>` is a variant call that also carries the `<*>` allele, and it
 stays in `calls` with `<*>` in `alts`. A monomorphic record (ALT `.`) stays in `calls` too.
+An `ALT .` record to `END` that carries a copy number (FORMAT or INFO `CN`) is a copy-number segment,
+not a block (RM282): Canvas writes its copy-neutral segments so (`GT 0/0`, `CN 2`, 90 of 182 records
+of a PGP-HMS Canvas file, which before RM282 loaded as 90 `ref` blocks and `absence_means = blocks`).
+It states the region's copy number and nothing about the small variants in it, so it is a `calls`
+row with `alts = []`, `end_pos = END` and `copy_number`, and the facet's absence stays `unknown`.
 
 Complete Genomics' native `var` and `masterVarBeta` files state their blocks directly: a `ref` locus is
 a `ref` block, and `no-call`, `no-ref` (an assembly gap) and `PAR-called-in-X` (chrY stretches whose
@@ -523,7 +531,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | null unless stated |
-| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`, `appended_export`). `appended_export`, like `caller_split`, has no parent: a second export appended to a file after the first, in another layout (F3), loaded as its own facet beside the first's; `derived_from` stays null, since neither export was made from the other, and the two share `source_sha256` and `member` (below, "Two exports in one file") |
+| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`, `appended_export`). `appended_export`, like `caller_split`, has no parent: a second export appended to a file after the first, in another layout (F3), loaded as its own facet beside the first's; `derived_from` stays null, since neither export was made from the other, and the two share `source_sha256` and `member` (below, "Two exports in one file"). A facet with several parents (`merge`) has `derived_from` null and its parents in `links` (Decision 12), which also links a caller split's facets and an appended export to the first; Decision 12 states how the two agree |
 | `contig_map` | `list[struct{source, chrom}]`: how this file's contig names were mapped (Decision 7) |
 | `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
@@ -533,6 +541,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `derivation_inputs` | `list[struct{role, name, sha256}]`: the files a derived facet was made with besides its parent and its reference collection (`ref_seqcol_digest`). A liftover writes its chain (`role = chain`, the file's name, not its path, and the sha256 of its bytes). Null on a facet read from a file. just-vcf's own shape |
 | `chip`, `chip_basis` | the genotyping chip an array export came from (RM4, `just_vcf.chip`), and how it is known: `stated` (the header names it: AncestryDNA's array version, a Final Report's `Content` manifest, Living DNA's genotype chip) or `inferred` (a 23andMe export's row count and internal-id profile both point at one generation; a preamble-less table in its layout is read so when it carries 23andMe's `i…` ids; an FTDNA or MyHeritage export, or a Final Report that names no manifest, whose rsids one Illumina manifest clearly holds, by marker overlap). An open vocabulary: `23andme_v1_v2` (the two are not told apart), `23andme_v3`, `23andme_v4`, `23andme_v5`, `ancestrydna_v1`, `ancestrydna_v2`, `living_dna_sirius`, `illumina:<manifest>` as a Final Report names it, and the platform families `illumina_gsa` and `illumina_omniexpress`, which only marker overlap names: a stated value carries the manifest, an inferred one the family, since one manifest per family is compared with, and a GSA v2 Final Report matches the v3 manifest at 0.97: the overlap does not tell versions apart. Null = unknown (a statement with no entry is quoted in a warning; an overlap that names no chip says why in one) or not an array. just-vcf's own shape |
 | `strand_check` | `forward` or `mixed`: what `resolve_ref` found about the strand an array's genotypes are written on (F13, Decision 2). Null = not checked: not an array, REF not read yet, or too few heterozygous rows. Never read as forward |
+| `subject` | the person the facet belongs to, as the caller labels them (RM273): supplied at `load(..., subject=...)`, never read from the file, never a sample name, never inferred. Null = not supplied. Every derived step's facet inherits its parent's. It is a claim, not identity: `facet_id` does not digest it, so one file loaded under two subjects gives one `facet_id` twice. It identifies a person if the caller makes it so: logs, warnings and errors name the `facet_id`, never the subject. Grouping by it and the check of the claim are under "Facets of one person" below. just-vcf's own shape |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
@@ -616,6 +625,11 @@ With Decisions 1–5 as recommended:
 | `filters` | `list[str]` | the source said `.` or has no filter column. `["PASS"]` is literal. Site-level |
 | `sample_filters` | `list[str]` | FORMAT `FT`: whether *this sample's* genotype passed, separate from the site. Null = not given |
 | `split_signal` | `Enum` | no sign that the row is one record of a multi-allelic site split one row per ALT. Otherwise why it looks so: `marker`, `slot_pattern` or `all_zero_beside_alt` (rule below). In such a row a `0` can mean another ALT, not REF |
+| `sv_type` | `str` | the source wrote no INFO `SVTYPE`. Verbatim, an open vocabulary (`DEL`, `BND`, DRAGEN's `CNV` on a `<DEL>`, Canvas's `LOH`, BreakDancer's `ITX`). Never derived from ALT, which holds the allele type already (structural variants, below) |
+| `cipos` | `list[i32]` | the source wrote no INFO `CIPOS`, or not one pair per ALT. Two offsets from `pos` per ALT, VCF 4.5's shape; an element null where the source wrote `.` (structural variants, below) |
+| `ciend` | `list[i32]` | as `cipos`, from INFO `CIEND`: offsets from the end. Never filled from `cipos`, though VCF 4.5 says a missing CIEND matches it |
+| `copy_number` | `f32` | the source wrote no FORMAT `CN`: this sample's copy number of the segment |
+| `alt_copy_numbers` | `list[f32]` | the source wrote no INFO `CN`, or not one value per ALT. Parallel to `alts`: VCF 4.5's copy number of each ALT allele; a VCF 4.2 INFO CN (`Number=1`, the copy number of the segment) is the one-ALT list |
 
 **`split_signal`.** A file split one row per ALT (bcftools `norm -m-`, Hail, GATK) can write the
 other ALT of a genotype as `0`, so `1/2` at `A>G,T` becomes `1/0` at `A>G` and `0/1` at `A>T`, and
@@ -709,7 +723,7 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    deletion. At a contig's first base there is no base before, and the row stays as written, counted.
 3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
    except the ones a move clears (`source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids`,
-   `vrs_errors`), which say how the source wrote a row, not what it states. So one indel written twice
+   `vrs_errors`, `cipos`, `ciend`), which say how the source wrote a row, not what it states. So one indel written twice
    by the source, once already left-aligned and once further right, with the same genotype and
    evidence, is one row, and the one kept is the row that did not move, with its source REF, check and
    GT text. Rows that state the same allele at one position and differ in anything else (genotype,
@@ -760,8 +774,9 @@ holding that collection and the target.
    and lifts complemented in place like an MNV. A re-anchored indel is not left-aligned on the target
    by `liftover`: the shift that was leftmost on the source is rightmost on the target. Run
    `normalize` on the lifted facet to left-align it there ("Normalizing", step 2).
-4. **What a lifted row carries.** `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and
-   `vrs_errors` are null: they described the source's representation on the source assembly. `gt`
+4. **What a lifted row carries.** `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids`,
+   `vrs_errors`, `cipos` and `ciend` are null: they described the source's representation on the
+   source assembly (the intervals are offsets a minus-strand block would reverse). `gt`
    indexes `[ref] + alts`. `gl`, `gp`, `ad` and the order of `source_alleles` are the parent's (Decision
    2: never reordered). A swapped row's `dosage` is null, since it counted the other allele. A row
    lifted to another contig than its source's has `phased`, `phase_sets` and `phase_set_kinds` null: a
@@ -790,7 +805,8 @@ alleles (P3), so the two must not share a name. The rule follows VCF 4.5's compu
    declared `Number=1` is read as the one-ALT list it is; one that is not one value per ALT cannot be
    matched to its alleles and is not read.
 2. For each allele compute an end:
-   - `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes: the record's INFO `END` where it gives one,
+   - `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes, and the copy-number alleles `<CN0>`,
+     `<CN2>`… (Canvas, the 1000 Genomes SV release; RM282): the record's INFO `END` where it gives one,
      else `pos + abs(SVLEN)`. POS is the base before the event, so `<DEL>` at 200 with `SVLEN=30` ends
      at 230. END is the record's stated end (VCF 4.5 deprecates it but defines it as this very
      maximum, and a missing SVLEN is to be inferred from it); where the two disagree, END is followed
@@ -809,6 +825,44 @@ counted in a warning.
 
 Where REF is not known yet (an array `I`/`D` row) `end_pos` is null. A single-position array call has
 `end_pos = pos`.
+
+**Structural variants (RM282).** An SV or CNV VCF (Manta, DELLY, Canvas, DRAGEN's `.sv`/`.cnv`,
+Sniffles) loads as any VCF does: its symbolic ALTs (`<DEL>`, `<DUP:TANDEM>`, `<INV>`, `<INS>`,
+`<CNV>`, `<CN0>`…) and breakends (`A]2:7000]`, `.A`) are kept verbatim in `alts`, each counted as an
+`sv` allele in `variant_classes`, its extent is `end_pos` (above), and what the caller wrote about the
+event goes to five columns, each just-vcf's own shape (VRS has no Allele for these; charter 2):
+
+- `sv_type` is INFO `SVTYPE` as written. VCF 4.5 deprecates it as redundant with ALT, but callers
+  write a type ALT does not say: DRAGEN's copy-number caller writes `SVTYPE=CNV` on `<DEL>` and `<DUP>`
+  (an abundance claim, VCF 4.5's `SVCLAIM=D`, not an adjacency), Canvas `LOH` on `<CN0>,<CN2>`.
+  Rejected: deriving it from ALT where SVTYPE is absent, which would mix stated and derived values in
+  one column.
+- `cipos` and `ciend` hold two offsets per ALT. VCF 4.2 declared one pair for the record
+  (`Number=2`), and every ALT of a record shares its POS, so that pair is repeated for each ALT; a
+  record with no ALT (a copy-neutral segment) keeps its one pair; any other count is withheld and
+  counted. Rejected: storing the values as written, which leaves every consumer to read the facet's
+  `vcf_version` to know what a list of two means on a two-ALT record. A missing `ciend` stays null:
+  VCF 4.5 says to assume CIPOS, and a consumer applies that rule, the frame does not fill it.
+- `copy_number` is FORMAT `CN`, the sample's total; `alt_copy_numbers` is INFO `CN`, per ALT under
+  VCF 4.5 (its own example: `<CNV>,<CNV>` with `CN=1,2` and FORMAT `CN` 3). The two are kept apart:
+  neither is filled from the other, nor from a `<CNn>` allele's name.
+- A VCF 4.3 header declaring `CN` with a Type other than the Integer 4.3 reserves (it is Float from
+  4.4 on) is refused by polars-bio's reader, so that key is not carried, with a warning and the key in
+  `dropped_fields`; an undeclared `CN` the rows use is declared as the file's version reserves it.
+  `write_vcf` writes VCF 4.3, so it declares `CN` Integer and leaves out, counted, a copy number that
+  is not a whole number.
+
+Each of these is null on a row that is no SV. `normalize` leaves symbolic sites as written; on a
+sequence site it splits, each row keeps its own ALT's pair and copy number, and a row it moves loses
+`cipos` and `ciend` (offsets from the POS the source wrote), as a lifted row does. Comparing SV calls
+across facets (truvari, docs/LANDSCAPE.md) is not built.
+
+Measured 2026-10-23 on the PGP-HMS SV and CNV files (aggregates): a Manta `.sv.` file, 9,373 calls
+(4,366 sequence-written indels, 3,350 breakends, 848 `<DEL>`, 558 `<DUP:TANDEM>`, 251 `<INS>`); a
+Canvas `.cnv.` file, 182 records, 92 copy-number calls and 90 copy-neutral segments; a DRAGEN
+`.cnv.` file, 586 calls (450 `<DEL>`, 136 `<DUP>`, every one with `SVTYPE=CNV` and a FORMAT `CN`);
+two Veritas files (F7's `##CHROM` shape, which loads since 2026-10-22), 5,614 SV calls and 2,632 CNV
+rows whose ALT is the bare word `CNV` (F15: no class, no extent, `end_pos = pos`).
 
 **When an id is minted (RM271, `mint_vrs_ids`).** An id is the VRS 2.x Allele id of the fully
 justified allele, on the refget sequence (`SQ.…`) of the contig in the collection REF was read from
@@ -844,7 +898,9 @@ an id exists. A row with neither `ref` nor `alts` (an array row whose REF was no
 It checks in this fixed order and the first hit wins:
 
 1. **What the allele is**, read from the allele string: `unspecified` (`<*>`), `spanning_deletion`
-   (`*`), `symbolic` (`<DEL>`, `<CNV:TR>`, breakends, `.`-anchored single breakends), `partial_call`
+   (`*`), `sv_no_vrs_model` (an allele `variant_classes` counts as `sv`: `<DEL>`, `<CNV:TR>`, `<CN0>`,
+   breakends, `.`-anchored single breakends; RM282), `symbolic` (a symbolic allele that names no
+   variant: Complete Genomics' `<CGA_NOCALL>` where it stays a call), `partial_call`
    (CGI `?`), `array_code` (23andMe `I`/`D` where the source wrote no REF), `not_sequence` (anything
    else outside `ACGTN`, such as an ambiguity code in ALT).
 2. **Pipeline state**, read from the row: `array_code` (an array row with an `I`/`D` genotype, whose
@@ -874,7 +930,7 @@ same rule as the package: a new nullable column is minor, and a rename or retype
 | Option | Cost |
 |---|---|
 | A. Verbatim per source (`chr1`, `1`, `23`) | Every cross-facet join has to know every spelling |
-| **B. One canonical spelling in `chrom`, the mapping recorded per facet in `contig_map`** | A mapping table to maintain. Canonical: `1`–`22`, `X`, `Y`, `MT`. `chrM`/`M`/`MT` are mapped explicitly, never with a `^chr` strip. Array codes `23`→`X`, `24`→`Y`, `26`→`MT`. Other contigs (alts, decoys, `chrUn_*`) keep their source name |
+| **B. One canonical spelling in `chrom`, the mapping recorded per facet in `contig_map`** | A mapping table to maintain. Canonical: `1`–`22`, `X`, `Y`, `MT`. `chrM`/`M`/`MT` are mapped explicitly, never with a `^chr` strip. Array codes `23`→`X`, `24`→`Y`, `26`→`MT`. T2T-CHM13v2.0's GenBank and RefSeq accessions (`CP068277.2`→`1`, `NC_060948.1`→`Y`, `CP068254.1`→`MT`; RM286) map by the NCBI assembly report, versions verbatim. Other contigs (alts, decoys, `chrUn_*`, GRCh37/38 accessions so far) keep their source name |
 | C. The seqcol's own names | Needs the seqcol at load time, and it is not always known then |
 
 **Recommendation: B.** Array code `25` (the X pseudo-autosomal region) is kept as its own contig, `XY`
@@ -981,6 +1037,79 @@ follows the seqcol order when it is known. Otherwise it is `1`–`22`, `X`, `Y`,
 names sorted as strings. Nulls sort last. Every loader gets a test that loads a shuffled input and
 compares it with the sorted one.
 
+## Decision 12: the `links` frame (charter 5, RM275)
+
+The facet graph's edges are a fourth lazy frame, `Loaded.links`, one row per link between two facets.
+`facets.derived_from` holds one parent; a merge or a consensus has several, and two facets read from one
+source are related without either being made from the other. The person chose a small links frame
+over a list column on `facets` (2026-10-23, E4). just-vcf's own shape (charter 2), except for the
+relation terms GA4GH defines.
+
+| Column | Meaning |
+|---|---|
+| `from_facet_id` (required) | the facet the link starts at: for lineage, the facet the step read |
+| `to_facet_id` (required) | the facet it ends at: for lineage, the facet the step made |
+| `relation` (required) | one of the relations below. An open vocabulary (`pl.String`); `just_vcf.links.RELATIONS` lists the documented values |
+| `provenance` | `struct{step, step_version, derivation_inputs}`: the public function that made the link (`load`, `rejoin_split`, `normalize`, `liftover`), the version of its rule as a string (the `REJOIN_VERSION`, `NORMALIZE_VERSION` or `LIFT_VERSION` its `facet_id` digests; null for `load`, which has no versioned rule and digests none), and the files this step read besides its parent and its reference collection, in `facets.derivation_inputs`' shape (a liftover's chain; `[]` when it read none) |
+
+**Direction.** A lineage link points from the parent to the facet made from it, as Cat-VRS reads
+`liftover_to`: from the defining allele to the one related to it (the term verbatim, charter 2). So
+`facets.derived_from = P` on facet `C` is the link `P → C` with `C`'s relation.
+
+**Relations.**
+
+| Relation | Kind | Written by | Meaning |
+|---|---|---|---|
+| `liftover_to` | lineage | `liftover` | Cat-VRS's term, verbatim: `to` is `from` lifted to another assembly |
+| `normalized` | lineage | `normalize` | just-vcf's: `to` is `from` split, left-aligned, trimmed and deduplicated |
+| `split_rejoined` | lineage | `rejoin_split` | just-vcf's: `to` is `from` with its pre-split sites joined again |
+| `merge` | lineage, several parents | none yet | just-vcf's: `to` was made from every `from` linked to it (a merge, a consensus) |
+| `caller_split` | kin | `load` | just-vcf's: two facets split by caller from one merge (Decision 8), the merge itself no facet |
+| `appended_export` | kin | `load` | just-vcf's: `to` is the export appended to a file after `from` (Decision 8, "Two exports in one file") |
+
+GA4GH defines no term for the others; Cat-VRS's relations relate alleles across assemblies and
+molecules (`liftover_to`, `transcribed_to`, `translated_to`), and only the first fits a facet.
+
+**Kin links.** A caller split's facets are linked in every pair, from the lower `facet_id` to the
+higher: the merge they came from is not a facet (Decision 8, option A), so there is no hub to link
+them to. An appended export is linked from the first export to the appended one, file order. Neither
+is lineage: `derived_from` stays null on both ends.
+
+**How `links` and `facets` agree** (`just_vcf.links.link_disagreements`, tested on every step):
+
+- `derived_from` set: exactly one lineage link ends at the facet, from `derived_from`, with the
+  facet's `relation`;
+- `derived_from` null and `relation = merge`: two or more `merge` links end at the facet;
+- `derived_from` null and a kin `relation`: no lineage link ends at the facet, and a link of that
+  relation names it;
+- both null: no lineage link ends at the facet.
+
+`facets.derivation_inputs` and a link's `provenance.derivation_inputs` can differ, so the rule above
+does not compare them: as the steps write it today, the facet's is carried from parent to child
+(`rejoin_split` and `normalize` copy the parent's row, so a facet normalized after a liftover still
+names the chain), while the link's names only the files its one step read. Whether the facet's
+column should be per step too is open.
+
+**What a `Loaded` holds.** A plain load: no links, except the kin links of a load that returns two
+facets or more. A derived step returns its parent's links and the one it adds, so a facet three steps
+from its file still says how each step got there when only the last `Loaded` is kept; its links can
+name facets its own `facets` frame does not hold. `resolve_ref` and `mint_vrs_ids` keep the facet's
+`facet_id` and pass its links through. Links are sorted by `from_facet_id`, `to_facet_id`, `relation`,
+each key once (charter 12).
+
+Rejected:
+
+- a `parents: list[str]` column on `facets`: one row per facet cannot carry a provenance per parent,
+  and a kin pair would be written twice;
+- links only into the facets of the `Loaded` at hand: a chain `load → normalize → liftover` would lose
+  its first step's link the moment the middle `Loaded` is dropped;
+- a kin link from a star's hub: a caller split's merge is no facet, and inventing one would be the
+  option Decision 8 rejected;
+- the reference collection in `provenance.derivation_inputs`: it is a seqcol digest, not a file, and
+  the `to` facet's `ref_seqcol_digest` already names it;
+- just-vcf's own package version in `provenance`: a new release would change the links of facets
+  whose `facet_id` it does not change.
+
 ## Other VCF 4.5 points the loaders have to respect
 
 None of these changes a column. Each is a rule a loader follows, and each gets a test.
@@ -1032,6 +1161,43 @@ lifted to GRCh38. How the draft holds up:
 None of this changes a column today. It marks where the person-level layer and the coverage facet have
 to connect.
 
+## Facets of one person (RM273)
+
+The person chose "supplied, checked" (Part 2 interview, E1): the caller says whose a file is, the
+library checks the claim and warns, and it never infers a subject or moves a facet to another one.
+
+- **Supplied.** `load(..., subject=...)` writes the label into `facets.subject` on every facet the file
+  loads as (Decision 5). Derived steps copy their parent's row, so the label carries down. Nothing
+  else writes it.
+- **Grouped.** `Person.of(*loaded, check=...)` gathers facets that all carry one subject: their
+  `facets`, `calls` and `blocks`, concatenated in `facet_id` order, which keeps the canonical order
+  (Decision 11). `people(*loaded, check=...)` returns one `Person` per subject, sorted by subject. A
+  facet without a subject, or two subjects handed to `Person.of`, is refused with `SubjectError`; one
+  `facet_id` given twice is refused, since its rows would count twice.
+- **Checked.** `check` is a relatedness test over two facets, each handed in as a `Loaded` of that one
+  facet, answering `True` (one person), `False` (two) or `None` (could not tell). Facets of one source
+  (the same `source_sha256`, `member` and `sample`: a file, the facets derived from it, or the facets
+  one file loads as) are one person's data by construction and are not checked against each other.
+  Every other pair of sources is checked once, each source standing as its facet read from the file
+  (else its lowest `facet_id`). `Person.checks` holds one row per pair (`facet_id`, `other_facet_id`,
+  `outcome`: `same`, `different`, `could_not_tell`, `not_run`), and `Person.one_person` is their Kleene
+  AND: `False` when any pair is `different`, `True` only when every pair is `same`, `None` otherwise,
+  one source alone included. `different` and `could_not_tell` pairs are warnings naming both facet ids;
+  the facets stay where the caller put them. No check given leaves every pair `not_run`, which is not a
+  pass. RM274 brings the library's own check.
+- **One source under two subjects** (a file loaded twice under two labels) is allowed: `people` warns
+  in each person concerned, naming the facet ids. Two samples of one VCF under two subjects (a trio)
+  are different sources and draw no warning.
+- **The label is not identity.** `facet_id` does not digest it, so it cannot split one file's data into
+  two ids, and relabelling changes no `facet_id`, its own or a derived one's. A derived step's cache
+  key digests the facet row, subject included, so one step run on one file under two labels writes two
+  cache generations: disk, never correctness (rejected: stripping the subject from that key in
+  `just_vcf.cache`, a shared module, for a cost only relabelling pays). The subject identifies a person if
+  the caller makes it so; warnings and errors name facet ids, never the subject. Rejected: a subject
+  inferred from relatedness (the person's option b), which E6's relatedness may suggest but never
+  assign; a subject read from the sample name, which is a file's label, often a real name, and the
+  same for different people across files.
+
 ## Sex-chromosome evidence: computed per facet, not stored (RM269)
 
 `sex_chromosome_evidence(loaded)` returns one `SexChromosomeEvidence` per row of `loaded.facets`. Like
@@ -1062,8 +1228,51 @@ just-vcf's, since Phenopackets has no place for an inference). Only `XY`, `XXY` 
 `UNKNOWN_KARYOTYPE` are estimated, the last always with a reason: `y_present` is `True` or unknown,
 never `False`, because depth at called sites cannot show a Y absent (a man's GATK genome read below the
 present band, close to the two-X range), so `XX` and `XO` wait for a coverage facet. The PAR bounds and the X-degenerate
-Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
-unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
+Y come from GIAB's stratifications for GRCh37 and GRCh38, and for T2T-CHM13 from GIAB's (PAR, XTR) with
+the T2T consortium's X-degenerate class (docs/PROVENANCE.md); other builds answer unknown
+(`unsupported_build`). The thresholds were measured on GRCh37 and GRCh38 genomes only, so a T2T-CHM13
+facet is grouped and measured, and its estimate withheld (`uncalibrated_build`, RM286) until T2T callsets
+of known karyotype are measured. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
+
+## CisPhasedBlock export: computed on demand, not stored (RM284)
+
+The person chose columns with an export on demand: phase sets stay the three `calls` columns of
+Decision 2, and `cis_phased_blocks(loaded, reference_alleles=False)` returns a lazy frame of VRS 2.x
+`CisPhasedBlock`s when asked. It adds no column to the three frames and needs no version bump. Rejected:
+a stored block table, which every load would pay for and every change to an allele id would orphan.
+
+| Column | Dtype | Null means |
+|---|---|---|
+| `facet_id` | `str` | never null |
+| `chrom` | `str` | a PSL set, which is keyed per file and may span chromosomes |
+| `phase_set_kind` | `Enum{ps, psl}` | never null |
+| `phase_set` | `str` | the chromosome's implicit set (phased, no PS) |
+| `haplotype` | `u32` | a PSL set, which is one haplotype itself. For a PS set, the GT slot: slot `h` of every record in the set is one molecule |
+| `sites` | `u32` | never null. Records whose slot is in the set on this haplotype |
+| `members` | `list[str]` | the block is withheld. Otherwise the member Alleles' VRS ids, sorted, each once |
+| `cpb_id` | `str` | the block is withheld. Otherwise `ga4gh:CPB.` + the sha512t24u of `{"members":[<Allele digests, sorted>],"type":"CisPhasedBlock"}`, as vrs-python identifies a block of inline Alleles |
+| `withheld` | `str` | the block has an id. Otherwise why not (below) |
+
+- **Members** are the non-reference alleles the haplotype carries. A `0` on a record split one row per
+  ALT (RM270) or under an overlapping deletion says "not this ALT", not "the reference base", so REF
+  slots join only with `reference_alleles=True`. `*` never joins: its deletion is a member at its own
+  record.
+- **Withheld, never shortened** (charter 4). A block missing one of the haplotype's alleles would carry
+  an id that looks like the haplotype's. So the first slot in row order that cannot be stated gives the
+  reason for the whole block: `phase_unknown` (the slot's `phased` is null, as on slot 0 of every VCF
+  4.4+ record, P4, and its allele would be a member: a REF slot by default is not), `uncalled`,
+  `not_indexed` (no `gt` index), or the allele's own `vrs_withheld` reason (`not_run` before
+  `mint_vrs_ids`, `symbolic`, …). Then `too_few_members`: VRS requires two members. The vocabulary is
+  `phasing.CPB_WITHHELD_REASONS`, open like `vrs.WITHHELD_REASONS`. On a whole imputed genome this
+  bites: an implicit set is a chromosome, and one symbolic ALT on it withholds the haplotype's block
+  (a phased Genes for Good upload: 45 of 46 blocks withheld `symbolic`).
+- **Haploid calls** (no separator, so phased in VCF's reading) sit in their chromosome's implicit set
+  even in a file nobody phased. On one copy (male X outside the PARs, Y, MT) that is true by ploidy, so
+  they make a block. Rejected: leaving out haploid rows, which would drop a true statement to guard
+  against a caller that writes a two-copy region haploid.
+- **Order**: by the set's first row in `calls`, then kind, set name and haplotype.
+- An IRI is not an Allele to vrs-python 2.3: a block whose members are written as `ga4gh:VA.…` strings
+  digests to another id there. Resolve the members to Alleles before identifying it again.
 
 ## The cache under the lazy frames (RM268)
 
@@ -1136,6 +1345,30 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
+  label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every
+  derived facet. Nullable and additive. `SCHEMA_VERSION` is deliberately left at 0.0.11 on this
+  builder branch; the lead bumps it at merge. `facet_id` does not digest the subject (Decision 5).
+
+- **No version change** (2026-10-23, RM275, the `links` frame): a fourth frame, `Loaded.links`
+  (Decision 12), and no column of `facets`, `calls` or `blocks` changes. `SCHEMA_VERSION` is not
+  bumped here: the lead bumps it when merging. Rules added: every derived step adds a lineage link and
+  carries its parent's; a load of several facets links them (`caller_split`, `appended_export`);
+  `link_disagreements` states how `links` agrees with `derived_from` and `relation`.
+
+- **Additive, version not bumped in this change** (2026-10-23, RM282 structural-variant facets): five
+  nullable `calls` columns, `sv_type`, `cipos`, `ciend`, `copy_number` and `alt_copy_numbers`
+  (Decision 6, "Structural variants"). A new nullable column is a minor bump by the rule above;
+  `SCHEMA_VERSION` stays 0.0.11 here and is bumped when the lead merges, with the other builders'
+  changes of the same round. Rules changed: `<CN0>`, `<CN2>`… end at INFO `END` (the `end_pos`
+  rule); an `ALT .` record with a copy number is a call, not a block (Decision 4); `vrs_withheld` gives
+  `sv_no_vrs_model` for an SV allele where it gave `symbolic` (`symbolic` now names only symbolic
+  alleles that are no variant). Values change on SV and CNV files that already load.
+
+- **No version change** (2026-10-23, RM284): no column changes. A computed frame,
+  `cis_phased_blocks`, exports the phase sets as VRS CisPhasedBlocks ("CisPhasedBlock export").
+  `SCHEMA_VERSION` was deliberately left as it is on this builder branch.
 
 - **No version change** (2026-10-23, RM281's allele pairs): no column changes. Rule changed (Decision
   2, "The strand of an array's genotypes"): in a `strand_check = mixed` facet, a withheld row whose
@@ -1233,6 +1466,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
 
+- **0.0.14** (2026-10-23, RM282): `calls.sv_type`, `cipos`, `ciend`, `copy_number`, `alt_copy_numbers`.
+  Additive. Values change: Canvas copy-neutral `ALT .` records are calls, not blocks (F18); `symbolic` in
+  VRS withholding now covers only CGI no-calls, SVs read `sv_no_vrs_model`.
+
+- **0.0.13** (2026-10-23, RM275): a fourth frame, `links` (`Loaded.links`, `schema.LINKS`). Additive.
+
+- **0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's subject label. Additive.
+
 - **0.0.11** (2026-10-23): `AbsenceMeans.REFERENCE` (a CGI VCF's silence is its producer's reference call;
   the `absence_means` enum dtype gains a member). Values change: the empty allele is `""` in every loader,
   and `dropped_fields` is `[]` wherever a loader read the fields and dropped none.
@@ -1296,7 +1537,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 ## At a glance
 
 - Three frames: `facets` (one row per facet), `calls` (one row per site per facet), `blocks` (reference
-  and no-call intervals, for formats that have them).
+  and no-call intervals, for formats that have them). A fourth, `links`, holds the facet graph's edges
+  (from, to, relation, provenance), so a facet can have several parents (Decision 12).
 - Coordinates: `pos` and `end_pos` are 1-based and inclusive. VRS objects keep 0-based interbase coordinates
   internally, and nothing else does.
 - REF: `ref` only from the assembly sequence; `source_ref` is what the file wrote; `ref_check` compares
@@ -1309,5 +1551,6 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   vector until concordance can measure one.
 - Identity: `vrs_allele_ids` parallel to `[ref] + alts`, minted by `mint_vrs_ids` once REF is read.
   `vrs_errors` stores only what minting reported; why an id is missing is computed by
-  `vrs_withheld()`. `seqcol_digest` per facet.
+  `vrs_withheld()`. `seqcol_digest` per facet. SV alleles have no id (`sv_no_vrs_model`); what the
+  caller wrote about the event is `sv_type`, `cipos`, `ciend`, `copy_number`, `alt_copy_numbers`.
 - Absence: a facet property (`absence_means`), turned into a row only on request.

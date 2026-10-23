@@ -8,7 +8,7 @@ import polars as pl
 import pytest
 import refget
 
-from just_vcf import load
+from just_vcf import load, sniff
 from just_vcf.assembly import (
     ASSEMBLY_LENGTHS,
     MIN_MARGIN,
@@ -22,6 +22,7 @@ from just_vcf.assembly import (
     sample_snv_rows,
     sorted_name_length_pairs_digest,
 )
+from just_vcf.schema import CHM13_ACCESSIONS, canonical_chrom
 
 # Domain constants: the first three chromosomes and the mitochondrion of each assembly, as UCSC's
 # chrom.sizes give them (hg19, hg38, hs1), typed here independently of `ASSEMBLY_LENGTHS`.
@@ -172,6 +173,76 @@ def test_load_leaves_mixed_missing_or_thin_headers_unknown(tmp_path: Path) -> No
     row, _ = facet(tmp_path / "thin", vcf_with_contigs(contigs({"1": GRCH38["1"]})))
     assert row["assembly_label"] is None and row["sorted_name_length_pairs_digest"] is not None
     assert row["sorted_name_length_pairs_digest"] == sorted_name_length_pairs_digest(contigs({"1": GRCH38["1"]}))
+
+
+# T2T-CHM13 v2.0 (RM286): its names as NCBI's assembly report writes them, and its header shapes.
+
+CHM13_REPORT = Path(__file__).resolve().parent.parent / "assets" / "ncbi_assembly_reports" / "GCA_009914755.4_T2T-CHM13v2.0_assembly_report.txt"
+
+
+def chm13_report() -> list[dict[str, str]]:
+    """The report's sequence rows, keyed by its own column names."""
+    lines = CHM13_REPORT.read_text().splitlines()
+    columns = next(line for line in lines if line.startswith("# Sequence-Name")).removeprefix("# ").split("\t")
+    return [dict(zip(columns, line.split("\t"), strict=True)) for line in lines if line and not line.startswith("#")]
+
+
+def test_chm13_accessions_are_the_assembly_reports() -> None:
+    rows = chm13_report()
+    expected = {row["GenBank-Accn"]: row["Assigned-Molecule"] for row in rows}
+    expected |= {row["RefSeq-Accn"]: row["Assigned-Molecule"] for row in rows if row["RefSeq-Accn"] != "na"}
+    assert CHM13_ACCESSIONS == expected
+    assert len(rows) == 25 and sum(row["RefSeq-Accn"] == "na" for row in rows) == 1
+    for row in rows:
+        chrom = canonical_chrom(row["UCSC-style-name"])
+        assert canonical_chrom(row["GenBank-Accn"]) == chrom
+        if chrom != "MT":
+            assert ASSEMBLY_LENGTHS["T2T-CHM13"][chrom] == {int(row["Sequence-Length"])}
+    assert ASSEMBLY_LENGTHS["T2T-CHM13"]["MT"] == {16569}
+
+
+@pytest.mark.parametrize("column", ["GenBank-Accn", "RefSeq-Accn"])
+def test_an_accession_named_header_names_t2t(tmp_path: Path, column: str) -> None:
+    rows = [row for row in chm13_report() if row[column] != "na"]
+    header = [{"name": row[column], "length": int(row["Sequence-Length"]), "md5": None} for row in rows]
+    inferred = infer_assembly(header)
+    assert inferred.label == "T2T-CHM13" and inferred.matched == {"T2T-CHM13": 24}
+    row, _ = facet(tmp_path, vcf_with_contigs(header))
+    assert (row["assembly_label"], row["assembly_label_basis"]) == ("T2T-CHM13", "inferred")
+    first = header[0]["name"]
+    assert {entry["source"]: entry["chrom"] for entry in row["contig_map"]} == {first: "1"}
+
+
+def test_a_t2t_shaped_vcf_header_loads_as_t2t(tmp_path: Path) -> None:
+    """The analysis set's names (`chr1`…`chrM`) and lengths, and a `##reference` naming its FASTA."""
+    rows = chm13_report()
+    header = [{"name": row["UCSC-style-name"], "length": int(row["Sequence-Length"]), "md5": None} for row in rows]
+    row, warnings = facet(tmp_path, vcf_with_contigs(header, ("##reference=file:///refs/chm13v2.0.fa",)))
+    assert (row["assembly_label"], row["assembly_label_basis"]) == ("T2T-CHM13", "stated")
+    assert row["sorted_name_length_pairs_digest"] == sorted_name_length_pairs_digest(header)
+    assert {entry["name"]: entry["length"] for entry in row["header_contigs"]} == {c["name"]: c["length"] for c in header}
+    assert not [w for w in warnings if "assembl" in w or "states" in w]
+
+
+@pytest.mark.parametrize(
+    ("line", "build"),
+    [
+        ("##reference=file:///refs/chm13v2.0.fa", "T2T-CHM13"),
+        ("##reference=https://hgdownload.soe.ucsc.edu/goldenPath/hs1/bigZips/hs1.fa.gz", "T2T-CHM13"),
+        ("##reference=GCA_009914755.4_T2T-CHM13v2.0_genomic.fna", "T2T-CHM13"),
+        ("##contig=<ID=chr1,length=248387328,assembly=chm13v2.0>", "T2T-CHM13"),
+        ("##contig=<ID=chr1,length=248387328,assembly=hs1>", "T2T-CHM13"),
+        ("##reference=file:///refs/hs37d5.fa", "GRCh37"),
+        ("##reference=file:///refs/hs38DH.fa", "GRCh38"),
+        ("##reference=file:///refs/hs10.fa", None),
+        ("##reference=file:///refs/GRCh38_to_chm13.fa", None),
+    ],
+)
+def test_vcf_build_hints_name_t2t_and_only_t2t(tmp_path: Path, line: str, build: str | None) -> None:
+    lines = ["##fileformat=VCFv4.2", line, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO", "chr1\t100\t.\tA\tG\t.\tPASS\t."]
+    path = tmp_path / "hint.vcf"
+    path.write_text("\n".join(lines) + "\n")
+    assert sniff(path).build == build
 
 
 # F9: an array's build from its own rows. The scorer is a pure function over sampled rows and bases.

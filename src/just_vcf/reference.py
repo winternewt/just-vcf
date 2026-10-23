@@ -69,11 +69,18 @@ CHR1_LENGTHS: dict[int, str] = {247_249_719: "GRCh36", 249_250_621: "GRCh37", 24
 PRIMARY: frozenset[str] = frozenset([str(n) for n in range(1, 23)] + ["X", "Y"])
 """Contigs whose length differing from the reference means another assembly, not another contig."""
 
-LABEL_UNVERIFIABLE: dict[str, frozenset[str]] = {"GRCh36": frozenset({"MT"}), "GRCh37": frozenset({"MT"})}
+LABEL_UNVERIFIABLE: dict[str, frozenset[str]] = {
+    "GRCh36": frozenset({"MT"}),
+    "GRCh37": frozenset({"MT"}),
+    "T2T-CHM13": frozenset({"MT"}),
+}
 """Contigs a label cannot vouch for: `GRCh37` covers both hg19, whose chrM is the Yoruba sequence
 (16,571 bases), and GRCh37, whose MT is rCRS (16,569). Only a stated length tells them apart.
 `GRCh36` likewise: NCBI36 and hg18 carry the Yoruba sequence, and an array labelled build 36 does not
-say whether its MT positions are on it or on rCRS."""
+say whether its MT positions are on it or on rCRS. `T2T-CHM13` covers `chm13v2.0.fa`, whose chrM is
+the CHM13 cell line's own mitochondrion (CP068254.1), and the T2T analysis set's
+`chm13v2.0_maskedY_rCRS.fa.gz`, which puts rCRS (NC_012920.1) there: both 16,569 bases, so even a
+stated length does not tell them apart, only a stated md5 or the REF check."""
 
 _REF_SPAN_FOR = {"XY": "X"}
 """Canonical names read from another reference contig: array code 25 (`XY`, the X pseudo-autosomal
@@ -348,6 +355,7 @@ def resolve_ref(
         ),
         calls=pl.scan_parquet(parts) if parts else empty(CALLS),
         blocks=loaded.blocks,
+        links=loaded.links,
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )

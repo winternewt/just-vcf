@@ -19,6 +19,9 @@ dependencies = [
     "typer>=0.27",
 ]
 
+[project.scripts]
+just-vcf = "just_vcf.cli:app"
+
 [project.optional-dependencies]
 # pysam backs the FASTA tier of REF lookup (faidx). It has no Windows wheels, so it
 # carries the platform marker; Windows users who need FASTA lookup should use WSL/Linux.

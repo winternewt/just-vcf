@@ -29,7 +29,7 @@ short:
    target contig's first base (no base before it to anchor on), symbolic alleles and `*`, rows
    flagged as one record of a pre-split site, and the `blocks` frame.
 
-A lifted row's `source_ref`, `ref_check`, `source_gt` and VRS ids are null: they described the
+A lifted row's `source_ref`, `ref_check`, `source_gt`, VRS ids, `cipos` and `ciend` are null: they described the
 source's representation on the source assembly. `gl`, `gp` and `ad` stay indexed over
 `source_alleles`, never reordered (SCHEMA.md Decision 2); a swapped row's `dosage` is withheld, since it
 counted the other allele. Re-mint ids on the target with `mint_vrs_ids`.
@@ -50,6 +50,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf import cache
+from just_vcf.links import LIFTOVER_TO, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import PRIMARY, Contig, ReferenceMismatchError, ReferenceStore, _derive_array_alleles, _span, _store_for
 from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceMeans, AssemblyLabelBasis, RefCheck, canonical_chrom, canonical_order, empty
@@ -59,7 +60,7 @@ logger = logging.getLogger(__name__)
 LIFT_VERSION = 2
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits."""
 
-RELATION = "liftover_to"
+RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
 
 UNLIFTED_REASONS: frozenset[str] = frozenset(
@@ -316,6 +317,7 @@ def liftover(
     present = calls.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
     names = {chrom: contig.name for chrom, contig in target_contigs.items()}
     label = store.assembly_label(target_digest)
+    chain_input = [{"role": "chain", "name": chain.name, "sha256": chain.sha256}]
     facets = parent.lazy().with_columns(
         pl.lit(facet_id).alias("facet_id"),
         pl.lit(facet["facet_id"]).alias("derived_from"),
@@ -331,12 +333,15 @@ def liftover(
             sorted(({"source": names.get(chrom, chrom), "chrom": chrom} for chrom in present), key=lambda entry: entry["source"]),
             dtype=FACETS["contig_map"],
         ).alias("contig_map"),
-        pl.lit([{"role": "chain", "name": chain.name, "sha256": chain.sha256}], dtype=FACETS["derivation_inputs"]).alias("derivation_inputs"),
+        pl.lit(chain_input, dtype=FACETS["derivation_inputs"]).alias("derivation_inputs"),
     )
     derived = Loaded(
         facets=facets.select(FACETS.names()),
         calls=calls,
         blocks=loaded.blocks.clear().with_columns(pl.lit(facet_id).alias("facet_id")),
+        links=derived_links(
+            loaded.links, facet["facet_id"], facet_id, RELATION, step="liftover", step_version=str(LIFT_VERSION), derivation_inputs=chain_input
+        ),
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )
@@ -691,6 +696,9 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
         pl.lit(None, dtype=CALLS["source_gt"]).alias("source_gt"),
         pl.lit(None, dtype=CALLS["vrs_allele_ids"]).alias("vrs_allele_ids"),
         pl.lit(None, dtype=CALLS["vrs_errors"]).alias("vrs_errors"),
+        # Offsets from the source's POS and END, which a minus-strand block reverses.
+        pl.lit(None, dtype=CALLS["cipos"]).alias("cipos"),
+        pl.lit(None, dtype=CALLS["ciend"]).alias("ciend"),
         pl.when(pl.col("_swap")).then(None).otherwise(pl.col("dosage")).alias("dosage"),
         *[pl.when(moved_contig).then(None).otherwise(pl.col(name)).alias(name) for name in ("phased", "phase_sets", "phase_set_kinds")],
         array.alias("_array"),

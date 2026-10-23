@@ -11,6 +11,7 @@ from just_vcf.schema import (
     CONTIG_ALIASES,
     CONTIG_RANK,
     FACETS,
+    LINKS,
     canonical_chrom,
     canonical_chrom_expr,
     canonical_order,
@@ -44,6 +45,11 @@ def test_calls_columns_match_the_doc() -> None:
 
 def test_facets_columns_match_the_doc() -> None:
     assert _table_names(_section("## Decision 5")) == FACETS.names()
+
+
+def test_links_columns_match_the_doc() -> None:
+    columns = _section("## Decision 12").split("**Direction.**")[0]
+    assert _table_names(columns) == LINKS.names()
 
 
 def test_blocks_columns_match_the_doc() -> None:

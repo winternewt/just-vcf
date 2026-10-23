@@ -13,6 +13,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   only alleles a genotype carries count. `pair_counts`/`pool_counts` split the run from the pooling;
   `scripts/method_atlas.py` builds one from a plan of pairs, each gated by `same_person`. No column
   changes; `SCHEMA_VERSION` unchanged.
+- The first method-error atlas (RM279), over eight same-person pairs (three callers on the same reads,
+  three DeepVariant releases, two PGP-HMS CGI-against-freeBayes pairs): headline rates in
+  docs/METHOD_ATLAS.md. `scripts/method_atlas.py` takes one facet of a file split per caller
+  (`a_caller`/`b_caller` in the plan) and compares a pair by label where `resolve_ref` refuses a facet
+  (CGI vcfBeta's chrY md5 differs from the store's GRCh37), saying so per pair.
 
 - Schema 0.0.16: the method chain on the facet (`method_steps`, `reference`, `aligner`, `aligner_version`);
   the CLI and `query` pass `reference` and the aligner through their path and name redaction.

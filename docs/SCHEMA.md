@@ -1778,7 +1778,8 @@ far a row generalizes.
 the summed counts with `p_same_gl_sum`, `p_same_gp_sum`), and `pool_counts(frames)` sums them per key
 and computes the rates from the sums; `method_atlas` is the two together. Counts written per pair can
 be pooled later and in any grouping. `scripts/method_atlas.py` builds an atlas from a plan of pairs,
-skipping a pair `same_person` does not answer True for.
+skipping a pair `same_person` does not answer True for; docs/METHOD_ATLAS.md holds the first one's
+headline rates.
 
 ## Open questions
 

@@ -8,6 +8,11 @@ The plan is a JSON file kept out of the repo (it names private files), for examp
     {"reference": "<refget store>", "giab": "<GIAB v3.6 directory>",
      "pairs": [{"group": "same reads, two callers", "a": "<facet file>", "b": "<facet file>"}]}
 
+A file that loads into several facets (a merge split per caller) names the one to take with
+`"a_caller"` or `"b_caller"`. Where `resolve_ref` refuses either facet (no collection in the store fits
+it), the pair is compared as loaded, by its equal assembly label (`concordance` warns);
+`<out>.pairs.tsv` says which pairs were (`assembly_check`: `content` or `label`).
+
 Each facet is loaded and its REF read once, however many pairs name it. A pair is compared only when
 `same_person` answers True: a pair it calls unrelated, or cannot tell, is skipped and the verdict
 written down, so the atlas never pools two people's differences as a method's error. Each compared
@@ -25,7 +30,7 @@ from typing import Annotated
 import polars as pl
 import typer
 
-from just_vcf import Loaded, ReferenceStore, load, resolve_ref, same_person
+from just_vcf import Loaded, ReferenceMismatchError, ReferenceStore, load, resolve_ref, same_person
 from just_vcf.atlas import ALL, giab_stratifications, pair_counts, pool_counts
 
 logger = logging.getLogger("method_atlas")
@@ -50,13 +55,26 @@ def main(
     out.parent.mkdir(parents=True, exist_ok=True)
     per_pair = out.with_name(out.name + ".pairs")
     per_pair.mkdir(exist_ok=True)
-    resolved: dict[str, Loaded] = {}
+    loaded: dict[tuple[str, str | None], Loaded] = {}
     regions = {}
 
-    def facet(path: str) -> Loaded:
-        if path not in resolved:
-            resolved[path] = resolve_ref(_on(load(Path(path)), contigs), store)
-        return resolved[path]
+    def facet(path: str, caller: str | None) -> Loaded:
+        """The file's one facet, or the one by `caller` where the file loads into several."""
+        if (path, caller) not in loaded:
+            whole = _on(load(Path(path)), contigs)
+            loaded[(path, caller)] = whole if caller is None else _by_caller(whole, caller)
+        return loaded[(path, caller)]
+
+    def pair(entry: dict) -> tuple[Loaded, Loaded, str]:
+        """Both facets with REF read, or, where resolve_ref refuses either (the store holds no
+        collection that fits it), both as loaded: concordance then compares them by their equal
+        assembly label, with a warning, and the ledger says so."""
+        a, b = facet(entry["a"], entry.get("a_caller")), facet(entry["b"], entry.get("b_caller"))
+        try:
+            return resolve_ref(a, store), resolve_ref(b, store), "content"
+        except ReferenceMismatchError as refused:
+            logger.warning("pair %s: REF not read (%s); compared by assembly label", entry["group"], str(refused).split(";")[0][:200])
+            return a, b, "label"
 
     ledger = []
     for index, entry in enumerate(spec["pairs"]):
@@ -64,9 +82,10 @@ def main(
         row = {"pair": index, "group": entry["group"]}
         if done.exists():
             counts = pl.read_parquet(done)
-            ledger.append(row | {"verdict": "same_person", "alleles": _alleles(counts)} | _methods(counts))
+            ledger.append(row | {"verdict": "same_person", "assembly_check": None, "alleles": _alleles(counts)} | _methods(counts))
             continue
-        a, b = facet(entry["a"]), facet(entry["b"])
+        a, b, check = pair(entry)
+        row["assembly_check"] = check
         verdict = same_person(a, b)
         if verdict is not True:
             logger.warning("pair %d (%s): same_person answered %s; skipped", index, entry["group"], verdict)
@@ -86,6 +105,15 @@ def main(
     atlas.with_columns(pl.col("variant_class").cast(pl.String)).write_csv(out.with_suffix(".tsv"), separator="\t")
     pl.DataFrame(ledger, infer_schema_length=None).write_csv(out.with_name(out.name + ".pairs.tsv"), separator="\t")
     logger.info("atlas: %d rows from %d pairs", atlas.height, len(frames))
+
+
+def _by_caller(loaded: Loaded, caller: str) -> Loaded:
+    """The facet of `loaded` whose caller is `caller` (a file split per caller loads one facet each)."""
+    facets = loaded.facets.filter(pl.col("caller") == caller)
+    ids = facets.select("facet_id").collect()["facet_id"].to_list()
+    if len(ids) != 1:
+        raise ValueError(f"{len(ids)} facets with caller {caller}")
+    return Loaded(facets=facets, calls=loaded.calls.filter(pl.col("facet_id") == ids[0]), blocks=loaded.blocks.filter(pl.col("facet_id") == ids[0]))
 
 
 def _alleles(counts: pl.DataFrame) -> int:

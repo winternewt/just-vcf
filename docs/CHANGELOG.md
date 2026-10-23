@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `chip_absence` reads only a genotype table as an array export: a headerless VCF, a CASAVA or
+  SOAPsnp site table, a Nirvana, Color or GET-Evidence export and a CGI `var` or `masterVarBeta` file
+  state no VCF version and load with no callset type, so they were read as arrays, and a site such a
+  file has no row at could come back as a chip's `no_call`. They are refused as not an array export.
+
 - A lifted facet's `reference` is null: it kept the parent's, which named the source assembly's
   file, while its rows are against the target (`ref_seqcol_digest`). `aligner`, `aligner_version`
   and `method_steps` stay the parent's, since the reads were aligned to the source. `LIFT_VERSION` 6:

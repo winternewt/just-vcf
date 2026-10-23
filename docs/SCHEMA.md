@@ -511,8 +511,10 @@ no genotype: a no-call it wrote, `--` or AncestryDNA's `0 0`, every allele null;
 set, a site the export has no row at, a no-call it dropped or a probe left out of this release) or
 `not_on_chip` (no probe there). A written no-call is `no_call` with or without a probe set, since the
 row shows the chip looked. The sites with no row get null when there is no probe set (chip or
-assembly unknown, or nothing configured or learned), and every site when the facet is not an array;
-the answer carries the reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
+assembly unknown, or nothing configured or learned), and every site when the facet is not an array
+(an array is a `genotype_table` facet whose `callset_type` is `array` or null: a VCF, a site table, an
+annotation export and a CGI callset are not, though they state no VCF version either); the answer
+carries the reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
 (`ProbeSetKind`): `manifest`, the chip's own Illumina manifest when a Final Report names it
 (`illumina:<manifest>`) and it is configured (`JUST_VCF_MANIFESTS_DIR`), its probes on that build
 (`Chr 0` probes are unplaced and left out); or `learned`, the positions at least half of the exports

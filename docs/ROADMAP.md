@@ -143,8 +143,8 @@ lift onto an Ensembl-named GRCh38 store. A UCSC↔GenBank scaffold alias table w
 **Left:**
 - Calibrating the karyotype thresholds on T2T callsets of known karyotype with FORMAT DP (the HG002
   benchmark has none); then `ESTIMATE_BUILDS` takes T2T-CHM13.
-- GRCh37's and GRCh38's accessions (`NC_000001.11`, `CM000663.2`…) are not aliased yet, and UCSC
-  scaffold names do not meet Ensembl's (above).
+- UCSC scaffold names do not meet Ensembl's (above; F19). GRCh37's and GRCh38's assembled-molecule
+  accessions are aliased since 2026-10-23 (`just_vcf.contig_names`).
 - Making store-chm13 the default test store, or adding CHM13 to `store`, is the lead's call.
 
 ## RM1 — Final shape and plan

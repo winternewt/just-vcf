@@ -876,7 +876,7 @@ same rule as the package: a new nullable column is minor, and a rename or retype
 | Option | Cost |
 |---|---|
 | A. Verbatim per source (`chr1`, `1`, `23`) | Every cross-facet join has to know every spelling |
-| **B. One canonical spelling in `chrom`, the mapping recorded per facet in `contig_map`** | A mapping table to maintain. Canonical: `1`–`22`, `X`, `Y`, `MT`. `chrM`/`M`/`MT` are mapped explicitly, never with a `^chr` strip. Array codes `23`→`X`, `24`→`Y`, `26`→`MT`. T2T-CHM13v2.0's GenBank and RefSeq accessions (`CP068277.2`→`1`, `NC_060948.1`→`Y`, `CP068254.1`→`MT`; RM286) map by the NCBI assembly report, versions verbatim. Other contigs (alts, decoys, `chrUn_*`, GRCh37/38 accessions so far) keep their source name |
+| **B. One canonical spelling in `chrom`, the mapping recorded per facet in `contig_map`** | A mapping table to maintain. Canonical: `1`–`22`, `X`, `Y`, `MT`. `chrM`/`M`/`MT` are mapped explicitly, never with a `^chr` strip. Array codes `23`→`X`, `24`→`Y`, `26`→`MT`. T2T-CHM13v2.0's GenBank and RefSeq accessions (`CP068277.2`→`1`, `NC_060948.1`→`Y`, `CP068254.1`→`MT`; RM286), and GRCh37.p13's and GRCh38.p14's assembled molecules' (`CM000663.1`, `NC_000001.11`→`1`; F19) map by the NCBI assembly reports, versions verbatim. Other contigs (alts, decoys, `chrUn_*`, scaffolds by any name) keep their source name |
 | C. The seqcol's own names | Needs the seqcol at load time, and it is not always known then |
 
 **Recommendation: B.** Array code `25` (the X pseudo-autosomal region) is kept as its own contig, `XY`

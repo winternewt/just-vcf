@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- GRCh37's and GRCh38's assembled-molecule accessions map to canonical `chrom`, as T2T-CHM13's do
+  (`CM000663.2`, `NC_000001.11` → `1`; `J01415.2`, `NC_012920.1` → `MT`), from NCBI's GRCh37.p13 and
+  GRCh38.p14 assembly reports, now carried in `assets/` and derived into the package table
+  `contig_names.tsv` (`just_vcf.contig_names`, F19). A header named by accession is labelled with its
+  assembly. Values change on files that already load: such a file's `chrom` and `contig_map` now say
+  `1`…`MT` instead of the accession.
+
 - Schema 0.0.12 (RM273): `facets.subject`; `Person.of` groups one subject's facets and checks the claim.
 
 - `Person.of(*loaded, check=...)` and `people(*loaded, check=...)` group facets by the subject the

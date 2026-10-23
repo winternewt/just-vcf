@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- docs/CONSENSUS.md: the consensus calibrated again on hu1B2689 against held-out freeBayes, on the
+  atlas with F21 and F22. With rates by confidence band it predicts 31,462 disagreements and sees
+  27,245 (pooled rates: 51,225 against 27,243); 10 to 30 phred is still about twice underconfident and
+  60 phred and up about twice overconfident. `scripts/consensus_check.py` predicts with the held-out
+  facet's own rate per allele (its region classes and band). docs/METHOD_ATLAS.md gains the PGP
+  pairs' discordance by confidence band; its pooled PGP rates already were F22's.
+
 - The method-error atlas counts each pair per cell of the two sides' confidence bands (`a_band`,
   `b_band`: `genotype_evidence`'s confidence of each side's row, `0-10` to `100+` phred, `none`),
   beside the pooled rows (`all`, `all`). `method_error_rates` gives a rate per band of a method's own

@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The two-process tests in `tests/test_rerun.py` fail within ten minutes instead of hanging the suite.
+  A child put its result (about 57 KiB) on a `multiprocessing.Queue`; once the parent's loop failed
+  (its 120 s deadline passes under a heavy load), nothing read the pipe, the second child waited in
+  its queue's feeder thread forever, and pytest's exit joined it forever. Children now write their
+  results to files, are daemonic and are killed when a test fails, and a missed deadline prints each
+  live child's stack. Test-only: the library starts no processes.
+
 - Schema 0.0.15: `calls.phase_set_ordinals`, `phase_set_qualities` (VCF 4.4+ PSO/PSQ); PSL phase sets load and
   write back under VCF 4.5.
 

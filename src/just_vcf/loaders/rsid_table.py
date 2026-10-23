@@ -25,6 +25,7 @@ import polars as pl
 
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import FormatSpec
+from just_vcf.links import APPENDED_EXPORT  # noqa: F401 (kept importable here; defined in just_vcf.links)
 from just_vcf.loaders.text import (
     chrom_columns,
     ids_expr,

@@ -974,9 +974,11 @@ is lineage: `derived_from` stays null on both ends.
   relation names it;
 - both null: no lineage link ends at the facet.
 
-`facets.derivation_inputs` and a link's `provenance.derivation_inputs` differ by design: the facet's
-is carried from parent to child (a facet normalized after a liftover still names the chain), the
-link's names the files that one step read.
+`facets.derivation_inputs` and a link's `provenance.derivation_inputs` can differ, so the rule above
+does not compare them: as the steps write it today, the facet's is carried from parent to child
+(`rejoin_split` and `normalize` copy the parent's row, so a facet normalized after a liftover still
+names the chain), while the link's names only the files its one step read. Whether the facet's
+column should be per step too is open.
 
 **What a `Loaded` holds.** A plain load: no links, except the kin links of a load that returns two
 facets or more. A derived step returns its parent's links and the one it adds, so a facet three steps

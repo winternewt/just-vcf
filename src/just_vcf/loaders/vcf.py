@@ -34,6 +34,7 @@ from polars_bio.sql import SQL
 
 from just_vcf import cache as cache_index
 from just_vcf.bgzf import BgzfWriter
+from just_vcf.links import CALLER_SPLIT  # noqa: F401 (kept importable here; defined in just_vcf.links)
 from just_vcf.schema import BLOCKS, CALLS, EMPTY_ALLELE, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)

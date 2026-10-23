@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The stale-version sweep in `load` and the derived steps no longer removes an older version's cache
+  entry that was used in the last `JUST_VCF_CACHE_GRACE_DAYS` (default 7; `0` restores sweeping at
+  once). Two sessions on one cache dir at two `SCHEMA_VERSION`s showed why: the newer one's sweep
+  removed a generation the older one's live frame read, and its next `collect` failed with
+  `FileNotFoundError`. The sweep judges each entry again under its lock, logs how many older entries
+  it kept, and reports them in the new `CacheClearReport.recently_used` (an added field, empty from
+  `clear_cache`). An entry with no manifest is judged by the newest modification time in it. A frame
+  kept open past the grace period without its step running again is still not protected.
+
 - docs/METHOD_ATLAS.md: the two PGP-HMS CGI pairs rebuilt with F21 and F22. SNV discordance falls
   from 3.40% to 0.54% and from 3.07% to 1.02%, indel from 7.95% to 4.98% and from 10.41% to 7.92%;
   the per-region SNV table is now the VRS pairing's, with no complex-row artefact left to take out.

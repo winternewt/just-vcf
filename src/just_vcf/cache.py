@@ -26,23 +26,30 @@ never removes it; only the stale-version sweep does, and only where its name sho
 `vcf/` entry without a manifest predates `REWRITE_VERSION` 7, the version that brought the index,
 so it is stale by construction, and a `keyvalue/` or `cgi/` one predates their index.
 
-Removing an entry a live `Loaded` reads breaks that frame's next `collect`. The stale-version sweep
-cannot hit one: no current frame reads an old version, and it removes only entries older than the
-running version, never a newer install's that shares the cache. `clear_cache` can, and that is the caller's
-call. `load` or a derived step run again never can: it reuses the generation an earlier run
-committed for the same content, or commits another beside it, and never rewrites or removes a
-complete one.
+Removing an entry a live `Loaded` reads breaks that frame's next `collect`. An older version's frame
+can be live: two sessions, or two applications pinned to different just-vcf versions, share one cache
+dir, and the newer one's sweep once removed a generation the older one's frame still read
+(`FileNotFoundError` on `calls-00000.parquet`, 2026-10-23). So the stale-version sweep removes an
+older version's entry only when no writer holds its lock and nothing has used it for the grace period
+(`grace_period`, `JUST_VCF_CACHE_GRACE_DAYS`, 7 days by default). Every run of a step that returns a
+frame over an entry, writing or reusing a generation, moves its `last_used`; a frame kept open longer
+than the grace period without its step running again is not protected, since nothing marks a
+`collect`. The sweep never removes a newer install's entry at all. `clear_cache` removes what it is
+asked to, live or not, and that is the caller's call. `load` or a derived step run again never
+removes anything a frame reads: it reuses the generation an earlier run committed for the same
+content, or commits another beside it, and never rewrites or removes a complete one.
 """
 
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
 import time
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -84,11 +91,33 @@ _FRAMES_NAME = re.compile(
 before the index, and now spills under `<facet_id>-<SCHEMA_VERSION>` like the other derived facets."""
 _LEGACY_STEP_KEY = {"ref": ("RESOLVE_VERSION", RESOLVE_SPILL), "vrs": ("MINT_VERSION", VRS_SPILL)}
 
+GRACE_DAYS = 7
+"""How long an older version's entry is kept after its last use when `JUST_VCF_CACHE_GRACE_DAYS` is unset."""
+
 
 def cache_dir() -> Path:
     """Where rewritten inputs and spills are kept: `JUST_VCF_CACHE_DIR`, else the platform's user cache."""
     configured = os.environ.get("JUST_VCF_CACHE_DIR")
     return Path(configured) if configured else Path(user_cache_dir("just-vcf"))
+
+
+def grace_period() -> timedelta:
+    """How long the stale-version sweep keeps an older version's entry after its last use:
+    `JUST_VCF_CACHE_GRACE_DAYS` (days, a fraction allowed, `0` for none), else `GRACE_DAYS`.
+
+    Read at every sweep. A value that is not a non-negative number is refused with `ValueError`, never
+    replaced by the default: a mistyped setting must not quietly change what gets deleted.
+    """
+    raw = os.environ.get("JUST_VCF_CACHE_GRACE_DAYS", "").strip()
+    if not raw:
+        return timedelta(days=GRACE_DAYS)
+    try:
+        days = float(raw)
+    except ValueError:
+        raise ValueError(f"JUST_VCF_CACHE_GRACE_DAYS must be a number of days, got {raw!r}") from None
+    if not math.isfinite(days) or days < 0:
+        raise ValueError(f"JUST_VCF_CACHE_GRACE_DAYS must be a non-negative number of days, got {raw!r}")
+    return timedelta(days=days)
 
 
 class CacheEntry(BaseModel):
@@ -176,6 +205,9 @@ class CacheClearReport(BaseModel):
     unknown_origin: tuple[CacheEntryInfo, ...]
     """Written before the index, so nothing says what they came from: never removed here. The
     stale-version sweep in `load` and the derived steps removes those whose name shows an old version."""
+    recently_used: tuple[CacheEntryInfo, ...] = ()
+    """`sweep_stale` only: of an older version, but used within the grace period (`grace_period`), so
+    an older install's live frame may read it: left alone."""
 
     @property
     def bytes_removed(self) -> int:
@@ -186,6 +218,7 @@ class _Entry:
     """An entry on disk: its directory, manifest and lock paths, and the manifest if there is one."""
 
     def __init__(self, root: Path, directory: str, name: str) -> None:
+        self.root, self.directory, self.name = root, directory, name
         self.relative = f"{directory}/{name}"
         self.path = root / directory / name
         self.manifest_path = root / directory / f"{name}.json"
@@ -196,6 +229,22 @@ class _Entry:
 
     def size(self) -> int:
         return _size(self.path)
+
+    def reread(self) -> "_Entry":
+        """The entry as it is on disk now: a writer may have rewritten its manifest since this was read."""
+        return _Entry(self.root, self.directory, self.name)
+
+    def last_used(self) -> datetime | None:
+        """The manifest's `last_used`; for an entry with no manifest, the newest modification time of
+        its directory and files, the only trace of use code before the index left. None when neither
+        is there."""
+        if self.manifest is not None:
+            return self.manifest.last_used
+        if not self.path.exists():
+            return None
+        # A file an older install's writer removes during the scan is skipped (`_stat`).
+        times = [found.st_mtime for child in [self.path, *self.path.rglob("*")] if (found := _stat(child)) is not None]
+        return datetime.fromtimestamp(max(times), timezone.utc) if times else None
 
     def info(self) -> CacheEntryInfo:
         m = self.manifest
@@ -370,22 +419,39 @@ def _read_generation(path: Path) -> Generation | None:
 
 
 def sweep_stale(kind: str, current: dict[str, object]) -> CacheClearReport:
-    """Remove every entry of `kind` written under an older version than `current`, logging the bytes freed.
+    """Remove the entries of `kind` an older version than `current` wrote and nothing has used for the
+    grace period, logging the bytes freed and what was kept.
 
     Older means no version key ahead of `current` and at least one behind, compared numerically
-    (`_older`). An entry a newer version wrote is kept: two installs of different versions can share
-    the platform user cache, and the older one must not remove the newer one's live spills.
+    (`_older`). An entry a newer version wrote is never removed: two installs of different versions can
+    share the platform user cache, and the older one must not remove the newer one's live spills.
+
+    An older entry is removed only when (a) no writer holds its lock (`being_written` otherwise; a
+    writer that starts waiting on the lock while the sweep holds it finds the lock file gone and writes
+    the entry afresh, `_acquire`), and (b) its `last_used` is longer ago than `grace_period()`
+    (`recently_used` otherwise). The older install's session may still hold a frame over it, and no
+    lock is held once a step returned: (b) is what keeps that frame working. Every run of a step moves
+    its entry's `last_used`, so the frame is safe for the grace period after its step last ran. Both
+    are judged again under the entry's lock, so a writer that finished between the scan and the removal
+    keeps its entry.
 
     Run by the step that owns the kind, before it writes: `load` for `rewrite_copy`, `work_copy` and `frames_spill`,
     each derived step for its own. An entry with no manifest is judged by its name where the name shows
-    its version, and a `vcf/` one is stale by construction (module docstring). Always safe: no current
-    lazy frame reads an entry of an old version. An entry being written is left alone.
+    its version, and a `vcf/` one is stale by construction (module docstring); its last use is the
+    newest modification time in it.
     """
     if kind not in CACHE_KINDS:
         raise ValueError(f"unknown cache entry kind {kind!r}")
     stamped = {key: str(value) for key, value in current.items()}
+    grace = grace_period()
+    cutoff = _now() - grace
+
+    def removable(entry: _Entry) -> bool:
+        used = entry.last_used()
+        return _stale(entry, kind, stamped) and (used is None or used < cutoff)
+
     chosen = [entry for entry in _entries(cache_dir()) if _stale(entry, kind, stamped)]
-    report = _remove(chosen, dry_run=False, unknown=[])
+    report = _remove(chosen, dry_run=False, unknown=[], still=removable)
     if report.removed:
         by_kind = Counter(info.kind or "unindexed" for info in report.removed)
         logger.info(
@@ -398,6 +464,13 @@ def sweep_stale(kind: str, current: dict[str, object]) -> CacheClearReport:
         )
     if report.being_written:
         logger.info("cache: %d stale %s entr(ies) left alone, being written", len(report.being_written), kind)
+    if report.recently_used:
+        logger.info(
+            "cache: %d older-version %s entr(ies) kept, used within the last %s (JUST_VCF_CACHE_GRACE_DAYS)",
+            len(report.recently_used),
+            kind,
+            grace,
+        )
     return report
 
 
@@ -546,15 +619,29 @@ def _entries(root: Path) -> list[_Entry]:
     return entries
 
 
-def _remove(chosen: list[_Entry], *, dry_run: bool, unknown: list[_Entry]) -> CacheClearReport:
+def _remove(
+    chosen: list[_Entry],
+    *,
+    dry_run: bool,
+    unknown: list[_Entry],
+    still: Callable[[_Entry], bool] | None = None,
+) -> CacheClearReport:
+    """Remove each chosen entry whose lock is free. With `still`, the entry is read again under its
+    lock and removed only if `still` holds for it then; otherwise it goes to `recently_used`."""
     removed: list[CacheEntryInfo] = []
     busy: list[CacheEntryInfo] = []
+    kept: list[CacheEntryInfo] = []
     for entry in chosen:
         handle = _acquire(entry.lock_path, blocking=False)
         if handle is None:
             busy.append(entry.info())
             continue
         try:
+            if still is not None:
+                entry = entry.reread()
+                if not still(entry):
+                    kept.append(entry.info())
+                    continue
             info = entry.info()
             if not dry_run:
                 if entry.path.is_dir():
@@ -573,6 +660,7 @@ def _remove(chosen: list[_Entry], *, dry_run: bool, unknown: list[_Entry]) -> Ca
         removed=tuple(removed),
         being_written=tuple(busy),
         unknown_origin=tuple(entry.info() for entry in unknown),
+        recently_used=tuple(kept),
     )
 
 

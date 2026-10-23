@@ -42,6 +42,8 @@ def isolated_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest
     monkeypatch.setenv("JUST_VCF_REFERENCE_DIR", "")
     # No configured chip manifests either (RM281): a test that reads the real ones asks for `manifests_dir`.
     monkeypatch.setenv("JUST_VCF_MANIFESTS_DIR", "")
+    # The default grace period (7 days): the sweep tests age their entries past it.
+    monkeypatch.setenv("JUST_VCF_CACHE_GRACE_DAYS", "")
     return path
 
 

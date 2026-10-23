@@ -21,7 +21,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from test_cache import SEQ, legacy_entry, manifests, sha256, size_on_disk, vcf_zip, write_entry
+from test_cache import SEQ, _schema_ahead, aged, legacy_entry, manifests, sha256, size_on_disk, vcf_zip, write_entry
 from test_load_cgi import LOCI, var_text
 from test_load_cgi import write as write_cgi
 from test_load_keyvalue import ROWS as KEYVALUE_ROWS
@@ -39,7 +39,9 @@ from just_vcf import (
     rejoin_split,
     resolve_ref,
 )
+from just_vcf import loading as loading_module
 from just_vcf.liftover import LIFT_VERSION
+from just_vcf.loaders import vcf as vcf_loader
 from just_vcf.reference import RESOLVE_VERSION
 from just_vcf.schema import SCHEMA_VERSION
 
@@ -164,10 +166,10 @@ def test_a_generation_missing_a_file_is_written_again(tmp_path: Path, default_st
 def test_a_spill_in_the_layout_before_generations_is_swept(tmp_path: Path, default_store: ReferenceStore) -> None:
     """Same data versions, no `SPILL_LAYOUT`: files written straight into the entry, which no run of
     this version reads, so the sweep removes the entry."""
-    old = write_entry(
+    old = aged(write_entry(
         "frames", f"{'e' * 32}-{SCHEMA_VERSION}-ref-SQ_ab-c-{RESOLVE_VERSION}", cache.RESOLVE_SPILL,
         {"SCHEMA_VERSION": SCHEMA_VERSION, "RESOLVE_VERSION": RESOLVE_VERSION},
-    )
+    ))
     resolve_ref(load(vcf_zip(tmp_path, "one")), default_store)
     assert not old.exists()
 
@@ -357,6 +359,7 @@ def test_a_lift_spill_from_before_the_index_is_swept(tmp_path: Path, default_sto
     old = cache.cache_dir() / "frames" / f"{'e' * 32}-{SCHEMA_VERSION}-lift"
     old.mkdir(parents=True)
     (old / "calls-00000.parquet").write_bytes(b"x" * 100)
+    aged(old)
     resolved = resolve_ref(load(vcf_zip(tmp_path, "one")), default_store)
     assert old.exists()
     add_target(default_store, tmp_path)
@@ -434,7 +437,7 @@ def test_loading_again_reuses_the_spill_and_touches_no_file(name: str, tmp_path:
 
 def test_a_load_spill_in_the_layout_before_generations_is_swept(tmp_path: Path) -> None:
     """A load spill indexed before generations: its manifest has no `SPILL_LAYOUT`, so `load` sweeps it."""
-    old = write_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION})
+    old = aged(write_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION}))
     load(vcf_zip(tmp_path, "one"))
     assert not old.exists()
 
@@ -495,6 +498,47 @@ def test_clearing_a_cgi_or_keyvalue_source_removes_every_entry_from_it(name: str
 
 
 def test_a_working_copy_from_before_the_index_is_swept(tmp_path: Path) -> None:
-    stale = {directory: legacy_entry(directory, "a" * 32) for directory in ("keyvalue", "cgi")}
+    stale = {directory: aged(legacy_entry(directory, "a" * 32)) for directory in ("keyvalue", "cgi")}
     load(vcf_zip(tmp_path, "one"))
     assert not any(entry.exists() for entry in stale.values())
+
+
+# Two installs at two versions sharing one cache dir (the 2026-10-23 incident): the newer one's sweep
+# removed a generation the older one's live frame read, and its next `collect` failed with
+# FileNotFoundError on calls-00000.parquet. Here the parent is the older install; the child is a newer
+# one, its version keys moved ahead before it loads.
+
+
+def _load_as_newer(path: Path) -> list[bytes]:
+    """In a child process: `load` as an install whose `SCHEMA_VERSION` and `REWRITE_VERSION` are ahead
+    of the parent's, so every frames spill and copy the parent wrote is an older version's to it."""
+    ahead = _schema_ahead()
+    loading_module.SCHEMA_VERSION = ahead
+    loading_module._FRAMES_VERSIONS = {**loading_module._FRAMES_VERSIONS, "SCHEMA_VERSION": ahead}
+    vcf_loader.REWRITE_VERSION += 1
+    return [frame.write_ipc(None).getvalue() for frame in all_frames(load(path))]
+
+
+def test_a_newer_install_sweeping_leaves_an_older_installs_live_frame_working(tmp_path: Path) -> None:
+    path = vcf_zip(tmp_path, "one")
+    live = load(path)
+    rows = all_frames(live)
+    (live_entry,) = load_entries()
+    before = file_stamps(live_entry)
+    # Another file this install loaded, and nothing has used since: past the grace period, the newer
+    # install retires it.
+    load(vcf_zip(tmp_path, "two", positions=(150, 200)))
+    (untouched,) = set(load_entries()) - {live_entry}
+    aged(untouched)
+
+    def check() -> None:
+        assert same(all_frames(live), rows), "the live frame changed"
+
+    (newer,) = run_children(_load_as_newer, (path,), check, tmp_path / "children", count=1)
+
+    assert same(all_frames(live), rows)
+    assert file_stamps(live_entry) == before
+    assert not untouched.exists() and not untouched.with_name(f"{untouched.name}.json").exists()
+    # The newer install spilled the same facet under its own version, beside the older one's.
+    assert set(load_entries()) == {live_entry, live_entry.with_name(live_entry.name.replace(SCHEMA_VERSION, _schema_ahead()))}
+    assert pl.read_ipc(newer[1]).equals(rows[1])

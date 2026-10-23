@@ -83,6 +83,10 @@ same facet breaks the frame the first run returned. That predates RM268 and is n
 Closed later the same day: a derived spill is now one generation per content key (docs/SCHEMA.md,
 "The cache under the lazy frames"). `liftover`'s spill and `load`'s own followed the same day, and the
 Complete Genomics and key=value loaders' working copies came under the index (`work_copy`).
+Amended 2026-10-23 (the lead's decision, after two sessions at two `SCHEMA_VERSION`s on one cache dir
+broke the older one's live frame): "orphans by version are always safe to remove" was wrong while an
+older install still runs. The sweep now keeps an older entry used within `JUST_VCF_CACHE_GRACE_DAYS`
+(7 days) or whose lock is held (docs/SCHEMA.md, "The cache under the lazy frames").
 
 ## RM270 — Pre-split multi-allelic input
 Severity: high · Status: shipped 2026-10-19: B, the flags (schema 0.0.4), and D, `rejoin_split`; C not built, the person chose D (desk #45) · Owner: lead

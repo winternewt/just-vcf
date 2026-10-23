@@ -362,6 +362,7 @@ class _Found:
     """The line states a run date, parsed or not."""
     when: datetime | None = None
     references: list[str] = field(default_factory=list)
+    """The reference base names as written, not yet withheld: `_reference` compares them, then withholds."""
 
 
 _PATHLIKE = re.compile(
@@ -515,6 +516,8 @@ def method_chain(meta: list[str], callers: list[Caller], caller_at: dict[str, in
     `reference` is `##reference=`'s base name (DRAGEN's `reference.bin` gives its directory's); with
     none, the one reference the call steps name. Two of them leave it null with a warning; a
     `##reference=` that differs from the caller's with no `lift` step recorded is kept, with a warning.
+    The names are compared as written and only then withheld (`<file>`), so two different unknown
+    files never agree; the warnings name no file.
     """
     caller_at = caller_at or {}
     chain = MethodChain()
@@ -556,7 +559,7 @@ def method_chain(meta: list[str], callers: list[Caller], caller_at: dict[str, in
         if key.startswith("bcftools") and key.endswith("Version"):
             versions[key.removesuffix("Version")] = value.strip()
         elif key == "reference":
-            stated.append(_reference_name(value))
+            stated.append(_reference_base(value))
         elif key.startswith("GATKCommandLine") or _gatk2(key, value):
             tool, version, text = _gatk_parts(key, value)
             gatk_named.add(tool)
@@ -565,7 +568,7 @@ def method_chain(meta: list[str], callers: list[Caller], caller_at: dict[str, in
             dated, when = _dated(value)
             role = "call" if tool in _GATK_CALLERS else _GATK_ROLES.get(tool, "other")
             step = Step(f"GATK {tool.replace('MuTect2', 'Mutect2')}", version, role, tuple(options), f"##{key}")
-            add(_Found(index, step, dated, when, _references(options, spec)), step.tool if tool in _GATK_CALLERS else None)
+            add(_Found(index, step, dated, when, _references(text, spec)), step.tool if tool in _GATK_CALLERS else None)
         elif key == "source" and value.strip() in _GATK_ROLES:
             gatk_sources.append((index, value.strip()))
         elif key == "source" and (match := _SHAPEIT.match(value.strip())):
@@ -574,7 +577,7 @@ def method_chain(meta: list[str], callers: list[Caller], caller_at: dict[str, in
             version, text = _dragen_version(value), _attr(value, "CommandLineOptions") or ""
             dated, when = _dated(value)
             align, call = _options(text, _DRAGEN_ALIGN), _options(text, _DRAGEN_CALL)
-            add(_Found(index, Step("DRAGEN", version, "call", tuple(call), f"##{key}"), dated, when, _references(call, _DRAGEN_CALL)), "DRAGEN")
+            add(_Found(index, Step("DRAGEN", version, "call", tuple(call), f"##{key}"), dated, when, _references(text, _DRAGEN_CALL)), "DRAGEN")
             if "--enable-map-align true" in align:
                 add(_Found(index - 0.5, Step("DRAGEN", version, "align", tuple(align), f"##{key}"), dated, when))
         elif re.fullmatch(r"bcftools_?\w*Command", key):
@@ -595,7 +598,7 @@ def method_chain(meta: list[str], callers: list[Caller], caller_at: dict[str, in
             if program in _CALLER_COMMANDS:
                 name, spec = _CALLER_COMMANDS[program]
                 options = _options(rest, spec)
-                add(_Found(index, Step(name, None, "call", tuple(options), f"##{key}"), references=_references(options, spec)), name)
+                add(_Found(index, Step(name, None, "call", tuple(options), f"##{key}"), references=_references(rest, spec)), name)
         elif key in ("SnpEffCmd", "OriginalSnpEffCmd"):
             version = versions.get(key.removesuffix("Cmd") + "Version")
             add(_Found(index, Step("SnpEff", version, "annotate", tuple(_snpeff_options(value)), f"##{key}")))
@@ -659,31 +662,35 @@ def _ordered(found: list[_Found], warnings: list[str]) -> list[_Found]:
 
 
 def _reference(stated: list[str], called: list[str], steps: list[Step], warnings: list[str]) -> str | None:
+    """The one reference, withheld unless known (`_known_reference`), from base names as written.
+
+    The names are compared before any is withheld: two different unknown files are both `<file>`, and
+    comparing those would make them agree. The warnings name no file, so they withhold nothing."""
     distinct = list(dict.fromkeys(name for name in stated if name))
     if len(distinct) > 1:
-        warnings.append(f"the header names more than one ##reference ({', '.join(distinct)}); reference left null")
+        warnings.append(f"the header names {len(distinct)} different ##reference files; reference left null")
         return None
     if not distinct:
         if len(called) > 1:
-            warnings.append(f"the call steps name more than one reference ({', '.join(called)}); reference left null")
+            warnings.append(f"the call steps name {len(called)} different reference files; reference left null")
             return None
-        return called[0] if called else None
+        return _known_reference(called[0]) if called else None
     if called and distinct[0] not in called and not any(step.role == "lift" for step in steps):
         warnings.append(
-            f"##reference names {distinct[0]} but the call step names {', '.join(called)}, and no liftover step is "
-            "recorded: the rows may have been moved to another reference by a tool the header does not name"
+            f"##reference and the call step{'s' if len(called) > 1 else ''} name two different reference files, and no "
+            "liftover step is recorded: the rows may have been moved to another reference by a tool the header does not name"
         )
-    return distinct[0]
+    return _known_reference(distinct[0])
 
 
-def _reference_name(value: str) -> str:
-    """`##reference=`'s base name (`_known_reference`); DRAGEN names the `reference.bin` inside its
-    reference directory."""
+def _reference_base(value: str) -> str:
+    """`##reference=`'s base name as written; DRAGEN names the `reference.bin` inside its reference
+    directory, so the directory's name is taken."""
     text = _strip_url(value)
     parts = [part for part in re.split(r"[/\\]", text) if part]
     if len(parts) > 1 and parts[-1] == "reference.bin":
-        return _known_reference(parts[-2])
-    return _known_reference(parts[-1]) if parts else ""
+        return parts[-2]
+    return parts[-1] if parts else ""
 
 
 FILE_PLACEHOLDER = "<file>"
@@ -754,12 +761,13 @@ def _bcftools(index: int, key: str, value: str, versions: dict[str, str]) -> _Fo
     words = command.split()
     sub = words[0] if words else key.removeprefix("bcftools_").removesuffix("Command")
     role, spec = _BCFTOOLS.get(sub, ("other", {}))
-    options = _options(command.strip()[len(sub) :], spec)
+    text = command.strip()[len(sub) :]
+    options = _options(text, spec)
     if sub == "view" and not options:
         role = "other"
     version = versions.get(f"bcftools_{sub}") or versions.get("bcftools")
     step = Step(f"bcftools {sub}", version, role, tuple(options), f"##{key}")
-    return _Found(index, step, bool(date.strip()), _parse_date(date) if date.strip() else None, _references(options, spec))
+    return _Found(index, step, bool(date.strip()), _parse_date(date) if date.strip() else None, _references(text, spec))
 
 
 def _program(value: str) -> tuple[str | None, str | None, str]:
@@ -803,16 +811,23 @@ def _snpeff_options(value: str) -> list[str]:
 
 
 def _options(text: str, spec: _Spec) -> list[str]:
-    """The options `spec` names, in command order, written as they were with their values redacted.
+    """The options `spec` names, in command order, written as they were with their values redacted."""
+    shown = (name if value is None else f"{name}{sep}{_shown(value, kind)}" for name, sep, value, kind in _option_values(text, spec))
+    return list(dict.fromkeys(shown))
+
+
+def _option_values(text: str, spec: _Spec) -> list[tuple[str, str, str | None, str]]:
+    """`(name, separator, value as written, kind)` for each option `spec` names, in command order; a
+    flag's value is None.
 
     Reads `--name value`, `--name=value`, `-xVALUE` and GATK 3's `name=value` and `name=[a, b]`."""
     if not spec or not text:
         return []
-    out: list[str] = []
+    out: list[tuple[str, str, str | None, str]] = []
     for match in re.finditer(r"(?:^|\s)(\w+)=(\[[^\]]*\]|\"[^\"]*\"|\S+)", text):
         name, value = match.group(1), match.group(2)
         if name in spec and value.strip('"') not in _EMPTY_VALUES:
-            out.append(f"{name}={_shown(value, spec[name])}")
+            out.append((name, "=", value, spec[name]))
     tokens = _tokens(text)
     i = 0
     while i < len(tokens):
@@ -826,7 +841,7 @@ def _options(text: str, spec: _Spec) -> list[str]:
             name, value, sep = token[:2], token[2:], ""
         kind = spec.get(name) if name.startswith("-") else None
         if kind == "flag":
-            out.append(name)
+            out.append((name, "", None, kind))
             continue
         if kind is None:
             continue
@@ -836,8 +851,8 @@ def _options(text: str, spec: _Spec) -> list[str]:
             value = tokens[i]
             i += 1
         if value not in _EMPTY_VALUES:
-            out.append(f"{name}{sep}{_shown(value, kind)}")
-    return list(dict.fromkeys(out))
+            out.append((name, sep, value, kind))
+    return out
 
 
 def _tokens(text: str) -> list[str]:
@@ -855,17 +870,11 @@ def _shown(value: str, kind: str) -> str:
     return "<path>" if _PATHLIKE.search(re.sub(r"\b(?:INFO|FORMAT|FMT)/", "", value.strip('"'))) else value
 
 
-def _references(options: list[str], spec: _Spec) -> list[str]:
-    """The reference base names among a step's options."""
-    out = []
-    names = [name for name, kind in spec.items() if kind == "ref"]
-    for option in options:
-        for name in names:
-            rest = option[len(name) :]
-            if option.startswith(name) and rest and (rest[0] in " =" or len(name) == 2):
-                out.append(rest[1:] if rest[0] in " =" else rest)
-                break
-    return out
+def _references(text: str, spec: _Spec) -> list[str]:
+    """The base names of the references a command line's options name, as written: `_reference`
+    compares them before withholding any (`_known_reference`)."""
+    named = (_basename(value) for _, _, value, kind in _option_values(text, spec) if kind == "ref" and value is not None)
+    return list(dict.fromkeys(name for name in named if name))
 
 
 def _dated(value: str) -> tuple[bool, datetime | None]:

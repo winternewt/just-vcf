@@ -450,12 +450,47 @@ def test_any_other_reference_or_chain_file_name_is_withheld() -> None:
     assert ("freeBayes", ("-f <file>",)) in [(s.tool, s.options) for s in source.steps]
     assert ("CrossMap", ("liftOverChainFile=<file>", "targetRefGenome=<file>")) in [(s.tool, s.options) for s in source.steps]
     assert ("DRAGEN", ("--ref-dir <file>", "--enable-variant-caller true")) in [(s.tool, s.options) for s in source.steps]
+    assert not any(planted in " ".join(source.warnings) for planted in ("PLANTED", "Planted", "planted"))
+
+
+PLANTED_REFERENCES = ("/refs/PLANTEDSMITH-hg38.fa", "/refs/PLANTEDJONES-hg38.fa")
+"""Two reference files whose base names are not a known reference's: both are stored as `<file>`."""
+
+
+def test_two_different_withheld_reference_files_still_conflict() -> None:
+    """The names are compared as written, then withheld: two `<file>`s are not one reference."""
+    source = detect_source([f"##reference=file://{path}" for path in PLANTED_REFERENCES])
+    assert source.reference is None
+    assert source.warnings == ["the header names 2 different ##reference files; reference left null"]
+    same = detect_source([f"##reference=file://{PLANTED_REFERENCES[0]}"] * 2)
+    assert (same.reference, same.warnings) == ("<file>", [])
+
+
+def test_two_different_withheld_call_references_still_conflict() -> None:
+    meta = [f'##commandline="/opt/bin/freebayes -f {path} /work/x.bam"' for path in PLANTED_REFERENCES]
+    source = detect_source(meta)
+    assert source.reference is None
+    assert source.warnings == ["the call steps name 2 different reference files; reference left null"]
+
+
+def test_a_withheld_reference_that_differs_from_the_callers_is_still_flagged() -> None:
+    """`##reference=` and the caller's `-f` name two different files, both withheld: the warning fires,
+    naming neither, and the stored reference is `<file>`."""
+    stated, called = PLANTED_REFERENCES
+    source = detect_source([f"##reference=file://{stated}", f'##commandline="/opt/bin/freebayes -f {called} /work/x.bam"'])
+    assert source.reference == "<file>"
+    assert source.warnings == [
+        "##reference and the call step name two different reference files, and no liftover step is recorded: the rows "
+        "may have been moved to another reference by a tool the header does not name"
+    ]
+    agree = detect_source([f"##reference=file://{stated}", f'##commandline="/opt/bin/freebayes -f {stated} /work/x.bam"'])
+    assert (agree.reference, agree.warnings) == ("<file>", [])
 
 
 def test_reference_falls_back_to_the_caller_and_two_references_leave_it_null() -> None:
     assert detect_source(CLAIR3).reference == "hg38.fa"
     two = detect_source(["##reference=/ref/hg19.fa", "##reference=/ref/hs37d5.fa"])
-    assert two.reference is None and two.warnings == ["the header names more than one ##reference (hg19.fa, hs37d5.fa); reference left null"]
+    assert two.reference is None and two.warnings == ["the header names 2 different ##reference files; reference left null"]
     assert detect_source(["##reference=GRCh38"]).reference == "GRCh38"
     assert (detect_source([]).reference, detect_source([]).steps) == (None, [])
 

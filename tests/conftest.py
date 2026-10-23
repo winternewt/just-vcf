@@ -72,6 +72,21 @@ def test_reference_dir() -> Path:
 
 
 @pytest.fixture(scope="session")
+def test_chain_dir() -> Path:
+    """`JUST_VCF_TEST_CHAIN_DIR`, a directory of public UCSC chain files, read like `samples_dir`."""
+    if "JUST_VCF_TEST_CHAIN_DIR" in os.environ:
+        value = os.environ["JUST_VCF_TEST_CHAIN_DIR"]
+    else:
+        value = dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_TEST_CHAIN_DIR")
+    if not value:
+        pytest.skip("JUST_VCF_TEST_CHAIN_DIR is not set")
+    path = Path(value)
+    if not path.is_dir():
+        pytest.skip(f"{path} is absent")
+    return path
+
+
+@pytest.fixture(scope="session")
 def pgp_root(samples_dir: Path) -> Path:
     """The PGP-HMS download tree under the samples directory (docs/PGP_HMS.md)."""
     root = samples_dir / "pgp-hms"

@@ -81,7 +81,8 @@ order they first appear, as `vcf_samples` does for a VCF.
 `loaders.cgi` reads both CGI callsets into one per-haplotype shape (a `var` locus's sub-rows joined
 in `begin` order, a `masterVarBeta` row's two allele columns) and makes the rows from there, so the
 two files of one assembly give the same sites, blocks and allele sets; the haplotype slots can differ,
-since neither file's slot order is a phase and `phased` stays null. The facet's caller is
+since neither file's slot order is a phase. Phase comes from `hapLink`, an id per haplotype that is a
+phase set of kind `cgi_haplink`, so the two files give the same sets too. The facet's caller is
 `CGAPipeline` at the file's `#SOFTWARE_VERSION`, as CGI's own VCF names it, its `callset_type` is
 `wgs` where `#TITLE` says whole-genome sequencing (28 of 250 PGP-HMS files have no `#TITLE`), and its
 blocks make `absence_means = blocks`. A whole PGP-HMS `var` (18.9M rows, bz2) loads in about 3.5

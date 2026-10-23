@@ -20,7 +20,8 @@ What is written, and the rules it follows:
   the caller passes `resolved_only=True`; then the rest is written and the counts are reported.
 - **FORMAT** is per row: a key is listed where the row has a value for it, so a field the source
   left out stays out. GT is rebuilt from `gt` and `phased` (`source_gt` is null on derived facets and
-  VCF 4.4+ files). `gl` is written as GL: the frame holds log10 likelihoods and does not remember
+  VCF 4.4+ files). PS is written for a `ps`-kind set only; a haplotype phased only by a PSL name or a
+  CGI hapLink is written `/`, since `|` without its set would read back as the implicit one. `gl` is written as GL: the frame holds log10 likelihoods and does not remember
   whether the source wrote PL. `gl`, `gp` and `ad` are written only when `source_alleles`, the order
   they are indexed over, is the written `[REF] + ALTs`; otherwise they are left out and counted.
 - **VCF 4.3**, not 4.4+: GP is a probability from 4.3 on, which is what `gp` holds, and the writer
@@ -75,7 +76,7 @@ from just_vcf.bgzf import BgzfWriter
 from just_vcf.loaders.vcf import FORMAT_KEYS, SPLIT_INFO_KEY, V43_RESERVED_TYPES
 from just_vcf.loading import Loaded
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _store_for
-from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, BlockKind, RefCheck, canonical_chrom
+from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, BlockKind, PhaseSetKind, RefCheck, canonical_chrom
 from just_vcf.tabix import TabixIndexer
 
 logger = logging.getLogger(__name__)
@@ -292,8 +293,9 @@ def write_vcf(
         )
     if stats["n_ps_dropped"]:
         warnings.append(
-            f"{stats['n_ps_dropped']} row(s) had a phase set VCF 4.3 cannot write as PS (a PSL name, or not an "
-            "integer); left out"
+            f"{stats['n_ps_dropped']} row(s) had a phase set VCF 4.3 cannot write as PS (a PSL name, a CGI "
+            "hapLink, or not an integer); left out, and a haplotype phased only by a PSL name or a hapLink "
+            "is written unphased"
         )
     if stats["n_cn_fractional"]:
         warnings.append(
@@ -447,11 +449,17 @@ def _has_vector() -> pl.Expr:
     return pl.any_horizontal(pl.col(name).list.len().fill_null(0) > 0 for name in ("gl", "gp", "ad"))
 
 
+_UNWRITTEN_KINDS = [PhaseSetKind.PSL.value, PhaseSetKind.CGI_HAPLINK.value]
+"""Phase set kinds VCF 4.3 has no field for: a PSL name, a CGI hapLink. Each names a haplotype, not a
+GT slot, so neither is a PS."""
+
+
 def _ps_text() -> pl.Expr:
-    """PS: the row's PS-kind phase set, as an integer. Null where there is none or it is a PSL name."""
+    """PS: the row's PS-kind phase set, as an integer. Null where there is none, or it is of a kind
+    VCF 4.3 cannot write (`_UNWRITTEN_KINDS`)."""
     value = pl.col("phase_sets").list.drop_nulls().list.first()
-    psl = pl.col("phase_set_kinds").list.contains("psl").fill_null(False)
-    return pl.when(psl).then(None).otherwise(value.cast(pl.Int64, strict=False)).cast(pl.String)
+    unwritten = pl.col("phase_set_kinds").list.eval(pl.element().cast(pl.String).is_in(_UNWRITTEN_KINDS)).list.any().fill_null(False)
+    return pl.when(unwritten).then(None).otherwise(value.cast(pl.Int64, strict=False)).cast(pl.String)
 
 
 def _number_text(value: pl.Expr) -> pl.Expr:
@@ -468,11 +476,16 @@ def _list_text(name: str) -> pl.Expr:
 
 
 def _gt_text(ploidy: int) -> pl.Expr:
-    """GT from `gt` and `phased`: `.` per uncalled haplotype, `|` before a phased one, else `/`."""
+    """GT from `gt` and `phased`: `.` per uncalled haplotype, `|` before a phased one, else `/`.
+
+    A haplotype phased only by a set VCF 4.3 cannot write (`_UNWRITTEN_KINDS`) is written `/`: its
+    PS is left out, and `|` without one would put it in the chromosome's implicit set."""
     gt = pl.col("gt")
     parts = [gt.list.get(0, null_on_oob=True).cast(pl.String).fill_null(".")]
     for slot in range(1, ploidy):
-        separator = pl.when(pl.col("phased").list.get(slot, null_on_oob=True).fill_null(False)).then(pl.lit("|")).otherwise(pl.lit("/"))
+        kind = pl.col("phase_set_kinds").list.get(slot, null_on_oob=True).cast(pl.String)
+        phased = pl.col("phased").list.get(slot, null_on_oob=True).fill_null(False) & ~kind.is_in(_UNWRITTEN_KINDS).fill_null(False)
+        separator = pl.when(phased).then(pl.lit("|")).otherwise(pl.lit("/"))
         allele = gt.list.get(slot, null_on_oob=True).cast(pl.String).fill_null(".")
         parts.append(pl.when(gt.list.len() > slot).then(pl.concat_str(separator, allele)))
     return pl.when(gt.list.len() > 0).then(pl.concat_str(parts, ignore_nulls=True))

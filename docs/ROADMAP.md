@@ -310,10 +310,17 @@ own (SCHEMA Decision 4); the native files keep `blocks`. Builder's choices, each
 - An uncalled insertion point (a zero-length no-call, 346,474 in one genome) is a `calls` row with
   every haplotype null. Rejected: dropping it with a count, which loses "looked and could not tell"
   (Decision 2); and a block on the anchor base, as vcfBeta writes it, which overlaps a `ref` block.
-- `alts` sorted by string, slots as each file wrote them, `phased` null. Rejected: reading `hapLink`
-  as a phase set; neither file's slot order is a phase (the two files of one assembly order the slots
-  differently), and hapLink's semantics were not checked against CGI's documentation.
-- `gq`, `gl` null; the allele scores and `hapLink` in `dropped_fields`. Rejected: `gq` as the lower
+- `alts` sorted by string, slots as each file wrote them. Neither file's slot order is a phase (the
+  two files of one assembly order the slots differently).
+- `hapLink` is a phase set of its own kind, `cgi_haplink` (since 2026-10-23): an id per haplotype,
+  one molecule, keyed per chromosome; a linked slot is `phased` with the id, an unlinked one null.
+  CGI's documentation was not at hand; the reading rests on a PGP-HMS assembly, where no id leaves
+  its chromosome, both haplotypes of a locus never share one, and CGI's own VCF writes the same
+  phasing as 25,696 PS sets of two ids each (51,392 ids; 2,708,191 linked loci, 2,707,622 `|`
+  records). `cis_phased_blocks` gives one block per id. Rejected: kind `psl`, which would name a VCF
+  field the file does not have and key the set per file; kind `ps` with the slot as the haplotype,
+  which is wrong because the slot is no phase.
+- `gq`, `gl` null; the allele scores in `dropped_fields`. Rejected: `gq` as the lower
   allele score, the convention CGI's VCF writer uses, which is a derivation, not a value the file
   states.
 - `varQuality` values kept verbatim (VQHIGH). Rejected: mapping VQHIGH to PASS without a CGI document
@@ -327,7 +334,7 @@ own (SCHEMA Decision 4); the native files keep `blocks`. Builder's choices, each
   counts contradict that. Rejected: summing a hom ALT's two slots, which counts the same reads twice
   (the sum passes `totalReadCount`); `ad` per slot, which is CGI's VCF AD and not VCF's.
 
-**Left for CGI:** `hapLink` as phase sets; the 1.x layouts
+**Left for CGI:** the 1.x layouts
 (`totalScore`, no file on disk); memory (a whole `var` peaks at 8.9 GB, the haplotype sort);
 GET-Evidence copies named `<assembly>.tsv.bz2`, not checked.
 

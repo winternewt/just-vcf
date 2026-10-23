@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- CGI's `hapLink` is read as phase sets (RM2): a new `PhaseSetKind.CGI_HAPLINK` (`cgi_haplink`); a
+  linked haplotype of a `var` or `masterVarBeta` row has `phased` true and the id in `phase_sets`,
+  and `cis_phased_blocks` gives one VRS CisPhasedBlock per id and chromosome, the same from both
+  files. `write_vcf` writes neither a hapLink nor a PSL name as PS, and writes the haplotypes they
+  phase unphased, where it wrote `|` (read back as the chromosome's implicit set). Adding the enum
+  member changes the `phase_set_kinds` dtype; `SCHEMA_VERSION` is bumped at merge.
+
 - CGI `masterVarBeta` rows carry `ad` (RM2): REF's count is `referenceAlleleReadCount`, each ALT's the
   read count of the slot that carries it, indexed over `source_alleles = [source_ref] + alts`. A row
   with an empty count, a partly called allele or counts that contradict each other keeps `ad` null,

@@ -43,9 +43,65 @@ Severity: medium · Status: open (decided by the person in the Part 2 interview,
 The person chose graded where possible (E2): GL/GP compared where both facets carry them, hard genotypes otherwise, and every row says which. Kept as data, never resolved to a winner (invariant 8). Needs RM273 and VRS ids (RM271).
 
 ## RM278 — Coverage as a facet
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: medium · Status: in progress (built 2026-10-23: readers, BAM depth, callable) · Owner: lead
 
 The person chose summaries and BAM depth (E3): mosdepth/samtools summaries, and polars-bio's `depth()` over a BAM the person has (scope note of 2026-09-28). Absence with a cause. RM269's XX and XO labels wait for this (the person chose to wait, 2026-10-23).
+
+**Built 2026-10-23** (`just_vcf.coverage`; docs/SCHEMA.md "Coverage facets"): `read_coverage` for
+mosdepth's four outputs and `samtools depth`/`coverage`, told by content; `alignment_coverage` over a
+BAM or CRAM through polars-bio `depth()`, folded into 1,000-base windows with exact mean, min, max and
+described bases, tiling the header's contigs with zeros; `callable_sites`/`callable_at` with
+`min_depth` required. Decisions, each with what was rejected: a `Coverage` beside `Loaded`, not a
+fourth frame (the load contract and the cache of every format would change for evidence about an
+alignment); windows, not `depth()`'s raw runs (498 million on the 27 GB BAM below); per-base mode, not block mode (block mode's peak grows with the reads, below); a mean
+bounds no base, so regions and summaries answer callable unknown (rejected: reading a mean of 30 as
+"every base above 4"); `min_depth` with no default (rejected: GATK CallableLoci's 4, a convention the
+caller should choose); a BAM's `facet_id` from its header, index and size (rejected: hashing the bytes,
+a second full read); a headerless three-column file whose rows read as intervals is refused unless `kind=` states it (rejected: taking it as `samtools depth`, which reads a BED3 as depths). mosdepth's thresholds file is refused for now.
+
+Substrate findings, polars-bio 0.36 (for the upstream-liaison seat to file; read in the mirror under
+`data/interim/`, `bio-function-pileup` and `polars-bio/src/pileup.rs`):
+
+- `depth()`'s output column `coverage` is Int16, written by `prev_cov as i16` from a 32-bit count, so a
+  base deeper than 32,767 comes out negative and one past 65,535 as a wrong positive. Shown by a test
+  (`test_a_depth_past_int16_is_left_out_and_counted`, 32,770 reads over five bases). Mitigated here:
+  negative depths are left out of their window and counted in a warning.
+- `DepthTableProvider::scan` drops pushed-down filters and `depth()` takes no region, and `PileupExec`
+  holds a dense `Vec<i32>` per touched contig (its full length) for the whole file before emitting
+  anything. Peak memory therefore grows with the genome, not with a window; it cannot be bounded from
+  just-vcf.
+- In block mode `merge_dense_results` builds every contig's run-length batches into `pending_batches`
+  before emitting the first, so the peak adds all the runs (498 million on the 27 GB BAM below) to
+  the dense arrays. Per-base mode emits contig by contig. `alignment_coverage` uses per-base mode.
+- Block mode loses depth at a contig's end: on a synthetic BAM whose reads reach a contig's last
+  base it emits no run for that contig at all, and on the 27 GB BAM the last window of 60 contigs
+  read a zero there that per-base mode did not (the only differences across 2.94 million covered
+  windows). Shown by `test_a_read_on_a_contigs_last_base_is_counted`, which fails on block mode.
+- An indexed full scan reads the BAM twice: the dedicated no-coordinate partition scans "from the
+  first alignment record and filter[s] to no-coor rows" (`bio-format-bam/src/physical_exec.rs`), the
+  comment says, rather than seek past the placed reads. Measured as bytes read equal to twice the
+  file (below).
+
+**Measured 2026-10-23** on two private GRCh38 bwa-mem2 BAMs on the Krypton share (aggregates only;
+the machine shared with about eleven other sessions, load average 17–60):
+
+| BAM | depth mode | time | peak RSS | bytes read | windows |
+|---|---|---|---|---|---|
+| 27.4 GB | blocks | 18.1 min | 22.6 GB | not recorded | 3,099,848 |
+| 27.4 GB | per-base | 12.7 min | 13.3 GB | 49.6 GB | 3,099,848 |
+| 48.3 GB | blocks | 38.3 min | 33.6 GB | 96.7 GB | 3,099,848 |
+| 42.1 GB | per-base | 20.4 min | 16.3 GB | 83.1 GB | 3,099,848 |
+| 39.2 GB | per-base | 16.7 min | 13.6 GB | 78.5 GB | 3,099,848 |
+
+The four come from three person folders (the 48.3 and 39.2 GB BAMs are two libraries in one folder,
+which docs/LIVE_SAMPLES.md says are different people).
+
+Each BAM had a few windows (18 on the first) holding bases deeper than 32,767, reported as wrapped
+(the Int16 finding above).
+
+Left: a cache spill of the windows keyed by `facet_id` (RM268's pattern), so a BAM is read once; a
+quantized output from one depth pass; mosdepth's thresholds file; a person-level layer that pairs a
+coverage facet with callsets.
 
 ## RM279 — A method-error atlas
 Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
@@ -1006,7 +1062,7 @@ store:
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO wait for a coverage facet, as do XXX, XYY and arrays) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY and arrays wait) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -1198,9 +1254,39 @@ Decisions, each with what was rejected:
   (above); and dropping the Y line altogether, which would lose `XY` and `XXY` where Y depth is high
   and the women measured sit far below.
 
-**Left:** `XX` and `XO` need a Y shown absent, and XXX, XYY and the other classes a copy count:
-both wait for a coverage facet (depth at called sites cannot show a region empty, and does not
-separate one Y from two). An array's female Y probes are no-calls, which may be the absence signal
+**Built 2026-10-23: coverage as an X and a Y line** (RM278). `sex_chromosome_evidence(loaded,
+coverage=…)` reads a coverage facet's length-weighted median depth over non-PAR X, the X-degenerate Y
+and chr20 (`CoverageRatios`, on the result's `coverage` field). X: a third line, one X at a ratio of
+at most 0.625, two from 0.875 to 1.25, and all measured X lines must agree. Y: present at 0.375 or
+more, absent at 0.125 or less, unknown between; absent with one X names `XO`, with two `XX`. Each band
+is the central half of the copy-number gap (one copy 0.5, two 1.0; a Y 0.5, none 0), the rule the
+call-based bands followed. Decisions, each with what was rejected:
+
+Calibration, 2026-10-23, on the four private BAMs of RM278's table (aggregates only, pooled, no file
+named or classed): every X and Y coverage ratio lay within 0.034 of its nearest copy-number
+expectation (0, 0.5 or 1.0), so every file fell inside a class band with at least 0.09 to spare; each
+file's X and Y pair was one of the usual two (one X with a Y, two X without); chr20's even share was
+0.972 or more. The X-degenerate Y coverage of the files without a Y read near 0, against 0.35–0.40
+from the calls' DP on the local two-X VCFs: the call-site line sees the mismapped stretches only.
+Four files from three person folders confirm the bands' placement, not their width.
+
+- Coverage shows a Y absent where call-site depth could not: the coverage median runs over every base
+  of the region, the calls' DP only over the sites a caller found something at, which in a genome
+  without a Y are the mismapped stretches. Rejected: an absent band on the calls' Y ratio (it named a
+  man `XO`, above).
+- Coverage showing no Y against calls showing one is `lines_disagree`. Rejected: letting coverage
+  win, which would hide a mispaired coverage facet (another person's BAM).
+- Zero-depth intervals are left out on chr20 and X (assembly gaps; each span holds a centromere) and
+  kept on the X-degenerate Y, which GIAB cuts free of gaps and where zero is the signal. Rejected:
+  counting them everywhere, which lowers both medians by the gaps' share.
+- A coverage facet whose chr20 depth is uneven (under 75% of its bases within half to twice the
+  median: an exome's or a panel's shape) is set aside as `coverage_uneven`. Rejected: trusting the
+  paired facet's `callset_type`, which says what the calls are, not what the reads are.
+- The coverage facet is paired by the caller and used only on its own build. Rejected: placing it on
+  the facet's build, which would read GRCh37 coordinates against GRCh38 regions.
+
+**Left:** XXX, XYY and the other classes need a copy count past two, which the bands above do not
+read (a Y ratio near 1.0 still reads as one Y present). An array's female Y probes are no-calls, which may be the absence signal
 arrays have and genomes lack. Arrays (no `gt`
 before RM3, no depth) and exomes answer unknown; an array's own lines (female Y probes no-calls,
 AncestryDNA's doubled X letters) are not built. Liftovers of one callset are not yet weighed as one

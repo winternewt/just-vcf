@@ -241,6 +241,21 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   16,569 bases), so an array labelled T2T-CHM13 keeps MT unread. Value changes on files that already
   load; no column changes.
 
+- `sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM269 with RM278): the
+  median read depth over non-PAR X and the X-degenerate Y against chr20 is a third X line and a Y line
+  that can show a Y absent, so `XX` and `XO` are now named where the lines agree. Without coverage
+  nothing changes; the result gains a nullable `coverage` field and two reasons
+  (`coverage_no_build`, `coverage_build_mismatch`, `coverage_uneven` for an exome-shaped depth).
+
+- Coverage as a facet (RM278): `read_coverage` reads mosdepth's per-base, regions, quantized and
+  summary outputs and `samtools depth` / `samtools coverage` into a `Coverage` (a `CoverageFacet` and
+  a lazy `intervals` frame of depth mean, bounds and described bases per interval);
+  `alignment_coverage` runs polars-bio's `depth()` over a BAM or CRAM and folds its per-base depth
+  into 1,000-base windows while it streams (13.3 GB peak, 12.7 minutes on a 27 GB BAM);
+  `callable_sites` and `callable_at` say per position whether the reads reached a `min_depth`, `True`, `False` or unknown with a reason. A headerless
+  three-column file that could be a BED3 is refused unless `kind=` states it. Nothing in `facets`,
+  `calls` or `blocks` changes, so `SCHEMA_VERSION` stays (docs/SCHEMA.md, "Coverage facets").
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

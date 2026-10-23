@@ -1287,7 +1287,7 @@ null is VCF's "filters not applied"):
 It answers `x_copies` (`one`, `two_or_more`) and `y_present` separately, so a facet whose Y line is
 unusable still says how many X copies it holds, and `inferred_karyotypic_sex`, a GA4GH Phenopackets
 `KaryotypicSex` value (charter invariant 2: the vocabulary is the standard's, the field is
-just-vcf's, since Phenopackets has no place for an inference). Only `XY`, `XXY` and
+just-vcf's, since Phenopackets has no place for an inference). From calls alone only `XY`, `XXY` and
 `UNKNOWN_KARYOTYPE` are estimated, the last always with a reason: `y_present` is `True` or unknown,
 never `False`, because depth at called sites cannot show a Y absent (a man's GATK genome read below the
 present band, close to the two-X range), so `XX` and `XO` wait for a coverage facet. The PAR bounds and the X-degenerate
@@ -1346,6 +1346,92 @@ a stored block table, which every load would pay for and every change to an alle
 - **Order**: by the set's first row in `calls`, then kind, set name and haplotype.
 - An IRI is not an Allele to vrs-python 2.3: a block whose members are written as `ga4gh:VA.…` strings
   digests to another id there. Resolve the members to Alleles before identifying it again.
+
+never `False` from the calls, because depth at called sites cannot show a Y absent (a man's GATK genome
+read below the present band, close to the two-X range).
+
+`sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM278) of the same person and
+build, paired by the caller. Its `coverage` field (`CoverageRatios`) holds the length-weighted median
+read depth over non-PAR X, over the X-degenerate Y and over chr20 (zero-depth intervals left out on
+chr20 and X, where they are assembly gaps; kept on the Y, where zero is the signal), from intervals
+wholly inside each region and described at every base, and the two ratios. It is a third X line,
+which must agree with the other two, and a second Y line that can show a Y absent: `y_present = False`,
+which names `XX` (two X) and `XO` (one X). Coverage showing no Y where the calls' depth shows one is
+`lines_disagree`. A coverage facet without a build, or on another one, is set aside with
+`coverage.reason` (`coverage_no_build`, `coverage_build_mismatch`), and the answer is the calls' alone. So is a coverage facet whose chr20 depth is too uneven for a whole genome (`coverage_uneven`: under 75% of its bases within half to twice the median, an exome's or a panel's shape).
+The field defaults to null, so nothing changes without coverage. The PAR bounds and the X-degenerate
+Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
+unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
+
+## Coverage facets: read depth beside the frames (RM278)
+
+A coverage facet says how deep the reads were, interval by interval: what was callable (charter, "a
+facet too"). `read_coverage(path)` reads a depth tool's output; `alignment_coverage(path)` runs
+polars-bio's `depth()` over a BAM or CRAM, the substrate's own alignment processing, used as is. Both
+return a `Coverage`: a `CoverageFacet` model and a lazy `intervals` frame. It is not a fourth frame of
+`Loaded` and changes no column of the three, so `SCHEMA_VERSION` stays.
+
+`intervals` (`COVERAGE_INTERVALS`), sorted by contig rank, `pos`, `end_pos`:
+
+| Column | Meaning |
+|---|---|
+| `chrom` | canonical (Decision 7) |
+| `pos`, `end_pos` | 1-based, inclusive, like `calls` and `blocks`. A BED's `start` is `pos - 1`; `samtools depth` and `samtools coverage` positions are taken as written |
+| `depth_mean` | mean depth over the interval's described bases; null for a quantized bin |
+| `depth_min`, `depth_max` | the lowest and highest depth at any described base. Null where the source bounds nothing (a regions mean); `depth_max` null for an open bin (`4:inf`) |
+| `bases` | how many of the interval's bases the source described; fewer than its length means a window only partly described |
+| `label` | a quantized bin's or a named region's label, verbatim |
+
+`CoverageFacet`: `facet_id` (a digest of the source, the format, the options and `COVERAGE_VERSION`),
+`format_id` (`per_base_bed`, `regions_bed`, `quantized_bed`, `mosdepth_summary`, `samtools_depth`,
+`samtools_coverage`, `alignment_depth`: named by shape, since mosdepth's per-base BED and bedtools'
+`genomecov -bg` are one shape), `source_path`, `source_sha256`, `assembly_label` and its basis,
+`contig_lengths`, `resolution` (`base`, `window`, `bin`, `region`), `window`, `options` (the read
+filters `depth()` ran with), `zero_filled`, `dropped_fields`, `warnings`. just-vcf's own shape
+(charter 2): GA4GH has no coverage model.
+
+Rules:
+
+- **A position no interval covers is unknown, never zero.** A file may be a region cut, and `samtools
+  depth` leaves zero-depth bases out unless run with `-a`. The exception is `alignment_depth`, whose
+  BAM header names every contig: its windows tile them and an uncovered base is zero
+  (`zero_filled = True`).
+- **Per-base sources become windows while they stream** (`window`, default 1,000): the folded sums,
+  bounds and described bases are exact, and a whole genome is about 3.1 million rows whatever its depth.
+  `window=None` keeps every source row, read whole, for small files. Regions, bins and summaries keep
+  their own intervals.
+- **The kind is read from the content**, compression from the magic bytes. A `samtools depth` with
+  several depth columns is refused (one alignment file per facet), as are mosdepth's thresholds file and
+  anything whose rows are not positions. A headerless three-column file whose third column always
+  exceeds the second is refused too: a BED3 of intervals and a `samtools depth` near a contig's start
+  (chrM, thousands deep) look the same. `kind=` states the format where the content cannot.
+- **The build** is stated by the caller, or inferred from contig lengths where the source gives them
+  (an alignment header, mosdepth's summary). Otherwise it is null.
+- **An alignment file is not hashed**: `source_sha256` is null and `facet_id` digests its header, its
+  index and its size. Rejected: the sha256 of the bytes, which would read a 30x BAM a second time over
+  the network for a name.
+- **polars-bio 0.36 writes depth as Int16 by a wrapping cast** from a 32-bit count. A negative depth is
+  left out of its window (`bases` drops) and counted in a warning; a depth past 65,535 wraps to a small
+  positive value that cannot be told apart.
+
+**Callable.** `callable_sites(coverage, sites, min_depth=…)` adds `callable` and `callable_reason` to a
+frame of `chrom, pos`; `callable_at` asks for one position and returns a `Callability` (truthy only
+when callable). `True` when the covering interval's `depth_min` reaches `min_depth` and every base was
+described; `False` when its `depth_max` is under it, likewise; otherwise null with a reason:
+`no_interval`, `no_bounds` (a mean or a renamed bin bounds no base), `straddles`, `partly_described`.
+`min_depth` has no default: what depth makes a base callable is the caller's choice. It is evidence
+beside `absence_means` (Decision 4) and changes no answer `absence_is_reference` gives.
+
+Rejected, each with its cost:
+
+- A fourth frame on `Loaded`, filled by `load`: changes the load contract, the sniff registry and the
+  cache spill of every format, for evidence that belongs to an alignment, not to a callset. It can
+  move there when a person-level layer pairs facets.
+- Coverage rows in `blocks`: a block is a caller's reference or no-call statement; reads reaching a
+  base are not a call, and `absence_means = blocks` would then read depth as reference.
+- Keeping `depth()`'s run-length blocks as they come: 498 million runs on a 27 GB BAM (RM278), where
+  windows with exact bounds answer the same questions. `alignment_coverage` reads `depth()`'s
+  per-base mode, which peaks lower than its block mode (docs/ROADMAP.md RM278).
 
 ## The cache under the lazy frames (RM268)
 
@@ -1562,6 +1648,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   codes with the site's sequences (`source_gt` keeps them). Values change on array facets with such
   rows when the manifests are configured; without them nothing changes but the warning's wording.
   `RESOLVE_VERSION` 5.
+
+- **No version change** (2026-10-23, RM269 with coverage): `sex_chromosome_evidence` takes an
+  optional coverage facet and its result a nullable `coverage` field; it may now answer `XX` and `XO`.
+  Not stored, so no frame changes.
+
+- **No version change** (2026-10-23, RM278 coverage facets): no column of `facets`, `calls` or
+  `blocks` changes. `read_coverage`, `alignment_coverage` and `callable_sites` return their own
+  `Coverage` shape beside the frames ("Coverage facets", above).
 
 - **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
   (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from

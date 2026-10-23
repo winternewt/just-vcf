@@ -4,6 +4,18 @@ from importlib.metadata import version
 
 from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
 from just_vcf.callset import absence_is_reference
+from just_vcf.coverage import (
+    Callability,
+    Coverage,
+    CoverageFacet,
+    CoverageFormat,
+    Resolution,
+    UnsupportedCoverageError,
+    alignment_coverage,
+    callable_at,
+    callable_sites,
+    read_coverage,
+)
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.links import link_disagreements
@@ -72,6 +84,7 @@ __all__ = [
     "BlockKind",
     "CacheClearReport",
     "CacheEntryInfo",
+    "Callability",
     "CallsetType",
     "ChipAbsence",
     "ChipBasis",
@@ -79,6 +92,9 @@ __all__ = [
     "ContentFilter",
     "ContentFilterBasis",
     "ContigNames",
+    "Coverage",
+    "CoverageFacet",
+    "CoverageFormat",
     "DamagedBgzfError",
     "Dimension",
     "Lifted",
@@ -103,6 +119,7 @@ __all__ = [
     "Relatedness",
     "RelationBand",
     "SameSubjectCheck",
+    "Resolution",
     "SexChromosomeEvidence",
     "SitePanel",
     "Sniffed",
@@ -119,6 +136,7 @@ __all__ = [
     "SubjectError",
     "TableLayoutError",
     "UnsortedRowsError",
+    "UnsupportedCoverageError",
     "UnsupportedFormatError",
     "UnwritableRowsError",
     "VariantClass",
@@ -129,6 +147,9 @@ __all__ = [
     "absence_is_reference",
     "chip_absence",
     "cis_phased_blocks",
+    "alignment_coverage",
+    "callable_at",
+    "callable_sites",
     "clear_cache",
     "learn_probe_sets",
     "liftover",
@@ -143,6 +164,7 @@ __all__ = [
     "pairwise_relatedness",
     "read_chain",
     "read_pedigree",
+    "read_coverage",
     "reference_dir",
     "rejoin_split",
     "relatedness",

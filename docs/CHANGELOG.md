@@ -81,6 +81,25 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   says so. A value change on array facets with I/D rows when the manifests are configured. Tests see
   `JUST_VCF_MANIFESTS_DIR` empty; the opt-in manifest test takes the new `manifests_dir` fixture.
 
+- A GRCh37 or GRCh38 scaffold now meets the reference store under any name NCBI's assembly reports
+  give it (F19): UCSC's `chr1_KI270706v1_random`, GenBank's and Ensembl's `KI270706.1`, RefSeq's
+  `NT_187361.1`, GRCh37's `chr4_gl000194_random`. `ReferenceStore.contigs_by_chrom` lists a contig
+  under its report names only where its length is the report's and the collection holds no contig of
+  that name; stated lengths and chain sizes are checked against it as before. `resolve_ref`,
+  `normalize`, `mint_vrs_ids` and `liftover`'s target contigs all go through it, and `resolve_ref`
+  says how many rows it read that way. `chrom` keeps the source's spelling. Values change on files
+  that already load: such rows now get `ref`, alignment, VRS ids and lifts. `RESOLVE_VERSION` 5,
+  `NORMALIZE_VERSION` 6 and `LIFT_VERSION` 3 (derived `facet_id`s change), `MINT_VERSION` 3. Measured:
+  a PGP-HMS GRCh38 VCF goes from 44,594 rows unread to 0; GIAB HG002 lifted CHM13 → GRCh38 from
+  75,001 `target_contig_unmatched` to 40,099 (all on `_fix` patches, which the Ensembl store lacks).
+
+- GRCh37's and GRCh38's assembled-molecule accessions map to canonical `chrom`, as T2T-CHM13's do
+  (`CM000663.2`, `NC_000001.11` → `1`; `J01415.2`, `NC_012920.1` → `MT`), from NCBI's GRCh37.p13 and
+  GRCh38.p14 assembly reports, now carried in `assets/` and derived into the package table
+  `contig_names.tsv` (`just_vcf.contig_names`, F19). A header named by accession is labelled with its
+  assembly. Values change on files that already load: such a file's `chrom` and `contig_map` now say
+  `1`…`MT` instead of the accession.
+
 - Schema 0.0.12 (RM273): `facets.subject`; `Person.of` groups one subject's facets and checks the claim.
 
 - `Person.of(*loaded, check=...)` and `people(*loaded, check=...)` group facets by the subject the

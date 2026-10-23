@@ -56,13 +56,13 @@ from just_vcf.liftover import RELATION as LIFT_RELATION
 from just_vcf.links import NORMALIZED, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore
-from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, RefCheck, SplitSignal, canonical_chrom, canonical_order, empty
+from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, RefCheck, SplitSignal, canonical_order, empty
 
 logger = logging.getLogger(__name__)
 
-NORMALIZE_VERSION = 6
+NORMALIZE_VERSION = 7
 """Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits (6: RM282's
-per-ALT SV columns split with their ALT, the intervals of a moved row cleared)."""
+per-ALT SV columns split with their ALT, the intervals of a moved row cleared; 7: F19's scaffold aliases)."""
 
 RELATION = NORMALIZED
 """The derived facet's `relation`."""
@@ -158,11 +158,9 @@ def _derived_id(parent_id: str, digest: str) -> str:
 
 
 def _contigs_by_chrom(store: ReferenceStore, digest: str) -> dict[str, Contig]:
-    """The collection's contigs by canonical name; a name the collection holds twice is left out."""
-    found: dict[str, list[Contig]] = {}
-    for contig in store.contigs(digest):
-        found.setdefault(canonical_chrom(contig.name), []).append(contig)
-    return {chrom: matches[0] for chrom, matches in found.items() if len(matches) == 1}
+    """The collection's contigs by the names `resolve_ref` matched them under (`ReferenceStore.contigs_by_chrom`,
+    a scaffold's report names included, F19); a name the collection holds twice is left out."""
+    return {chrom: matches[0] for chrom, matches in store.contigs_by_chrom(digest).items() if len(matches) == 1}
 
 
 def _normalize_contig(

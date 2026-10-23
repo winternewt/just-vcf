@@ -220,12 +220,11 @@ The 75,001 are a finding: 34,178 of the chain's 856,832 blocks target UCSC's sca
 (`chr1_KI270706v1_random`, `chrUn_…`, and `_fix` patches), which the Ensembl GRCh38 primary assembly
 names `KI270706.1` or does not hold (patches). The rows are counted, not lost silently, but they cannot
 lift onto an Ensembl-named GRCh38 store. A UCSC↔GenBank scaffold alias table would fix the first kind.
+It does since 2026-10-23 (F19, docs/PREVIOUS_ISSUES.md): 40,099 left, all on `_fix` patches.
 
 **Left:**
 - Calibrating the karyotype thresholds on T2T callsets of known karyotype with FORMAT DP (the HG002
   benchmark has none); then `ESTIMATE_BUILDS` takes T2T-CHM13.
-- GRCh37's and GRCh38's accessions (`NC_000001.11`, `CM000663.2`…) are not aliased yet, and UCSC
-  scaffold names do not meet Ensembl's (above).
 - Making store-chm13 the default test store, or adding CHM13 to `store`, is the lead's call.
 
 ## RM1 — Final shape and plan
@@ -418,7 +417,9 @@ of 83 rows; the rest need the site's alleles, F17. Checked 2026-10-23: CGI's nat
 write indels without the anchor base, as the empty allele `""`. A CGI deletion's REF is read and
 `normalize` anchors it; a CGI or Genos insertion point's anchor base is not read, and neither is REF
 for Genos's multi-base rows, whose span the file states, so `normalize` cannot reach them yet); emitting
-reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither
+reference-supported positions; an opt-in test against a real assembly. UCSC's scaffold names meet
+Ensembl's accessions since 2026-10-23, through NCBI's assembly reports rather than the accession inside
+the name (F19, docs/PREVIOUS_ISSUES.md). A VCF with neither
 `##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array
 without a stated build has it inferred from its rows (F9, below).
 

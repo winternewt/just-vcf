@@ -133,7 +133,11 @@ same calls. A facet already read is refused rather than read again.
   (below).
 
 **Matching the reference to the facet.** Per contig the calls use, read through `canonical_chrom` on
-both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X):
+both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X). A GRCh37 or GRCh38 scaffold
+also meets the reference under the other names NCBI's assembly reports give it (UCSC's
+`chr1_KI270706v1_random`, GenBank's and Ensembl's `KI270706.1`, RefSeq's `NT_187361.1`; F19,
+`ReferenceStore.contigs_by_chrom`), only where the reference contig's length is the report's and the
+reference holds no contig of that name itself; the row keeps its source spelling in `chrom`:
 
 - the facet stated the contig's length (`header_contigs`): the reference's length must equal it, and
   its md5 too where the header gives one;
@@ -750,7 +754,7 @@ result beside the facet, not a stored column. It takes a facet `resolve_ref` has
 holding that collection and the target.
 
 1. **The chain is checked against both assemblies.** Each chain header states its contig's size on
-   both sides. Through `canonical_chrom`, the source sizes must equal the collection the parent's REF
+   both sides. Through `canonical_chrom` (and a scaffold's report names, as for REF above), the source sizes must equal the collection the parent's REF
    was read from and the target sizes the target collection. A primary contig (1-22, X, Y) that differs
    refuses the lift (`ReferenceMismatchError`: the chain is for another assembly); any other contig that
    differs leaves its rows unlifted. So UCSC's hg38ToHg19 chain lifts no MT row into GRCh37: its chrM is
@@ -939,7 +943,7 @@ same rule as the package: a new nullable column is minor, and a rename or retype
 | Option | Cost |
 |---|---|
 | A. Verbatim per source (`chr1`, `1`, `23`) | Every cross-facet join has to know every spelling |
-| **B. One canonical spelling in `chrom`, the mapping recorded per facet in `contig_map`** | A mapping table to maintain. Canonical: `1`–`22`, `X`, `Y`, `MT`. `chrM`/`M`/`MT` are mapped explicitly, never with a `^chr` strip. Array codes `23`→`X`, `24`→`Y`, `26`→`MT`. T2T-CHM13v2.0's GenBank and RefSeq accessions (`CP068277.2`→`1`, `NC_060948.1`→`Y`, `CP068254.1`→`MT`; RM286) map by the NCBI assembly report, versions verbatim. Other contigs (alts, decoys, `chrUn_*`, GRCh37/38 accessions so far) keep their source name |
+| **B. One canonical spelling in `chrom`, the mapping recorded per facet in `contig_map`** | A mapping table to maintain. Canonical: `1`–`22`, `X`, `Y`, `MT`. `chrM`/`M`/`MT` are mapped explicitly, never with a `^chr` strip. Array codes `23`→`X`, `24`→`Y`, `26`→`MT`. T2T-CHM13v2.0's GenBank and RefSeq accessions (`CP068277.2`→`1`, `NC_060948.1`→`Y`, `CP068254.1`→`MT`; RM286), and GRCh37.p13's and GRCh38.p14's assembled molecules' (`CM000663.1`, `NC_000001.11`→`1`; F19) map by the NCBI assembly reports, versions verbatim. Other contigs (alts, decoys, `chrUn_*`, scaffolds by any name) keep their source name |
 | C. The seqcol's own names | Needs the seqcol at load time, and it is not always known then |
 
 **Recommendation: B.** Array code `25` (the X pseudo-autosomal region) is kept as its own contig, `XY`

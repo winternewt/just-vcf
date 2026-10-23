@@ -7,7 +7,9 @@ short:
 
 1. **The chain is checked against both assemblies first.** A chain header states each contig's size
    on both sides (`tSize`, `qSize`). The source sizes must equal the collection the parent's REF was
-   read from, the target sizes the target collection, contig by contig through `canonical_chrom`. A
+   read from, the target sizes the target collection, contig by contig through `canonical_chrom` and,
+   for a GRCh37/38 scaffold, the names NCBI's assembly reports give it (`ReferenceStore.contigs_by_chrom`,
+   F19: the chain's `chr1_KI270706v1_random` meets the store's `KI270706.1` where the sizes agree). A
    primary contig (1-22, X, Y) that differs refuses the lift: the chain is for another assembly. Any
    other contig that differs leaves its rows unlifted, counted (UCSC hg19's chrM, 16,571 bases,
    against GRCh37's rCRS MT).
@@ -58,7 +60,7 @@ from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceM
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 3
+LIFT_VERSION = 4
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits."""
 
 RELATION = LIFTOVER_TO

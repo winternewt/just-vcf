@@ -25,7 +25,7 @@ REJOIN_VERSION = 1
 RELATION = SPLIT_REJOINED
 """The derived facet's `relation`."""
 
-_KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "dp", "qual")
+_KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "dp", "qual")
 """Columns a joined row keeps only when every row of its group agrees; otherwise null (not known)."""
 
 

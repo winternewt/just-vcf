@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- VCF 4.4+ phase-set lists are read and written (layer 8). The VCF loader reads FORMAT `PSL` into
+  `phase_sets`/`phase_set_kinds` (kind `psl`) per allele, and `PSO` and `PSQ` into two new nullable
+  `calls` columns, `phase_set_ordinals` and `phase_set_qualities` (SCHEMA_VERSION not bumped here). A
+  PSL name on a VCF 4.4+ record's first slot makes that slot phased, which P4 otherwise leaves
+  unknown. polars-bio refuses `Number=P` (P10), so such a header is read through the rewritten copy
+  declaring `Number=.` (`REWRITE_VERSION` 9); before this, a file with PSL loaded with PSL dropped.
+  `write_vcf` writes VCF 4.5 when a row holds a PSL set (PSL, PSO, PSQ, a leading GT phase indicator
+  where it differs from the implicit one, CN declared Float), and 4.3 otherwise, as before; a PSL facet
+  round-trips through `load`, and htslib reads it. `cis_phased_blocks` keeps a PSL record's
+  implicit-set slots out of its PSL sets.
 - In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
   probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
   (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or

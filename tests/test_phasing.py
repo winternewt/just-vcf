@@ -318,3 +318,56 @@ def test_a_phased_pgp_hms_facet_equals_vrs_python(pgp_participants: Path, test_r
             assert row["cpb_id"] == oracle_block_id(list(members[slot].values()))
             assert len(row["members"]) == len(members[slot]) > 100
     assert blocks["cpb_id"].null_count() < 2
+
+
+PslRecord = tuple[str, int, str, str, str, str]
+"""`(chrom, pos, ref, alts, GT text, PSL text)` of a VCF 4.5 record."""
+
+
+def psl_vcf(tmp_path: Path, records: list[PslRecord], name: str = "psl.vcf") -> Path:
+    meta = ["##fileformat=VCFv4.5", *(f"##contig=<ID={c},length={n}>" for c, n in CONTIGS.items())]
+    meta += [
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+        '##FORMAT=<ID=PSL,Number=P,Type=String,Description="Phase set list">',
+    ]
+    header = "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "S1"])
+    body = [f"{c}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\tGT:PSL\t{gt}:{names}" for c, p, r, a, gt, names in records]
+    path = tmp_path / name
+    path.write_text("\n".join([*meta, header, *body]) + "\n")
+    return path
+
+
+def psl(chrom: str, pos: int, gt: str, names: str) -> PslRecord:
+    return (chrom, pos, base(chrom, pos), other(base(chrom, pos)), gt, names)
+
+
+def test_a_loaded_psl_facet_equals_vrs_python(tmp_path: Path, store: ReferenceStore) -> None:
+    """PSL sets read by the VCF loader, not rewritten by hand: each named slot is in its set wherever
+    the record sits, a first slot named by PSL is phased (a VCF 4.5 unphased allele has `.`), and a
+    phased slot with `.` is in the chromosome's implicit set. The oracle reads the GT and PSL text."""
+    records = [
+        psl("1", 10, "|1/0", "a,."),  # slot 0 in `a`; slot 1 unphased
+        psl("1", 20, "1|1", ".,a"),  # slot 0 says nothing; slot 1 in `a`
+        psl("1", 30, "1|1", "b,."),  # slot 1 phased with `.`: the implicit set
+        psl("1", 40, "/1|1", ".,b"),
+        psl("2", 50, "1|1", "b,a"),  # both sets cross to chromosome 2
+    ]
+    loaded = minted(psl_vcf(tmp_path, records), store)
+    blocks = cis_phased_blocks(loaded).collect()
+
+    proxy, sq = StoreProxy(store), accessions(store)
+    expected: dict[str, dict[str, object]] = defaultdict(dict)
+    for chrom, pos, ref, alt, gt, names in records:
+        for index, name in zip(re.split(r"[|/]", gt.lstrip("|/")), names.split(",")):
+            if name != "." and index != "0":
+                vrs = oracle_allele(proxy, sq[chrom], pos, ref, alt)
+                expected[name][ga4gh_identify(vrs)] = vrs
+    got = {row["phase_set"]: row for row in blocks.filter(pl.col("phase_set_kind") == "psl").iter_rows(named=True)}
+    assert set(got) == set(expected) == {"a", "b"}
+    for name, alleles in expected.items():
+        assert got[name]["cpb_id"] == oracle_block_id(list(alleles.values())), name
+        assert got[name]["chrom"] is None and got[name]["haplotype"] is None
+    assert got["a"]["sites"] == got["b"]["sites"] == 3
+    implicit = blocks.filter(pl.col("phase_set_kind") == "ps").rows(named=True)
+    assert [(r["chrom"], r["phase_set"], r["haplotype"], r["sites"], r["withheld"]) for r in implicit] == [("1", None, 1, 1, "too_few_members")]
+

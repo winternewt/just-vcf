@@ -14,6 +14,8 @@ What a block is:
 - **A PSL set** is keyed `(facet_id, name)`, `chrom` null: VCF 4.5 ties a PSL name to one haplotype
   and lets it span chromosomes, so the set itself is one block, `haplotype` null, whatever slot each
   allele sits in.
+- **A PSL record's slots go by their kind**: its named slots are in their PSL sets, and a phased
+  slot with PSL `.` (kind `ps`) is in the chromosome's implicit set, as a phased slot with no PS is.
 - **The members** are the ids in `vrs_allele_ids` of the alleles the haplotype carries: by default
   the non-reference ones only. A `0` on a record split one row per ALT, or under an overlapping
   deletion, means "not this ALT", not the reference base, so a REF member would state something the
@@ -88,10 +90,10 @@ def cis_phased_blocks(loaded: Loaded, *, reference_alleles: bool = False) -> pl.
         .select("_order", "facet_id", "chrom", "gt", "gt_alleles", "phased", "phase_sets", "phase_set_kinds", "vrs_allele_ids", "vrs_withheld")
     )
     is_ps = pl.col("phase_set_kinds").list.eval(pl.element() == PhaseSetKind.PS.value).list.any().fill_null(False)
-    # A PS is one value per record, on each of its phased slots; null for the implicit set.
-    row_ps = pl.col("phase_sets").list.drop_nulls().list.first()
+    # A PS is one value per record, on each of its PS-kind slots; null for the implicit set. A PSL
+    # record's named slots are PSL sets, so only its `ps` slots (the implicit set) are read here.
     slots = (
-        rows.with_columns(is_ps.alias("_is_ps"), row_ps.alias("_row_ps"), pl.int_ranges(0, pl.col("phased").list.len(), dtype=pl.UInt32).alias("_h"))
+        rows.with_columns(is_ps.alias("_is_ps"), pl.int_ranges(0, pl.col("phased").list.len(), dtype=pl.UInt32).alias("_h"))
         .explode("_h", empty_as_null=False)
         .with_columns(
             pl.col("phased").list.get(pl.col("_h")).alias("_phased"),
@@ -104,6 +106,7 @@ def cis_phased_blocks(loaded: Loaded, *, reference_alleles: bool = False) -> pl.
             pl.col("vrs_allele_ids").list.get(pl.col("_index").cast(pl.Int64), null_on_oob=True).alias("_id"),
             pl.col("vrs_withheld").list.get(pl.col("_index").cast(pl.Int64), null_on_oob=True).alias("_why"),
         )
+        .with_columns(pl.col("_set").filter(pl.col("_kind") == PhaseSetKind.PS.value).drop_nulls().first().over("_order").alias("_row_ps"))
     )
     in_set = pl.col("_phased").fill_null(False)
     skipped = (pl.col("_allele") == "*") | ((pl.col("_index") == 0) & pl.lit(not reference_alleles))
@@ -126,13 +129,15 @@ def cis_phased_blocks(loaded: Loaded, *, reference_alleles: bool = False) -> pl.
     )
     slots = slots.with_columns(member.alias("_member"), problem.alias("_problem"), in_set.alias("_in_set"))
 
-    # A PS set: every slot of its records but the unphased ones, one block per slot.
-    ps = slots.filter(pl.col("_is_ps") & (pl.col("_phased").is_null() | pl.col("_phased"))).select(
+    # A PS set: every slot of its records but the unphased ones and those in a PSL set, one block per slot.
+    in_ps = (pl.col("_kind") == PhaseSetKind.PS.value) | (pl.col("_kind").is_null() & pl.col("_phased").is_null())
+    ps = slots.filter(pl.col("_is_ps") & (pl.col("_phased").is_null() | pl.col("_phased")) & in_ps.fill_null(False)).select(
         "_order", "facet_id", "chrom", pl.lit(PhaseSetKind.PS.value).alias("_kind"), pl.col("_row_ps").alias("phase_set"), pl.col("_h").alias("haplotype"),
         "_member", "_problem", "_in_set", "_id",
     )
-    # A PSL set: the phased slots that name it, wherever they sit, one block per set.
-    psl = slots.filter(in_set & (pl.col("_kind") == PhaseSetKind.PSL.value)).select(
+    # A PSL set: the slots that name it, wherever they sit, one block per set. A named slot whose phase
+    # is unknown stays in it, to withhold it.
+    psl = slots.filter((pl.col("_phased").is_null() | in_set) & (pl.col("_kind") == PhaseSetKind.PSL.value)).select(
         "_order", "facet_id", pl.lit(None, dtype=pl.String).alias("chrom"), "_kind", pl.col("_set").alias("phase_set"), pl.lit(None, dtype=pl.UInt32).alias("haplotype"),
         "_member", "_problem", "_in_set", "_id",
     )

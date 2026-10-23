@@ -233,6 +233,8 @@ CALLS = pl.Schema(
         "phased": pl.List(pl.Boolean),
         "phase_sets": pl.List(pl.String),
         "phase_set_kinds": pl.List(enum_dtype(PhaseSetKind)),
+        "phase_set_ordinals": pl.List(pl.UInt32),
+        "phase_set_qualities": pl.List(pl.UInt16),
         "gl": pl.List(pl.Float32),
         "gp": pl.List(pl.Float32),
         "dosage": pl.Float32,

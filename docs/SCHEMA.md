@@ -289,6 +289,27 @@ its own phase set. So:
 - A phased haplotype with no PS or PSL has `phased = true` and `phase_set` null (kind `ps`). It belongs
   to its chromosome's one implicit set (VCF 4.5: "All phased genotypes that do not contain a PS
   subfield are assumed to belong to the same phased set"), key `(facet_id, chrom, ps, null)`.
+- **How the VCF loader reads PSL** (VCF 4.4+, `Number=P`: one value per allele in GT). On a record
+  whose PSL names a set, each slot is read from its own entry: a phased slot with a name is in that
+  set (kind `psl`); a phased slot with `.` is in the implicit set above (kind `ps`, set null), since it
+  has no PS subfield either; an unphased slot is in none, and a name written there is not read
+  (counted: VCF 4.5 says an unphased allele has `.`). A PSL that is not one value per GT allele
+  withholds the record's phase (`phased` null on every slot, counted), since the set each phased
+  allele is in cannot be read. PS is ignored on a record whose PSL names a set (counted; VCF 4.5
+  forbids both).
+- **The first slot of a VCF 4.4+ record** has `phased` null, because polars-bio drops the leading
+  indicator (P4). A PSL name there says it is phased: VCF 4.5 gives an unphased allele `.`, so the
+  loader reads `phased[0] = true` from the name. Rejected: leaving it null, which withholds every PSL
+  block whose first-slot allele is an ALT (`phase_unknown`), although the file stated the set. A `.`
+  there says nothing (a phased allele may have no name), so it stays null.
+- **PSO and PSQ** are carried beside PSL, on the slots in a PSL set: `phase_set_ordinals` (the
+  traversal order along a derivative chromosome, which VCF 4.5 asks for when a set holds a
+  symbolic SV or a breakend) and `phase_set_qualities` (PSQ, the phasing evidence of each slot,
+  Decision 3). A list that is not one value per PSL entry is dropped and counted. PQ, the PS
+  counterpart of PSQ, is not carried.
+- polars-bio refuses a header that declares `Number=P` (P10), so the loader reads such a file
+  through its rewritten copy with those keys declared `Number=.` (`REWRITE_VERSION` 9), with a warning;
+  the count is checked against GT here.
 
 The VRS CisPhasedBlock is built from `phase_sets` at export, by `cis_phased_blocks` ("CisPhasedBlock
 export" below). It is not stored per row.
@@ -614,6 +635,8 @@ With Decisions 1–5 as recommended:
 | `phased` | `list[bool]` | the source says nothing about phase for the whole row (every array export). Otherwise parallel to `gt_alleles`, with an element null where the source did not say for that haplotype |
 | `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS or PSL value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. Keyed by kind: PS per chromosome, PSL per file (Decision 2) |
 | `phase_set_kinds` | `list[Enum]` | parallel to `phase_sets`: `ps` or `psl`. Null where the haplotype is unphased |
+| `phase_set_ordinals` | `list[u32]` | the row has no PSL set or its PSO gave no value. Parallel to `gt_alleles`: FORMAT `PSO`, the order a haplotype's alleles are met along a derivative chromosome, on the slots in a PSL set; null elsewhere and per `.` (Decision 2) |
+| `phase_set_qualities` | `list[u16]` | the row has no PSL set or its PSQ gave no value. Parallel to `gt_alleles`: FORMAT `PSQ`, the phred quality of each slot's PSL phasing (encoded like PQ), on the slots in a PSL set; null elsewhere, per `.` (unknown quality) and out of 0..65535 |
 | `gl` | `list[f32]` | no likelihoods given |
 | `gp` | `list[f32]` | no posteriors given |
 | `dosage` | `f32` | no dosage given |
@@ -1270,6 +1293,8 @@ a stored block table, which every load would pay for and every change to an alle
   even in a file nobody phased. On one copy (male X outside the PARs, Y, MT) that is true by ploidy, so
   they make a block. Rejected: leaving out haploid rows, which would drop a true statement to guard
   against a caller that writes a two-copy region haploid.
+- **A PSL record's slots are split by kind**: its named slots are in their PSL sets, its `ps` slots
+  (phased, PSL `.`) in the chromosome's implicit set, and only those make the record part of it.
 - **Order**: by the set's first row in `calls`, then kind, set name and haplotype.
 - An IRI is not an Allele to vrs-python 2.3: a block whose members are written as `ga4gh:VA.…` strings
   digests to another id there. Resolve the members to Alleles before identifying it again.
@@ -1345,6 +1370,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **Additive, version not bumped in this change** (2026-10-23, PSL/PSO/PSQ phase sets, layer 8): two
+  nullable `calls` columns, `phase_set_ordinals` and `phase_set_qualities` (Decision 2, "How the VCF
+  loader reads PSL"). A new nullable column is a minor bump by the rule above;
+  `SCHEMA_VERSION` is left as it is on this builder branch for the lead to bump at merge. Values change
+  on VCF 4.4+ files that declare PSL: they loaded with PSL dropped (or not at all, Number=P, P10), and
+  now carry its sets, and `phased[0]` where PSL names the first slot's set.
 
 - **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every

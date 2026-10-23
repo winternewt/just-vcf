@@ -68,11 +68,20 @@ FORMAT_KEYS: dict[str, tuple[str, str]] = {
     "DS": ("A", "Float"),
     "FT": ("1", "String"),
     "PS": ("1", "Integer"),
+    "PSL": ("P", "String"),
+    "PSO": ("P", "Integer"),
+    "PSQ": ("P", "Integer"),
     "LEN": ("1", "Integer"),
     "MIN_DP": ("1", "Integer"),
     "CN": ("1", "Float"),
 }
-"""FORMAT keys the schema carries, with the Number and Type VCF 4.5 reserves for them."""
+"""FORMAT keys the schema carries, with the Number and Type VCF 4.5 reserves for them. `P` (one value
+per allele in GT, VCF 4.4+) is refused by polars-bio's reader (P10), so a copy declares those keys
+`Number=.` (`READ_AS_ANY_NUMBER`)."""
+
+READ_AS_ANY_NUMBER = frozenset({"P"})
+"""FORMAT Numbers polars-bio refuses (P10) that the loader reads through a copy declaring `Number=.`:
+the values are the same lists, and the length is checked against GT here."""
 
 VECTOR_NUMBERS: dict[str, str] = {"AD": "R", "PL": "G", "GL": "G", "GP": "G", "PP": "G"}
 """Carried vectors that are parallel to the alleles (R) or the genotypes (G). A file declaring one of
@@ -139,12 +148,14 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 8
+REWRITE_VERSION = 9
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
 them undeclared, and a structural copy keeps them (RM282); an older copy lacks the declarations,
-and polars-bio panics on a requested key its header does not declare."""
+and polars-bio panics on a requested key its header does not declare.
+9: a FORMAT key declared `Number=P` (PSL, PSO, PSQ) is declared `Number=.` in the copy (P10), and the
+phase-set-list keys are carried, so a structural copy keeps them."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -554,6 +565,21 @@ def caller_parts(header: Header, data: list[bytes]) -> list[Part]:
     return parts
 
 
+def any_number_keys(header: Header) -> list[str]:
+    """FORMAT keys the header declares with a Number polars-bio refuses and the loader reads through a
+    copy declaring `Number=.` (`READ_AS_ANY_NUMBER`, P10). Any such key, carried or not: polars-bio
+    refuses the whole header for one."""
+    return sorted(key for key, number in header.format.items() if number in READ_AS_ANY_NUMBER)
+
+
+def _readable_number(line: str) -> str:
+    """A `##FORMAT` line with a Number polars-bio refuses (`READ_AS_ANY_NUMBER`) declared `Number=.`."""
+    if not line.startswith("##FORMAT=<"):
+        return line
+    numbers = "|".join(re.escape(number) for number in sorted(READ_AS_ANY_NUMBER))
+    return re.sub(rf"(?<=[<,])Number=(?:{numbers})(?=[,>])", "Number=.", line)
+
+
 def unfit_keys(header: Header) -> dict[str, str]:
     """Carried vector keys the header declares with a Number they cannot be read under → that Number."""
     return {
@@ -585,7 +611,14 @@ def readable_path(
     `cache` is the entry (`vcf/<key>`); it is written, or reused, under its lock, with `origin` in its
     manifest (`just_vcf.cache.writing`).
     """
-    as_is = header.format_first and not header.hashed_column_line and not header.resaved and not missing and not structural_only
+    as_is = (
+        header.format_first
+        and not header.hashed_column_line
+        and not header.resaved
+        and not missing
+        and not structural_only
+        and not any_number_keys(header)
+    )
     if layers in ((), ("gzip",), ("bgzf",)) and as_is:
         return path
     with cache_index.writing(cache, cache_index.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION}, origin):
@@ -611,10 +644,11 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
                 if key.groups() in declared:
                     continue
                 declared.add(key.groups())
-            out.write(f"{line}\n".encode())
+            out.write(f"{_readable_number(line)}\n".encode())
         for name in missing:
             namespace, key = name.split("/", 1)
             number = (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key][0]
+            number = "." if number in READ_AS_ANY_NUMBER else number
             kind = declared_type(header, name)
             out.write(
                 f'##{namespace}=<ID={key},Number={number},Type={kind},'
@@ -869,6 +903,7 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
         # can still be retried (P7), rather than when the caller collects the frames.
         pl.col("fmt_GT").null_count().alias("gt_missing"),
         (_gt_body().str.count_matches(r"[/|]").max() + 1).alias("ploidy_max"),
+        *_psl_stats(),
         *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith("_multi_")],
         *[
             (pl.col(f"fmt_{key}").is_not_null() & ~_fits(pl.col(f"fmt_{key}"), key, alts)).sum().alias(f"unfit_{key}")
@@ -1109,7 +1144,8 @@ def to_rows(
     rows = rows.with_columns(
         pl.when(_marker_expr(header)).then(pl.lit(SplitSignal.MARKER.value)).alias("split_signal")
     )
-    rows = _phase_sets(rows)
+    rows = _phase_sets(rows, psl="PSL" in header.format, ploidy=stats.get("ploidy_max") or 1, v44=v44)
+    warnings += psl_warnings(stats)
 
     gp, gp_warning = _gp(header, stats)
     if gp_warning:
@@ -1265,24 +1301,147 @@ def _end_stats(alts: pl.Expr, ref: pl.Expr) -> list[pl.Expr]:
     ]
 
 
-def _phase_sets(rows: pl.LazyFrame) -> pl.LazyFrame:
-    """`phase_sets` and `phase_set_kinds`: the PS value on each phased haplotype, kind `ps`.
+def _psl_names() -> pl.Expr:
+    """FORMAT PSL's names, a null per `.` (and per empty name)."""
+    return pl.col("fmt_PSL").list.eval(pl.when(pl.element().is_in(["", "."])).then(None).otherwise(pl.element()))
 
-    Written without a join, as list arithmetic: a phased haplotype carries `PS + 1`, an unphased one
-    0, which then becomes null; a null PS (the chromosome's implicit set) stays null.
+
+def _psl_present() -> pl.Expr:
+    """True on a record whose PSL names at least one phase set."""
+    return _psl_names().list.eval(pl.element().is_not_null()).list.any().fill_null(False)
+
+
+def _psl_fits() -> pl.Expr:
+    """True where PSL has one value per allele in GT (`Number=P`); a record without GT has no slots."""
+    slots = _gt_body().str.count_matches(r"[/|]") + 1
+    return (pl.col("fmt_PSL").list.len().cast(pl.Int64) == slots.cast(pl.Int64)).fill_null(False)
+
+
+def _psl_stats() -> list[pl.Expr]:
+    """Counts for the warnings about PSL, PSO and PSQ (`scan_stats`)."""
+    present = _psl_present()
+    fits = _psl_fits()
+    # Slots after the first: `/` before the allele is unphased; a PSL name there breaks VCF 4.5's rule.
+    # (Null where the lengths differ: list arithmetic is evaluated on every row, guarded or not.)
+    unphased = pl.when(fits).then(_gt_body().str.extract_all(r"[/|]").list.eval((pl.element() == "/").cast(pl.Int64)))
+    named = pl.when(fits).then(_psl_names().list.slice(1).list.eval(pl.element().is_not_null().cast(pl.Int64)))
+    psq = pl.col("fmt_PSQ").cast(pl.List(pl.Int64), strict=False)
+    pso = pl.col("fmt_PSO").cast(pl.List(pl.Int64), strict=False)
+    return [
+        present.sum().alias("psl_rows"),
+        (present & ~fits).sum().alias("psl_unfit"),
+        (present & fits & pl.col("fmt_PS").is_not_null()).sum().alias("psl_and_ps"),
+        (present & fits & ((unphased * named).list.sum() > 0).fill_null(False)).sum().alias("psl_on_unphased"),
+        (present & fits & (psq.list.len() != pl.col("fmt_PSL").list.len()).fill_null(False)).sum().alias("psq_unfit"),
+        (present & fits & (pso.list.len() != pl.col("fmt_PSL").list.len()).fill_null(False)).sum().alias("pso_unfit"),
+        (present & fits).cast(pl.Int64).mul(
+            psq.list.eval(((pl.element() < 0) | (pl.element() > _BOUNDED["GQ"])).cast(pl.Int64)).list.sum().fill_null(0)
+            + pso.list.eval(((pl.element() < 0) | (pl.element() > 2**32 - 1)).cast(pl.Int64)).list.sum().fill_null(0)
+        ).sum().alias("psl_values_out"),
+    ]
+
+
+def psl_warnings(stats: dict) -> list[str]:
+    """One warning per PSL rule a record broke, with its count."""
+    warnings = []
+    if stats.get("psl_unfit"):
+        warnings.append(
+            f"{stats['psl_unfit']} record(s) whose PSL is not one value per allele in GT (Number=P): their phase is "
+            "withheld (phased null), since the set each phased allele is in cannot be read"
+        )
+    if stats.get("psl_and_ps"):
+        warnings.append(
+            f"{stats['psl_and_ps']} record(s) carry both PS and PSL, which VCF 4.5 forbids: PSL read, PS ignored"
+        )
+    if stats.get("psl_on_unphased"):
+        warnings.append(
+            f"{stats['psl_on_unphased']} record(s) name a PSL phase set on an unphased allele (VCF 4.5 says `.`): "
+            "the name is not read, the allele stays unphased"
+        )
+    for key in ("PSO", "PSQ"):
+        if stats.get(f"{key.lower()}_unfit"):
+            warnings.append(f"{stats[f'{key.lower()}_unfit']} {key} value(s) not one per PSL entry set to null")
+    if stats.get("psl_values_out"):
+        warnings.append(f"{stats['psl_values_out']} PSO or PSQ value(s) out of range (negative, or too large) set to null")
+    return warnings
+
+
+def _phase_sets(rows: pl.LazyFrame, psl: bool = False, ploidy: int = 2, v44: bool = False) -> pl.LazyFrame:
+    """`phase_sets` and `phase_set_kinds`, and from PSL `phase_set_ordinals` and `phase_set_qualities`.
+
+    PS: the PS value on each phased haplotype, kind `ps`. Written without a join, as list arithmetic:
+    a phased haplotype carries `PS + 1`, an unphased one 0, which then becomes null; a null PS (the
+    chromosome's implicit set) stays null.
+
+    PSL (`psl`, the file declares it; VCF 4.4+): on a record whose PSL names a set, each slot is read
+    from its own entry (docs/SCHEMA.md, Decision 2). A phased slot with a name is in that set, kind
+    `psl`, with the PSO and PSQ entries beside it; a phased slot with `.` is in the chromosome's
+    implicit set (kind `ps`, set null: it has no PS subfield either); an unphased slot is in none,
+    and a name there is not read (counted). In a VCF 4.4+ file the first slot's phase is unknown
+    (P4), and a name there is what says it is phased: VCF 4.5 gives an unphased allele `.`. A PSL
+    that is not one value per GT allele withholds the record's phase (counted); PS is ignored where
+    PSL names a set (counted). `ploidy` is the file's largest, the slots written out one by one.
     """
     encoded = pl.col("phased").list.eval(pl.element().cast(pl.Int64)) * (pl.col("fmt_PS").cast(pl.Int64) + 1)
     phased_any = pl.col("phased").list.eval(pl.element().fill_null(False)).list.any()
-    return rows.with_columns(
+    ps_sets = (
         pl.when(phased_any)
         .then(encoded.list.eval(pl.when(pl.element() > 0).then((pl.element() - 1).cast(pl.String)).otherwise(None)))
         .otherwise(None)
-        .alias("phase_sets"),
+    )
+    ps_kinds = (
         pl.when(phased_any)
         .then(pl.col("phased").list.eval(pl.when(pl.element()).then(pl.lit(PhaseSetKind.PS.value)).otherwise(None)))
         .otherwise(None)
-        .alias("phase_set_kinds"),
     )
+    if not psl:
+        return rows.with_columns(
+            ps_sets.alias("phase_sets"),
+            ps_kinds.alias("phase_set_kinds"),
+            pl.lit(None, dtype=pl.List(pl.UInt32)).alias("phase_set_ordinals"),
+            pl.lit(None, dtype=pl.List(pl.UInt16)).alias("phase_set_qualities"),
+        )
+    names = _psl_names()
+    width = pl.col("phased").list.len()
+    pso = pl.col("fmt_PSO").cast(pl.List(pl.Int64), strict=False)
+    psq = pl.col("fmt_PSQ").cast(pl.List(pl.Int64), strict=False)
+    pso = pl.when(pso.list.len() == pl.col("fmt_PSL").list.len()).then(pso)
+    psq = pl.when(psq.list.len() == pl.col("fmt_PSL").list.len()).then(psq)
+    phased, sets, kinds, ordinals, qualities = [], [], [], [], []
+    for slot in range(max(ploidy, 1)):
+        was = pl.col("phased").list.get(slot, null_on_oob=True)
+        name = names.list.get(slot, null_on_oob=True)
+        now = pl.when(was.is_null() & name.is_not_null() & pl.lit(slot == 0 and v44)).then(pl.lit(True)).otherwise(was)
+        named = (now & name.is_not_null()).fill_null(False)
+        phased.append(now)
+        sets.append(pl.when(named).then(name))
+        kinds.append(pl.when(named).then(pl.lit(PhaseSetKind.PSL.value)).when(now.fill_null(False)).then(pl.lit(PhaseSetKind.PS.value)))
+        ordinals.append(pl.when(named).then(pso.list.get(slot, null_on_oob=True)))
+        qualities.append(pl.when(named).then(psq.list.get(slot, null_on_oob=True)))
+
+    def per_slot(values: list[pl.Expr]) -> pl.Expr:
+        return pl.concat_list(values).list.head(width)
+
+    def bounded(values: list[pl.Expr], top: int, dtype: pl.DataType) -> pl.Expr:
+        listed = per_slot(values).list.eval(pl.when((pl.element() >= 0) & (pl.element() <= top)).then(pl.element()).cast(dtype))
+        return pl.when(listed.list.eval(pl.element().is_not_null()).list.any()).then(listed)
+
+    # As for PS: a record with no phased slot has no phase-set lists.
+    read = _psl_present() & _psl_fits()
+    in_some_set = read & per_slot(kinds).list.eval(pl.element().is_not_null()).list.any().fill_null(False)
+    unfit = _psl_present() & ~_psl_fits()
+    return rows.with_columns(
+        pl.when(read)
+        .then(per_slot(phased))
+        .when(unfit)
+        .then(pl.col("phased").list.eval(pl.when(pl.element().is_null()).then(None).otherwise(None).cast(pl.Boolean)))
+        .otherwise(pl.col("phased"))
+        .alias("_phased"),
+        pl.when(in_some_set).then(per_slot(sets)).when(read | unfit).then(None).otherwise(ps_sets).alias("phase_sets"),
+        pl.when(in_some_set).then(per_slot(kinds)).when(read | unfit).then(None).otherwise(ps_kinds).alias("phase_set_kinds"),
+        pl.when(read).then(bounded(ordinals, 2**32 - 1, pl.UInt32)).alias("phase_set_ordinals"),
+        pl.when(read).then(bounded(qualities, _BOUNDED["GQ"], pl.UInt16)).alias("phase_set_qualities"),
+    ).with_columns(pl.col("_phased").alias("phased")).drop("_phased")
 
 
 def _gp(header: Header, stats: dict) -> tuple[pl.Expr, str | None]:

@@ -593,6 +593,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             "key(s) declared with a Type VCF 4.3 reserves otherwise, which polars-bio refuses, not carried: "
             + ", ".join(f"{name} (Type={kind}, 4.3 reserves {vcf.V43_RESERVED_TYPES[name]})" for name, kind in sorted(refused.items()))
         )
+    if any_number := vcf.any_number_keys(header):
+        warnings.append(
+            "FORMAT key(s) declared Number=P, which polars-bio refuses (P10), read through a copy declaring "
+            f"Number=. with each value's count checked against GT: {', '.join(any_number)}"
+        )
     if not header.meta:
         warnings.append(
             "no meta lines: read under a synthesised header (##fileformat=VCFv4.2 and the carried keys the "

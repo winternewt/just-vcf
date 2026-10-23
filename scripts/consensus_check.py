@@ -19,7 +19,9 @@ Two runs per contig: the consensus over every facet, and one without `leave_out`
 `<out>.agreement.tsv` (per source method and variant class: the alleles either side carries, how
 often the consensus's most probable genotype matches the source's), `<out>.calibration.tsv` (the
 held-out facet against the consensus made without it, per confidence bin: the predicted rate of
-disagreement against the observed one), `<out>.support.tsv` (rows per supported / contradicted /
+disagreement against the observed one), `<out>.calibration_detail.tsv` (the same per bin, band of the
+held-out facet's own row, and `rows_from`: which other facets wrote a row at the allele's position),
+`<out>.support.tsv` (rows per supported / contradicted /
 silent count) and `<out>.rates.tsv` (the rates each method was weighted by). Aggregates only: no
 path, sample name or position is written. Autosomes by default.
 
@@ -156,14 +158,25 @@ def main(
         def miss(e: pl.Expr) -> pl.Expr:
             return 1 - (p_map * (1 - e) + (1 - p_map) * e / P)
 
+        # Which other facets wrote a row at the allele's position: the speakers beside a facet whose
+        # absence reads as reference.
+        rowed = []
+        for method, part in parts.items():
+            if method == held:
+                continue
+            at_rows = part.calls.select("chrom", "pos").unique().collect().with_columns(pl.lit(True).alias(f"_row_{method}"))
+            joined = joined.join(at_rows, on=["chrom", "pos"], how="left").with_columns(pl.col(f"_row_{method}").fill_null(False))
+            rowed.append(pl.when(pl.col(f"_row_{method}")).then(pl.lit(method)))
         calibration.append(
             joined.with_columns(
                 pl.col("confidence").cut(BINS[1:-1], left_closed=True).alias("bin"),
+                band.alias("held_band"),
+                pl.concat_str(rowed, separator="+", ignore_nulls=True).alias("rows_from"),
                 miss(pl.col("_e_held")).alias("_predicted"),
                 miss(pl.lit(e_snv)).alias("_predicted_flat"),
                 (1 - p_map).alias("_consensus_error"),
             )
-            .group_by("bin")
+            .group_by("bin", "held_band", "rows_from")
             .agg(
                 pl.len().alias("alleles"),
                 (pl.col("agreement") == "mismatch").sum().alias("mismatch"),
@@ -181,21 +194,13 @@ def main(
         .with_columns((pl.col("match") / (pl.col("match") + pl.col("mismatch") + pl.col("ploidy_differs"))).alias("agreement_share"))
         .sort("method", "variant_class")
     )  # fmt: skip
-    cal = pl.concat(calibration).with_columns(pl.col("bin").cast(pl.String)).group_by("bin").agg(pl.exclude("bin").sum()).sort("bin")
-    cal = cal.with_columns(
-        (pl.col("mismatch") / pl.col("alleles")).alias("observed"),
-        (pl.col("predicted_sum") / pl.col("alleles")).alias("predicted"),
-        (pl.col("predicted_flat_sum") / pl.col("alleles")).alias("predicted_flat"),
-        (pl.col("consensus_error_sum") / pl.col("alleles")).alias("consensus_error"),
-        (pl.col("held_error_sum") / pl.col("alleles")).alias("held_error"),
-        (pl.col("speaking_sum") / pl.col("alleles")).alias("speaking_mean"),
-    )
-    intervals = [wilson_interval(int(m), int(n)) for m, n in zip(cal["mismatch"], cal["alleles"])]
-    cal = cal.with_columns(pl.Series("observed_ci_low", [i[0] for i in intervals]), pl.Series("observed_ci_high", [i[1] for i in intervals]))
+    detail = pl.concat(calibration).with_columns(pl.col("bin").cast(pl.String))
+    cal = _rated(detail, ["bin"])
     sp = pl.concat(support).group_by(pl.exclude("len")).agg(pl.col("len").sum()).sort(pl.exclude("len"))
     out.parent.mkdir(parents=True, exist_ok=True)
     ag.write_csv(out.with_name(out.name + ".agreement.tsv"), separator="\t")
     cal.write_csv(out.with_name(out.name + ".calibration.tsv"), separator="\t")
+    _rated(detail, ["bin", "held_band", "rows_from"]).write_csv(out.with_name(out.name + ".calibration_detail.tsv"), separator="\t")
     sp.with_columns(pl.col("variant_class").cast(pl.String)).write_csv(out.with_name(out.name + ".support.tsv"), separator="\t")
     if rates is not None:
         names = {fid: method for method, fids in ids.items() for fid in fids}
@@ -205,6 +210,21 @@ def main(
     with pl.Config(tbl_rows=60, tbl_cols=20, tbl_width_chars=200):
         print(ag)
         print(cal)
+
+
+def _rated(detail: pl.DataFrame, keys: list[str]) -> pl.DataFrame:
+    """The calibration sums per `keys`, with the rates and the observed rate's Wilson interval."""
+    cal = detail.group_by(keys).agg(pl.exclude("bin", "held_band", "rows_from").sum()).sort(keys)
+    cal = cal.with_columns(
+        (pl.col("mismatch") / pl.col("alleles")).alias("observed"),
+        (pl.col("predicted_sum") / pl.col("alleles")).alias("predicted"),
+        (pl.col("predicted_flat_sum") / pl.col("alleles")).alias("predicted_flat"),
+        (pl.col("consensus_error_sum") / pl.col("alleles")).alias("consensus_error"),
+        (pl.col("held_error_sum") / pl.col("alleles")).alias("held_error"),
+        (pl.col("speaking_sum") / pl.col("alleles")).alias("speaking_mean"),
+    )
+    intervals = [wilson_interval(int(m), int(n)) for m, n in zip(cal["mismatch"], cal["alleles"])]
+    return cal.with_columns(pl.Series("observed_ci_low", [i[0] for i in intervals]), pl.Series("observed_ci_high", [i[1] for i in intervals]))
 
 
 if __name__ == "__main__":

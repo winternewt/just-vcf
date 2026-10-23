@@ -211,7 +211,11 @@ both called in that band; CGI's few rows below 10 phred and those with no confid
 | CGA 2.5.0.24 / freeBayes 0.9.20 | CGI | 7.25 | 6.79 | 4.78 | 3.17 | 2.19 | 0.73 |
 | CGA 2.5.0.24 / freeBayes 0.9.20 | freeBayes | 9.18 | 2.47 | 0.78 | 0.47 | 0.29 | 0.16 |
 
-freeBayes 0.9.15 has no SNV row at 100 phred or more, so its top band is empty. 90 and 91% of CGI's
+freeBayes 0.9.15 has no SNV row at 100 phred or more, so its top band is empty: PGP's merge floors
+every GL entry at -10, which caps its confidence at 97 phred, and most of its rows sit at the cap.
+The two freeBayes facets' bands are therefore not one scale: in `easy`, against CGI at 100 phred or
+more, 0.9.15's rows at 40–60 phred disagree on 0.52% and 0.9.20's on 0.105% (docs/CONSENSUS.md,
+"Where the overconfidence at 60 phred came from"). 90 and 91% of CGI's
 SNVs both called sit at 100 phred or more, where the pair disagrees on 0.37 and 0.73%, against 0.54
 and 1.02% overall; at CGI's rows below 60 phred it disagrees three to eleven times more often. Much
 of a method's average rate is its unsure rows. `method_error_rates` fits each pair's cells as one

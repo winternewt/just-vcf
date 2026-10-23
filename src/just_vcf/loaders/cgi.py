@@ -22,9 +22,30 @@ What a `calls` row of a CGI locus holds (SCHEMA.md Decision 2):
   point CGI could not call (a zero-length no-call) is such a row too, with every haplotype null.
 - `sample_filters` are the haplotypes' `varFilter` tokens (`varQuality` before format 2.5, kept
   verbatim), with PASS left out beside another token, as CGI's own VCF writes FT. `ids` are the rs
-  ids of `xRef`, sorted. `dp` is masterVarBeta's `totalReadCount`. The allele scores are no likelihood, and
-  `hapLink` does not say which haplotype slot is which across loci, so `gl`, `gq` and `phased` stay
-  null; those columns are listed in `facets.dropped_fields`.
+  ids of `xRef`, sorted. `dp` is masterVarBeta's `totalReadCount`.
+- `ad` comes from masterVarBeta's read counts, indexed over `source_alleles = [source_ref] + alts`:
+  REF gets `referenceAlleleReadCount`, each ALT the `allele<n>ReadCount` of the slot that carries it.
+  Measured on a PGP-HMS masterVarBeta (2026-10-23, 4.2M variant loci): a slot carrying the reference
+  always counts what `referenceAlleleReadCount` does, and the two slots of a hom ALT count alike, so
+  the counts are per allele, not per slot; the slots of a hom ALT add up past `totalReadCount`, being
+  the same reads, so they are never summed. CGI counts a read for every allele it supports, so `ad`
+  can add up past `dp`. Withheld, with the reason counted (`AD_WITHHELD_REASONS`), where no haplotype
+  is called (an uncalled insertion point: all 346,474 in that file leave every count empty), the file
+  leaves a count empty (a half-called reference: every count empty), an allele is only partly called
+  (`?A`: a count of a half-known sequence), or the counts contradict that rule. `var` has no counts.
+- `hapLink` (`allele<n>HapLink` in masterVarBeta) is a phase set of kind `cgi_haplink`: the id on
+  one haplotype of a locus, shared by the haplotypes of other loci on the same molecule. A linked
+  slot has `phased` true and the id, verbatim, in `phase_sets` (an integer before 2.5, mostly
+  `Phased_a_b_c` in 2.5); an unlinked slot has both null, and a row with no linked slot has the three
+  columns null. The id names a haplotype, not a GT slot: the two files of one assembly order the slots
+  differently and give the same sets. Measured on a PGP-HMS assembly (2026-10-23): 51,392 ids, none on
+  two chromosomes, never one id on both haplotypes of a locus, every haplotype's `var` sub-rows
+  agreeing; CGI's own VCF of it writes 25,696 PS sets, two ids each, over the 2,708,191 linked loci
+  (`|` on 2,707,622 records). A `var` haplotype whose sub-rows name two ids gets no phase there,
+  counted. A slot `?` or partly called keeps its link: the molecule is known, its sequence is not, and
+  `cis_phased_blocks` withholds that set rather than shorten it.
+- The allele scores are no likelihood, so `gl` and `gq` stay null; the scores are listed in
+  `facets.dropped_fields`.
 """
 
 import logging
@@ -36,7 +57,7 @@ from typing import BinaryIO
 
 import polars as pl
 
-from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
+from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
 
@@ -72,15 +93,33 @@ _FILTER_ALIASES = {"varQuality": "varFilter", "allele1VarQuality": "allele1VarFi
 """Format 2.0 and 2.2 name the filter column `…VarQuality` (VQHIGH/VQLOW). The values are kept."""
 
 _CARRIED = {
-    VAR: frozenset({"locus", "ploidy", "allele", "chromosome", "begin", "end", "varType", "reference", "alleleSeq", "varFilter", "xRef"}),
+    VAR: frozenset(
+        {"locus", "ploidy", "allele", "chromosome", "begin", "end", "varType", "reference", "alleleSeq", "varFilter", "hapLink", "xRef"}
+    ),
     MASTER_VAR: frozenset(
         {
             "locus", "ploidy", "chromosome", "begin", "end", "zygosity", "varType", "reference", "allele1Seq",
-            "allele2Seq", "allele1VarFilter", "allele2VarFilter", "allele1XRef", "allele2XRef", "totalReadCount",
+            "allele2Seq", "allele1VarFilter", "allele2VarFilter", "allele1HapLink", "allele2HapLink", "allele1XRef",
+            "allele2XRef", "allele1ReadCount", "allele2ReadCount", "referenceAlleleReadCount", "totalReadCount",
         }
     ),
 }
 """The columns a frame carries; every other column of the file is listed in `dropped_fields`."""
+
+_READ_COUNTS = ("allele1ReadCount", "allele2ReadCount", "referenceAlleleReadCount", "totalReadCount")
+"""masterVarBeta's read counts: per haplotype slot, for the reference sequence, and over the locus."""
+
+AD_WITHHELD_REASONS: frozenset[str] = frozenset(
+    {
+        "no haplotype called",
+        "a partly called allele",
+        "a read count the file leaves empty",
+        "a reference haplotype whose count is not referenceAlleleReadCount",
+        "two haplotypes of one allele with different counts",
+    }
+)
+"""Why a masterVarBeta row's `ad` is null, each counted in a load warning. Closed: every reason
+`call_rows` gives is here."""
 
 
 @dataclass
@@ -166,7 +205,11 @@ def malformed(rows: pl.LazyFrame) -> pl.Expr:
 def prepare(rows: pl.LazyFrame, format_id: str) -> pl.LazyFrame:
     """`scan` output with the optional columns added (null) and the locus and coordinates typed.
     Rows that are then `malformed` are the caller's to count and leave out."""
-    optional = ["varFilter", "xRef"] if format_id == VAR else [*_FILTER[MASTER_VAR], "allele1XRef", "allele2XRef", "totalReadCount"]
+    optional = (
+        ["varFilter", "hapLink", "xRef"]
+        if format_id == VAR
+        else [*_FILTER[MASTER_VAR], "allele1HapLink", "allele2HapLink", "allele1XRef", "allele2XRef", *_READ_COUNTS]
+    )
     return _typed(_with_optional(rows, optional))
 
 
@@ -199,6 +242,11 @@ def _spelled(rows: pl.LazyFrame, sequences: list[str]) -> pl.LazyFrame:
     )
 
 
+def _linked(column: pl.Expr) -> pl.Expr:
+    """A hapLink field as its id, null where the field is empty (the slot is linked to nothing)."""
+    return pl.when(column.str.len_chars() > 0).then(column)
+
+
 def var_haplotypes(segments: pl.LazyFrame) -> pl.LazyFrame:
     """One row per haplotype of each `var` locus: its sub-rows joined in `begin` order.
 
@@ -216,10 +264,18 @@ def var_haplotypes(segments: pl.LazyFrame) -> pl.LazyFrame:
         (pl.col("begin").slice(1) == pl.col("end").slice(0, pl.len() - 1)).all().alias("tiles"),
         pl.col("varFilter").filter(pl.col("alleleSeq") != NO_CALL).str.split(";").list.explode(keep_nulls=False, empty_as_null=False).alias("filters"),
         pl.col("xRef").str.join(";").alias("xref"),
+        _linked(pl.col("hapLink")).drop_nulls().unique().alias("_links"),
     )
+    links = pl.col("_links").list.len()
     return joined.with_columns(
+        pl.when(links == 1).then(pl.col("_links").list.first()).alias("link"),
+        (links > 1).alias("link_conflict"),
+    ).drop("_links").with_columns(
         pl.col("allele").cast(pl.Int64, strict=False).alias("allele"),
         pl.lit(None, dtype=pl.UInt32).alias("dp"),
+        pl.lit(None, dtype=pl.UInt32).alias("reads"),
+        pl.lit(None, dtype=pl.UInt32).alias("ref_reads"),
+        pl.lit(False).alias("counted"),
     )
 
 
@@ -256,7 +312,12 @@ def master_var_parts(rows: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
                 .otherwise(pl.col(f"allele{number}VarFilter").str.split(";"))
                 .alias("filters"),
                 pl.col(f"allele{number}XRef").alias("xref"),
+                _linked(pl.col(f"allele{number}HapLink")).alias("link"),
+                pl.lit(False).alias("link_conflict"),
                 pl.col("totalReadCount").cast(pl.UInt32, strict=False).alias("dp"),
+                pl.col(f"allele{number}ReadCount").cast(pl.UInt32, strict=False).alias("reads"),
+                pl.col("referenceAlleleReadCount").cast(pl.UInt32, strict=False).alias("ref_reads"),
+                pl.lit(True).alias("counted"),
             )
         )
     return blocks, pl.concat(alleles, how="vertical")
@@ -280,9 +341,12 @@ def block_rows(uniform: pl.LazyFrame) -> pl.LazyFrame:
 
 
 def locus_checks(haplotypes: pl.LazyFrame) -> pl.LazyFrame:
-    """Per locus: whether it can become a row, and why not. Columns `locus`, `problem` (null = fine)."""
+    """Per locus: whether it can become a row, and why not. Columns `locus`, `problem` (null = fine),
+    and `link_conflicts`, the haplotypes whose `var` sub-rows name more than one hapLink (their phase
+    is left out; the locus stays)."""
     expected = pl.col("ploidy").first().cast(pl.Int64, strict=False)
     return haplotypes.group_by("locus").agg(
+        pl.col("link_conflict").sum().alias("link_conflicts"),
         pl.when(expected.is_null() | (expected < 1))
         .then(pl.lit("a ploidy that is not a positive number"))
         .when((pl.col("allele").sort() != pl.int_range(1, pl.len() + 1)).any() | (pl.len() != expected))
@@ -331,13 +395,46 @@ def call_rows(haplotypes: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
             pl.col("filters").filter(called).list.explode(keep_nulls=False, empty_as_null=False).alias("_filters"),
             pl.col("xref").str.join(";").alias("_xref"),
             pl.col("dp").first(),
+            pl.col("link").alias("_links"),
+            pl.col("counted").first().alias("_counted"),
+            pl.col("ref_reads").first().alias("_ref_reads"),
+            # One entry per distinct (allele, count) among the ALT slots, in `alts` order (sorted by
+            # sequence): a hom ALT is one entry when both slots count alike, two when they do not.
+            pl.struct("seq", "reads").filter(is_alt).unique().sort().alias("_alt_reads"),
+            (called & pl.col("seq").str.contains(NO_CALL, literal=True)).any().alias("_partial"),
+            (called & pl.col("reads").is_null()).any().alias("_empty_slot"),
+            called.any().alias("_any_called"),
+            (called & ~is_alt & (pl.col("reads") != pl.col("ref_reads"))).fill_null(False).any().alias("_ref_slot_differs"),
         )
+    )
+    alt_counts = pl.col("_alt_reads").list.eval(pl.element().struct.field("reads"))
+    ad_withheld = (
+        pl.when(~pl.col("_counted"))
+        .then(None)
+        .when(~pl.col("_any_called"))
+        .then(pl.lit("no haplotype called"))
+        .when(pl.col("_partial"))
+        .then(pl.lit("a partly called allele"))
+        .when(pl.col("_ref_reads").is_null() | pl.col("_empty_slot"))
+        .then(pl.lit("a read count the file leaves empty"))
+        .when(pl.col("_ref_slot_differs"))
+        .then(pl.lit("a reference haplotype whose count is not referenceAlleleReadCount"))
+        .when(pl.col("_alt_reads").list.len() != pl.col("alts").list.len())
+        .then(pl.lit("two haplotypes of one allele with different counts"))
+        .otherwise(None)
+    )
+    loci = loci.with_columns(ad_withheld.alias("ad_withheld")).with_columns(
+        pl.when(pl.col("_counted") & pl.col("ad_withheld").is_null())
+        .then(pl.concat_list(pl.col("_ref_reads"), alt_counts))
+        .otherwise(None)
+        .alias("ad")
     )
     tokens = pl.col("_filters").list.eval(pl.element().filter(pl.element().is_not_null() & (pl.element() != ""))).list.unique().list.sort()
     not_pass = tokens.list.eval(pl.element().filter(pl.element() != "PASS"))
     # Sorted: each haplotype writes its own xRef, so their order says nothing.
     ids = pl.col("_xref").str.extract_all(r"rs\d+").list.unique().list.sort()
     insertion = pl.col("end") == pl.col("begin")
+    linked = pl.col("_links").list.drop_nulls().list.len() > 0
     rows = loci.select(
         canonical_chrom_expr("chromosome").alias("chrom"),
         pl.col("chromosome").alias("source_chrom"),
@@ -349,8 +446,16 @@ def call_rows(haplotypes: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
         "alts",
         "gt_alleles",
         "gt",
+        pl.when(linked).then(pl.col("_links").list.eval(pl.when(pl.element().is_not_null()).then(True))).alias("phased"),
+        pl.when(linked).then(pl.col("_links")).alias("phase_sets"),
+        pl.when(linked)
+        .then(pl.col("_links").list.eval(pl.when(pl.element().is_not_null()).then(pl.lit(PhaseSetKind.CGI_HAPLINK.value))))
+        .alias("phase_set_kinds"),
         pl.when(not_pass.list.len() > 0).then(not_pass).when(tokens.list.len() > 0).then(tokens).otherwise(None).alias("sample_filters"),
         "dp",
+        "ad",
+        pl.when(pl.col("ad").is_not_null()).then(pl.concat_list(pl.col("source_ref"), pl.col("alts"))).alias("source_alleles"),
+        "ad_withheld",
         pl.lit(EvidenceBasis.ASSAY.value).alias("evidence_basis"),
     )
     return rows, none_called
@@ -358,6 +463,6 @@ def call_rows(haplotypes: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
 
 def to_frames(calls: pl.LazyFrame, blocks: pl.LazyFrame, facet_id: str) -> tuple[pl.LazyFrame, pl.LazyFrame]:
     return (
-        conform(calls.drop("source_chrom").with_columns(pl.lit(facet_id).alias("facet_id")), CALLS),
+        conform(calls.drop("source_chrom", "ad_withheld").with_columns(pl.lit(facet_id).alias("facet_id")), CALLS),
         conform(blocks.drop("source_chrom").with_columns(pl.lit(facet_id).alias("facet_id")), BLOCKS),
     )

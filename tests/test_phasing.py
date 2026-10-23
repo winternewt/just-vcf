@@ -16,6 +16,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 from ga4gh.core import ga4gh_identify
+from test_load_cgi import Locus, Seg, master_var_text, snp_locus, var_text
+from test_load_cgi import write as write_cgi
 from test_vrs import CA_REPEAT, LENGTHS, POLY_A, accessions, base, other, write_fasta
 from test_vrs import SEQ as SEQUENCES
 from vrs_oracle import StoreProxy, oracle_allele, oracle_block_id
@@ -225,6 +227,61 @@ def test_blocks_are_ordered_by_first_row_and_deterministic(tmp_path: Path, store
     assert [(r["chrom"], r["phase_set"], r["haplotype"]) for r in first.iter_rows(named=True)] == [
         ("1", "100", 0), ("1", "100", 1), ("1", "300", 0), ("1", "300", 1), ("1", None, 0), ("1", None, 1), ("2", "100", 0), ("2", "100", 1),
     ]
+
+
+def cgi_linked_loci() -> list[Locus]:
+    """CGI loci over the synthetic reference: two molecules of one 2.5 phase block with the ALTs on
+    either slot; an integer id over an unanchored deletion and an SNV; one over a haplotype CGI could
+    not call; and the same integer on chr2, another molecule."""
+    def snp(chrom: str, pos: int, links: tuple[str, str], alt_slot: int = 0) -> Locus:
+        return snp_locus(f"chr{chrom}", pos - 1, base(chrom, pos), other(base(chrom, pos)), links, alt_slot)
+
+    return [
+        snp("1", 10, ("Phased_1_1_1", "Phased_1_1_2")),
+        snp("1", 20, ("Phased_1_1_2", "Phased_1_1_1"), alt_slot=1),
+        snp("1", 30, ("Phased_1_1_2", "Phased_1_1_1")),
+        snp("1", 40, ("Phased_1_1_1", "Phased_1_1_2"), alt_slot=1),
+        Locus("chr1", 149, 150, haps=((Seg(149, 150, "del", base("1", 150), "", link="7"),), (Seg(149, 150, "ref", base("1", 150), base("1", 150)),))),
+        snp("1", 160, ("7", "")),
+        Locus("chr1", 199, 200, haps=((Seg(199, 200, "no-call", base("1", 200), "?", filter="", link="9"),), (Seg(199, 200, "snp", base("1", 200), other(base("1", 200))),))),
+        snp("1", 210, ("9", "")),
+        snp("2", 50, ("7", "")),
+        snp("2", 60, ("7", "")),
+    ]
+
+
+def test_cgi_hap_link_sets_equal_vrs_python(tmp_path: Path) -> None:
+    """A hapLink set is one molecule on one chromosome: one block per id and chromosome, `haplotype`
+    null, whichever slot each ALT sits in. `var` and `masterVarBeta` (which writes the ALT slot first)
+    give the same blocks, and the ids are vrs-python's for the same alleles."""
+    # CGI's files state GRCh37 and no contig lengths: the store says which assembly it holds.
+    store = ReferenceStore.open(tmp_path / "grch37")
+    store.add_fasta(write_fasta(tmp_path / "grch37.fa", SEQUENCES), assembly_label="GRCh37")
+    proxy, sq = StoreProxy(store), accessions(store)
+
+    def snv_allele(chrom: str, pos: int):
+        return oracle_allele(proxy, sq[chrom], pos, base(chrom, pos), other(base(chrom, pos)))
+
+    deletion = oracle_allele(proxy, sq["1"], 149, base("1", 149, 2), base("1", 149))  # CGI's `""` at 150, anchored
+    expected = {
+        ("1", "Phased_1_1_1"): oracle_block_id([snv_allele("1", 10), snv_allele("1", 20)]),
+        ("1", "Phased_1_1_2"): oracle_block_id([snv_allele("1", 30), snv_allele("1", 40)]),
+        ("1", "7"): oracle_block_id([deletion, snv_allele("1", 160)]),
+        ("2", "7"): oracle_block_id([snv_allele("2", 50), snv_allele("2", 60)]),
+    }
+    seen = []
+    for name, text in (("var-GS000000005-ASM.tsv.bz2", var_text(cgi_linked_loci())), ("masterVarBeta-GS000000005-ASM.tsv.bz2", master_var_text(cgi_linked_loci()))):
+        blocks = cis_phased_blocks(minted(write_cgi(tmp_path, text, name), store)).collect()
+        assert set(blocks["phase_set_kind"].to_list()) == {"cgi_haplink"} and blocks["haplotype"].null_count() == blocks.height
+        got = {(row["chrom"], row["phase_set"]): row for row in blocks.iter_rows(named=True)}
+        assert set(got) == {*expected, ("1", "9")}, name
+        for key, cpb_id in expected.items():
+            # Each of the four block loci has a slot on each molecule; the REF ones are sites, not members.
+            sites = 4 if key[1].startswith("Phased") else 2
+            assert (got[key]["cpb_id"], got[key]["withheld"], got[key]["sites"]) == (cpb_id, None, sites), (name, key)
+        assert (got[("1", "9")]["cpb_id"], got[("1", "9")]["withheld"]) == (None, "uncalled"), "a molecule CGI could not call is not shortened"
+        seen.append(blocks.drop("facet_id"))
+    assert seen[0].equals(seen[1])
 
 
 def test_unphased_facets_give_no_blocks(tmp_path: Path, store: ReferenceStore) -> None:

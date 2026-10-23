@@ -17,7 +17,7 @@ import polars as pl
 from just_vcf.contig_names import PRIMARY_ACCESSIONS
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.16"
+SCHEMA_VERSION = "0.0.17"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -58,10 +58,14 @@ class BlockKind(str, Enum):
 
 
 class PhaseSetKind(str, Enum):
-    """Which VCF field a phase set came from. PS and PSL sets never merge, even when spelled alike."""
+    """Which field a phase set came from. Sets of different kinds never merge, even when spelled alike."""
 
     PS = "ps"
     PSL = "psl"
+    CGI_HAPLINK = "cgi_haplink"
+    """Complete Genomics' `hapLink` (native `var` and `masterVarBeta`): an id on one haplotype of a
+    locus, shared by the haplotypes of other loci on the same molecule. Like a PSL name it is one
+    haplotype, not a GT slot; unlike PSL it is keyed per chromosome. just-vcf's own term; VCF has none."""
 
 
 class AbsenceMeans(str, Enum):

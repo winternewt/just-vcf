@@ -21,7 +21,9 @@ What is written, and the rules it follows:
   the caller passes `resolved_only=True`; then the rest is written and the counts are reported.
 - **FORMAT** is per row: a key is listed where the row has a value for it, so a field the source
   left out stays out. GT is rebuilt from `gt` and `phased` (`source_gt` is null on derived facets and
-  VCF 4.4+ files). `gl` is written as GL: the frame holds log10 likelihoods and does not remember
+  VCF 4.4+ files). A haplotype phased by a CGI hapLink is written `/`: VCF has no field for the
+  hapLink, and `|` without its set would read back as the implicit one. `gl` is written as GL: the
+  frame holds log10 likelihoods and does not remember
   whether the source wrote PL. `gl`, `gp` and `ad` are written only when `source_alleles`, the order
   they are indexed over, is the written `[REF] + ALTs`; otherwise they are left out and counted.
 - **VCF 4.3**, not 4.4+: GP is a probability from 4.3 on, which is what `gp` holds, and the writer
@@ -82,7 +84,7 @@ from just_vcf.bgzf import BgzfWriter
 from just_vcf.loaders.vcf import FORMAT_KEYS, INFO_KEYS, SPLIT_INFO_KEY, V43_RESERVED_TYPES
 from just_vcf.loading import Loaded
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _store_for
-from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, BlockKind, RefCheck, canonical_chrom
+from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, BlockKind, PhaseSetKind, RefCheck, canonical_chrom
 from just_vcf.tabix import TabixIndexer
 
 logger = logging.getLogger(__name__)
@@ -312,6 +314,11 @@ def write_vcf(
         )
     if stats["n_ps_dropped"]:
         warnings.append(f"{stats['n_ps_dropped']} row(s) had a PS phase set that is not an integer, which PS cannot write; left out")
+    if stats["n_haplink_unwritten"]:
+        warnings.append(
+            f"{stats['n_haplink_unwritten']} row(s) phased by a CGI hapLink, which VCF has no field for; their "
+            "haplotypes written unphased"
+        )
     if stats["v45"] and stats["n_first_phase_unread"]:
         warnings.append(
             f"{stats['n_first_phase_unread']} row(s) state their first haplotype's phase, written as VCF 4.5's leading "
@@ -470,6 +477,20 @@ def _has_vector() -> pl.Expr:
     return pl.any_horizontal(pl.col(name).list.len().fill_null(0) > 0 for name in ("gl", "gp", "ad"))
 
 
+def _has_haplink() -> pl.Expr:
+    """True on a row with a slot phased by a CGI hapLink, which VCF has no field for: a hapLink names a
+    molecule, not a GT slot, so it is no PS, and `|` without its set would read back as the
+    chromosome's implicit one. Such a slot is written unphased."""
+    return pl.col("phase_set_kinds").list.contains(PhaseSetKind.CGI_HAPLINK.value).fill_null(False)
+
+
+def _phase(slot: int) -> pl.Expr:
+    """The phase written for GT slot `slot`: `phased`, null where the slot is phased by a hapLink."""
+    kind = pl.col("phase_set_kinds").list.get(slot, null_on_oob=True).cast(pl.String)
+    phased = pl.col("phased").list.get(slot, null_on_oob=True)
+    return pl.when((kind == PhaseSetKind.CGI_HAPLINK.value).fill_null(False)).then(None).otherwise(phased)
+
+
 def _has_psl() -> pl.Expr:
     """True on a row with a slot in a PSL phase set."""
     return pl.col("phase_set_kinds").list.contains("psl").fill_null(False)
@@ -477,9 +498,10 @@ def _has_psl() -> pl.Expr:
 
 def _ps_text() -> pl.Expr:
     """PS: the row's PS-kind phase set, as an integer. Null where there is none or the row has a PSL
-    set (VCF 4.5: a genotype has PS or PSL, never both; its implicit-set slots are PSL's `.`)."""
+    set (VCF 4.5: a genotype has PS or PSL, never both; its implicit-set slots are PSL's `.`), or a
+    CGI hapLink (`_has_haplink`)."""
     value = pl.col("phase_sets").list.drop_nulls().list.first()
-    return pl.when(_has_psl()).then(None).otherwise(value.cast(pl.Int64, strict=False)).cast(pl.String)
+    return pl.when(_has_psl() | _has_haplink()).then(None).otherwise(value.cast(pl.Int64, strict=False)).cast(pl.String)
 
 
 def _psl_texts(ploidy: int) -> dict[str, pl.Expr]:
@@ -516,19 +538,20 @@ def _gt_text(ploidy: int, v45: bool = False) -> pl.Expr:
 
     Under VCF 4.5 the first haplotype's phase is its own: a leading `|` or `/` is written where
     `phased[0]` is known and differs from the implicit one (`/` if any later slot is `/`, else `|`),
-    and none where it agrees or is unknown. VCF 4.3 has no leading indicator."""
+    and none where it agrees or is unknown. VCF 4.3 has no leading indicator. A slot phased by a CGI
+    hapLink is written unphased (`_phase`)."""
     gt = pl.col("gt")
     parts = [gt.list.get(0, null_on_oob=True).cast(pl.String).fill_null(".")]
     later_phased = []
     for slot in range(1, ploidy):
-        phased = pl.col("phased").list.get(slot, null_on_oob=True).fill_null(False)
+        phased = _phase(slot).fill_null(False)
         separator = pl.when(phased).then(pl.lit("|")).otherwise(pl.lit("/"))
         allele = gt.list.get(slot, null_on_oob=True).cast(pl.String).fill_null(".")
         parts.append(pl.when(gt.list.len() > slot).then(pl.concat_str(separator, allele)))
         later_phased.append(pl.when(gt.list.len() > slot).then(phased).otherwise(pl.lit(True)))
     if v45:
         implicit = pl.all_horizontal(later_phased) if later_phased else pl.lit(True)
-        first = pl.col("phased").list.get(0, null_on_oob=True)
+        first = _phase(0)
         lead = pl.when(first.is_not_null() & (first != implicit)).then(pl.when(first).then(pl.lit("|")).otherwise(pl.lit("/")))
         parts.insert(0, lead)
     return pl.when(gt.list.len() > 0).then(pl.concat_str(parts, ignore_nulls=True))
@@ -565,9 +588,12 @@ def _scan(calls: pl.LazyFrame) -> dict:
             *[text.is_not_null().any().alias(f"has_{key}") for key, text in values.items()],
             *[text.is_not_null().any().alias(f"has_info_{key}") for key, text in _sv_info_values(v45).items()],
             (_has_vector() & ~_vectors_indexable() & pl.col("_unwritable").is_null()).sum().alias("n_vectors_dropped"),
-            (pl.col("phase_sets").list.drop_nulls().list.len().fill_null(0).gt(0) & _ps_text().is_null() & ~_has_psl()).sum().alias("n_ps_dropped"),
+            (pl.col("phase_sets").list.drop_nulls().list.len().fill_null(0).gt(0) & _ps_text().is_null() & ~_has_psl() & ~_has_haplink())
+            .sum()
+            .alias("n_ps_dropped"),
+            _has_haplink().sum().alias("n_haplink_unwritten"),
             (
-                pl.col("phased").list.get(0, null_on_oob=True).is_not_null()
+                _phase(0).is_not_null()
                 & (pl.col("phase_set_kinds").list.get(0, null_on_oob=True).cast(pl.String) != "psl").fill_null(True)
             )
             .sum()

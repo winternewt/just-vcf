@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.16.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.17.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -288,8 +288,17 @@ its own phase set. So:
 - `phase_sets: list[str]`, parallel to `gt_alleles`: the raw value the file wrote, with no prefix. A
   `PS` integer is written as its decimal string on each phased haplotype; a `PSL` entry is taken as is.
   Unphased haplotypes are null.
-- `phase_set_kinds: list[Enum{ps, psl}]`, parallel to `phase_sets`: which field the value came from.
-  VCF 4.5 says PS and PSL "are not interoperable", so a PS `5` and a PSL `5` are different sets.
+- `phase_set_kinds: list[Enum{ps, psl, cgi_haplink}]`, parallel to `phase_sets`: which field the value
+  came from. VCF 4.5 says PS and PSL "are not interoperable", so a PS `5` and a PSL `5` are different
+  sets, and a CGI hapLink `5` is a third.
+- **CGI's `hapLink`** (native `var` and `masterVarBeta`, kind `cgi_haplink`, just-vcf's own term) is
+  an id on one haplotype of a locus, shared by the haplotypes of other loci on the same molecule: a
+  linked slot has `phased = true` and the id verbatim in `phase_sets` (an integer before format 2.5,
+  mostly `Phased_a_b_c` in 2.5); an unlinked slot has both null, since the file says nothing about it,
+  and a row with no linked slot has all three columns null. Like a PSL name it is a molecule, not a GT
+  slot; unlike PSL it is keyed per chromosome, `(facet_id, chrom, cgi_haplink, value)`: on a PGP-HMS
+  assembly no id leaves its chromosome, and CGI's own VCF writes the same phasing as PS sets of two
+  ids each (25,696 sets, 51,392 ids). A slot written `?` or partly called keeps its link.
 - **The key of a phase set depends on its kind.** A PS is scoped to its chromosome ("on the same
   chromosome and have the same PS value"), so its key is `(facet_id, chrom, ps, value)`. `PS=100` on
   chr1 and on chr2 are two sets. A PSL name is global to the file ("records with different CHROM but
@@ -364,6 +373,16 @@ per genotype of the row's ploidy (checked for haploid and diploid rows). A row w
 another length gets null there, counted in the warnings. A key declared with a fixed count is a
 different quantity under the same name and is not carried at all (VarScan2's AD, `Number=1`, is the
 ALT depth; CGI's AD, `Number=2`, counts reads per GT slot); it is listed in `dropped_fields`.
+
+CGI's native `masterVarBeta` states its counts per allele, not per slot, so it does fill `ad`, over
+`source_alleles = [source_ref] + alts`: REF gets `referenceAlleleReadCount`, each ALT the
+`allele<n>ReadCount` of the slot that carries it, and `dp` is `totalReadCount`. On a PGP-HMS file a
+slot carrying the reference always counts what `referenceAlleleReadCount` does and both slots of a
+hom ALT count alike; their sum passes `totalReadCount` (the same reads twice), so slots are never
+summed, and since CGI counts a read for every allele it supports, `ad` can add up past `dp`. A row
+that calls no haplotype (an uncalled insertion point, whose counts the file leaves empty), whose
+counts are empty (a half-called reference), contradict that rule, or belong to a partly called
+allele (`?A`) has `ad` and `source_alleles` null, counted in a warning by reason.
 
 A dosage (VCF `DS`, the expected count of the second allele) is one number. It cannot be turned into a
 posterior triple, because two unknowns do not follow from one number, so it gets its own column:
@@ -652,8 +671,8 @@ With Decisions 1–5 as recommended:
 | `gt` | `list[u8]` | there is no allele list to index yet, or RM3 withheld it with `alts` (a mixed-strand array, Decision 2). Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
 | `source_gt` | `str` | the source wrote no genotype text (a BCF encodes GT in binary). The file's raw text, not polars-bio's rewrite of it |
 | `phased` | `list[bool]` | the source says nothing about phase for the whole row (every array export). Otherwise parallel to `gt_alleles`, with an element null where the source did not say for that haplotype |
-| `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS or PSL value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. Keyed by kind: PS per chromosome, PSL per file (Decision 2) |
-| `phase_set_kinds` | `list[Enum]` | parallel to `phase_sets`: `ps` or `psl`. Null where the haplotype is unphased |
+| `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS, PSL or CGI hapLink value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. Keyed by kind: PS and hapLink per chromosome, PSL per file (Decision 2) |
+| `phase_set_kinds` | `list[Enum]` | parallel to `phase_sets`: `ps`, `psl` or `cgi_haplink`. Null where the haplotype is unphased |
 | `phase_set_ordinals` | `list[u32]` | the row has no PSL set or its PSO gave no value. Parallel to `gt_alleles`: FORMAT `PSO`, the order a haplotype's alleles are met along a derivative chromosome, on the slots in a PSL set; null elsewhere and per `.` (Decision 2) |
 | `phase_set_qualities` | `list[u16]` | the row has no PSL set or its PSQ gave no value. Parallel to `gt_alleles`: FORMAT `PSQ`, the phred quality of each slot's PSL phasing (encoded like PQ), on the slots in a PSL set; null elsewhere, per `.` (unknown quality) and out of 0..65535 |
 | `gl` | `list[f32]` | no likelihoods given |
@@ -1319,9 +1338,9 @@ a stored block table, which every load would pay for and every change to an alle
 |---|---|---|
 | `facet_id` | `str` | never null |
 | `chrom` | `str` | a PSL set, which is keyed per file and may span chromosomes |
-| `phase_set_kind` | `Enum{ps, psl}` | never null |
+| `phase_set_kind` | `Enum{ps, psl, cgi_haplink}` | never null |
 | `phase_set` | `str` | the chromosome's implicit set (phased, no PS) |
-| `haplotype` | `u32` | a PSL set, which is one haplotype itself. For a PS set, the GT slot: slot `h` of every record in the set is one molecule |
+| `haplotype` | `u32` | a PSL set or a CGI hapLink, each one haplotype itself (a hapLink block keeps its `chrom`). For a PS set, the GT slot: slot `h` of every record in the set is one molecule |
 | `sites` | `u32` | never null. Records whose slot is in the set on this haplotype |
 | `members` | `list[str]` | the block is withheld. Otherwise the member Alleles' VRS ids, sorted, each once |
 | `cpb_id` | `str` | the block is withheld. Otherwise `ga4gh:CPB.` + the sha512t24u of `{"members":[<Allele digests, sorted>],"type":"CisPhasedBlock"}`, as vrs-python identifies a block of inline Alleles |
@@ -1343,6 +1362,10 @@ a stored block table, which every load would pay for and every change to an alle
   `phasing.CPB_WITHHELD_REASONS`, open like `vrs.WITHHELD_REASONS`. On a whole imputed genome this
   bites: an implicit set is a chromosome, and one symbolic ALT on it withholds the haplotype's block
   (a phased Genes for Good upload: 45 of 46 blocks withheld `symbolic`).
+- **A CGI hapLink** is one molecule: one block per id and chromosome, `haplotype` null, whichever
+  slot each allele sits in, so `var` and `masterVarBeta` (whose slot orders differ) give the same
+  blocks. A linked haplotype CGI wrote `?` withholds its block `uncalled`. A locus with every haplotype
+  no-called is a block, not a `calls` row, so whatever links it carried are not in `calls`.
 - **Haploid calls** (no separator, so phased in VCF's reading) sit in their chromosome's implicit set
   even in a file nobody phased. On one copy (male X outside the PARs, Y, MT) that is true by ploidy, so
   they make a block. Rejected: leaving out haploid rows, which would drop a true statement to guard
@@ -1709,6 +1732,21 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **An enum member, version bump pending** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
+  (`cgi_haplink`), CGI's `hapLink` as a phase set, just-vcf's own term. Adding a member changes the
+  `pl.Enum` dtype of `calls.phase_set_kinds` and of `cis_phased_blocks`' `phase_set_kind`, which is a
+  schema change; `SCHEMA_VERSION` was deliberately left as it is on this builder branch, and the lead
+  bumps it at merge. Rule changes (Decision 2): CGI's native rows fill `phased`, `phase_sets` and
+  `phase_set_kinds` from `hapLink`, where they were null, and `hapLink` leaves `dropped_fields`;
+  `cis_phased_blocks` gives one block per hapLink and chromosome; `write_vcf` writes a haplotype
+  phased by a hapLink `/`, with no PS (VCF has no field for a hapLink, and `|` without its set would
+  read back as the chromosome's implicit set), and `write_vcf_zarr` its `call_genotype_phased` false.
+  Values change on CGI files that already load.
+
+- **No version change** (2026-10-23, RM2's CGI read counts): no column changes. Rule changed
+  (Decision 3): a `masterVarBeta` row fills `ad` and `source_alleles` from its per-allele read counts,
+  where they were null. Values change on files that already load; `var` rows are unchanged.
+
 - **No version change** (2026-10-23, the audit of RM282's derived steps): no column changes. Rule
   changed in `liftover`: a swapped row's `alt_copy_numbers` are null, as its `dosage` is
   (`LIFT_VERSION` 3). `normalize` gets a new `facet_id` (`NORMALIZE_VERSION` 6) for RM282's rule,
@@ -1883,6 +1921,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   which runs beside other builders' branches; the lead bumps it at merge. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.17** (2026-10-24, the CGI leftovers): `PhaseSetKind.CGI_HAPLINK` (the `phase_set_kinds` dtype gains a
+  member); CGI masterVarBeta fills `ad`; CGI `var` 1.x layouts tested.
 
 - **0.0.16** (2026-10-23, layer 2's method chain): `facets.method_steps`, `reference`, `aligner`,
   `aligner_version`. Additive; `phasing_method` now comes from the phase step.

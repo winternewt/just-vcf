@@ -18,7 +18,7 @@ from just_vcf import (
 )
 from just_vcf.bgzf import EOF_BLOCK
 from just_vcf.sniff import sniff
-from test_load_cgi import LOCI, var_text
+from test_load_cgi import LINKED, LOCI, master_var_text, var_text
 from test_load_cgi import write as write_cgi
 
 FORMAT_LINES = {
@@ -207,6 +207,23 @@ def test_an_unanchored_allele_is_never_written(tmp_path: Path) -> None:
     assert written.rows_skipped["alt_not_an_allele"] >= empty_alt
     body = [line.split("\t") for line in plain_text(written.path).splitlines() if not line.startswith("#")]
     assert body and all(row[3] and "" not in row[4].split(",") for row in body)
+
+
+def test_a_cgi_hap_link_is_no_ps_and_its_haplotypes_are_written_unphased(tmp_path: Path) -> None:
+    """VCF 4.3 has no field for a hapLink: it names a molecule, not a GT slot, so it is not a PS, and a
+    `|` without a PS would put the haplotype in the chromosome's implicit set. The writer leaves the
+    set out and writes the genotype unphased; masterVarBeta's read counts go out as AD."""
+    loaded = load(write_cgi(tmp_path, master_var_text(LINKED), "masterVarBeta-GS000000004-ASM.tsv.bz2"))
+    linked = loaded.calls.filter(pl.col("phase_sets").is_not_null()).select(pl.len()).collect().item()
+    written = write_vcf(loaded, tmp_path / "out.vcf.gz", resolved_only=True)
+    body = [line.split("\t") for line in plain_text(written.path).splitlines() if not line.startswith("#")]
+    formats = [dict(zip(row[8].split(":"), row[9].split(":"))) for row in body]
+    assert len(body) == loaded.calls.select(pl.len()).collect().item() and linked > 0
+    assert all("|" not in f["GT"] and "PS" not in f for f in formats)
+    assert any(w.startswith(f"{linked} row(s) phased by a CGI hapLink") for w in written.warnings), written.warnings
+    assert not any("PS phase set that is not an integer" in w for w in written.warnings), "a hapLink is no PS"
+    assert plain_text(written.path).startswith("##fileformat=VCFv4.3"), "no PSL row: nothing asks for 4.5"
+    assert all(f.get("AD") == "1,1" for f in formats), "the fixture's counts: one read for REF and for the ALT"
 
 
 def test_resolved_only_writes_the_rest_and_counts_each_reason(tmp_path: Path) -> None:

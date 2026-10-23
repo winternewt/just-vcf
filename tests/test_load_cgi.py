@@ -18,6 +18,7 @@ import polars as pl
 import pytest
 
 from just_vcf import Loaded, callset, load, sniff
+from just_vcf.loaders import cgi
 from just_vcf.schema import BLOCKS, CALLS, CallsetType, canonical_order
 from test_load_vcf import assert_gt_consistent
 
@@ -34,13 +35,13 @@ MASTER_COLUMNS = (
 )
 
 
-def meta(kind: str, version: str = "2.5", title: bool = True) -> str:
+def meta(kind: str, version: str = "2.5", title: bool = True, software: str = "2.5.0.48") -> str:
     lines = [
         *(["#TITLE\tWhole Human Genome Sequencing"] if title else []),
         "#ASSEMBLY_ID\tGS000000001-ASM",
         "#GENERATED_BY\tcgatools",
         "#GENOME_REFERENCE\tNCBI build 37",
-        "#SOFTWARE_VERSION\t2.5.0.48",
+        f"#SOFTWARE_VERSION\t{software}",
         f"#FORMAT_VERSION\t{version}",
         "#GENERATED_BY\tdbsnptool",
         f"#TYPE\t{kind}",
@@ -59,6 +60,8 @@ class Seg:
     seq: str
     filter: str = "PASS"
     xref: str = ""
+    link: str = ""
+    """hapLink: the id of the haplotype this row is on; empty when it is linked to nothing."""
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,8 @@ def var_text(loci: list[Locus], version: str = "2.5", title: bool = True) -> str
     columns = list(VAR_COLUMNS)
     if version == "2.0":
         columns = [*columns[:11], "varQuality", "hapLink", "xRef"]
+    elif version.startswith("1."):
+        columns = [*columns[:9], "totalScore", "hapLink", "xRef"]
     lines = [">" + "\t".join(columns)]
     for number, locus in enumerate(loci, 1):
         if locus.uniform:
@@ -139,10 +144,12 @@ def var_text(loci: list[Locus], version: str = "2.5", title: bool = True) -> str
             for seg in segments:
                 score = "" if seg.seq == "?" else "99"
                 filt = seg.filter if version == "2.5" else ("VQHIGH" if seg.filter == "PASS" else seg.filter)
-                row = [str(number), str(locus.ploidy), str(allele), locus.chrom, str(seg.begin), str(seg.end), seg.var_type,
-                       seg.reference, seg.seq, score, score, filt, "", seg.xref]
+                head = [str(number), str(locus.ploidy), str(allele), locus.chrom, str(seg.begin), str(seg.end), seg.var_type, seg.reference, seg.seq]
+                # 1.x: one totalScore, no filter column.
+                row = [*head, score, seg.link, seg.xref] if version.startswith("1.") else [*head, score, score, filt, seg.link, seg.xref]
                 lines.append("\t".join(row + [""] * (len(columns) - len(row))))
-    return meta("VAR-ANNOTATION", version, title) + "\n".join(lines) + "\n"
+    software = "1.11.0.16" if version.startswith("1.") else "2.5.0.48"
+    return meta("VAR-ANNOTATION", version, title, software) + "\n".join(lines) + "\n"
 
 
 def joined(segments: tuple[Seg, ...]) -> str:
@@ -165,9 +172,10 @@ def master_var_text(loci: list[Locus]) -> str:
             haps = list(locus.haps)[::-1] if len(locus.haps) == 2 and joined(locus.haps[0]) != reference else list(locus.haps)
             seqs = [joined(h) for h in haps] + ([""] if locus.ploidy == 1 else [])
             filters = [";".join(sorted({s.filter for s in h if s.filter})) for h in haps] + ([""] if locus.ploidy == 1 else [])
+            links = [next((s.link for s in h if s.link), "") for h in haps] + ([""] if locus.ploidy == 1 else [])
             xrefs = [";".join(s.xref for s in h if s.xref) for h in haps] + ([""] if locus.ploidy == 1 else [])
             row = [str(number), str(locus.ploidy), locus.chrom, str(locus.begin), str(locus.end), "het-ref", "complex", reference,
-                   *seqs, "99", "99", "99", "99", *filters, "", "", *xrefs, "", "", "", "", "1", "1", "1", "1", locus.total_reads]
+                   *seqs, "99", "99", "99", "99", *filters, *links, *xrefs, "", "", "", "", "1", "1", "1", "1", locus.total_reads]
         lines.append("\t".join(row + [""] * (len(MASTER_COLUMNS) - len(row))))
     return meta("VAR-OLPL") + "\n".join(lines) + "\n"
 
@@ -202,7 +210,7 @@ def test_facet(var) -> None:
     assert facet["sample"] == "GS000000001-ASM", "the assembly id, as CGI's own VCF names its sample column"
     assert (facet["assembly_label"], facet["assembly_label_basis"]) == ("GRCh37", "stated")
     assert (facet["callset_type"], facet["absence_means"]) == ("wgs", "blocks")
-    assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF", "hapLink", "alleleFreq", "alternativeCalls"]
+    assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF", "alleleFreq", "alternativeCalls"]
     assert {(m["source"], m["chrom"]) for m in facet["contig_map"]} == {("chr1", "1"), ("chrX", "X"), ("chrY", "Y"), ("chrM", "MT")}
     assert facet["vcf_version"] is None and facet["ploidy_statements"] is None
     assert "1 chrY stretch(es) called on chrX (PAR-called-in-X) kept as no-call blocks" in loaded.warnings
@@ -275,7 +283,7 @@ def test_master_var_gives_the_same_sites_blocks_and_allele_sets(tmp_path: Path, 
     assert sniff(path).format == "cgi_master_var"
     loaded, facet, calls, blocks = frames(path)
     assert facet["caller_version"] == "2.5.0.48" and facet["sample"] == "GS000000001-ASM"
-    assert "totalReadCount" not in facet["dropped_fields"] and "allele1ReadCount" in facet["dropped_fields"]
+    assert not {"allele1ReadCount", "allele2ReadCount", "referenceAlleleReadCount", "totalReadCount"} & set(facet["dropped_fields"])
     assert blocks.drop("facet_id").equals(var_blocks.drop("facet_id"))
 
     def sites(frame: pl.DataFrame) -> pl.DataFrame:
@@ -351,7 +359,168 @@ def test_format_2_0_and_no_title(tmp_path: Path) -> None:
     assert facet["callset_type"] is None, "no #TITLE says what the file is, and too few sites for the rows to"
     assert facet["absence_means"] == "blocks"
     assert by_pos(calls)[("1", 752566)]["sample_filters"] == ["VQHIGH"], "varQuality's vocabulary is kept, not mapped"
-    assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF", "hapLink"]
+    assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF"]
+
+
+def test_format_1_x_reads_as_2_5_does_less_the_filters(tmp_path: Path, var) -> None:
+    """Format 1.6/1.7 (CGA 1.11, 1.12): twelve columns, one `totalScore` where 2.x has two scores and a
+    filter, and xRef may name COSMIC beside dbSNP. The same loci give the same sites, blocks, alleles,
+    rs ids and phase sets; `sample_filters` is null, since the file has no filter to say anything."""
+    _, _, v25_calls, v25_blocks = var
+    cosmic = [
+        Locus(lo.chrom, lo.begin, lo.end, lo.ploidy, lo.uniform, tuple(tuple(Seg(**{**s.__dict__, "xref": f"COSMIC:ncv_id:1;{s.xref}" if s.xref else ""}) for s in h) for h in lo.haps), lo.total_reads)
+        for lo in LOCI
+    ]
+    path = write(tmp_path, var_text(cosmic, version="1.6", title=False), "var-GS000000006-ASM.tsv.bz2")
+    assert sniff(path).format == "cgi_var"
+    loaded, facet, calls, blocks = frames(path)
+    assert (facet["caller_version"], facet["dropped_fields"]) == ("1.11.0.16", ["totalScore"])
+    assert facet["callset_type"] is None, "no #TITLE, and too few sites for the rows to say"
+    assert blocks.drop("facet_id").equals(v25_blocks.drop("facet_id")), "no-call-rc and no-call-ri are no calls, as in 2.5"
+    columns = ["chrom", "pos", "end_pos", "source_ref", "alts", "gt", "gt_alleles", "ids", "phased"]
+    assert calls.select(columns).equals(v25_calls.select(columns))
+    assert calls["sample_filters"].null_count() == calls.height
+    assert not [w for w in loaded.warnings if "dropped" in w]
+    linked = frames(write(tmp_path, var_text(LINKED, version="1.7"), "var-GS000000007-ASM.tsv.bz2"))[2]
+    assert {(r["chrom"], r["pos"], a, ps) for r in linked.iter_rows(named=True) if r["phase_sets"] for a, ps in zip(r["gt_alleles"], r["phase_sets"]) if ps} == linked_slots(LINKED)
+
+
+# --- masterVarBeta's read counts as `ad` -------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Counted:
+    """One masterVarBeta variant locus with its read counts, and the `ad` it should give (None:
+    withheld, for `reason`). Counts are text as the file writes them; `""` is an empty field."""
+
+    begin: int
+    end: int
+    zygosity: str
+    reference: str
+    seqs: tuple[str, str]
+    counts: tuple[str, str, str]
+    """allele1ReadCount, allele2ReadCount, referenceAlleleReadCount."""
+    ad: list[int] | None
+    reason: str | None = None
+    ploidy: int = 2
+
+
+COUNTED = [
+    Counted(100, 101, "het-ref", "G", ("A", "G"), ("7", "9", "9"), [9, 7]),
+    Counted(200, 201, "hom", "G", ("T", "T"), ("12", "12", "0"), [0, 12]),
+    # The slots name the ALTs in the other order than `alts` sorts them: the counts follow the alleles.
+    Counted(300, 301, "het-alt", "G", ("T", "C"), ("5", "6", "1"), [1, 6, 5]),
+    Counted(400, 401, "hap", "G", ("C", ""), ("8", "", "0"), [0, 8], ploidy=1),
+    Counted(500, 501, "half", "G", ("A", "?"), ("4", "", "2"), [2, 4]),
+    Counted(600, 600, "het-ref", "", ("GG", ""), ("3", "10", "10"), [10, 3]),  # an insertion point
+    Counted(700, 701, "het-ref", "T", ("", "T"), ("5", "6", "6"), [6, 5]),  # a deletion
+    Counted(800, 801, "half", "G", ("G", "?"), ("", "", ""), None, "a read count the file leaves empty"),
+    Counted(850, 850, "no-call", "", ("?", "?"), ("", "", ""), None, "no haplotype called"),  # an uncalled insertion point
+    Counted(900, 902, "half", "GA", ("?A", "GA"), ("2", "9", "9"), None, "a partly called allele"),
+    Counted(1000, 1001, "hom", "G", ("T", "T"), ("12", "11", "0"), None, "two haplotypes of one allele with different counts"),
+    Counted(1100, 1101, "het-ref", "G", ("A", "G"), ("7", "9", "8"), None, "a reference haplotype whose count is not referenceAlleleReadCount"),
+]
+
+
+def counted_master_var(loci: list[Counted]) -> str:
+    lines = [">" + "\t".join(MASTER_COLUMNS)]
+    for number, locus in enumerate(loci, 1):
+        row = [str(number), str(locus.ploidy), "chr1", str(locus.begin), str(locus.end), locus.zygosity, "complex", locus.reference,
+               *locus.seqs, *([""] * 4), "PASS", "" if locus.ploidy == 1 else "PASS", *([""] * 9), *locus.counts, "30"]
+        lines.append("\t".join(row))
+    return meta("VAR-OLPL") + "\n".join(lines) + "\n"
+
+
+def test_master_var_read_counts_are_ad_over_ref_and_alts(tmp_path: Path) -> None:
+    """`ad` is indexed over `source_alleles = [source_ref] + alts`: REF gets referenceAlleleReadCount,
+    each ALT the count of the slot that carries it. Where a count is missing, a slot's count
+    contradicts another, or an allele is only partly called, `ad` is withheld and the reason counted."""
+    loaded, facet, calls, _ = frames(write(tmp_path, counted_master_var(COUNTED), "masterVarBeta-GS000000003-ASM.tsv.bz2"))
+    assert not {"allele1ReadCount", "allele2ReadCount", "referenceAlleleReadCount", "totalReadCount"} & set(facet["dropped_fields"])
+    rows = by_pos(calls)
+    for locus in COUNTED:
+        row = rows[("1", locus.begin if locus.begin == locus.end else locus.begin + 1)]
+        assert row["ad"] == locus.ad, locus
+        if locus.ad is None:
+            assert row["source_alleles"] is None, locus
+        else:
+            assert row["source_alleles"] == [row["source_ref"], *row["alts"]], locus
+            assert len(row["ad"]) == len(row["source_alleles"])
+        assert row["dp"] == 30
+    reasons = {locus.reason for locus in COUNTED if locus.reason}
+    assert reasons <= cgi.AD_WITHHELD_REASONS
+    assert {w for w in loaded.warnings if "without `ad`" in w} == {f"1 row(s) without `ad`: {reason}" for reason in reasons}
+    # var has no read counts: nothing to index, and nothing withheld to report.
+    var_loaded, _, var_calls, _ = frames(write(tmp_path, var_text(LOCI), "var-GS000000003-ASM.tsv.bz2"))
+    assert var_calls["ad"].null_count() == var_calls.height and var_calls["source_alleles"].null_count() == var_calls.height
+    assert not [w for w in var_loaded.warnings if "without `ad`" in w]
+
+
+# --- hapLink as phase sets ---------------------------------------------------------------------------
+
+
+def snp_locus(chrom: str, begin: int, ref: str, alt: str, links: tuple[str, str] = ("", ""), alt_slot: int = 0) -> Locus:
+    """A het SNV locus whose ALT sits on haplotype `alt_slot + 1`, each haplotype with its hapLink."""
+    haps = [(Seg(begin, begin + 1, "ref", ref, ref, link=links[0]),), (Seg(begin, begin + 1, "ref", ref, ref, link=links[1]),)]
+    haps[alt_slot] = (Seg(begin, begin + 1, "snp", ref, alt, link=links[alt_slot]),)
+    return Locus(chrom, begin, begin + 1, haps=tuple(haps))
+
+
+# Two molecules of one 2.5 phase block (`Phased_1_1_1` and `_2`), the ALT on either slot; a 2.0-style
+# integer id over a haplotype of two sub-rows, and on a haplotype CGI could not call; the same integer
+# on chr2, which is another molecule; and a locus linked to nothing.
+LINKED = [
+    snp_locus("chr1", 9, "A", "G", ("Phased_1_1_1", "Phased_1_1_2")),
+    snp_locus("chr1", 19, "C", "T", ("Phased_1_1_2", "Phased_1_1_1"), alt_slot=1),
+    Locus("chr1", 29, 32, haps=((Seg(29, 31, "ref", "GA", "GA", link="7"), Seg(31, 32, "snp", "T", "C", link="7")), (Seg(29, 32, "ref", "GAT", "GAT"),))),
+    snp_locus("chr1", 39, "A", "G"),
+    Locus("chr1", 49, 50, haps=((Seg(49, 50, "no-call", "A", "?", filter="", link="7"),), (Seg(49, 50, "snp", "A", "G", link="8"),))),
+    snp_locus("chr2", 99, "A", "G", ("7", "")),
+]
+
+
+def linked_slots(loci: list[Locus]) -> set[tuple]:
+    """`(chrom, pos, allele, hapLink)` for every linked haplotype, from the loci as written; a
+    haplotype written `?` is the allele None."""
+    out = set()
+    for locus in loci:
+        for segments in locus.haps:
+            link = next((s.link for s in segments if s.link), "")
+            if link:
+                seq = joined(segments)
+                out.add((locus.chrom.removeprefix("chr"), locus.begin + 1, None if seq == "?" else seq, link))
+    return out
+
+
+def test_hap_links_are_phase_sets_of_their_own_kind(tmp_path: Path) -> None:
+    """A hapLink names a molecule, whatever slot it sits in: both files give the same sets of alleles,
+    though masterVarBeta writes the ALT haplotype first. A linked slot is phased with the id as its
+    set, kind `cgi_haplink`; an unlinked one says nothing (null), and a row with none has no phase."""
+    expected = linked_slots(LINKED)
+    for name, text in (("var-GS000000004-ASM.tsv.bz2", var_text(LINKED)), ("masterVarBeta-GS000000004-ASM.tsv.bz2", master_var_text(LINKED))):
+        _, facet, calls, _ = frames(write(tmp_path, text, name))
+        assert not {"hapLink", "allele1HapLink", "allele2HapLink"} & set(facet["dropped_fields"]), name
+        got = {
+            (row["chrom"], row["pos"], allele, ps)
+            for row in calls.iter_rows(named=True) if row["phase_sets"] is not None
+            for allele, ps in zip(row["gt_alleles"], row["phase_sets"]) if ps is not None
+        }
+        assert got == expected, name
+        for row in calls.iter_rows(named=True):
+            if row["phase_sets"] is None:
+                assert row["phased"] is None and row["phase_set_kinds"] is None, (name, row["pos"])
+                continue
+            assert row["phased"] == [True if ps is not None else None for ps in row["phase_sets"]], (name, row["pos"])
+            assert row["phase_set_kinds"] == ["cgi_haplink" if ps is not None else None for ps in row["phase_sets"]], (name, row["pos"])
+        assert by_pos(calls)[("1", 40)]["phased"] is None, "linked to nothing"
+
+
+def test_a_haplotype_naming_two_hap_links_gets_no_phase(tmp_path: Path) -> None:
+    torn = Locus("chr1", 29, 32, haps=((Seg(29, 31, "ref", "GA", "GA", link="7"), Seg(31, 32, "snp", "T", "C", link="9")), (Seg(29, 32, "ref", "GAT", "GAT", link="8"),)))
+    loaded, _, calls, _ = frames(write(tmp_path, var_text([torn]), "torn.tsv.bz2"))
+    row = by_pos(calls)[("1", 30)]
+    assert (row["gt_alleles"], row["phase_sets"], row["phased"]) == (["GAC", "GAT"], [None, "8"], [None, True]), "the locus stays; one slot loses its phase"
+    assert "1 haplotype(s) whose rows name more than one hapLink left without a phase set" in loaded.warnings
 
 
 # --- var against CGI's own VCF of the same assembly --------------------------------------------------
@@ -540,3 +709,91 @@ def test_real_var_converges_with_its_vcf_beta(real_assembly: dict[str, Loaded]) 
     assert counts["bases_var_ref_vcf_covered"] < 0.001 * counts["bases_var_ref"], counts
     assert counts["bases_var_other_vcf_silent"] < 0.001 * counts["bases_var_other"], counts
 
+
+
+def _snv_slots(calls: pl.LazyFrame, molecule: list[pl.Expr]) -> pl.LazyFrame:
+    """`(chrom, pos, allele)` of every phased slot of a single-base row whose allele sits in one slot
+    only (a hom row says nothing about which molecule is which), with the molecule it is on."""
+    slots = (
+        calls.filter((pl.col("source_ref").str.len_chars() == 1) & pl.col("phased").is_not_null())
+        .with_columns(pl.int_ranges(0, pl.col("gt_alleles").list.len(), dtype=pl.UInt32).alias("_h"))
+        .explode("_h", empty_as_null=False)
+        .with_columns(
+            pl.col("gt_alleles").list.get(pl.col("_h")).alias("allele"),
+            pl.col("phased").list.get(pl.col("_h")).alias("_phased"),
+            pl.col("phase_sets").list.get(pl.col("_h"), null_on_oob=True).alias("_set"),
+            pl.col("phase_sets").list.drop_nulls().list.first().alias("_row_set"),
+        )
+        .filter(pl.col("_phased").fill_null(False) & (pl.col("allele").str.len_chars() == 1))
+    )
+    once = pl.len().over("chrom", "pos", "allele") == 1
+    return slots.filter(once).select("chrom", "pos", "allele", *molecule)
+
+
+def test_real_hap_links_are_the_molecules_of_vcf_beta_phase_sets(real_assembly: dict[str, Loaded]) -> None:
+    """Counts only: CGI's own VCF of the assembly writes the same phasing as PS sets, slot `h` of every
+    record of a set one molecule. Matched at single-base sites, each hapLink is one such molecule and
+    each molecule one hapLink, in var and in masterVarBeta alike.
+
+    On the smallest assembly (2026-10-23, the raw files): 4,190,488 linked single-base slots match a
+    vcfBeta slot, and their 25,010 hapLinks and 25,010 molecules pair one to one. About 2% do not
+    match: 90,181 sit where vcfBeta writes no record (it joins the locus with a neighbour), 52,763
+    where it writes the other haplotype `.`."""
+    vcf = _snv_slots(real_assembly["vcf"].calls, [pl.struct("_row_set", "_h").alias("vcf_molecule")])
+    for name in ("var", "master_var"):
+        links = _snv_slots(real_assembly[name].calls, [pl.col("_set").alias("link")])
+        joined = links.join(vcf, on=["chrom", "pos", "allele"], how="inner")
+        counts = pl.collect_all(
+            [
+                joined.select(pl.len()),
+                links.select(pl.len()),
+                joined.group_by("chrom", "link").agg(pl.col("vcf_molecule").n_unique().alias("n")).select((pl.col("n") > 1).sum(), pl.len()),
+                joined.group_by("chrom", "vcf_molecule").agg(pl.col("link").n_unique().alias("n")).select((pl.col("n") > 1).sum(), pl.len()),
+            ]
+        )
+        matched, total = counts[0].item(), counts[1].item()
+        (split_links, n_links), (merged_molecules, n_molecules) = counts[2].row(0), counts[3].row(0)
+        assert matched > 0.95 * total, (name, matched, total)
+        assert n_links > 0 and split_links == 0, (name, split_links, n_links)
+        assert merged_molecules == 0 and n_molecules == n_links, (name, merged_molecules, n_molecules, n_links)
+
+
+def _format_version(path: Path) -> str | None:
+    """A CGI file's `#FORMAT_VERSION`, read from its head; None where the head names none."""
+    with bz2.open(path, "rt", errors="replace") as text:
+        for _, line in zip(range(40), text):
+            if line.startswith("#FORMAT_VERSION\t"):
+                return line.split("\t", 1)[1].strip()
+            if line.startswith(">"):
+                break
+    return None
+
+
+def test_a_real_format_1_x_var_loads(pgp_participants: Path) -> None:
+    """Counts only. The PGP-HMS census (2026-10-23) has two 1.x `var` files, formats 1.6 and 1.7 (CGA
+    1.11, 1.12), both in GET-Evidence collections; the first in path order is loaded whole. It reads
+    as a genome: whole-genome classes, blocks of both kinds, rs ids and hapLink sets, nothing dropped."""
+    found = next(
+        (path for path in sorted(pgp_participants.glob("*/evidence-*/*.tsv.bz2")) if (_format_version(path) or "").startswith("1.")),
+        None,
+    )
+    if found is None:
+        pytest.skip("no CGI format 1.x var file on disk")
+    loaded = load(found)
+    facet = loaded.facets.collect().row(0, named=True)
+    assert facet["format_id"] == "cgi_var" and facet["caller_version"].startswith("1.")
+    assert facet["dropped_fields"] == ["totalScore"]
+    assert facet["absence_means"] == "blocks" and facet["callset_type"] == "wgs"
+    classes = {entry["variant_class"]: entry["alleles"] for entry in facet["variant_classes"]}
+    assert classes["snv"] > 1_000_000 and classes["indel"] >= 0.05 * sum(classes.values())
+    counts = loaded.calls.select(
+        pl.len().alias("rows"),
+        pl.col("sample_filters").is_not_null().sum().alias("filtered"),
+        pl.col("ids").is_not_null().sum().alias("with_ids"),
+        pl.col("phase_sets").is_not_null().sum().alias("linked"),
+    ).collect().row(0, named=True)
+    assert counts["filtered"] == 0, "1.x has no filter column"
+    assert counts["with_ids"] > 0.3 * counts["rows"] and counts["linked"] > 0, counts
+    kinds = dict(loaded.blocks.group_by("kind").len().collect().iter_rows())
+    assert kinds.get("ref", 0) > 0 and kinds.get("no_call", 0) > 0
+    assert not [w for w in loaded.warnings if "dropped" in w], loaded.warnings

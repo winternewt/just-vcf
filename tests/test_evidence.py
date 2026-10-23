@@ -20,6 +20,7 @@ from just_vcf.evidence import (
     genotype_evidence,
     genotype_evidence_at,
 )
+from just_vcf.schema import ContentFilter, enum_dtype
 from test_load_vcf import vcf_text
 
 DS_LINE = '##FORMAT=<ID=DS,Number=A,Type=Float,Description="Dosage">'
@@ -286,3 +287,17 @@ def test_asking_positions_of_several_facets_is_refused(tmp_path: Path) -> None:
     assert genotype_evidence(both).collect().height == 2, "the row-wise frame takes any number of facets"
     with pytest.raises(ValueError, match="one facet"):
         genotype_evidence_at(both, pl.DataFrame({"chrom": ["1"], "pos": [100]}), variant_class="snv")
+
+
+def test_a_content_filter_holds_absence_back_unless_forced_for_the_kept_class(tmp_path: Path) -> None:
+    """The `.snp.` half of a split delivery: its silence is held back, and `force` lifts it for SNVs only."""
+    loaded = _weak_reference(_vcf(tmp_path, ["1\t100\t.\tA\tG\t50\t.\t.\tGT:GQ:PL:GP\t0/1:30:.:."]))
+    snv_only = pl.lit(ContentFilter.SNV_ONLY.value).cast(enum_dtype(ContentFilter)).alias("content_filter")
+    cut = Loaded(facets=loaded.facets.with_columns(snv_only), calls=loaded.calls, blocks=loaded.blocks)
+    sites = pl.DataFrame({"chrom": ["1"], "pos": [500]})
+    held = genotype_evidence_at(cut, sites, variant_class="snv").row(0, named=True)
+    forced = genotype_evidence_at(cut, sites, variant_class="snv", force=True).row(0, named=True)
+    indel = genotype_evidence_at(cut, sites, variant_class="indel", force=True).row(0, named=True)
+    assert held["grade_basis"] == GradeBasis.ABSENT_UNKNOWN.value
+    assert forced["grade_basis"] == GradeBasis.ABSENT_REFERENCE.value
+    assert indel["grade_basis"] == GradeBasis.ABSENT_UNKNOWN.value, "a class the filter cut stays unknown"

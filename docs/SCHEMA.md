@@ -1489,7 +1489,8 @@ called deletion is not absent. A facet's blocks are taken not to overlap one ano
 CGI's tile the genome), so the block over a site is the last one starting at or before it; only the
 matched records are graded, so a panel's answer does not grade a genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:
 `absent_reference` (asserted, no number, `genotype_index` 0) where `absence_is_reference(facet,
-variant_class)` is True, else `absent_unknown`. Decision 3 rejected a made-up number for an
+variant_class, force=force)` is True, else `absent_unknown`; `force` lifts a content filter's hold for
+the class it kept, as there. Decision 3 rejected a made-up number for an
 unquantified call, and that holds for absence too. `absence_means` comes along on every row, so a
 CGI `reference` silence and a `weak_reference` one stay apart. `coverage=` with `min_depth=` adds
 `callable`, `callable_reason` and the depths of `callable_sites` beside the answer; they change no

@@ -341,6 +341,7 @@ def genotype_evidence_at(
     coverage: Coverage | None = None,
     min_depth: int | None = None,
     gq_on_reference: bool = False,
+    force: bool = False,
 ) -> pl.DataFrame:
     """The graded evidence a one-facet `loaded` holds at each of `sites` (`chrom` canonical, `pos` 1-based).
 
@@ -351,7 +352,8 @@ def genotype_evidence_at(
     both. A site nothing covers gets one row, `evidence_basis = absence`: `absent_reference` (asserted,
     no number, `genotype_index` 0) where `absence_is_reference(facet, variant_class)` is True, and
     `absent_unknown` otherwise. `variant_class` is the class of variant the question is about; a
-    facet's silence speaks only for the classes it called. `absence_means` comes along on every row,
+    facet's silence speaks only for the classes it called. `force` is `absence_is_reference`'s: it lifts
+    a content filter's hold for the class the filter kept (the `.snp.` half of a split delivery). `absence_means` comes along on every row,
     so `reference` and `weak_reference` stay apart.
 
     `coverage` (with `min_depth`, which has no default) adds `callable`, `callable_reason` and the
@@ -404,7 +406,7 @@ def genotype_evidence_at(
         .collect()
     )  # fmt: skip
     absent = asked.join(covered.select("_site").unique(), on="_site", how="anti")
-    reads_reference = absence_is_reference(facet, asked_class) is True
+    reads_reference = absence_is_reference(facet, asked_class, force=force) is True
     absence = absent.with_columns(
         pl.lit(facet["facet_id"]).alias("facet_id"),
         pl.lit(EvidenceBasis.ABSENCE.value).cast(enum_dtype(EvidenceBasis)).alias("evidence_basis"),

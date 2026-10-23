@@ -1463,7 +1463,7 @@ reading) into every cache spill and need a version bump each time they move.
   that does not record which key was written (Decision 3 makes them load equal), so there is one basis
   for both; telling them apart would take a stored column.
 - `gq`: a fully called genotype carrying an ALT, with a GQ. VCF defines GQ as conditional on the site
-  being variant ("Other VCF 4.5 points" below), so by default GQ grades no reference genotype and no
+  being variant ("Other VCF 4.5 points" above), so by default GQ grades no reference genotype and no
   reference block; `gq_on_reference=True` lets it, as single-sample callers compute it. The called
   genotype gets `1 - 10^(-GQ/10)` and the rest is spread evenly over the other genotypes, which the
   source did not rank (`prior = even_remainder`); `confidence` is GQ. No vector beyond diploid, or for a
@@ -1486,7 +1486,8 @@ positive sum. Otherwise the row falls to the next basis; nothing is patched.
 `calls` row from `pos` to `end_pos`, or its `pos` alone where the span is unknown; a `blocks` row over
 its span), graded as above, with the record's span as `record_pos`, `record_end_pos`. A site inside a
 called deletion is not absent. A facet's blocks are taken not to overlap one another (a gVCF's and
-CGI's tile the genome), so the block over a site is the last one starting at or before it; only the
+CGI's tile the genome; none of 10.8M CGI `var` blocks or 14.6M DeepVariant blocks overlaps its
+predecessor), so the block over a site is the last one starting at or before it; only the
 matched records are graded, so a panel's answer does not grade a genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:
 `absent_reference` (asserted, no number, `genotype_index` 0) where `absence_is_reference(facet,
 variant_class, force=force)` is True, else `absent_unknown`; `force` lifts a content filter's hold for
@@ -1511,9 +1512,9 @@ Measured 2026-10-23 on PGP-HMS facets, each asked at the packaged relatedness pa
 
 No PGP facet carried both GQ and likelihoods on a reference genotype, so the GQ reading was checked on
 a local DeepVariant gVCF (aggregates only): on 1.32M hom-ref calls GQ is within 1.5 of the confidence
-their PL gives (capped at 99, as DeepVariant caps GQ) for 96.6%, which is what `gq_on_reference=True`
+their PL gives (clipped at 99, the highest GQ DeepVariant wrote on them) for 96.6%, which is what `gq_on_reference=True`
 assumes. On its 13.6M reference blocks only 26.9% agree, median difference 49: a block's GQ is the
-band's floor, its PL is not, so a block graded by its likelihoods (median 291) states more than its
+band's floor (at most 50 there), its PL is not, so a block graded by its likelihoods (median 291) states more than its
 weakest base supports. Which of the two should grade a block is the person's call; until then a
 block is graded by its likelihoods, as written.
 

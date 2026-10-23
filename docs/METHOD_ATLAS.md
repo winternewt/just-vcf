@@ -103,9 +103,10 @@ ids (`assembly_check = content`, `pairing = vrs`).
 
 Two conventions sit inside these pairs' counts and are not method error:
 
-- **X outside the PARs is haploid in CGI and diploid in freeBayes.** Every allele both call there is
-  `ploidy_differs`: 72,462 and 64,818 SNVs, 65% and 67% of the pairs' discordant SNVs. The tables here
-  therefore give **mismatch over called-both**, which leaves `ploidy_differs` out; the atlas's
+- **X outside the PARs is haploid in CGI and diploid in freeBayes** (every genotype there: CGI writes
+  one allele, freeBayes two). Every allele both call there is `ploidy_differs`: 72,462 and 64,818
+  SNVs, 65% and 67% of the pairs' discordant SNVs. The tables here therefore give **mismatch over
+  called both**: `ploidy_differs` is left out of the count and stays in `called_both`. The atlas's
   `discordance_rate` (3.40% and 3.07% for SNVs) is in the full table.
 - **A complex freeBayes row can hold the allele under another spelling.** freeBayes writes a
   haplotype as one multi-allelic row: REF `CGCCC`, ALT `TGCCT,TGCCC`, GT `TGCCT/TGCCT`. Its ALT
@@ -132,23 +133,29 @@ carried sibling) out of both counts.
 | CGA 2.5.0.24 / freeBayes 0.9.20 | indel | 1,193,130 | 53.12 | 99.03 | 819,248 | 342,076 | 8.05 | 6.79 | 52.93 | 60 |
 
 Pairing by VRS id is what the indels needed. The two spellings of one indel used to count as two
-one-sided alleles: carried indels fall by a third (1.44 million to 0.99 million), the indels both
-facets call rise from 11,891 to 410,440, and one-sided indels drop from 99% to 53%, 16 to 18% in
-GIAB's easy regions. SNVs barely move: with the complex-row mismatches taken out, the mismatch rate
-is the first build's to two decimals (an SNV's VRS id and its position and spelling name one allele),
-which says the new pairing added no other error. `uncalled` grows with it (indels 420 to 43,543, as
-CGI's half-calls now meet freeBayes), so `called_both` is less than the carried alleles minus the
-one-sided ones. MNVs are in the full table; complex rows are a larger share of them, and their mean
-`p_same` falls (0.93 to 0.66 on one pair) for the same reason.
+one-sided alleles: in the CGA 2.5.0.44 pair carried indels fall by a third (1.44 million to 0.99
+million) and the indels both facets call rise from 11,891 to 410,440; in both pairs one-sided indels
+drop from 99% to 53%, 16 to 18% in GIAB's easy regions. SNVs barely move: with the complex-row
+mismatches taken out, the mismatch rate is the first build's to two decimals (an SNV's VRS id and
+its position and spelling name one allele), which says the new pairing added no other error.
+`uncalled` grows with it (indels 420 to 43,543 in the CGA 2.5.0.24 pair, as CGI's half-calls now meet
+freeBayes), so `called_both` is less than the carried alleles minus the one-sided ones. MNVs are in
+the full table; complex rows are a larger share of them, and their mean `p_same` falls (0.93 to 0.66
+in the CGA 2.5.0.44 pair) for the same reason.
 
-**SNV mismatch, % of called both** (by VRS id; `ploidy_differs` left out)
+The artefact is counted for region `all` only. The VRS-paired SNV rates per region carry it in every
+class, so the SNV table below is the first build's, by position, which has no artefact and agrees
+with the VRS pairing once it is taken out (above). The indel table is the VRS pairing's, complex rows
+still in.
+
+**SNV mismatch, % of called both** (by position, the first build; `ploidy_differs` left out)
 
 | Methods (a / b) | all | easy | difficult | low mappability | segdups | homopolymer 7–11 | homopolymer ≥12 | TR 51–200 bp | TR 201–10k bp | GC <25 or >65 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| CGA 2.5.0.44 / freeBayes 0.9.15 | 1.19 | 0.89 | 2.83 | 3.90 | 2.94 | 2.64 | 15.58 | 4.72 | 3.68 | 1.50 |
-| CGA 2.5.0.24 / freeBayes 0.9.20 | 1.02 | 0.64 | 3.25 | 3.83 | 2.02 | 3.50 | 24.82 | 4.78 | 3.11 | 2.44 |
+| CGA 2.5.0.44 / freeBayes 0.9.15 | 0.49 | 0.29 | 1.60 | 2.70 | 1.63 | 1.25 | 10.75 | 3.12 | 2.53 | 0.67 |
+| CGA 2.5.0.24 / freeBayes 0.9.20 | 0.93 | 0.55 | 3.08 | 3.70 | 1.89 | 3.25 | 24.69 | 4.35 | 2.86 | 2.35 |
 
-**Indel mismatch, % of called both** (by VRS id; `ploidy_differs` left out)
+**Indel mismatch, % of called both** (by VRS id, complex rows still in; `ploidy_differs` left out)
 
 | Methods (a / b) | all | easy | difficult | low mappability | segdups | homopolymer 7–11 | homopolymer ≥12 | TR 51–200 bp | TR 201–10k bp | GC <25 or >65 |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -168,18 +175,18 @@ The 95% Wilson intervals of these `all` and `easy` cells are within ±0.2 percen
 
 Reading them:
 
-- **Easy regions mostly agree across technologies.** Away from X's ploidy and the complex rows, CGI
-  and freeBayes disagree on 0.6 to 0.9% of SNV genotypes in easy regions and 1.5 to 3.0% of indel
-  genotypes, several times the same-reads callers' rate (0.05 to 0.40% SNV) but the same order.
-  Homopolymers of 12 or more bases are again the worst class, at 15 to 27%.
+- **Easy regions mostly agree across technologies.** Leaving X's ploidy out, CGI and freeBayes
+  disagree on 0.29 to 0.55% of SNV genotypes in easy regions, around the same-reads callers' rate
+  (0.05 to 0.40%), and on 1.5 to 3.0% of indel genotypes with complex rows still in. Homopolymers of
+  12 or more bases are again the worst class, at 11 to 27%.
 - **One-sided alleles are the larger difference.** A quarter to a third of carried SNVs, and half the
   indels, are stated by one side only, rising to 75 to 90% in low mappability, segmental duplications
   and long tandem repeats. Most are freeBayes's (`only_b` is 6 times `only_a` for SNVs), and in
   55 to 60% of them the silent side reads as reference (`one_sided_reference`: a reference block over
   the position, or a whole-genome facet's absence rule), a stated disagreement, where the rest is
-  silence. In the CGA 2.5.0.24 pair, 262,836 of the
-  freeBayes alleles lie on `hs37d5` and `NC_007605`, which the CGI facet never declared; they are
-  one-sided with `absence = unknown` and fall in `all` only.
+  silence. In the CGA 2.5.0.24 pair, 262,836 freeBayes alleles (before the carried and PASS
+  filters) lie on `hs37d5` and `NC_007605`, which the CGI facet never declared; they are one-sided
+  with `absence = unknown` and fall in `all` only.
 
 X and Y classes are in the full table only: for a private pair they would state an aggregate about
 the person's sex chromosomes.

@@ -38,6 +38,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   disagree. `LINKS` and `link_disagreements` are exported. No column of the other frames changes; the
   schema version is not bumped.
 
+- A command line, `just-vcf` (RM272): `sniff`, `load` (a summary of each facet), `check` (REF read
+  from a reference, `ref_check` and withheld VRS ids counted) and `convert` (to VCF or gVCF through
+  `write_vcf`, with `--reference`, `--normalize`, `--lift` and `--target-reference`, `--vrs`, `--gvcf`,
+  `--resolved-only`). It prints counts and aggregates only, as text or `--json`; `--sample` is never
+  echoed, library warnings and refusals are redacted of the input's path, file name, sample and member,
+  and logging is off while a command runs (polars-bio's import configures the root logger, which would
+  print each library warning unredacted). Refusals exit 3 to 11, one code per kind (`cli.ExitCode`); a
+  crash exits 1 with its message withheld. No column changes; typer and python-dotenv were already core.
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

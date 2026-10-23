@@ -1467,6 +1467,91 @@ Rejected, each with its cost:
   windows with exact bounds answer the same questions. `alignment_coverage` reads `depth()`'s
   per-base mode, which peaks lower than its block mode (docs/ROADMAP.md RM278).
 
+## Graded genotype evidence: computed on demand, not stored (layer 7, charter 7)
+
+The frames keep each quantity as the source wrote it (Decision 3). `just_vcf.evidence` reads them into
+one graded value a consumer can rank and compare across sources, and stores nothing: it is a function
+over `calls` and `blocks`, like `sex_chromosome_evidence`, so no column changes and `SCHEMA_VERSION`
+stays. The shape is just-vcf's own (charter 2): VRS 2.x has no genotype model and GA4GH defines no
+graded-evidence value. Rejected: a stored column, which would freeze today's rules (the prior, the GQ
+reading) into every cache spill and need a version bump each time they move.
+
+`genotype_evidence(loaded)` gives one row per `calls` row and per `blocks` row (`GENOTYPE_EVIDENCE`):
+`facet_id`, `chrom`, `pos`, `end_pos`, `evidence_basis` (the origin, Decision 3: `assay` or
+`ref_block`), `block_kind`, and
+
+| Column | Meaning |
+|---|---|
+| `grade_basis` | which quantity the value rests on (below). Never null |
+| `confidence_kind` | `quantified` (a number), `asserted` (a genotype stated without a quantity) or `unknown` (none stated). It follows from the basis, and is a column so that a null `confidence` is never read as a low one |
+| `genotype_alleles` | the alleles `genotype_probabilities` and `genotype_index` index: `source_alleles` for a vector (Decision 2: never reordered; for a VCF row that is `[source_ref] + alts`), `[source_ref or ref] + alts` for a genotype, which is what `gt` indexes, and `[null, "<*>"]` for a block, whose REF base the frame does not keep |
+| `genotype_probabilities` | `list[f64]`, one probability per genotype in VCF genotype order at the row's ploidy; null where the source supports no vector |
+| `prior` | how the vector was made: `source` (GP as given, under whatever prior the source used), `flat` (GL/PL normalized with every genotype equally likely beforehand, just-vcf's choice), `even_remainder` (GQ alone, below) |
+| `genotype_index` | the genotype `confidence` speaks for: the top one of a vector (the first on a tie), or the called one (`gt`, haploid or diploid). 0 for reference asserted by a block or by absence |
+| `confidence` | phred-like: `-10·log10(1 - p)` of that genotype, from 0 (no confidence; a flat three-genotype vector gives 1.76) up. Null where nothing quantifies it, never 0 for unknown. Infinite where the source gave every other genotype probability zero (a rounded GP `0,1,0`); it is computed in log space, so a PL of 3,000 gives 3,000 and not infinity by rounding |
+
+**The bases**, the first that applies to a row:
+
+- `gp`: a usable GP vector, as written.
+- `gl`: a usable likelihood vector, normalized under a flat prior. GL and PL load into one `gl` column
+  that does not record which key was written (Decision 3 makes them load equal), so there is one basis
+  for both; telling them apart would take a stored column.
+- `gq`: a fully called genotype carrying an ALT, with a GQ. VCF defines GQ as conditional on the site
+  being variant ("Other VCF 4.5 points" above), so by default GQ grades no reference genotype and no
+  reference block; `gq_on_reference=True` lets it, as single-sample callers compute it. The called
+  genotype gets `1 - 10^(-GQ/10)` and the rest is spread evenly over the other genotypes, which the
+  source did not rank (`prior = even_remainder`); `confidence` is GQ. No vector beyond diploid, or for a
+  block, whose ploidy the frame does not keep without its likelihoods.
+- `dosage`: only a dosage. One number gives no vector (Decision 3), so no vector and no number.
+- `gt_only`: a genotype with at least one allele called and no quantity: asserted, unquantified. A
+  half-call (`0/.`) is here even with a GQ: there is no one genotype for GQ to grade.
+- `block`: a `ref` block with no quantity (CGI's native blocks): reference asserted, unquantified.
+- `no_call`: the source wrote that it looked and called nothing (`./.`, a `no_call` block) and gave no
+  vector: unknown. A no-call that carries likelihoods is graded by them (a gVCF `./.` block with PL
+  `0,0,0` is `gl` at 1.76).
+- `absent_reference` and `absent_unknown`: only from `genotype_evidence_at` (below).
+
+A vector is usable when it has one value per genotype at the row's ploidy (GT's, else diploid as the
+spec says, ploidy 1 to 4), at least two genotypes, no missing value, and for GP no negative value and a
+positive sum. Otherwise the row falls to the next basis; nothing is patched.
+
+**Asked positions.** `genotype_evidence_at(loaded, sites, variant_class=…)` answers a one-facet
+`loaded` at each `chrom, pos` (`GENOTYPE_EVIDENCE_AT`): one row per record that covers the site (a
+`calls` row from `pos` to `end_pos`, or its `pos` alone where the span is unknown; a `blocks` row over
+its span), graded as above, with the record's span as `record_pos`, `record_end_pos`. A site inside a
+called deletion is not absent. A facet's blocks are taken not to overlap one another (a gVCF's and
+CGI's tile the genome; none of 10.8M CGI `var` blocks or 14.6M DeepVariant blocks overlaps its
+predecessor), so the block over a site is the last one starting at or before it; only the
+matched records are graded, so a panel's answer does not grade a genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:
+`absent_reference` (asserted, no number, `genotype_index` 0) where `absence_is_reference(facet,
+variant_class, force=force)` is True, else `absent_unknown`; `force` lifts a content filter's hold for
+the class it kept, as there. Decision 3 rejected a made-up number for an
+unquantified call, and that holds for absence too. `absence_means` comes along on every row, so a
+CGI `reference` silence and a `weak_reference` one stay apart. `coverage=` with `min_depth=` adds
+`callable`, `callable_reason` and the depths of `callable_sites` beside the answer; they change no
+basis, because reads reaching a base are not a call (coverage facets, above).
+
+Measured 2026-10-23 on PGP-HMS facets, each asked at the packaged relatedness panel's 15,289 SNVs:
+
+| Facet | Bases of its rows | Panel sites |
+|---|---|---|
+| 23andMe, AncestryDNA, Living DNA, Genes for Good (array and its 23andMe-layout imputed export, which writes no probabilities) | `gt_only`, `no_call` 0.0–1.9% | 26–51% `gt_only`, rest `absent_unknown` |
+| Genos exome VCF (GATK, gVCF-banded) | `gl` 44,784 (confidence p10/p50/p90 102/581/2,473), `no_call` blocks 259,070 | 46% `gl`, 25% `no_call` block, 29% `absent_unknown` |
+| CGI `var` (whole genome) | `gt_only` 4.2M, `block` 7.7M, `no_call` 3.1M blocks and 356k calls | 60% `gt_only`, 38% `block`, 2% `no_call`; none absent |
+| CGI VCF of the same genome | `gl` 4.16M (3/357/1,022 at p1/p50/p90), `gt_only` 48,655, `no_call` blocks | 60% `gl`, **5,763 `absent_reference`: the same 5,763 sites its `var` file calls with a `ref` block** |
+| DRAGEN `.snp.` half (GP) | `gp` 3.86M (41/48/175) | 62% `gp`, 38% `absent_unknown` (its `content_filter` holds absence back unless `force`) |
+| DRAGEN `.indel.` half | `gp` 956,057 | all `absent_unknown`: an SNV question, an indel-only cut |
+| Isaac/Starling GRCh38 VCF | `gq` 4.63M (45/137/235) | 62% `gq`, 38% `absent_reference` |
+| PGP freeBayes + VarScan2, the two caller facets | freeBayes `gl` 4.85M (42/97/97), `gt_only` 114,598; VarScan2 `gq` 340,150 (16/42/141) | freeBayes 59% `gl`, 40% `absent_reference`; VarScan2 2% `gq`, rest `absent_unknown` |
+
+No PGP facet carried both GQ and likelihoods on a reference genotype, so the GQ reading was checked on
+a local DeepVariant gVCF (aggregates only): on 1.32M hom-ref calls GQ is within 1.5 of the confidence
+their PL gives (clipped at 99, the highest GQ DeepVariant wrote on them) for 96.6%, which is what `gq_on_reference=True`
+assumes. On its 13.6M reference blocks only 26.9% agree, median difference 49: a block's GQ is the
+band's floor (at most 50 there), its PL is not, so a block graded by its likelihoods (median 291) states more than its
+weakest base supports. Which of the two should grade a block is the person's call; until then a
+block is graded by its likelihoods, as written.
+
 ## The cache under the lazy frames (RM268)
 
 The frames `load` and the derived steps return are lazy scans over files in `cache_dir()`

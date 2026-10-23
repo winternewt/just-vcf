@@ -35,6 +35,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   results to files, are daemonic and are killed when a test fails, and a missed deadline prints each
   live child's stack. Test-only: the library starts no processes.
 
+- Graded genotype evidence across sources (layer 7, charter 7): `genotype_evidence(loaded)` gives every
+  `calls` and `blocks` row a probability vector over its genotypes in VCF order where the source
+  supports one (GP as given; GL/PL normalized under a flat prior, named in `prior`; GQ alone on its
+  called genotype, the rest spread evenly), a phred-like `confidence` (null where nothing quantifies it,
+  never 0 for unknown) and its `grade_basis` (`gp`, `gl`, `gq`, `dosage`, `gt_only`, `block`, `no_call`);
+  `genotype_evidence_at(loaded, sites, variant_class=…)` adds a facet's absence reading at asked
+  positions (`absent_reference`, `absent_unknown`, through `absence_is_reference`) and, with
+  `coverage=`, callability beside it. Computed, not stored: no column changes and `SCHEMA_VERSION`
+  stays. GQ grades no reference genotype unless `gq_on_reference=True` (VCF defines it conditional on
+  the site being variant). docs/SCHEMA.md, "Graded genotype evidence".
+
 - Schema 0.0.15: `calls.phase_set_ordinals`, `phase_set_qualities` (VCF 4.4+ PSO/PSQ); PSL phase sets load and
   write back under VCF 4.5.
 

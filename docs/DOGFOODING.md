@@ -55,4 +55,3 @@ probe tests GSA's allele. A learned probe set cannot settle it either: PGP-HMS h
 export, and learning its site alleles from the same person's WGS would make the array agree with that
 WGS by construction (a value filled from the source that checks it). Stays open until a second
 source of the Sirius chip's site alleles appears.
-

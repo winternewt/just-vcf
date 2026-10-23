@@ -4,6 +4,27 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- docs/METHOD_ATLAS.md: the two PGP-HMS CGI pairs rebuilt with F21 and F22. SNV discordance falls
+  from 3.40% to 0.54% and from 3.07% to 1.02%, indel from 7.95% to 4.98% and from 10.41% to 7.92%;
+  the per-region SNV table is now the VRS pairing's, with no complex-row artefact left to take out.
+
+- **Breaking:** `concordance` reads a haploid call against the same allele's diploid homozygote (a
+  male's X outside the PARs, `1` against `1/1`) as `match`, with a new `sites.ploidy_differs` flag
+  (null on a one-sided allele) that `summary` groups by (F22). `Agreement.PLOIDY_DIFFERS` is removed:
+  a haploid call against a het is a `mismatch`. The atlas's `ploidy_differs` now counts the flagged
+  alleles of `called_both`, which is `match + mismatch`, and `discordant` is `mismatch`, so the
+  convention leaves the discordance rate. The graded comparison meets a haploid `k` with a diploid
+  `2k`.
+
+- `concordance` reads each side's genotype for the allele's change in its own row (F21). A complex
+  multi-allelic row met by VRS id (freeBayes REF `CGCCC`, ALT `TGCCT,TGCCC`, GT `TGCCT/TGCCT` against
+  `C>T` `T/T`) now reads two copies instead of zero, where the other ALT holds the same change; one
+  that cannot be read (another length over the allele's span) is never zero copies. New `agreement`
+  value `unreadable` for a pair that leaves undecided, and a matching `unreadable` count in the
+  atlas, outside `called_both`; the graded distribution and the `site` pairing read alleles the same
+  way, and the atlas counts an allele carried where `concordance` read a copy under another spelling.
+  An added enum value and column: minor.
+
 - `scripts/method_atlas.py` mints VRS ids on both facets of a pair once REF is read, so alleles pair
   by VRS id (`--no-mint` pairs by position and spelling, as before); `method_atlas.pairs.tsv` gains a
   `pairing` column. The atlas's two PGP-HMS pairs (CGI vcfBeta against freeBayes) were rebuilt that

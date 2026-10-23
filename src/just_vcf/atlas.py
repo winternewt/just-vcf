@@ -156,6 +156,7 @@ COUNTS = pl.Schema(
         "mismatch": pl.UInt64,
         "ploidy_differs": pl.UInt64,
         "uncalled": pl.UInt64,
+        "unreadable": pl.UInt64,
         "only_a": pl.UInt64,
         "only_b": pl.UInt64,
         "one_sided_reference": pl.UInt64,
@@ -190,6 +191,7 @@ ATLAS = pl.Schema(
         "one_sided_ci_high": pl.Float64,
         "one_sided_reference": pl.UInt64,
         "uncalled": pl.UInt64,
+        "unreadable": pl.UInt64,
         "graded_gl": pl.UInt64,
         "p_same_gl_mean": pl.Float64,
         "graded_gp": pl.UInt64,
@@ -262,8 +264,8 @@ def pool_counts(counts: Iterable[pl.DataFrame]) -> pl.DataFrame:
     if not frames:
         return pl.DataFrame(schema=ATLAS)
     pooled = pl.concat([frame.select(COUNTS.names()).cast(dict(COUNTS)) for frame in frames]).group_by(_KEYS).agg(pl.col(_SUMMED).sum())
-    called = pl.col("match") + pl.col("mismatch") + pl.col("ploidy_differs")
-    discordant = pl.col("mismatch") + pl.col("ploidy_differs")
+    called = pl.col("match") + pl.col("mismatch")
+    discordant = pl.col("mismatch")
     one_sided = pl.col("only_a") + pl.col("only_b")
     atlas = pooled.with_columns(
         called.alias("called_both"),
@@ -334,7 +336,10 @@ def _passes(side: str) -> pl.Expr:
 
 def _counts(sites: pl.DataFrame, regions: RegionSet) -> pl.DataFrame:
     """Counts per (region class, variant class, scope) over one pair's `sites`."""
-    carries = pl.col("a_gt_alleles").list.contains(pl.col("alt")).fill_null(False) | pl.col("b_gt_alleles").list.contains(pl.col("alt")).fill_null(False)
+    # A genotype carries the allele where it spells it, or where it holds it under another ALT of its
+    # row (a complex row met by VRS id, whose copies `concordance` read from the change).
+    spelled = pl.col("a_gt_alleles").list.contains(pl.col("alt")).fill_null(False) | pl.col("b_gt_alleles").list.contains(pl.col("alt")).fill_null(False)
+    carries = spelled | (pl.col("a_copies") > 0).fill_null(False) | (pl.col("b_copies") > 0).fill_null(False)
     probe = (
         sites.filter(carries)
         .with_columns(pl.col("pos").cast(pl.Int64).alias("_at"), (_passes("a") & _passes("b")).alias("_pass"))
@@ -360,6 +365,7 @@ def _tally(sites: pl.DataFrame) -> pl.DataFrame:
     tallied = sites.group_by("variant_class").agg(
         pl.len().cast(pl.UInt64).alias("alleles"),
         *[_count(agreement == value.value).alias(value.value) for value in Agreement],
+        _count(pl.col("ploidy_differs") & agreement.is_in([Agreement.MATCH.value, Agreement.MISMATCH.value])).alias("ploidy_differs"),
         _count(one_sided_reference & agreement.is_in([Agreement.ONLY_A.value, Agreement.ONLY_B.value])).alias("one_sided_reference"),
         _count(gl).alias("graded_gl"),
         pl.col("p_same").filter(gl).sum().cast(pl.Float64).alias("p_same_gl_sum"),

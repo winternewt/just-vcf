@@ -106,7 +106,13 @@ def test_genotypes_compare_as_copies_of_the_allele(tmp_path: Path, store: Refere
         ("./.", "0/1", Agreement.UNCALLED),  # the source looked and could not tell
         ("1/.", "1/1", Agreement.UNCALLED),
         ("1/.", "0/0", Agreement.MISMATCH),  # the called haplotype already contradicts
-        ("1", "1/1", Agreement.PLOIDY_DIFFERS),
+        # A haploid call against the same allele's homozygote: every copy holds it on both (F22).
+        ("1", "1/1", Agreement.MATCH),
+        ("0", "0/0", Agreement.MATCH),
+        ("1", "0/1", Agreement.MISMATCH),  # a haploid call against a het: they disagree
+        ("0", "1/1", Agreement.MISMATCH),
+        ("1", "1/.", Agreement.UNCALLED),  # 1/1 or 1/0: not decided
+        ("1", "0/.", Agreement.MISMATCH),  # neither completion is a homozygote of the allele
     ]
     positions = [20 + 30 * i for i in range(len(cases))]
     a = facet(tmp_path, "a", [snv("1", p, ga) for p, (ga, _, _) in zip(positions, cases)], store)
@@ -122,6 +128,23 @@ def test_genotypes_compare_as_copies_of_the_allele(tmp_path: Path, store: Refere
     # Copies are the allele's count in each genotype, null where a haplotype is uncalled.
     expect_a = [None if "." in ga else ga.count("1") for ga, _, _ in cases]
     assert sites["a_copies"].to_list() == expect_a
+    # The ploidy is a flag of its own, beside the agreement.
+    assert sites["ploidy_differs"].to_list() == [len(ga.split("/")) != len(gb.split("/")) for ga, gb, _ in cases]
+    flagged = result.summary.filter(pl.col("ploidy_differs"))
+    assert int(flagged["alleles"].sum()) == sum(len(ga.split("/")) != len(gb.split("/")) for ga, gb, _ in cases)
+
+
+def test_a_haploid_call_is_graded_against_a_diploid_one_by_the_share_of_copies(tmp_path: Path, store: ReferenceStore) -> None:
+    # Haploid `k` copies are the same genotype as diploid `2k`: p_same = pa(0) pb(0) + pa(1) pb(2) (F22).
+    pl_a, pl_b = [60, 0], [70, 30, 0]
+    a = facet(tmp_path, "a", [snv("X", 100, "1", PL=",".join(map(str, pl_a))), snv("X", 200, "0/1")], store)
+    b = facet(tmp_path, "b", [snv("X", 100, "1/1", PL=",".join(map(str, pl_b)))], store)
+    sites = {row["pos"]: row for row in concordance(a, b).sites.collect().iter_rows(named=True)}
+    pa, pb = _flat(pl_a), _flat(pl_b)
+    assert (sites[100]["agreement"], sites[100]["ploidy_differs"], sites[100]["basis"]) == ("match", True, "gl_flat_prior")
+    assert sites[100]["p_same"] == pytest.approx(pa[0] * pb[0] + pa[1] * pb[2], rel=1e-6)
+    # A one-sided allele has no second genotype: whether the ploidies differ is unknown.
+    assert (sites[200]["agreement"], sites[200]["ploidy_differs"]) == ("only_a", None)
 
 
 def test_a_shifted_deletion_meets_its_twin_by_vrs_id(tmp_path: Path, store: ReferenceStore) -> None:
@@ -180,6 +203,61 @@ def test_a_row_over_another_span_is_not_read_for_copies(tmp_path: Path, store: R
     rows = {row["alt"]: row for row in concordance(a, b).sites.collect().iter_rows(named=True)}
     lone = rows[other(base("1", 100))]
     assert (lone["agreement"], lone["key"], lone["absence"], lone["b_copies"], lone["b_gt_alleles"]) == ("only_a", None, "other_alleles", None, None)
+
+
+def _complex_row(pos: int, siblings: list[str], gt: str, **extra: str) -> Record:
+    """A haplotype caller's multi-allelic row over five bases at `pos`, with `siblings` as its ALTs."""
+    return ("1", pos, base("1", pos, 5), ",".join(siblings), gt, extra)
+
+
+def test_a_vrs_met_allele_is_read_in_terms_of_its_own_change_in_a_complex_row(tmp_path: Path, store: ReferenceStore) -> None:
+    # `b` writes a haplotype as one row over r0..r4 (F21). Its ALT `x r1 r2 r3 r4` trims to `r0>x`, so its
+    # VRS id is `a`'s SNV and the two meet; the genotype holds the other ALT. At 100 that ALT is
+    # `x r1 r2 r3 y`, which holds `r0>x` too; at 300 it is `r0 r1 r2 r3 y`, which holds r0, a true
+    # mismatch; at 500 it replaces r0 r1 with one base, another length over the allele's span, which
+    # cannot be read; at 700 it deletes r4, away from the span, and holds r0.
+    def five(pos: int) -> str:
+        return base("1", pos, 5)
+
+    x = {p: other(five(p)[0]) for p in (100, 300, 500, 700)}
+    met = {p: x[p] + five(p)[1:] for p in x}
+    sibling = {
+        100: x[100] + five(100)[1:4] + other(five(100)[4]),
+        300: five(300)[:4] + other(five(300)[4]),
+        500: other(five(500)[0], skip=five(500)[1]) + five(500)[2:],
+        700: five(700)[:4],
+    }
+    pl_b = [90, 60, 0, 80, 70, 99]  # over REF, sibling, met: the sibling's homozygote (1/1) by far
+    gt_b = {100: "1/1", 300: "1/1", 500: "1/1", 700: "1/2"}
+    b_rows = [_complex_row(p, [sibling[p], met[p]], gt_b[p], **({"PL": ",".join(map(str, pl_b))} if p in (100, 300) else {})) for p in sorted(x)]
+    a_rows = [snv("1", p, "1/1", alt=x[p], PL="99,60,0") for p in (100, 300)] + [snv("1", 500, "1/1", alt=x[500]), snv("1", 700, "0/1", alt=x[700])]
+    result = concordance(facet(tmp_path, "a", a_rows, store, mint=True), facet(tmp_path, "b", b_rows, store, mint=True))
+    sites = {row["pos"]: row for row in result.sites.collect().iter_rows(named=True) if row["key"] == "vrs"}
+    assert set(sites) == set(x)
+    assert (sites[100]["agreement"], sites[100]["a_copies"], sites[100]["b_copies"]) == ("match", 2, 2)
+    # The graded comparison reads the same: b's likelihood sits on two copies of the change.
+    carry = [0, 1, 1]  # copies of `r0>x` that REF, the sibling and the met ALT each hold
+    order = sorted(itertools.combinations_with_replacement(range(3), 2), key=lambda jk: (jk[1], jk[0]))
+    pb = [sum(w for w, (j, k) in zip(_flat(pl_b), order) if carry[j] + carry[k] == n) for n in range(3)]
+    pa = _flat([99, 60, 0])
+    assert sites[100]["basis"] == "gl_flat_prior"
+    assert sites[100]["p_same"] == pytest.approx(sum(p * q for p, q in zip(pa, pb)), rel=1e-6)
+    assert (sites[300]["agreement"], sites[300]["b_copies"]) == ("mismatch", 0)
+    assert (sites[500]["agreement"], sites[500]["b_copies"]) == ("unreadable", None)
+    assert any("unreadable" in line for line in result.warnings)
+    assert (sites[700]["agreement"], sites[700]["b_copies"]) == ("match", 1)
+
+
+def test_a_multi_allelic_indel_row_reads_its_other_length_as_another_allele(tmp_path: Path, store: ReferenceStore) -> None:
+    # At the CA repeat, `b` writes a deletion and an insertion of one unit in one row, GT 1/2. The
+    # insertion is another allele of the site, not unreadable: one copy of the deletion, as `a` says.
+    anchor = REPEAT_AT - 1
+    ref = base("1", anchor, 3)
+    a = facet(tmp_path, "a", [("1", anchor, ref, ref[0], "0/1", {})], store, mint=True)
+    b = facet(tmp_path, "b", [("1", anchor, ref, f"{ref[0]},{ref}CA", "1/2", {})], store, mint=True)
+    sites = concordance(a, b).sites.collect()
+    deletion = sites.filter(pl.col("key") == "vrs").row(0, named=True)
+    assert (deletion["agreement"], deletion["a_copies"], deletion["b_copies"]) == ("match", 1, 1)
 
 
 def test_a_silent_facet_says_what_its_absence_means(tmp_path: Path, store: ReferenceStore) -> None:
@@ -378,7 +456,8 @@ def test_real_upload_against_its_own_normalized_facet(pgp_participants: Path, te
     sites = result.sites.collect()
     counts = dict(sites.group_by("agreement").len().iter_rows())
     assert counts.get("match", 0) > 1000
-    assert not {"mismatch", "ploidy_differs", "only_a", "only_b"} & set(counts), counts
+    assert not {"mismatch", "unreadable", "only_a", "only_b"} & set(counts), counts
+    assert not sites["ploidy_differs"].any()
     multi = (
         one.calls.filter((pl.col("alts").list.len() > 1) | pl.col("gt_alleles").list.eval(pl.element().is_null()).list.any().fill_null(True))
         .select("pos")

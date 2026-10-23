@@ -18,9 +18,12 @@ and why. Disagreement is kept as rows, never resolved to a winner. The rules are
    row at that position, if it wrote exactly one (an array's hom-ref row, a DeepVariant `RefCall`, the
    other ALT of a site): that row's genotype says how many copies of this allele it holds (key `site`).
 3. **Genotypes are compared as copies of the allele**, from `gt_alleles`, unordered (phase is not
-   comparable across facets): `match`, `mismatch`, `ploidy_differs`, or `uncalled` where a haplotype
-   is null and the called ones do not contradict. A `./.` is the source saying it could not tell,
-   never a mismatch.
+   comparable across facets): `match`, `mismatch`, or `uncalled` where a haplotype is null and the
+   called ones do not contradict. A haploid call against the same allele's diploid homozygote is a
+   `match` (both hold it on every copy), with `ploidy_differs` set apart. A `./.` is the source
+   saying it could not tell, never a mismatch. Each side reads its own row: another ALT of a complex
+   row can hold the allele's change (`_holds`), and one that cannot be read is open, never zero
+   copies (`unreadable`).
 4. **Graded where both carry vectors** (charter 7): each side's vector becomes a distribution over
    the copies of the allele, and `p_same` is the probability the two agree, `sum_k pa(k) * pb(k)`.
    Likelihoods (`gl`) are preferred, turned into probabilities under a flat prior over the genotypes
@@ -55,14 +58,17 @@ class Agreement(str, Enum):
     """How the two facets' genotypes for one allele compare."""
 
     MATCH = "match"
-    """Both fully called, the same number of copies of the allele, the same ploidy."""
+    """Both fully called with the same copies of the allele; where the ploidies differ, each genotype
+    holds it on every haplotype, or on none (a haploid `1` against `1/1`: `ploidy_differs` says so)."""
     MISMATCH = "mismatch"
     """Both called and the copies differ; with a null haplotype, the called ones already contradict
     (`1/.` against `0/0`)."""
-    PLOIDY_DIFFERS = "ploidy_differs"
-    """Both genotypes written, with different numbers of haplotypes (a haploid X call against a diploid one)."""
     UNCALLED = "uncalled"
     """A haplotype is null on either side and the called ones do not contradict: not decided."""
+    UNREADABLE = "unreadable"
+    """A genotype holds another allele of its row whose change, of another length, covers this allele's
+    span, so whether it holds this allele cannot be read, and the rest do not contradict: not decided,
+    and not the source's no-call (F21)."""
     ONLY_A = "only_a"
     """Only facet `a` states the allele, and `b` gave no single row to read it against (`absence` says
     what `b`'s silence means)."""
@@ -119,6 +125,7 @@ SITES = pl.Schema(
         "vrs_allele_id": pl.String,
         "key": enum_dtype(PairKey),
         "agreement": enum_dtype(Agreement),
+        "ploidy_differs": pl.Boolean,
         "absence": enum_dtype(AbsenceReading),
         "basis": enum_dtype(ComparisonBasis),
         "p_same": pl.Float64,
@@ -137,11 +144,14 @@ SITES = pl.Schema(
 """One row per allele either facet states. `pos`, `ref` and `alt` are the spelling of the facet that
 states it (`a` first); `a_pos` and `b_pos` are where each facet wrote it, which differ for an indel
 the two spelled at different positions and met by VRS id. `a_copies` and `b_copies` are the copies of
-the allele in each genotype, null where a haplotype is uncalled."""
+the allele in each genotype, null where a haplotype is uncalled. `ploidy_differs` is True where the two
+genotypes were written with different numbers of haplotypes, False where with the same, null where
+either side has no genotype."""
 
 SUMMARY = pl.Schema(
     {
         "agreement": enum_dtype(Agreement),
+        "ploidy_differs": pl.Boolean,
         "key": enum_dtype(PairKey),
         "absence": enum_dtype(AbsenceReading),
         "variant_class": enum_dtype(VariantClass),
@@ -170,18 +180,18 @@ class Concordance(BaseModel):
     sites: pl.LazyFrame
     """`SITES`' columns, one row per allele, in canonical order."""
     summary: pl.DataFrame
-    """`summarize(sites)`: alleles per agreement, key, absence, variant class and basis."""
+    """`summarize(sites)`: alleles per agreement, ploidy flag, key, absence, variant class and basis."""
     excluded: pl.DataFrame
     """Alleles not compared, per facet (`a`, `b`) and reason (`EXCLUDED_REASONS`)."""
     warnings: tuple[str, ...] = ()
 
 
 def summarize(sites: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
-    """Alleles per `(agreement, key, absence, variant_class, basis)`, with the mean `p_same` of the
+    """Alleles per `(agreement, ploidy_differs, key, absence, variant_class, basis)`, with the mean `p_same` of the
     graded ones; every count sums to the height of `sites`. Run it again on a filtered `sites` (PASS
     only, alleles either facet carries) to summarize that subset."""
     frame = sites.lazy() if isinstance(sites, pl.DataFrame) else sites
-    groups = ["agreement", "key", "absence", "variant_class", "basis"]
+    groups = ["agreement", "ploidy_differs", "key", "absence", "variant_class", "basis"]
     return (
         frame.group_by(groups)
         .agg(pl.len().cast(pl.UInt32).alias("alleles"), pl.col("p_same").mean().alias("p_same_mean"))
@@ -225,7 +235,7 @@ def concordance(
     alone_a = _one_sided(rest_a, b, fb, "a", "b", warnings) if rest_a.height else None
     alone_b = _one_sided(rest_b, a, fa, "b", "a", warnings) if rest_b.height else None
 
-    pieces = [_two_sided(pairs) if pairs.height else None, alone_a, alone_b]
+    pieces = [_two_sided(pairs, warnings) if pairs.height else None, alone_a, alone_b]
     present = [_conform(piece) for piece in pieces if piece is not None]
     sites = pl.concat(present, how="vertical") if present else pl.DataFrame(schema={**SITES, **_ROWS})
     sites = _ordered(sites).select(SITES.names())
@@ -385,29 +395,148 @@ def _pair(side_a: pl.DataFrame, side_b: pl.DataFrame, warnings: list[str]) -> pl
     return pairs
 
 
-def _copies(gt: str, alt: str, max_ploidy: int) -> tuple[pl.Expr, pl.Expr, pl.Expr]:
-    """Copies of `alt` among the called haplotypes of `gt`, the null haplotypes, and the ploidy."""
-    hits = [(pl.col(gt).list.get(slot, null_on_oob=True) == pl.col(alt)).fill_null(False).cast(pl.Int32) for slot in range(max_ploidy)]
-    called = pl.sum_horizontal(hits) if hits else pl.lit(0, dtype=pl.Int32)
-    nulls = pl.col(gt).list.eval(pl.element().is_null()).list.sum().cast(pl.Int32)
-    return called, nulls, pl.col(gt).list.len().cast(pl.Int32)
+HOLDS, HOLDS_NOT, UNREADABLE = 1, 0, -1
+"""What `_holds` says of one haplotype: it holds the allele's change, it does not, or that cannot be read."""
+
+_BASES = frozenset("ACGT")
 
 
-def _agreement(a: tuple[pl.Expr, pl.Expr, pl.Expr], b: tuple[pl.Expr, pl.Expr, pl.Expr], a_gt: str, b_gt: str) -> pl.Expr:
-    ca, na, pa = a
-    cb, nb, pb = b
-    a_silent = pl.col(a_gt).is_null() | (pa == 0) | (na == pa)
-    b_silent = pl.col(b_gt).is_null() | (pb == 0) | (nb == pb)
+def _change(ref: str, allele: str) -> tuple[int, int, str]:
+    """`allele`'s change against `ref` once their common prefix, then suffix, is trimmed: the span
+    `[start, end)` of `ref` it replaces and the bases it puts there (both empty: no change)."""
+    start = 0
+    limit = min(len(ref), len(allele))
+    while start < limit and ref[start] == allele[start]:
+        start += 1
+    tail = 0
+    while tail < limit - start and ref[len(ref) - 1 - tail] == allele[len(allele) - 1 - tail]:
+        tail += 1
+    return start, len(ref) - tail, allele[start : len(allele) - tail]
+
+
+def _overlaps(first: tuple[int, int], second: tuple[int, int]) -> bool:
+    """Whether two changes' spans of REF meet; an insertion (an empty span) meets a span strictly inside it."""
+    (s1, e1), (s2, e2) = first, second
+    if s1 < e1 and s2 < e2:
+        return s1 < e2 and s2 < e1
+    if s1 == e1 and s2 == e2:
+        return s1 == s2
+    point, (start, end) = (s1, (s2, e2)) if s1 == e1 else (s2, (s1, e1))
+    return start < point < end
+
+
+def _holds(ref: str, alt: str, held: str) -> int:
+    """Whether the haplotype `held`, an allele of a row over `ref`, holds the change `alt` makes there.
+
+    A haplotype caller writes a haplotype as one row (REF `CGCCC`, ALT `TGCCT,TGCCC`), so a genotype
+    can hold an allele's change inside another ALT's spelling. With both trimmed against `ref`: a
+    change away from the allele's span holds REF there (`HOLDS_NOT`); of one length with REF and the
+    allele, it holds the change when its bases over the allele's span are the allele's; a length change
+    against another length change, or against a substitution, is another allele of the site
+    (`HOLDS_NOT`). The rest (a change of another length that also replaces bases over the span, or a
+    base that is not ACGT there) cannot be read: `UNREADABLE`, never `HOLDS_NOT`.
+    """
+    ref, alt, held = ref.upper(), alt.upper(), held.upper()
+    if held == alt:
+        return HOLDS
+    if held == ref:
+        return HOLDS_NOT
+    a_start, a_end, a_bases = _change(ref, alt)
+    h_start, h_end, h_bases = _change(ref, held)
+    if not _overlaps((a_start, a_end), (h_start, h_end)):
+        return HOLDS_NOT
+    if len(held) == len(ref) == len(alt):
+        window = held[a_start:a_end]
+        if not set(window) <= _BASES:
+            return UNREADABLE
+        return HOLDS if window == alt[a_start:a_end] else HOLDS_NOT
+
+    def pure(start: int, end: int, bases: str) -> bool:
+        return start == end or not bases or len(bases) == end - start
+
+    return HOLDS_NOT if pure(a_start, a_end, a_bases) and pure(h_start, h_end, h_bases) else UNREADABLE
+
+
+def _codes(frame: pl.DataFrame, alleles: str, ref: str, alt: str) -> pl.Series:
+    """Per row, what each entry of the list column `alleles` says of `alt`'s change over `ref`
+    (`_holds`), null where the entry is null; a null or empty list gives null."""
+    work = frame.select(
+        pl.col(alleles).alias("_h"), pl.col(ref).str.to_uppercase().alias("_r"), pl.col(alt).str.to_uppercase().alias("_x")
+    ).with_row_index("_i")
+    long = (
+        work.filter(pl.col("_h").list.len() > 0)
+        .with_columns(pl.int_ranges(pl.col("_h").list.len(), dtype=pl.UInt32).alias("_s"))
+        .explode(["_h", "_s"])
+        .with_columns(pl.col("_h").str.to_uppercase())
+        .with_columns(
+            pl.when(pl.col("_h") == pl.col("_x"))
+            .then(pl.lit(HOLDS, dtype=pl.Int8))
+            .when(pl.col("_h") == pl.col("_r"))
+            .then(pl.lit(HOLDS_NOT, dtype=pl.Int8))
+            .alias("_code")
+        )
+    )
+    other = long.filter(pl.col("_h").is_not_null() & pl.col("_code").is_null())
+    if other.height:
+        read = other.select("_i", "_s").with_columns(
+            pl.Series("_read", [_holds(r, x, h) for r, x, h in other.select("_r", "_x", "_h").iter_rows()], dtype=pl.Int8)
+        )
+        long = long.join(read, on=["_i", "_s"], how="left").with_columns(pl.coalesce("_code", "_read").alias("_code"))
+    lists = long.group_by("_i").agg(pl.col("_code").sort_by("_s"))
+    return work.select("_i").join(lists, on="_i", how="left").sort("_i")["_code"]
+
+
+def _read(frame: pl.DataFrame, gt: str, ref: str, alt: str, name: str) -> tuple[pl.DataFrame, tuple[str, str, str, str]]:
+    """`frame` with the genotype `gt` read for `alt`'s change over `ref` (`_holds`): the haplotypes
+    holding it, the null ones, the unreadable ones and the ploidy, as columns `_{name}_c`, `_n`, `_u`, `_p`."""
+    codes = _codes(frame, gt, ref, alt)
+    columns = (f"_{name}_c", f"_{name}_n", f"_{name}_u", f"_{name}_p")
+    read = frame.with_columns(
+        codes.list.eval(pl.element() == HOLDS).list.sum().fill_null(0).cast(pl.Int32).alias(columns[0]),
+        codes.list.eval(pl.element().is_null()).list.sum().fill_null(0).cast(pl.Int32).alias(columns[1]),
+        codes.list.eval(pl.element() == UNREADABLE).list.sum().fill_null(0).cast(pl.Int32).alias(columns[2]),
+        pl.col(gt).list.len().fill_null(0).cast(pl.Int32).alias(columns[3]),
+    )
+    return read, columns
+
+
+def _ploidy_differs(a: tuple[str, str, str, str], b: tuple[str, str, str, str]) -> pl.Expr:
+    """True where both genotypes were written with different numbers of haplotypes, False where with
+    the same; null where either has none."""
+    pa, pb = pl.col(a[3]), pl.col(b[3])
+    return pl.when((pa > 0) & (pb > 0)).then(pa != pb)
+
+
+def _agreement(a: tuple[str, str, str, str], b: tuple[str, str, str, str]) -> pl.Expr:
+    """`Agreement` from two genotypes read for one allele (`_read`'s columns). A null or unreadable
+    haplotype may hold the allele or not; a pair is decided only where every completion agrees.
+
+    Of one ploidy, the genotypes agree when they hold the same copies. Of two (a haploid X call against
+    a diploid one), when each holds the allele on every haplotype or each on none (F22): `1` against
+    `1/1` agrees, `1` against `0/1` does not. `ploidy_differs` says the ploidies differed."""
+    ca, na, ua, pa = (pl.col(name) for name in a)
+    cb, nb, ub, pb = (pl.col(name) for name in b)
+    open_a, open_b = na + ua, nb + ub
+    a_silent = (pa == 0) | (na == pa)
+    b_silent = (pb == 0) | (nb == pb)
+    undecided = pl.when((ua > 0) | (ub > 0)).then(pl.lit(Agreement.UNREADABLE.value)).otherwise(pl.lit(Agreement.UNCALLED.value))
+    # Some completion of the open haplotypes holds the allele on every haplotype, or on none.
+    every = (ca + open_a == pa) & (cb + open_b == pb)
+    none = (ca == 0) & (cb == 0)
     return (
         pl.when(a_silent | b_silent)
         .then(pl.lit(Agreement.UNCALLED.value))
-        .when(pa != pb)
-        .then(pl.lit(Agreement.PLOIDY_DIFFERS.value))
-        .when((na == 0) & (nb == 0))
-        .then(pl.when(ca == cb).then(pl.lit(Agreement.MATCH.value)).otherwise(pl.lit(Agreement.MISMATCH.value)))
-        .when((ca > cb + nb) | (cb > ca + na))
+        .when((pa != pb) & ~(every | none))
         .then(pl.lit(Agreement.MISMATCH.value))
-        .otherwise(pl.lit(Agreement.UNCALLED.value))
+        .when((pa != pb) & (open_a == 0) & (open_b == 0))
+        .then(pl.lit(Agreement.MATCH.value))
+        .when(pa != pb)
+        .then(undecided)
+        .when((open_a == 0) & (open_b == 0))
+        .then(pl.when(ca == cb).then(pl.lit(Agreement.MATCH.value)).otherwise(pl.lit(Agreement.MISMATCH.value)))
+        .when((ca > cb + open_b) | (cb > ca + open_a))
+        .then(pl.lit(Agreement.MISMATCH.value))
+        .otherwise(undecided)
     )
 
 
@@ -416,33 +545,39 @@ def _max_ploidy(frame: pl.DataFrame, *columns: str) -> int:
     return max([int(n) for n in lengths if n is not None], default=0)
 
 
-def _two_sided(pairs: pl.DataFrame) -> pl.DataFrame:
-    """Pairs with their agreement, copies, and graded `p_same`."""
+def _two_sided(pairs: pl.DataFrame, warnings: list[str]) -> pl.DataFrame:
+    """Pairs with their agreement, copies, and graded `p_same`. Each side's genotype is read for its own
+    row's ALT over its own row's REF: a VRS id names the trimmed allele, which another ALT of the same
+    row can hold too (`_holds`)."""
     pairs = pairs.with_row_index("_pair")
-    ploidy = _max_ploidy(pairs, "a_gt_alleles", "b_gt_alleles")
-    a = _copies("a_gt_alleles", "a_alt", ploidy)
-    b = _copies("b_gt_alleles", "b_alt", ploidy)
+    pairs, a = _read(pairs, "a_gt_alleles", "_a_ref", "a_alt", "a")
+    pairs, b = _read(pairs, "b_gt_alleles", "_b_ref", "b_alt", "b")
     graded = _graded(pairs)
-    return (
-        pairs.join(graded, on="_pair", how="left")
-        .with_columns(
-            pl.col("a_chrom").alias("chrom"),
-            pl.col("a_pos").alias("pos"),
-            pl.col("_a_ref").alias("ref"),
-            pl.col("a_alt").alias("alt"),
-            pl.col("a_variant_class").alias("variant_class"),
-            pl.coalesce("_a_vid", "_b_vid").alias("vrs_allele_id"),
-            _agreement(a, b, "a_gt_alleles", "b_gt_alleles").alias("agreement"),
-            pl.lit(None, dtype=pl.String).alias("absence"),
-            pl.coalesce("basis", pl.lit(ComparisonBasis.HARD.value)).alias("basis"),
-            pl.when(a[1] == 0).then(a[0]).alias("a_copies"),
-            pl.when(b[1] == 0).then(b[0]).alias("b_copies"),
-        )
+    sites = pairs.join(graded, on="_pair", how="left").with_columns(
+        pl.col("a_chrom").alias("chrom"),
+        pl.col("a_pos").alias("pos"),
+        pl.col("_a_ref").alias("ref"),
+        pl.col("a_alt").alias("alt"),
+        pl.col("a_variant_class").alias("variant_class"),
+        pl.coalesce("_a_vid", "_b_vid").alias("vrs_allele_id"),
+        _agreement(a, b).alias("agreement"),
+        _ploidy_differs(a, b).alias("ploidy_differs"),
+        pl.lit(None, dtype=pl.String).alias("absence"),
+        pl.coalesce("basis", pl.lit(ComparisonBasis.HARD.value)).alias("basis"),
+        pl.when((pl.col(a[1]) == 0) & (pl.col(a[2]) == 0)).then(pl.col(a[0])).alias("a_copies"),
+        pl.when((pl.col(b[1]) == 0) & (pl.col(b[2]) == 0)).then(pl.col(b[0])).alias("b_copies"),
     )
+    unreadable = sites.filter(pl.col("agreement") == Agreement.UNREADABLE.value).height
+    if unreadable:
+        warnings.append(
+            f"{unreadable} alleles met where a genotype holds another allele of its row, of another length over the allele's span: not read for copies (agreement unreadable)"
+        )
+    return sites
 
 
 def _distribution(pairs: pl.DataFrame, side: str, vector: str) -> pl.DataFrame:
-    """Per pair, the probability of each number of copies of the allele under `side`'s `vector`.
+    """Per pair, the probability of each share of copies of the allele under `side`'s `vector`, as
+    `_dose`: the copies on a diploid scale (a haploid copy counts 2), so two ploidies compare.
 
     The vector is in VCF genotype order over `source_alleles` (Decision 3): haploid when it has one
     entry per allele, diploid when it has `n(n+1)/2`; any other length, a null entry, an allele list
@@ -451,9 +586,9 @@ def _distribution(pairs: pl.DataFrame, side: str, vector: str) -> pl.DataFrame:
     alleles, alt, values = f"{side}_source_alleles", f"{side}_alt", f"{side}_{vector}"
     usable = pairs.filter(pl.col(values).is_not_null() & pl.col(alleles).is_not_null())
     if usable.is_empty():
-        return pl.DataFrame(schema={"_pair": pl.UInt32, "_copies": pl.Int32, "_p": pl.Float64})
+        return pl.DataFrame(schema={"_pair": pl.UInt32, "_dose": pl.Int32, "_p": pl.Float64})
     width = min(_max_ploidy(usable, alleles), _MAX_GENOTYPE_ALLELES)
-    found = [pl.when(pl.col(alleles).list.get(j, null_on_oob=True) == pl.col(alt)).then(pl.lit(j, dtype=pl.Int32)) for j in range(width)]
+    usable = usable.with_columns(_codes(usable, alleles, f"_{side}_ref", alt).alias("_carry"))
     hits = pl.sum_horizontal([(pl.col(alleles).list.get(j, null_on_oob=True) == pl.col(alt)).fill_null(False).cast(pl.Int32) for j in range(width)])
     n = pl.col(alleles).list.len().cast(pl.Int64)
     length = pl.col(values).list.len().cast(pl.Int64)
@@ -461,21 +596,24 @@ def _distribution(pairs: pl.DataFrame, side: str, vector: str) -> pl.DataFrame:
         usable.select(
             "_pair",
             pl.col(values).alias("_v"),
-            pl.coalesce(found).alias("_i"),
+            "_carry",
             hits.alias("_hits"),
             pl.when(length == n).then(1).when(length == n * (n + 1) // 2).then(2).alias("_ploidy"),
             pl.col(values).list.eval(pl.element().is_null()).list.any().alias("_holes"),
             (n <= _MAX_GENOTYPE_ALLELES).alias("_small"),
+            pl.col("_carry").list.eval(pl.element().is_null() | (pl.element() == UNREADABLE)).list.any().alias("_unread"),
         )
-        .filter((pl.col("_hits") == 1) & pl.col("_ploidy").is_not_null() & ~pl.col("_holes") & pl.col("_small"))
+        .filter((pl.col("_hits") == 1) & pl.col("_ploidy").is_not_null() & ~pl.col("_holes") & pl.col("_small") & ~pl.col("_unread"))
         .with_columns(pl.int_ranges(pl.col("_v").list.len(), dtype=pl.Int64).alias("_g"))
         .explode(["_v", "_g"], empty_as_null=False)
     )
     order = _diploid_order()
     work = work.join(order, on="_g", how="left").with_columns(
         pl.when(pl.col("_ploidy") == 1)
-        .then((pl.col("_g") == pl.col("_i")).cast(pl.Int32))
-        .otherwise((pl.col("_j") == pl.col("_i")).cast(pl.Int32) + (pl.col("_k") == pl.col("_i")).cast(pl.Int32))
+        .then(pl.col("_carry").list.get(pl.col("_g"), null_on_oob=True).cast(pl.Int32))
+        .otherwise(
+            pl.col("_carry").list.get(pl.col("_j"), null_on_oob=True).cast(pl.Int32) + pl.col("_carry").list.get(pl.col("_k"), null_on_oob=True).cast(pl.Int32)
+        )
         .alias("_copies"),
         pl.col("_v").cast(pl.Float64),
     )
@@ -486,7 +624,9 @@ def _distribution(pairs: pl.DataFrame, side: str, vector: str) -> pl.DataFrame:
         work = work.with_columns(pl.col("_v").alias("_w"))
     total = pl.col("_w").sum().over("_pair")
     work = work.filter(total > 0).with_columns((pl.col("_w") / total).alias("_w"))
-    return work.group_by("_pair", "_copies").agg(pl.col("_w").sum().alias("_p"))
+    # The share of haplotypes holding the allele, on a diploid scale: haploid `k` is diploid `2k` (F22).
+    work = work.with_columns((pl.col("_copies") * (2 // pl.col("_ploidy"))).cast(pl.Int32).alias("_dose"))
+    return work.group_by("_pair", "_dose").agg(pl.col("_w").sum().alias("_p"))
 
 
 def _diploid_order() -> pl.DataFrame:
@@ -505,7 +645,7 @@ def _graded(pairs: pl.DataFrame) -> pl.DataFrame:
         both = da.select("_pair").unique().join(db.select("_pair").unique(), on="_pair").join(taken, on="_pair", how="anti")
         if both.is_empty():
             continue
-        products = da.join(db, on=["_pair", "_copies"], how="inner").group_by("_pair").agg((pl.col("_p") * pl.col("_p_right")).sum().alias("p_same"))
+        products = da.join(db, on=["_pair", "_dose"], how="inner").group_by("_pair").agg((pl.col("_p") * pl.col("_p_right")).sum().alias("p_same"))
         found.append(
             both.join(products, on="_pair", how="left").with_columns(pl.col("p_same").fill_null(0.0), pl.lit(basis.value).alias("basis"))
         )
@@ -565,21 +705,21 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
         .then(pl.lit(AbsenceReading.REFERENCE.value))
         .otherwise(pl.lit(AbsenceReading.UNKNOWN.value))
     )
-    ploidy = _max_ploidy(mine, f"{side}_gt_alleles", f"{other_side}_gt_alleles")
-    own = _copies(f"{side}_gt_alleles", "alt", ploidy)
-    theirs = _copies(f"{other_side}_gt_alleles", "alt", ploidy)
+    mine, own = _read(mine, f"{side}_gt_alleles", "_ref", "alt", side)
+    mine, theirs = _read(mine, f"{other_side}_gt_alleles", "_ref", "alt", other_side)
     pair = (own, theirs) if side == "a" else (theirs, own)
     lone = Agreement.ONLY_A.value if side == "a" else Agreement.ONLY_B.value
     return mine.with_columns(
         pl.col("_ref").alias("ref"),
         pl.col("_vid").alias("vrs_allele_id"),
         pl.when(single).then(pl.lit(PairKey.SITE.value)).alias("key"),
-        pl.when(single).then(_agreement(*pair, "a_gt_alleles", "b_gt_alleles")).otherwise(pl.lit(lone)).alias("agreement"),
+        pl.when(single).then(_agreement(*pair)).otherwise(pl.lit(lone)).alias("agreement"),
+        pl.when(single).then(_ploidy_differs(*pair)).alias("ploidy_differs"),
         absence.alias("absence"),
         pl.when(single).then(pl.lit(ComparisonBasis.HARD.value)).alias("basis"),
         pl.lit(None, dtype=pl.Float64).alias("p_same"),
-        pl.when(own[1] == 0).then(own[0]).alias(f"{side}_copies"),
-        pl.when(single & (theirs[1] == 0)).then(theirs[0]).alias(f"{other_side}_copies"),
+        pl.when((pl.col(own[1]) == 0) & (pl.col(own[2]) == 0)).then(pl.col(own[0])).alias(f"{side}_copies"),
+        pl.when(single & (pl.col(theirs[1]) == 0) & (pl.col(theirs[2]) == 0)).then(pl.col(theirs[0])).alias(f"{other_side}_copies"),
         pl.col("_row").alias(f"_{side}_row"),
     )
 

@@ -11,7 +11,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceStore, load, resolve_ref
+from just_vcf import ReferenceStore, load, mint_vrs_ids, resolve_ref
 from just_vcf.atlas import (
     ALL,
     ATLAS,
@@ -85,7 +85,7 @@ CASES = [
     ("1/1", "1/1", "PASS", "match"),
     ("0/1", "1/1", "PASS", "mismatch"),
     ("0/0", "0/1", "PASS", "mismatch"),  # carried by b only, both called
-    ("1", "1/1", "PASS", "ploidy_differs"),
+    ("1", "1/1", "PASS", "match"),  # haploid against the same homozygote: a match, its ploidy apart
     ("1/.", "1/1", "PASS", "uncalled"),
     ("0/1", None, "PASS", "only_a"),
     (None, "0/1", "PASS", "only_b"),
@@ -93,6 +93,7 @@ CASES = [
     ("0/0", None, "PASS", "not_carried"),  # a stated allele no genotype holds: not a method's error
     ("./.", "./.", "PASS", "not_carried"),
     ("0/1", "1/1", "LowQual", "mismatch"),
+    ("1", "0/1", "PASS", "mismatch"),  # haploid against a het: a disagreement, its ploidy apart too
 ]
 POSITIONS = [40 + 60 * i for i in range(len(CASES))]
 REGIONS = {
@@ -128,7 +129,11 @@ def expected(label: str, scope: str) -> dict[str, int]:
         held = label == ALL or any(c in ("1", "chr1") and s <= pos <= e for c, s, e in frame.iter_rows())
         if held and case[3] != "not_carried" and (scope == "carried" or case[2] == "PASS"):
             inside.append(case[3])
-    return {kind: inside.count(kind) for kind in ("match", "mismatch", "ploidy_differs", "uncalled", "only_a", "only_b")} | {"alleles": len(inside)}
+            if case[3] in ("match", "mismatch") and len(case[0].split("/")) != len(case[1].split("/")):
+                inside.append("ploidy_differs")
+    counted = [kind for kind in inside if kind != "ploidy_differs"]
+    kinds = {kind: inside.count(kind) for kind in ("match", "mismatch", "ploidy_differs", "uncalled", "only_a", "only_b")}
+    return kinds | {"alleles": len(counted)}
 
 
 def test_counts_follow_the_cases_per_region_and_scope(pair: tuple[Loaded, Loaded]) -> None:
@@ -141,8 +146,8 @@ def test_counts_follow_the_cases_per_region_and_scope(pair: tuple[Loaded, Loaded
     for row in snv.iter_rows(named=True):
         want = expected(row["region_class"], row["scope"])
         assert {kind: row[kind] for kind in want} == want, (row["region_class"], row["scope"])
-        assert row["discordant"] == want["mismatch"] + want["ploidy_differs"]
-        assert row["called_both"] == want["match"] + want["mismatch"] + want["ploidy_differs"]
+        assert row["discordant"] == want["mismatch"]
+        assert row["called_both"] == want["match"] + want["mismatch"]
     # The other classes have no allele: their rates are unknown, never zero.
     others = atlas.filter(pl.col("variant_class") != "snv")
     assert others["alleles"].sum() == 0
@@ -254,6 +259,24 @@ def test_a_one_sided_allele_the_silent_facet_reads_as_reference_is_counted(tmp_p
     row = atlas.filter((pl.col("variant_class") == "snv") & (pl.col("scope") == "carried")).row(0, named=True)
     # 100 lies in b's ref block; 500 lies in nothing b wrote, and b's absence says nothing.
     assert (row["one_sided_reference"], row["only_a"] + row["only_b"]) == (1, 3)
+
+
+def test_a_complex_row_s_sibling_carries_the_allele_and_an_unreadable_one_is_counted_apart(tmp_path: Path, store: ReferenceStore) -> None:
+    # `b` writes five-base haplotype rows whose second ALT trims to `a`'s SNV (F21). At 100 `a` holds no
+    # copy and b's sibling holds two: carried, a mismatch, though b's genotype never spells `a`'s ALT.
+    # At 300 b's sibling is of another length over the SNV's span: unreadable, not called both.
+    def five(pos: int) -> str:
+        return base("1", pos, 5)
+
+    x = {p: other(five(p)[0]) for p in (100, 300)}
+    sibling = {100: x[100] + five(100)[1:4] + other(five(100)[4]), 300: next(c for c in "ACGT" if c not in five(300)[:2]) + five(300)[2:]}
+    a_rows = [("1", 100, five(100)[0], x[100], "0/0", "PASS", {}), ("1", 300, five(300)[0], x[300], "1/1", "PASS", {})]
+    b_rows = [("1", p, five(p), f"{sibling[p]},{x[p]}{five(p)[1:]}", "1/1", "PASS", {}) for p in (100, 300)]
+    a = mint_vrs_ids(facet(tmp_path, "a", "freeBayes v1.3.6", a_rows, store), store)
+    b = mint_vrs_ids(facet(tmp_path, "b", "HaplotypeCaller", b_rows, store), store)
+    atlas = method_atlas([(a, b)], RegionSet.from_frames("test set", "GRCh38", {}))
+    row = atlas.filter((pl.col("variant_class") == "snv") & (pl.col("scope") == "carried")).row(0, named=True)
+    assert (row["mismatch"], row["unreadable"], row["called_both"], row["discordant"]) == (1, 1, 1, 1)
 
 
 def test_regions_on_another_assembly_are_refused(pair: tuple[Loaded, Loaded]) -> None:

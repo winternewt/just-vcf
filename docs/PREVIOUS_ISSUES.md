@@ -3,6 +3,77 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F22 — A haploid call against the same allele's diploid homozygous call counts as discordant
+
+Severity: medium · Found 2026-10-23 by RM279 on the PGP-HMS CGI against freeBayes pairs.
+
+Outside the PARs CGI writes a male's X call haploid (`1`) and freeBayes diploid (`1/1`). Every such
+pair is `ploidy_differs`, which the atlas counts in `discordant`: 72,462 and 64,818 SNVs, 65% and
+67% of the two pairs' discordant SNVs. Both say the person carries the allele on every copy of X
+they have; the difference is the writer's ploidy convention, not a method error, and it swamps the
+rate the atlas exists to give.
+
+Resolved 2026-10-23 by the lead's rule: a haploid call against the same allele's diploid homozygote
+is a `match`, and the ploidy is a flag of its own, `sites.ploidy_differs` (True, False, or null on a
+one-sided allele), counted apart in `summary` (a group key) and in the atlas (`ploidy_differs`, the
+flagged alleles of `called_both`). Of two ploidies the genotypes agree when each holds the allele on
+every haplotype or each on none; a haploid `1` against `0/1` stays a `mismatch`, and with a null
+haplotype a pair is decided only where every completion agrees (`1` against `1/.` is `uncalled`,
+against `0/.` a `mismatch`). The atlas's `called_both` is `match + mismatch` and `discordant` is
+`mismatch`, so the convention leaves the discordance rate. The graded comparison compares copies as a
+share of the ploidy (haploid `k` against diploid `2k`), as the hard one does. `Agreement` loses
+`ploidy_differs`.
+Measured on the rebuilt PGP pairs (`x_nonpar`, `carried_pass`): of 71,715 and 64,382 flagged SNVs,
+71,193 and 61,920 match and 522 and 2,462 are haploid calls against a freeBayes het, which stay
+discordant. The pairs' SNV discordance falls from 3.40% to 0.54% and from 3.07% to 1.02%, with F21.
+
+Rejected: keeping `ploidy_differs` as an agreement value and leaving it out of the rate (a haploid
+call against a het is a real disagreement, and the value hid it among the convention's matches);
+rewriting the haploid call as `1/1` (the source wrote one allele, Decision 2: list length is never
+corrected). Code: `concordance._agreement`, `_ploidy_differs`, `_distribution` (`_dose`),
+`atlas._tally`, `pool_counts`; tests `test_genotypes_compare_as_copies_of_the_allele`,
+`test_a_haploid_call_is_graded_against_a_diploid_one_by_the_share_of_copies`
+(tests/test_concordance.py), `test_counts_follow_the_cases_per_region_and_scope` (tests/test_atlas.py).
+
+## F21 — A VRS-met allele is read as zero copies in a complex multi-allelic row
+
+Severity: medium · Found 2026-10-23 by RM279 rebuilding the PGP-HMS CGI against freeBayes pairs with
+alleles met by VRS id.
+
+freeBayes writes a haplotype as one multi-allelic row: REF `CGCCC`, ALT `TGCCT,TGCCC`, GT
+`TGCCT/TGCCT`. Its ALT `TGCCC` trims to `C>T`, so its VRS id is CGI's `C>T` (GT `T/T`) and the two
+meet (`key = vrs`). `concordance` then counts the copies of the spelling `TGCCC` in the freeBayes
+genotype, zero, although each `TGCCT` haplotype carries the same `C>T`: a `mismatch` that is only
+representation. 20,434 to 23,014 SNV mismatches on the CGA 2.5.0.44 pair, 2,601 to 2,950 on the
+2.5.0.24 one, up to 5,982 and 4,627 indels (docs/METHOD_ATLAS.md). The `site` path guards the same
+case by reading only a row over the same REF span; the `vrs` path has no guard. The graded
+comparison has the same fault: its distribution counts the copies of the spelling too.
+
+Resolved 2026-10-23: each side's genotype is read for the allele's change in its own row. A haplotype
+that is neither REF nor the met ALT is trimmed against REF like the ALT: a change away from the
+allele's span is not a copy; one of the same length is a copy when its bases over the span are the
+ALT's (`TGCCT` holds `C>T`, `CGCCT` does not); a length change against another length change or a
+substitution is another allele of the site (a `1/2` deletion and insertion of one repeat unit), not a
+copy. What is left, a change of another length that also replaces bases over the span, cannot be
+read: it is open like a null haplotype, never zero copies, and a pair it leaves undecided gets the new
+`agreement` value `unreadable`, counted in a warning and in the atlas's `unreadable` column (never in
+`called_both`). The `site` pairing and the graded distribution read alleles the same way, and the
+atlas counts an allele as carried where `concordance` read a copy of it under another spelling.
+Measured on the rebuilt PGP pairs (region `all`, `carried_pass`, docs/METHOD_ATLAS.md): SNV
+mismatches outside X's non-PAR fall by 21,873 in the CGA 2.5.0.44 pair (20,434 counted exactly before)
+and by 2,460 in the 2.5.0.24 pair (2,601 counted); 2,315 and 201 SNVs are `unreadable`; mean `p_same`
+over graded MNVs rises from 0.661 to 0.706 and from 0.776 to 0.808.
+
+Rejected: marking every VRS pair whose row holds a sibling ALT unreadable (it drops the 20,000 SNVs
+the same-length rule reads exactly, and the common multi-allelic indel row); reading only the
+`vrs` pairing (the `site` and `position` pairings read the same genotypes, and the rule gives the old
+answer wherever a genotype holds only REF and the ALT). Code: `concordance._holds`, `_codes`, `_read`,
+`Agreement.UNREADABLE`, `atlas._counts`; tests
+`test_a_vrs_met_allele_is_read_in_terms_of_its_own_change_in_a_complex_row`,
+`test_a_multi_allelic_indel_row_reads_its_other_length_as_another_allele` (tests/test_concordance.py),
+`test_a_complex_row_s_sibling_carries_the_allele_and_an_unreadable_one_is_counted_apart`
+(tests/test_atlas.py).
+
 ## F20 — A CGI vcfBeta's chrY md5 refuses the whole facet
 
 Severity: medium · Found 2026-10-23 by RM279 (the method-error atlas) comparing PGP-HMS CGI vcfBeta

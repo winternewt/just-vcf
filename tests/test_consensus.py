@@ -565,6 +565,8 @@ def test_an_allele_frequency_table_is_validated_and_refused_not_patched(tmp_path
     with pytest.raises(ValueError, match="needs a name"):
         make(name=" ")
     assert make().frequencies.height == 1 and make(frequencies(("1", 100, "A", "C", 0), ("1", 100, "A", "G", 1))).frequencies.height == 2
+    # Contigs typed as integers (as some catalogues write them) are names, read as the frames read them.
+    assert make(good.with_columns(pl.lit(1).alias("chrom"))).frequencies.equals(make().frequencies)
     x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "0/1")], store)
     y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "0/1")], store)
     with pytest.raises(ValueError, match="the prior 't' is on GRCh37"):

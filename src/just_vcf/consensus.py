@@ -241,8 +241,9 @@ class AlleleFrequencyPrior(BaseModel):
         outside = (f.is_nan() | (f < 0.0) | (f > 1.0)).sum()
         if outside:
             raise ValueError(f"{outside} allele frequenc(ies) outside [0, 1]")
-        table = frame.select(
-            canonical_chrom_expr("chrom").cast(pl.String).alias("chrom"),
+        # A catalogue may type its contigs as integers; their names are strings here, as in the frames.
+        table = frame.with_columns(pl.col("chrom").cast(pl.String)).select(
+            canonical_chrom_expr("chrom").alias("chrom"),
             pl.col("pos").cast(pl.UInt32),
             pl.col("ref").cast(pl.String).str.to_uppercase(),
             pl.col("alt").cast(pl.String).str.to_uppercase(),

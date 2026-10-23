@@ -12,7 +12,7 @@ are in docs/SCHEMA.md ("A method-error atlas").
 | Set | Pairs | Assembly | What differs |
 |---|---|---|---|
 | A same-person set on the same reads (one GRCh38 alignment with alts, each output normalized by `bcftools norm -m -both`) | 3: DeepVariant 1.9.0, GATK HaplotypeCaller 4.6.2.0 (DRAGEN mode), Clair3 1.0.10, each against each | GRCh38, REF read | the caller only |
-| One person called by three DeepVariant releases | 3: 1.1.0, 1.3.0, 1.8.0, each against each | GRCh38, REF read | the release; the alignment behind 1.3.0 and 1.8.0 is not stated |
+| One person called by three DeepVariant releases | 3: 1.1.0, 1.3.0, 1.8.0, each against each | GRCh38, REF read, not normalized | the release; the alignment behind 1.3.0 and 1.8.0 is not stated |
 | Two PGP-HMS participants (public) | 2: Complete Genomics vcfBeta (CGA 2.5.0.24, 2.5.0.44) against freeBayes 0.9.15 / 0.9.20 on Illumina reads | GRCh37, compared by label | the sequencing technology and the caller |
 
 `same_person` (KING-robust, RM274) answered True for all eight, so none was skipped. The
@@ -87,10 +87,13 @@ no likelihood vector the comparison could use, so its pairs have no graded allel
 
 The two CGI vcfBeta facets state a chrY whose md5 differs from the store's GRCh37 collection, so
 `resolve_ref` refuses them and the pairs were compared by their equal `assembly_label` (the script
-records `assembly_check = label`). Without REF read there are no VRS ids, so alleles meet only by
-position and spelling. CGI and freeBayes spell indels and complex alleles differently, and 99% of the
-PGP indels come out one-sided: that is representation, not method error, and the indel and one-sided
-columns of those pairs are left out above. Their SNV discordance (alleles both called at one
+records `assembly_check = label`). No pair in this atlas was minted (`mint_vrs_ids`), so every pair's
+alleles met by position and spelling, not by VRS id. That holds where both files spell an allele
+alike: the same-reads set went through one `bcftools norm`, and the DeepVariant releases, though not
+normalized, share a caller's spelling. It fails for CGI against freeBayes, which spell indels and
+complex alleles differently, and with REF unread neither remedy (`normalize`, `mint_vrs_ids`) can
+run. 99% of the PGP indels come out one-sided: that is representation, not method error, and the
+indel and one-sided columns of those pairs are left out above. Their SNV discordance (alleles both called at one
 position) stands. Reading CGI's REF needs a GRCh37 collection matching CGI's own reference, or a
 per-contig resolve that leaves chrY unread; either is a library question, not the atlas's.
 

@@ -82,7 +82,9 @@ def main(
         row = {"pair": index, "group": entry["group"]}
         if done.exists():
             counts = pl.read_parquet(done)
-            ledger.append(row | {"verdict": "same_person", "assembly_check": None, "alleles": _alleles(counts)} | _methods(counts))
+            sidecar = done.with_suffix(".json")
+            check = json.loads(sidecar.read_text())["assembly_check"] if sidecar.exists() else None
+            ledger.append(row | {"verdict": "same_person", "assembly_check": check, "alleles": _alleles(counts)} | _methods(counts))
             continue
         a, b, check = pair(entry)
         row["assembly_check"] = check
@@ -96,6 +98,7 @@ def main(
             regions[label] = giab_stratifications(Path(spec["giab"]), label)
         counts = pair_counts(a, b, regions[label], reference=store, by_contig=True)
         counts.write_parquet(done)
+        done.with_suffix(".json").write_text(json.dumps({"assembly_check": check}))
         logger.info("pair %d (%s): %d alleles", index, entry["group"], _alleles(counts))
         ledger.append(row | {"verdict": "same_person", "alleles": _alleles(counts)} | _methods(counts))
 

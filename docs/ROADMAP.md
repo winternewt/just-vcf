@@ -104,7 +104,7 @@ quantized output from one depth pass; mosdepth's thresholds file; a person-level
 coverage facet with callsets.
 
 ## RM279 — A method-error atlas
-Severity: medium · Status: in progress (`method_atlas` and a first atlas over eight pairs shipped 2026-10-23, docs/METHOD_ATLAS.md; left: the PGP CGI pairs with REF read, so their indels meet by VRS id, and more pairs per method so a row pools more than one genome) · Owner: lead
+Severity: medium · Status: in progress (`method_atlas` and a first atlas over eight pairs shipped 2026-10-23, docs/METHOD_ATLAS.md; left: the PGP CGI pairs with REF read, so they can be normalized or minted and their indels meet, and more pairs per method so a row pools more than one genome) · Owner: lead
 
 The person chose GIAB stratifications as regions (E8): error and discordance rates by caller and region from multi-facet PGP-HMS people (docs/LIVE_SAMPLES.md). Needs RM277.
 

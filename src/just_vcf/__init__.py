@@ -19,6 +19,7 @@ from just_vcf.loading import (
 )
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
+from just_vcf.pedigree import Pedigree, PedigreeError, read_pedigree
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
 from just_vcf.relatedness import Relatedness, RelationBand, SitePanel, pairwise_relatedness, relatedness, same_person
@@ -72,6 +73,8 @@ __all__ = [
     "NoSampleError",
     "EvidenceBasis",
     "KaryotypicSex",
+    "Pedigree",
+    "PedigreeError",
     "PhaseSetKind",
     "RefCheck",
     "ReferenceMismatchError",
@@ -101,6 +104,7 @@ __all__ = [
     "open_payload",
     "pairwise_relatedness",
     "read_chain",
+    "read_pedigree",
     "reference_dir",
     "rejoin_split",
     "relatedness",

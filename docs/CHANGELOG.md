@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- GA4GH Pedigree read as supplied data (RM274): `read_pedigree` takes the standard's Phenopacket
+  `GA4GHPedigree` message as JSON (both protobuf JSON spellings of a field) into a `Pedigree` with an
+  individuals frame and a relationships frame, KIN terms and sex values verbatim. Nothing is inferred
+  from it or into it; a document without its required parts raises `PedigreeError`.
+
 - somalier as an optional second opinion on relatedness (RM274): `just_vcf.somalier.somalier_relate`
   writes each facet at the panel's positions with `write_vcf`, runs `somalier extract` and `relate`,
   and reads `pairs.tsv` into the relatedness frame (`method = somalier`, its `relatedness` kept

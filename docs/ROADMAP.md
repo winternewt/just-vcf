@@ -89,7 +89,9 @@ manifests are read at run time from `JUST_VCF_MANIFESTS_DIR`, each once into a p
   alleles alone. This is not the repair F13 rejected: F13 showed that no strand column predicts which
   probes FTDNA flipped; the pair decides each row whatever the vendor flipped by.
 - **Absence with a cause** (`chip_absence`, `probe_set`, `learn_probe_sets`): `in_export`, `no_call`
-  or `not_on_chip` per asked site, from the chip's own manifest (`illumina:<manifest>`, configured) or a
+  or `not_on_chip` per asked site (a written `--` is `no_call`, not `in_export`: the lead's call,
+  2026-10-23; rejected: a fourth member for a written no-call, since both say the chip looked and saw
+  nothing, and the row is there for a caller who needs to know it was written), from the chip's own manifest (`illumina:<manifest>`, configured) or a
   set learned from its exports. Learned from every loadable 23andMe and AncestryDNA export under PGP-HMS
   (sites carried by at least half of a chip's exports; every file counts, so a participant's copies of
   one upload count more than once):

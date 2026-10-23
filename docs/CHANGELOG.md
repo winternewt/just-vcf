@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `chip_absence` separates a written no-call from a call (RM281): a site the export writes as `--`
+  (AncestryDNA: `0 0`) is `no_call`, where it was `in_export`, with or without a probe set; `in_export`
+  now means the export has a genotype there. `AbsenceCause` keeps its three members; the meaning of
+  `in_export` narrows, a value change for any caller reading it on no-call sites.
+
 - `resolve_ref` resolves `I`/`D` indel codes only on a chip whose calibration passed (RM281,
   `just_vcf.probes.ID_CALIBRATION`): `23andme_v5` and `ancestrydna_v2`, where 98.7% and 98.4% of the
   resolved homozygous rows read hom-ref. `23andme_v3` and `23andme_v4` (76%, the same sites hom-alt in

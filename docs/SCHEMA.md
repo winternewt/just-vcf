@@ -461,11 +461,14 @@ hom-ref restoration from absence that just-vcf grows must ask it, and refuse a f
 **On an array, an absence has a cause (RM281).** An array's absence stays `unknown`, but
 `chip_absence(loaded, sites)` says why, per asked site (`chrom` canonical, `pos` 1-based), from the
 probe set of the facet's `chip` on its `assembly_label` (`just_vcf.probes.probe_set`):
-`absence_cause` is `in_export` (the export has a row there, a written no-call included), `no_call`
-(the chip has a probe there and the export reports nothing: a no-call it dropped, or a probe left out
-of this release) or `not_on_chip` (no probe there). Null for every site when there is no probe set:
-not an array, chip or assembly unknown, or nothing configured or learned; the answer carries the
-reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
+`absence_cause` is `in_export` (the export has a genotype there: an allele called in any of its rows
+at the site, or a text it could not split), `no_call` (the chip probed the site and the export gives
+no genotype: a no-call it wrote, `--` or AncestryDNA's `0 0`, every allele null; or, from the probe
+set, a site the export has no row at, a no-call it dropped or a probe left out of this release) or
+`not_on_chip` (no probe there). A written no-call is `no_call` with or without a probe set, since the
+row shows the chip looked. The sites with no row get null when there is no probe set (chip or
+assembly unknown, or nothing configured or learned), and every site when the facet is not an array;
+the answer carries the reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
 (`ProbeSetKind`): `manifest`, the chip's own Illumina manifest when a Final Report names it
 (`illumina:<manifest>`) and it is configured (`JUST_VCF_MANIFESTS_DIR`), its probes on that build
 (`Chr 0` probes are unplaced and left out); or `learned`, the positions at least half of the exports
@@ -1350,6 +1353,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, RM281's written no-calls): no column changes, no enum member
+  added. Rule changed (Decision 4): `chip_absence` gives a site the export writes as a no-call
+  (`--`, `0 0`) `no_call`, where it gave `in_export`; `in_export` now means a genotype. Computed on
+  request, so nothing stored changes.
 
 - **No version change** (2026-10-23, RM281's I/D calibration): no column changes. Rule changed
   (Decision 2): `I`/`D` codes are resolved only on a chip `probes.ID_CALIBRATION` passes

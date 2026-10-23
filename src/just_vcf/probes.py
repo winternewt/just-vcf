@@ -28,7 +28,7 @@ it, up to several bases on in a repeat, for the rest.
 
 **Probe sets and the cause of an absence.** Which sites a chip has turns an array's absence, still an
 unknown genotype, into one with a cause (`chip_absence`): `no_call` where the chip has a probe and the
-export reports nothing, `not_on_chip` where it has none. A chip's probe set is its own manifest where a
+export reports nothing (or writes a no-call), `not_on_chip` where it has none. A chip's probe set is its own manifest where a
 Final Report names one (`illumina:<manifest>`, configured), or one learned from exports of the chip
 (`learn_probe_sets`, written into the cache) for the vendors that publish none. A platform family named
 by marker overlap has none: which version's probes it carries is not known.
@@ -435,10 +435,13 @@ class AbsenceCause(str, Enum):
     """What a site's absence from an array export means, given the chip's probe set. Null = unknown."""
 
     IN_EXPORT = "in_export"
-    """Not absent: the export has a row at the site (a called genotype or a written no-call)."""
+    """Not absent: the export has a genotype at the site (an allele called, or a genotype text the
+    loader could not split, which is still something the export said)."""
     NO_CALL = "no_call"
-    """The chip has a probe at the site and the export reports nothing there: a no-call the export
-    dropped, or a probe the vendor left out of this release. Unknown genotype, never reference."""
+    """The chip probed the site and the export gives no genotype there: a no-call it wrote (`--`,
+    AncestryDNA's `0 0`; every allele null), or, where the chip's probe set has the site and the
+    export has no row, a no-call it dropped or a probe the vendor left out of this release. Unknown
+    genotype, never reference."""
     NOT_ON_CHIP = "not_on_chip"
     """No probe of the chip is at the site: the export could not have said anything about it."""
 
@@ -529,10 +532,13 @@ def probe_set(chip: str | None, assembly_label: str | None) -> ProbeSet | str:
 def chip_absence(loaded: Loaded, sites: pl.DataFrame) -> ChipAbsence:
     """Why each of `sites` (`chrom` canonical, `pos` 1-based) is or is not in an array facet's export.
 
-    `absence_cause` is `in_export` where the export has a row there, else `no_call` where the facet's
-    chip has a probe there and `not_on_chip` where it has none; null for every site when the facet has
-    no probe set (not an array, chip or assembly unknown, nothing configured or learned), with the
-    reason. Either absence is an unknown genotype (Decision 4); the cause says why it is unknown.
+    `absence_cause` is `in_export` where the export has a genotype there, `no_call` where it writes a
+    no-call there (every allele null; several rows at one site: any genotype makes it `in_export`),
+    else `no_call` where the facet's chip has a probe there and `not_on_chip` where it has none. With
+    no probe set (chip or assembly unknown, nothing configured or learned) the sites the export has no
+    row at get null, with the reason; a written no-call is `no_call` all the same, since the row
+    itself shows the chip probed there. Null for every site when the facet is not an array. Either
+    absence is an unknown genotype (Decision 4); the cause says why it is unknown.
     """
     facet = loaded.facets.collect().row(0, named=True)
     asked = sites.select(pl.col("chrom").cast(pl.String), pl.col("pos").cast(pl.Int64)).unique(maintain_order=True)
@@ -540,18 +546,28 @@ def chip_absence(loaded: Loaded, sites: pl.DataFrame) -> ChipAbsence:
         return ChipAbsence(sites=asked.with_columns(pl.lit(None, dtype=pl.String).alias("absence_cause")), probe_set=None,
                            reason="the facet is not an array export")  # fmt: skip
     found = probe_set(facet["chip"], facet["assembly_label"])
-    present = loaded.calls.select("chrom", pl.col("pos").cast(pl.Int64)).unique().collect().with_columns(pl.lit(True).alias("_in"))
+    # A row is a genotype unless it writes a no-call: alleles listed, every one null. A row whose text
+    # could not be split (`gt_alleles` null) still said something, so it counts as a genotype.
+    called = pl.col("gt_alleles").is_null() | (pl.col("gt_alleles").list.drop_nulls().list.len() > 0)
+    present = (
+        loaded.calls.select("chrom", pl.col("pos").cast(pl.Int64), called.alias("_called"))
+        .group_by("chrom", "pos").agg(pl.col("_called").any())
+        .collect().with_columns(pl.lit(True).alias("_in"))
+    )  # fmt: skip
     marked = asked.join(present, on=["chrom", "pos"], how="left", maintain_order="left").with_columns(pl.col("_in").fill_null(False))
+    written = (
+        pl.when(pl.col("_in") & pl.col("_called")).then(pl.lit(AbsenceCause.IN_EXPORT.value))
+        .when(pl.col("_in")).then(pl.lit(AbsenceCause.NO_CALL.value))
+    )  # fmt: skip
     if isinstance(found, str):
-        cause = pl.when(pl.col("_in")).then(pl.lit(AbsenceCause.IN_EXPORT.value)).otherwise(None)
-        return ChipAbsence(sites=marked.with_columns(cause.alias("absence_cause")).drop("_in"), probe_set=None, reason=found)
+        cause = written.otherwise(None)
+        return ChipAbsence(sites=marked.with_columns(cause.alias("absence_cause")).drop("_in", "_called"), probe_set=None, reason=found)
     on_chip = marked.join(found.sites.with_columns(pl.lit(True).alias("_on")), on=["chrom", "pos"], how="left", maintain_order="left")
     cause = (
-        pl.when(pl.col("_in")).then(pl.lit(AbsenceCause.IN_EXPORT.value))
-        .when(pl.col("_on").fill_null(False)).then(pl.lit(AbsenceCause.NO_CALL.value))
+        written.when(pl.col("_on").fill_null(False)).then(pl.lit(AbsenceCause.NO_CALL.value))
         .otherwise(pl.lit(AbsenceCause.NOT_ON_CHIP.value))
     )  # fmt: skip
-    return ChipAbsence(sites=on_chip.with_columns(cause.alias("absence_cause")).drop("_in", "_on"), probe_set=found,
+    return ChipAbsence(sites=on_chip.with_columns(cause.alias("absence_cause")).drop("_in", "_called", "_on"), probe_set=found,
                        reason=f"read against the {found.kind.value} probe set of {found.chip} on {found.assembly_label}: {found.source}")  # fmt: skip
 
 

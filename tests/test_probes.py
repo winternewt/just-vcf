@@ -362,6 +362,25 @@ def test_an_absence_on_the_chip_is_a_no_call_and_off_it_not_on_the_chip(tmp_path
     assert answer.probe_set is not None and answer.reason.startswith("read against the learned probe set of ancestrydna_v2 on GRCh37")
 
 
+def test_a_written_no_call_is_a_no_call_not_a_site_in_the_export(tmp_path: Path) -> None:
+    learn_probe_sets([ancestry_export(tmp_path / f"e{i}.txt", [100, 200, 300]) for i in range(3)])
+    person = tmp_path / "person.txt"
+    person.write_text(ANCESTRY_PREAMBLE + "rs100\t1\t100\tA\tG\nrs200\t1\t200\t0\t0\nrs300\t1\t300\tA\t0\n")
+    asked = pl.DataFrame({"chrom": ["1", "1", "1"], "pos": [100, 200, 300]})
+    assert chip_absence(load(person), asked).sites["absence_cause"].to_list() == ["in_export", "no_call", "in_export"]
+    # 23andMe's spelling, and no probe set at all: the written row itself shows the chip probed there.
+    twentythree = export(tmp_path, [("rs100", "1", 100, "AG"), ("rs200", "1", 200, "--"), ("rs201", "1", 200, "--")])
+    answer = chip_absence(load(twentythree), pl.DataFrame({"chrom": ["1", "1", "1"], "pos": [100, 200, 300]}))
+    assert answer.probe_set is None
+    assert answer.sites["absence_cause"].to_list() == ["in_export", "no_call", None]
+
+
+def test_a_site_with_a_genotype_in_any_of_its_rows_is_in_the_export(tmp_path: Path) -> None:
+    twentythree = export(tmp_path, [("rs200", "1", 200, "--"), ("rs201", "1", 200, "CT")])
+    answer = chip_absence(load(twentythree), pl.DataFrame({"chrom": ["1"], "pos": [200]}))
+    assert answer.sites["absence_cause"].to_list() == ["in_export"]
+
+
 def test_without_a_probe_set_an_absence_has_no_cause(tmp_path: Path) -> None:
     loaded = load(ancestry_export(tmp_path / "person.txt", [100, 300]))
     answer = chip_absence(loaded, pl.DataFrame({"chrom": ["1", "1"], "pos": [100, 200]}))

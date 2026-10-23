@@ -4,6 +4,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `facets.gl_source` names the FORMAT key a VCF facet's `gl` is read from: `gl`, `pl`, or `gl_over_pl` where the header declares both (GL per row, PL where a row's GL is missing). Null where the facet carries no likelihoods. A new `facets` column; `SCHEMA_VERSION` is bumped at merge.
+
 - Schema 0.0.17: `phase_set_kinds` gains `cgi_haplink`; CGI hapLinks load as phase sets, and masterVarBeta read
   counts fill `ad`.
 

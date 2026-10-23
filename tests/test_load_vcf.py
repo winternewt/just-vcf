@@ -9,7 +9,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import MultiSampleError, NoSampleError, load, vcf_samples, write_vcf
+from just_vcf import MultiSampleError, NoSampleError, load, rejoin_split, vcf_samples, write_vcf
 from just_vcf.loaders.vcf import undo_resave
 from just_vcf.schema import BLOCKS, CALLS
 
@@ -747,3 +747,45 @@ def test_crlf_and_plain_vcfs_are_not_taken_for_a_resave(tmp_path: Path) -> None:
         path = tmp_path / name
         path.write_bytes(body)
         assert not any("spreadsheet" in w for w in load(path).warnings), name
+
+
+GL_FLOAT = '##FORMAT=<ID=GL,Number=G,Type=Float,Description="Log10 likelihoods">'
+
+
+@pytest.mark.parametrize(
+    ("fmt", "extra", "sample", "expected"),
+    [
+        (("GT", "PL"), (), "0/1:40,0,300", "pl"),
+        (("GT",), (GL_FLOAT,), "0/1:-4,0,-30", "gl"),
+        (("GT", "PL"), (GL_FLOAT,), "0/1:40,0,300:-4,0,-30", "gl_over_pl"),
+        (("GT", "GQ"), (), "0/1:30", None),
+        # A GL with a fixed count is another quantity under the name, not carried: PL is the only source.
+        (("GT", "PL"), ('##FORMAT=<ID=GL,Number=1,Type=Float,Description="Something else">',), "0/1:40,0,300:-4", "pl"),
+    ],
+    ids=["pl", "gl", "both", "neither", "gl_fixed_count"],
+)
+def test_the_facet_names_the_key_gl_is_read_from(tmp_path: Path, fmt: tuple[str, ...], extra: tuple[str, ...], sample: str,
+                                                 expected: str | None) -> None:  # fmt: skip
+    keys = ":".join([*fmt, *("GL" for line in extra if "ID=GL" in line)])
+    path = write(tmp_path, vcf_text([f"1\t100\t.\tA\tG\t50\t.\t.\t{keys}\t{sample}"], fmt=fmt, extra_meta=extra))
+    loaded = load(path)
+    facets, calls = pl.collect_all([loaded.facets, loaded.calls])
+    assert facets["gl_source"].to_list() == [expected]
+    # Null means the facet carries no likelihoods: no row has `gl`.
+    assert (calls["gl"].is_null().all()) is (expected is None)
+
+
+def test_an_undeclared_pl_the_rows_use_is_a_pl_facet(tmp_path: Path) -> None:
+    """The loader declares a key the rows use without a declaration, so it is read, and named."""
+    path = write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:PL\t0/1:40,0,300"]))
+    loaded = load(path)
+    assert loaded.facets.collect()["gl_source"].to_list() == ["pl"]
+    assert loaded.calls.collect()["gl"].to_list()[0] == pytest.approx([-4.0, 0.0, -30.0])
+
+
+def test_a_derived_facet_keeps_its_parents_gl_source(tmp_path: Path) -> None:
+    path = write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:PL\t0/1:40,0,300"], fmt=("GT", "PL")))
+    loaded = load(path)
+    derived = rejoin_split(loaded).facets.collect()
+    assert derived["relation"].to_list() == ["split_rejoined"]
+    assert derived["gl_source"].to_list() == loaded.facets.collect()["gl_source"].to_list() == ["pl"]

@@ -36,7 +36,7 @@ from polars_bio.sql import SQL
 from just_vcf import cache as cache_index
 from just_vcf.bgzf import BgzfWriter
 from just_vcf.links import CALLER_SPLIT  # noqa: F401 (kept importable here; defined in just_vcf.links)
-from just_vcf.schema import BLOCKS, CALLS, EMPTY_ALLELE, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
+from just_vcf.schema import BLOCKS, CALLS, EMPTY_ALLELE, BlockKind, EvidenceBasis, GlSource, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
 
@@ -588,6 +588,20 @@ def unfit_keys(header: Header) -> dict[str, str]:
         for key, number in VECTOR_NUMBERS.items()
         if key in header.format and header.format[key] not in (number, ".")
     }
+
+
+def gl_source(header: Header) -> GlSource | None:
+    """Which FORMAT key(s) `gl` is read from: the likelihood keys `read_records` carries, so a GL or PL
+    declared with a fixed count (another quantity under the name) or a Type polars-bio refuses does not
+    count. Call it after `declare`, so a key the rows use undeclared counts. None: neither is carried."""
+    refused = refused_types(header)
+    unfit = unfit_keys(header)
+    carried = {key for key in ("GL", "PL") if key in header.format and key not in unfit and f"FORMAT/{key}" not in refused}
+    if carried == {"GL", "PL"}:
+        return GlSource.GL_OVER_PL
+    if carried:
+        return GlSource(carried.pop().lower())
+    return None
 
 
 def readable_path(

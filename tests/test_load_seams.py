@@ -95,6 +95,7 @@ _FEW_OVERLAP = (
 )
 _NO_BAND_23 = "The example's row count lies in no 23andMe generation's band (`chip.ChipOutcome.NO_BAND`, a load warning)."
 _NO_SAMPLE = "The layout has no sample column; the file holds one person by construction."
+_NO_LIKELIHOODS = "The format writes no likelihood vector: only the VCF loader reads GL or PL into `gl`, which stays null here."
 
 NULL_REASONS: dict[tuple[str, str], str] = {
     # Every facet `load` returns.
@@ -225,6 +226,12 @@ NULL_REASONS: dict[tuple[str, str], str] = {
     **_each(FB_KEYVALUE, ("caller_version", "sample"), "The key=value table has no header and no sample column."),
     **_each(FB_KEYVALUE, ("assembly_label", "assembly_label_basis"), "The key=value table has no header to state a build (the spec has no build hint)."),
     **_each(FB_KEYVALUE, ("ploidy_statements", "header_contigs", "vcf_version", "sample_meta"), _NOT_A_VCF),
+    # Where `gl` comes from (`loaders.vcf.gl_source`): only a VCF's FORMAT GL or PL fills it.
+    **_each((GT, CN, "annotated_variants", "casava_snp_table", "casava_indel_table", "soapsnp_cns", *FB_KEYVALUE), ("gl_source",), _NO_LIKELIHOODS),
+    **_each(("vcf", "vcf_cgi", "vcf_no_meta", "bcf", *FB_VCF), ("gl_source",), (
+        "The example's header declares neither GL nor PL with a genotype count, and its rows use neither, so `gl` is "
+        "null on every row."
+    )),
 }
 """(key, column) → why null is right for the facets the key covers."""
 

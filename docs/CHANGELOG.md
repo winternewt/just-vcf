@@ -55,6 +55,30 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   with the reference base stated, as CASAVA's and SOAPsnp's tables are, so `chip_absence` now refuses it as
   not an array export instead of reading its absent sites against a chip. A Big Y facet's `family` changes.
 
+- The first consensus check (RM280, docs/CONSENSUS.md): PGP-HMS hu1B2689's CGI, freeBayes, VarScan2 and
+  23andMe facets on the autosomes, rates held out from this person's atlas pair. The consensus's top SNV
+  genotype agrees with CGI on 99.88%, the array 99.85%, VarScan2 98.58%, freeBayes 98.27%; against
+  freeBayes held out it is calibrated below 10 phred and two to three times underconfident above.
+  `scripts/consensus_check.py` runs it from a plan, aggregates only.
+- `method_error_rates` takes a pair's genotype disagreement as `mismatch / (match + mismatch)`, leaving
+  `ploidy_differs` out: 69 to 82% of the PGP pairs' SNV `discordant` is a male X written haploid by CGI
+  and diploid by freeBayes, a convention and not a genotype error. With it in, the consensus check
+  was about seven times underconfident. `METHOD_RATES.called_both` is now `compared`.
+- `consensus(person, atlas=...)` (RM280, `just_vcf.consensus`): a derived facet (`relation = consensus`, a
+  link from every parent) with one row per ALT allele the parents state on one assembly, its `gp` the
+  posterior over the copies of it. Each parent's reading (its row, its vector tempered by its rate, a
+  site row, a `ref` block, or silence where `absence_is_reference` allows) is weighted by its method's
+  error rate; `method_error_rates` turns the atlas's pair rates into per-method genotype and silence
+  rates (triangulated where three methods were compared, else half a pair's), by caller and version,
+  else caller, else a stated default (the worst measured), and `regions` picks the highest rate among
+  the classes holding an allele. `Consensus.support` counts per row the parents that supported,
+  contradicted or were silent and those weighted by a default; the parents keep their calls. Refuses
+  two assemblies, a facet with its own derivative, and two subjects. No column changes;
+  `SCHEMA_VERSION` unchanged.
+- `links.CONSENSUS` (`consensus`): a documented multi-parent lineage relation, for a facet whose rows are
+  computed from all its parents (RM280). `merge` now means the parents' rows put together.
+  `link_disagreements` checks a `consensus` facet as it checks a `merge` one.
+
 - Schema 0.0.18: `facets.gl_source` says whether `gl` was read from PL or GL; `genotype_evidence` reports it
   on rows graded `gl`.
 

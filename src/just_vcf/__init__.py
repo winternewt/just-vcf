@@ -18,6 +18,7 @@ from just_vcf.coverage import (
     read_coverage,
 )
 from just_vcf.concordance import AbsenceReading, Agreement, ComparisonBasis, Concordance, PairKey, concordance
+from just_vcf.consensus import Consensus, GpReading, RateBasis, consensus, method_error_rates
 from just_vcf.evidence import (
     GENOTYPE_EVIDENCE,
     GENOTYPE_EVIDENCE_AT,
@@ -116,6 +117,9 @@ __all__ = [
     "ChipBasis",
     "ComparisonBasis",
     "Concordance",
+    "Consensus",
+    "GpReading",
+    "RateBasis",
     "ConfidenceKind",
     "Chain",
     "ContentFilter",
@@ -193,6 +197,8 @@ __all__ = [
     "genotype_evidence_at",
     "learn_probe_sets",
     "concordance",
+    "consensus",
+    "method_error_rates",
     "giab_stratifications",
     "method_atlas",
     "pair_counts",

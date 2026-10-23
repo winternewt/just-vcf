@@ -15,6 +15,7 @@ from just_vcf import LINKS, Loaded, link_disagreements, liftover, load, mint_vrs
 from just_vcf.links import (
     APPENDED_EXPORT,
     CALLER_SPLIT,
+    CONSENSUS,
     KIN_RELATIONS,
     LINEAGE_RELATIONS,
     LINK_KEY,
@@ -180,6 +181,10 @@ def _links(*rows: dict) -> pl.DataFrame:
         ([_facet("m", None, MERGE)], [_link("a", "m", MERGE), _link("b", "m", MERGE)], True),
         ([_facet("m", None, MERGE)], [_link("a", "m", MERGE)], False),
         ([_facet("m", None, MERGE)], [_link("a", "m", MERGE), _link("b", "m", NORMALIZED)], False),
+        ([_facet("m", None, CONSENSUS)], [_link("a", "m", CONSENSUS), _link("b", "m", CONSENSUS)], True),
+        ([_facet("m", None, CONSENSUS)], [_link("a", "m", CONSENSUS)], False),
+        ([_facet("m", None, CONSENSUS)], [_link("a", "m", CONSENSUS), _link("b", "m", MERGE)], False),
+        ([_facet("c", "p", CONSENSUS)], [_link("p", "c", CONSENSUS)], False),
         ([_facet("c", None, NORMALIZED)], [_link("p", "c", NORMALIZED)], False),
         # Kin: a link of the relation names the facet; no lineage link ends at it.
         ([_facet("a", None, CALLER_SPLIT), _facet("b", None, CALLER_SPLIT)], [_link("a", "b", CALLER_SPLIT)], True),
@@ -192,8 +197,8 @@ def _links(*rows: dict) -> pl.DataFrame:
         ([_facet("r")], [_link("r", "x", APPENDED_EXPORT)], True),
         ([_facet("r")], [_link("p", "r", LIFTOVER_TO)], False),
         # Relations outside the documented set, on a facet or a link.
-        ([_facet("c", None, "consensus")], [], False),
-        ([_facet("r")], [_link("r", "x", "consensus")], False),
+        ([_facet("c", None, "recalled")], [], False),
+        ([_facet("r")], [_link("r", "x", "recalled")], False),
     ],
 )
 def test_link_disagreements(facets: list[dict], links: list[dict], agree: bool) -> None:

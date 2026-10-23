@@ -62,7 +62,7 @@ Severity: low · Status: open (decided by the person in the Part 2 interview, 20
 The person chose load with ids withheld (E11): SV calls load as rows with type and `end_pos`, VRS ids withheld with a reason (VRS 2.x has no SV model; charter: never a non-conforming GA4GH value).
 
 ## RM283 — An aggregate-only query helper
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: medium · Status: built on a builder branch 2026-10-23 (`just_vcf.query`), waiting for the lead's merge; decided by the person in the Part 2 interview, 2026-10-23 · Owner: lead
 
 The person chose a helper beside `load` (E12): an API that answers counts, shares and presence questions and never returns rows, for agents and apps; `load` stays for code that may read rows.
 

@@ -27,6 +27,22 @@ anything else, and nothing needs to be. The controls are on what leaves it: the 
 exfiltration guard on agent actions, and the audits below for code that could send data out without
 an agent asking.
 
+## The surface an agent reads through
+
+An agent asking about a private genome uses `just_vcf.query` (RM283), not `load`. `query(path)` loads
+the file itself and answers with counts by contig, variant class, filter set, genotype class and block
+kind; summary statistics of GQ, DP and QUAL; the facet's provenance; the load's warnings grouped by
+reason; and, for one variant asked by VRS id or by position and alleles, whether the facet carries it,
+graded (`carried` true, false or unknown, and what the answer rests on). Every answer is a frozen
+pydantic model of counts, numbers, the schema's enums and bounded strings. None has a field for a row,
+a sample name, a path or an archive member's name, and a position, allele or genotype is returned only
+when it was asked for; the sample, the paths and anything shaped like a path are replaced in the text
+it returns. There is no position dimension and no region filter, so counts cannot be narrowed onto a
+row. Small counts are not suppressed: the data is one person's, a small count names no one else, and a
+suppressed cell is recovered by subtraction from its total. This is the model-provider row's control
+made into an API, a convention for the session and not a sandbox: `load` stays for code that reads
+rows on the machine, and its frames are never printed into a session.
+
 ## Per source
 
 | Source | What it runs here | Realistic threat | Control | Residual, accepted |

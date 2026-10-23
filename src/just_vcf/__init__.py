@@ -20,6 +20,7 @@ from just_vcf.loading import (
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
 from just_vcf.person import SUBJECT_CHECKS, Person, SameSubjectCheck, SubjectCheckOutcome, SubjectError, people
+from just_vcf.query import Dimension, GenotypeClass, Presence, PresenceBasis, Query, query
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
 from just_vcf.schema import (
@@ -67,14 +68,19 @@ __all__ = [
     "ContentFilterBasis",
     "ContigNames",
     "DamagedBgzfError",
+    "Dimension",
     "Lifted",
     "Loaded",
     "MultiSampleError",
     "NoSampleError",
     "EvidenceBasis",
+    "GenotypeClass",
     "KaryotypicSex",
     "PhaseSetKind",
     "Person",
+    "Presence",
+    "PresenceBasis",
+    "Query",
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
@@ -101,6 +107,7 @@ __all__ = [
     "mint_vrs_ids",
     "normalize",
     "people",
+    "query",
     "open_payload",
     "read_chain",
     "reference_dir",

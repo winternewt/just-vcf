@@ -162,7 +162,9 @@ The person chose columns with an export on demand (E5): phase sets stay columns;
 **Built:** `cis_phased_blocks` (docs/SCHEMA.md, "CisPhasedBlock export"). The VCF loader reads PSL,
 PSO and PSQ since 2026-10-23, and `write_vcf` writes them back under VCF 4.5, so PSL sets are tested on
 a loaded facet against vrs-python. Left open: in a VCF 4.4+ file a slot-0 block with an ALT is
-`phase_unknown` until polars-bio keeps the leading phase indicator (P4), unless PSL names that slot's set. On a whole imputed genome
+`phase_unknown` until polars-bio keeps the leading phase indicator (P4), unless PSL names that slot's set.
+A withheld block names the first allele that withheld it (`withheld_chrom`, `withheld_pos`,
+`withheld_allele`). On a whole imputed genome
 an implicit set is a chromosome, so one symbolic ALT withholds the haplotype's block (a phased Genes
 for Good upload: 45 of 46 withheld `symbolic`); whether a block per window or per contiguous run of
 sequence alleles is wanted is the person's call.

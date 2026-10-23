@@ -1275,6 +1275,9 @@ a stored block table, which every load would pay for and every change to an alle
 | `members` | `list[str]` | the block is withheld. Otherwise the member Alleles' VRS ids, sorted, each once |
 | `cpb_id` | `str` | the block is withheld. Otherwise `ga4gh:CPB.` + the sha512t24u of `{"members":[<Allele digests, sorted>],"type":"CisPhasedBlock"}`, as vrs-python identifies a block of inline Alleles |
 | `withheld` | `str` | the block has an id. Otherwise why not (below) |
+| `withheld_chrom` | `str` | the block has an id, or is `too_few_members`. Otherwise the contig of the first slot that withheld it |
+| `withheld_pos` | `u32` | as `withheld_chrom`: that slot's record position, 1-based |
+| `withheld_allele` | `str` | as `withheld_chrom`, and null for an uncalled slot: that slot's allele as `gt_alleles` holds it |
 
 - **Members** are the non-reference alleles the haplotype carries. A `0` on a record split one row per
   ALT (RM270) or under an overlapping deletion says "not this ALT", not "the reference base", so REF
@@ -1293,6 +1296,11 @@ a stored block table, which every load would pay for and every change to an alle
   even in a file nobody phased. On one copy (male X outside the PARs, Y, MT) that is true by ploidy, so
   they make a block. Rejected: leaving out haploid rows, which would drop a true statement to guard
   against a caller that writes a two-copy region haploid.
+- **Which allele withheld it**: `withheld_chrom`, `withheld_pos` and `withheld_allele` name the slot
+  that gave the reason, the first in row order: its record's contig and position, and the allele
+  as `gt_alleles` holds it (null for an uncalled slot). On a whole-chromosome implicit set this is
+  how a reader finds the one symbolic ALT that withheld the block. Null when the block has an id or
+  is `too_few_members`, which no single allele causes.
 - **A PSL record's slots are split by kind**: its named slots are in their PSL sets, its `ps` slots
   (phased, PSL `.`) in the chromosome's implicit set, and only those make the record part of it.
 - **Order**: by the set's first row in `calls`, then kind, set name and haplotype.
@@ -1373,7 +1381,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 - **Additive, version not bumped in this change** (2026-10-23, PSL/PSO/PSQ phase sets, layer 8): two
   nullable `calls` columns, `phase_set_ordinals` and `phase_set_qualities` (Decision 2, "How the VCF
-  loader reads PSL"). A new nullable column is a minor bump by the rule above;
+  loader reads PSL"), and three columns of the computed `cis_phased_blocks` frame, `withheld_chrom`,
+  `withheld_pos` and `withheld_allele`. A new nullable column is a minor bump by the rule above;
   `SCHEMA_VERSION` is left as it is on this builder branch for the lead to bump at merge. Values change
   on VCF 4.4+ files that declare PSL: they loaded with PSL dropped (or not at all, Number=P, P10), and
   now carry its sets, and `phased[0]` where PSL names the first slot's set.

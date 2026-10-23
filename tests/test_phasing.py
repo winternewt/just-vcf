@@ -341,6 +341,10 @@ def psl(chrom: str, pos: int, gt: str, names: str) -> PslRecord:
     return (chrom, pos, base(chrom, pos), other(base(chrom, pos)), gt, names)
 
 
+def withheld_at(row: dict) -> tuple:
+    return tuple(row[f"withheld_{name}"] for name in ("chrom", "pos", "allele"))
+
+
 def test_a_loaded_psl_facet_equals_vrs_python(tmp_path: Path, store: ReferenceStore) -> None:
     """PSL sets read by the VCF loader, not rewritten by hand: each named slot is in its set wherever
     the record sits, a first slot named by PSL is phased (a VCF 4.5 unphased allele has `.`), and a
@@ -371,3 +375,22 @@ def test_a_loaded_psl_facet_equals_vrs_python(tmp_path: Path, store: ReferenceSt
     implicit = blocks.filter(pl.col("phase_set_kind") == "ps").rows(named=True)
     assert [(r["chrom"], r["phase_set"], r["haplotype"], r["sites"], r["withheld"]) for r in implicit] == [("1", None, 1, 1, "too_few_members")]
 
+
+def test_a_withheld_block_names_the_first_allele_that_withheld_it(tmp_path: Path, store: ReferenceStore) -> None:
+    """On a whole-chromosome implicit set one symbolic ALT withholds the haplotype's block (RM284);
+    the block names that record and allele, the first in row order when there are several."""
+    records: list[Record] = [
+        snv("1", 10, "1|0", None),
+        ("1", 310, base("1", 310), "<DEL>", "1|0", None),
+        snv("1", 320, "1|1", None),
+        ("1", 500, base("1", 500), "<DUP>", "1|1", None),
+        snv("1", 600, ".|1", 9),  # set 9: slot 0 uncalled
+        snv("1", 610, "1|1", 9),
+    ]
+    got = blocks_by_key(cis_phased_blocks(minted(phased_vcf(tmp_path, records, {"1": LENGTHS["1"]}), store)).collect())
+    assert got[("1", None, 0)]["withheld"] == "sv_no_vrs_model" and withheld_at(got[("1", None, 0)]) == ("1", 310, "<DEL>")
+    assert got[("1", None, 1)]["withheld"] == "sv_no_vrs_model" and withheld_at(got[("1", None, 1)]) == ("1", 500, "<DUP>")
+    assert got[("1", 9, 0)]["withheld"] == "uncalled" and withheld_at(got[("1", 9, 0)]) == ("1", 600, None)
+    assert got[("1", 9, 1)]["cpb_id"] is not None and withheld_at(got[("1", 9, 1)]) == (None, None, None)
+    one = blocks_by_key(cis_phased_blocks(minted(phased_vcf(tmp_path, records[:1], {"1": LENGTHS["1"]}, name="one.vcf"), store)).collect())
+    assert one[("1", None, 0)]["withheld"] == "too_few_members" and withheld_at(one[("1", None, 0)]) == (None, None, None)

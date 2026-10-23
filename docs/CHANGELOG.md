@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A withheld CisPhasedBlock names the first slot that withheld it: three new columns of
+  `cis_phased_blocks`, `withheld_chrom`, `withheld_pos` and `withheld_allele` (RM284), so the one
+  symbolic ALT that withholds a chromosome's implicit set can be found. Null when the block has an id
+  or is `too_few_members`. Offering blocks per window instead stays the person's call.
 - VCF 4.4+ phase-set lists are read and written (layer 8). The VCF loader reads FORMAT `PSL` into
   `phase_sets`/`phase_set_kinds` (kind `psl`) per allele, and `PSO` and `PSQ` into two new nullable
   `calls` columns, `phase_set_ordinals` and `phase_set_qualities` (SCHEMA_VERSION not bumped here). A

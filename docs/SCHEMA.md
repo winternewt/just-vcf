@@ -1092,6 +1092,29 @@ library checks the claim and warns, and it never infers a subject or moves a fac
   assign; a subject read from the sample name, which is a file's label, often a real name, and the
   same for different people across files.
 
+## Relatedness and pedigrees: computed or supplied, not stored (RM274)
+
+Neither is a column of `facets`, `calls` or `blocks`. Relatedness is computed on demand from two facets'
+`calls` (and `blocks`, for a gVCF's absences) and returned; a pedigree is a document the caller
+supplies, read into frames of its own. docs/RELATEDNESS.md has the method.
+
+- **`RELATEDNESS_FRAME`** (`pairwise_relatedness`, `just_vcf.somalier`; one `Relatedness` model per
+  row): `facet_a`, `facet_b`, `method` (`king_robust` or `somalier`, an open vocabulary), `band` (a
+  `pl.Enum`: `same_person`, `first_degree`, `second_degree`, `third_degree`, `unrelated`, `unknown`),
+  `reason` (why `unknown`: `assembly_unknown`, `assembly_mismatch`, `no_panel`, `too_few_sites`,
+  `no_heterozygous_sites`, `between_bands`; an open vocabulary), `assembly_label`, `panel`, `kinship`
+  and `kinship_se` (KING's scale, one person 0.5), `ibs0` and `ibs2` (shares of the shared sites), the
+  counts `n_sites`, `n_het_a`, `n_het_b`, `n_het_both`, `n_ibs0`, `n_ibs2`, `n_vrs_compared`,
+  `n_vrs_differ`, and `somalier_relatedness` (somalier's own value, verbatim). A pair not compared at
+  all (no shared assembly, no panel) has null counts: not measured is not zero. The bands are
+  just-vcf's own terms (KING's inference criteria); GA4GH's KIN ontology names stated relationships,
+  not degrees measured from genotypes.
+- **`PEDIGREE_INDIVIDUALS`** (`pedigree_id`, `individual_id`, `sex`) and **`PEDIGREE_RELATIONSHIPS`**
+  (`pedigree_id`, `individual_id`, `relation_id`, `relation_label`, `relative_id`): a GA4GH Pedigree as
+  the caller supplied it, the KIN term and sex value as written. `individual_id` is `relation` of
+  `relative_id`, the standard's direction. A pedigree individual is not a `subject` and nothing joins
+  the two yet.
+
 ## Sex-chromosome evidence: computed per facet, not stored (RM269)
 
 `sex_chromosome_evidence(loaded)` returns one `SexChromosomeEvidence` per row of `loaded.facets`. Like
@@ -1196,6 +1219,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, RM274): no column of `facets`, `calls` or `blocks` changes.
+  Added outside the three frames: `RELATEDNESS_FRAME` and the two pedigree frames ("Relatedness and
+  pedigrees" above). `Person.of`'s default check is now `same_person`.
 
 - **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every

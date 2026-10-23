@@ -248,7 +248,7 @@ def test_what_a_dead_add_left_is_reported_then_removed(tmp_path: Path, caplog: p
     (root / "facets" / "0").mkdir(parents=True)
     with caplog.at_level(logging.WARNING, logger="just_vcf.store"):
         store = Store.open(root)
-    assert "2 facet or staging" in caplog.text
+    assert "2 facet or staging directory(ies) not in the manifest" in caplog.text
     store.add(_gvcf(tmp_path))
     assert not (root / ".staging-1-dead").exists() and not (root / "facets" / "0").exists()
     assert len(store.facet_ids) == 1

@@ -25,8 +25,9 @@ The rules, each from the charter or the item:
 - **Atomic per facet, safe under concurrent adds.** An add holds the store's lock from its check of
   what is present to its last manifest write. Each facet is sunk into a staging directory, synced, and
   renamed to `facets/<facet_id>/`; the manifest written after the rename is the commit. A staging
-  directory, or a facet directory the manifest does not name, can only be a writer's that died (the
-  lock is held for the whole add), so the next add removes it; `open` reports one.
+  directory, or a facet directory the manifest does not name, found under the lock can only be a
+  writer's that died (the lock is held for the whole add), so the next add removes it. `open` reports
+  one without the lock, so it may be an add still running.
 - **Deterministic (charter 12).** The same `Loaded` sinks to the same parquet bytes under one polars
   release. The manifest carries times and differs.
 
@@ -148,8 +149,8 @@ class Store:
         orphans = store._orphans(manifest)
         if orphans:
             logger.warning(
-                "store: %d facet or staging directory(ies) not in the manifest, left by an add that did not "
-                "finish; the next add removes them: %s",
+                "store: %d facet or staging directory(ies) not in the manifest: an add in progress, or one "
+                "that did not finish, whose leftovers the next add removes: %s",
                 len(orphans),
                 ", ".join(orphans),
             )

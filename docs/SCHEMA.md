@@ -1311,7 +1311,8 @@ layout (charter 2): GA4GH defines no on-disk store for a person's callsets.
   what is present to its last manifest write: each facet is sunk into a staging directory, synced,
   renamed to `facets/<facet_id>/`, and committed by rewriting the manifest (temporary name, then
   `os.replace`). Since the lock spans the whole add, a staging directory or a facet directory the
-  manifest does not name is a dead writer's: `open` reports it and the next add removes it. Rejected:
+  manifest does not name is a dead writer's when found under the lock: the next add removes it.
+  `open` reports one without taking the lock, so it may be an add still running. Rejected:
   sinking outside the lock and locking only the commit, which lets concurrent adds overlap but leaves
   no safe moment to remove a dead writer's staging directory.
 - **Lazy reads.** `loaded()` returns one `Loaded` over every facet, scans of its files in `facet_id`

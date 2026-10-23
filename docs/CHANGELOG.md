@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `chip_absence` and `learn_probe_sets` refuse a `Loaded` of more than one facet (an appended export)
+  with `ValueError`, as the derived steps do: they read the first facet's chip and assembly against
+  every facet's rows. `scripts/learn_probe_sets.py` skips such a file and counts it.
+
 - `Person` carries `links` (RM275's frame), which it dropped: every link its facets' loads carried,
   once each, in `canonical_links` order, so a lifted facet grouped with its parent keeps its
   `liftover_to` link. The CLI's `--facet` narrowing kept no links either, so a step after it lost the

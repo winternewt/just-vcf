@@ -12,9 +12,9 @@ usable for one person's facets, and say what they rest on.
 | 2 | Provenance per facet | 90% | caller and version, vendor, callset type, chip, content filter, ploidy lines, subject, derivation inputs, reference, aligner, the method chain (`method_steps`), coverage facets |
 | 3 | Identity (comparing facets) | 92% | REF, VRS, assembly inference incl. GRCh36/CHM13, scaffold aliases (F19: a PGP GRCh38 VCF reads 100%); `_fix` patches need a patch store |
 | 4 | A person | 90% | subject; Person with links and relatedness as its default check; a supplied GA4GH pedigree checked against measured bands (agrees/disagrees/cannot_tell, never corrected); exome variant-only sites read as unknown; the durable store; somalier waits on desk #88 |
-| 5 | Agreement measured | 88% | `concordance` (span-guarded VRS pairing, haploid vs a/a a match with ploidy flagged); the method-error atlas incl. the CGI pairs by VRS id; the consensus posterior (RM280); calibration by region and per-row confidence building |
+| 5 | Agreement measured | 90% | `concordance` (span-guarded VRS pairing, haploid vs a/a a match with ploidy flagged); the method-error atlas incl. the CGI pairs by VRS id and by each side's confidence band; the consensus posterior (RM280) |
 | 6 | Facet graph and liftover | 90% | links frame, liftover, normalize, rejoin_split |
-| 7 | Graded evidence across sources | 75% | `genotype_evidence` with the PL/GL source; the consensus posterior turns method error rates into probabilities (calibrated below 10 phred, underconfident above: being fixed); three choices on the desk (#94–#96) |
+| 7 | Graded evidence across sources | 82% | `genotype_evidence` with the PL/GL source; the consensus posterior weighs each row by its confidence band's measured rate (held-out SNVs: 1.15x predicted against observed, from 1.9x; the 60+ band still 2x overconfident); three choices on the desk (#94–#96) |
 | 8 | Export | 92% | VCF/gVCF with tabix, VCF 4.5 PSL/PSO/PSQ, CisPhasedBlock export naming what withheld it, VCF Zarr |
 
 ## Blockers waiting for the person
@@ -61,6 +61,13 @@ meanwhile. The desk carries the ones filed there.
   triangulation where three methods were compared, else half; a GP row read as its call; an unmeasured
   method gets the worst measured rate in its class; support counts in a sidecar frame; facets from the same
   reads (freeBayes and VarScan2) treated as independent, which overstates agreement (documented).
+- **Layer 5/7, the lead's calls on band calibration (built, listed for veto):** a row's whole error is its
+  band's measured rate, not its own phred floored at the method's (the data ruled the floor out both ways:
+  CGI rows claiming 20-30 phred err about 4%, freeBayes rows past 100 phred err 0.05%); with one pair,
+  band rates are fixed only up to a constant moved between the two methods, split evenly where both sides
+  sit in their most confident band; a band needs 1,000 alleles to be used (`MIN_BAND_ALLELES`). The 60+
+  band's 2x overconfidence has two candidate causes (freeBayes 0.9.15 borrowing 0.9.20's bands, or CGI and
+  the array not independent of freeBayes); a third method on one person would tell them apart.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

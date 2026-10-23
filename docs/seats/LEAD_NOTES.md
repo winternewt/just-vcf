@@ -119,3 +119,8 @@ status lines say what exists. Schema at 0.0.4.
   left to finish: the consensus calibration builder (rates by confidence band, commit 78d6ede on its branch,
   its real-data check written) and merge audit 4 over 01fca0b..ad2f185 (report to the scratchpad's
   audit4.md). `tests/test_facet_gate.py` is gone from main; `tests/test_load_seams.py` is the one guard.
+- **Audit 4 (01fca0b..ad2f185), done 2026-10-24:** no hunk lost in a hand merge. Fixed in 1a45d09: a
+  consensus facet stood as an independent source in `Person`/`check_pedigree`; the consensus ploidy test
+  built a pre-F22 atlas row and guarded nothing; SCHEMA.md history (orphan heading, stale bump wording).
+  Calibration merged at 86daede; the rebuilt atlas is in main's `data/output/`. Next audit after six more
+  merges.

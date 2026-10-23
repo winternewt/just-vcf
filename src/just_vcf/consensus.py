@@ -949,6 +949,13 @@ def consensus(
     defaulted = sorted({r["facet_id"] for r in rates.filter(pl.col("rate_basis") == RateBasis.DEFAULT.value).iter_rows(named=True)})
     if defaulted:
         warnings.append(f"{len(defaulted)} facet(s) weighted by a default rate in some class (no atlas row for their caller): {', '.join(defaulted)}")
+    borrowed = rates.filter((pl.col("rate_basis") == RateBasis.CALLER.value) & (pl.col("confidence_band") != ALL_BANDS))
+    borrowed_ids = sorted(set(borrowed["facet_id"].to_list()))
+    if borrowed_ids:
+        warnings.append(
+            f"{len(borrowed_ids)} facet(s) weighted by confidence-band rates their caller was measured at in other versions: {', '.join(borrowed_ids)}; "
+            "a band's error measured on one facet's confidence scale need not hold on another's (docs/CONSENSUS.md)"
+        )
 
     options = {"prior": prior, "default_rate": default_rate, "scope": scope, "pass_only": pass_only, "gp_as": gp_as.value,
                "gq_on_reference": gq_on_reference, "force": force, "regions": regions.name if regions is not None else None}  # fmt: skip

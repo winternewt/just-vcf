@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `consensus` warns, naming each facet weighted by confidence-band rates its caller was measured at
+  in other versions (`rate_basis = caller` on a band row). The rates and rows are unchanged.
+
 - `Person` and `check_pedigree` no longer check a merged or consensus facet against the facets it was
   made from, nor stand two of them for one source: computed from its parents, it agreed with them by
   construction and counted as evidence that they are one person (merge audit 4).

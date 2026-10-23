@@ -380,10 +380,16 @@ def genotype_evidence_at(
         pl.coalesce(pl.col("end_pos"), pl.col("pos")).cast(pl.Int64).alias("_end"),
     )
     at_start = calls.join(ask, left_on=["chrom", "_start"], right_on=["_site_chrom", "_site_pos"], how="inner")
-    inside = calls.filter(pl.col("_end") > pl.col("_start")).join_where(
-        ask, pl.col("chrom") == pl.col("_site_chrom"), pl.col("_site_pos") > pl.col("_start"), pl.col("_site_pos") <= pl.col("_end")
-    ).drop("_site_chrom", "_site_pos")
-    hit_calls = pl.concat([at_start, inside], how="vertical_relaxed")
+    # One range join per contig: with two inequalities and no equality, polars runs it as an IEJoin; an
+    # equality on `chrom` beside them makes it a filtered cross join (38 GB on a CGI genome's panel).
+    spanning = calls.filter(pl.col("_end") > pl.col("_start"))
+    inside = [
+        spanning.filter(pl.col("chrom") == contig)
+        .join_where(ask.filter(pl.col("_site_chrom") == contig), pl.col("_site_pos") > pl.col("_start"), pl.col("_site_pos") <= pl.col("_end"))
+        .drop("_site_chrom", "_site_pos")
+        for contig in sorted(contigs)
+    ]  # fmt: skip
+    hit_calls = pl.concat([at_start, *inside], how="vertical_relaxed")
     blocks = loaded.blocks.filter(pl.col("chrom").is_in(contigs)).with_columns(pl.col("pos").cast(pl.Int64).alias("_start")).sort("chrom", "_start")
     hit_blocks = (
         ask.rename({"_site_chrom": "chrom"}).sort("chrom", "_site_pos")

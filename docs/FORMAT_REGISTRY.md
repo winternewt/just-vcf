@@ -157,9 +157,11 @@ Complete Genomics `vcfBeta-*.vcf.bz2` (CGAPipeline 2.x through cgatools mkvcf).
   - `^###?reference=.*(?i:grch37|hg19|hs37d5|human_g1k_v37|g1k\.37|(?<![a-z0-9])b37(?![0-9])|ncbi ?37|build ?37)` names GRCh37
   - `^###?reference=.*(?i:grch38|hg38|hs38|GCA_000001405\.15|ncbi ?38|build ?38)` names GRCh38
   - `^###?reference=.*(?i:grch36|hg18|ncbi ?36|build ?36)` names GRCh36
+  - `^###?reference=.*(?i:chm13|t2t|(?<![a-z0-9])hs1(?![0-9])|GCA_009914755|GCF_009914755)` names T2T-CHM13
   - `^###?contig=<[^>\n]*assembly=(?i:b37|hg19|grch37)[,>]` names GRCh37
   - `^###?contig=<[^>\n]*assembly=(?i:b38|hg38|grch38)[,>]` names GRCh38
   - `^###?contig=<[^>\n]*assembly=(?i:b36|hg18|ncbi36|grch36)[,>]` names GRCh36
+  - `^###?contig=<[^>\n]*assembly=(?i:hs1|chm13[^,>\s]*|t2t[^,>\s]*)[,>]` names T2T-CHM13
   - `^##source_GENOME_REFERENCE=NCBI build 37$` names GRCh37
   - `^##source_GENOME_REFERENCE=NCBI build 36$` names GRCh36
   - `^##genomemap=.*(?i:ncbi ?37)` names GRCh37
@@ -226,9 +228,11 @@ PGP-HMS's hg19 callsets: freeBayes and VarScan2 run per chromosome and joined by
   - `^###?reference=.*(?i:grch37|hg19|hs37d5|human_g1k_v37|g1k\.37|(?<![a-z0-9])b37(?![0-9])|ncbi ?37|build ?37)` names GRCh37
   - `^###?reference=.*(?i:grch38|hg38|hs38|GCA_000001405\.15|ncbi ?38|build ?38)` names GRCh38
   - `^###?reference=.*(?i:grch36|hg18|ncbi ?36|build ?36)` names GRCh36
+  - `^###?reference=.*(?i:chm13|t2t|(?<![a-z0-9])hs1(?![0-9])|GCA_009914755|GCF_009914755)` names T2T-CHM13
   - `^###?contig=<[^>\n]*assembly=(?i:b37|hg19|grch37)[,>]` names GRCh37
   - `^###?contig=<[^>\n]*assembly=(?i:b38|hg38|grch38)[,>]` names GRCh38
   - `^###?contig=<[^>\n]*assembly=(?i:b36|hg18|ncbi36|grch36)[,>]` names GRCh36
+  - `^###?contig=<[^>\n]*assembly=(?i:hs1|chm13[^,>\s]*|t2t[^,>\s]*)[,>]` names T2T-CHM13
   - `^##source_GENOME_REFERENCE=NCBI build 37$` names GRCh37
   - `^##source_GENOME_REFERENCE=NCBI build 36$` names GRCh36
   - `^##genomemap=.*(?i:ncbi ?37)` names GRCh37
@@ -291,9 +295,11 @@ VCF with a `##fileformat=VCF` line, first or not.
   - `^###?reference=.*(?i:grch37|hg19|hs37d5|human_g1k_v37|g1k\.37|(?<![a-z0-9])b37(?![0-9])|ncbi ?37|build ?37)` names GRCh37
   - `^###?reference=.*(?i:grch38|hg38|hs38|GCA_000001405\.15|ncbi ?38|build ?38)` names GRCh38
   - `^###?reference=.*(?i:grch36|hg18|ncbi ?36|build ?36)` names GRCh36
+  - `^###?reference=.*(?i:chm13|t2t|(?<![a-z0-9])hs1(?![0-9])|GCA_009914755|GCF_009914755)` names T2T-CHM13
   - `^###?contig=<[^>\n]*assembly=(?i:b37|hg19|grch37)[,>]` names GRCh37
   - `^###?contig=<[^>\n]*assembly=(?i:b38|hg38|grch38)[,>]` names GRCh38
   - `^###?contig=<[^>\n]*assembly=(?i:b36|hg18|ncbi36|grch36)[,>]` names GRCh36
+  - `^###?contig=<[^>\n]*assembly=(?i:hs1|chm13[^,>\s]*|t2t[^,>\s]*)[,>]` names T2T-CHM13
   - `^##source_GENOME_REFERENCE=NCBI build 37$` names GRCh37
   - `^##source_GENOME_REFERENCE=NCBI build 36$` names GRCh36
   - `^##genomemap=.*(?i:ncbi ?37)` names GRCh37

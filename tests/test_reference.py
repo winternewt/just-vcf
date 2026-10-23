@@ -539,6 +539,19 @@ def test_a_grch36_reference_is_named_by_its_contig_1_and_cannot_vouch_for_mt(tmp
     assert any("the GRCh36 label cannot vouch for without a stated length: MT" in w for w in resolved.warnings)
 
 
+def test_the_rows_name_t2t_and_its_label_cannot_vouch_for_mt(tmp_path: Path) -> None:
+    """RM286: F9 names T2T-CHM13 like any label, and `T2T-CHM13` covers two mitochondria of one length
+    (the CHM13 cell line's own in `chm13v2.0.fa`, rCRS in the analysis set's `_rCRS` variant)."""
+    s, digests = labelled_store(tmp_path, "two", {"GRCh38": SEQ, "T2T-CHM13": OTHER_SEQ})
+    rows = [*drawn_rows(OTHER_SEQ), ("rsM", "MT", 7, OTHER_SEQ["MT"][6])]
+    resolved = resolve_ref(bare_array(tmp_path, rows), s)
+    facets, calls = frames(resolved)
+    assert (facets["assembly_label"].item(), facets["ref_seqcol_digest"].item()) == ("T2T-CHM13", digests["T2T-CHM13"])
+    assert calls.filter(pl.col("chrom") == "MT")["ref"].to_list() == [None]
+    assert calls.filter(pl.col("chrom") != "MT")["ref"].null_count() == 0
+    assert any("the T2T-CHM13 label cannot vouch for without a stated length: MT" in w for w in resolved.warnings)
+
+
 def test_a_vcf_without_lengths_or_a_build_is_not_scored_by_its_rows(tmp_path: Path) -> None:
     """Scoring a VCF by its source REF would choose the build its `ref_check` then confirms."""
     s, _ = labelled_store(tmp_path, "two", {"GRCh37": SEQ, "GRCh38": OTHER_SEQ})

@@ -6,6 +6,7 @@ import pytest
 
 from just_vcf.formats import BCF_FORMAT, FORMATS, REGISTRY, get_spec, validate_format
 from just_vcf.formats.spec import HeaderMode
+from just_vcf.reference import CHR1_LENGTHS
 from just_vcf.sniff import SniffOutcome, sniff
 
 TEXT_SPECS = [spec for spec in REGISTRY if spec.id != BCF_FORMAT]
@@ -60,4 +61,5 @@ def test_example_rows_have_the_declared_column_count(spec) -> None:
 def test_build_hints_compile_and_name_a_known_build(spec) -> None:
     for hint in spec.build_hints:
         re.compile(hint.pattern)
-        assert hint.build in {"GRCh36", "GRCh37", "GRCh38"}
+        # A label a reference collection can carry (contig 1's length names it), so a stated build can be checked.
+        assert hint.build in set(CHR1_LENGTHS.values())

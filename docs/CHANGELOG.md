@@ -75,6 +75,21 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   block that cannot be stated whole is withheld with a reason (`phase_unknown`, `uncalled`, the
   member allele's `vrs_withheld` reason, `too_few_members`), never shortened. No column changes.
 
+- Sex-chromosome evidence on T2T-CHM13 (RM286): `PAR_BOUNDS` and `X_DEGENERATE_Y` gain T2T-CHM13 (GIAB
+  v3.6 CHM13 PAR and XTR, the T2T consortium's X-degenerate class), so a T2T facet's X and Y are grouped
+  and its het share and depth ratios measured; the estimate is withheld with the new reason
+  `uncalibrated_build`, since the thresholds were measured on GRCh37/38 genomes only. It answered
+  `unsupported_build` before. `karyotype.REGION_SET` is now a dict by build (`region_set` names the T2T
+  source too), and `REGION_BUILDS` joins `ESTIMATE_BUILDS`. A value change; no column changes.
+
+- T2T-CHM13 names (RM286): a VCF whose contigs are T2T-CHM13v2.0's GenBank (`CP068277.2`…) or RefSeq
+  (`NC_060925.1`…) accessions maps them to canonical `chrom` and gets its `assembly_label` from their
+  lengths; those names kept their source spelling before. A `##reference` naming `chm13`, `t2t`, UCSC's
+  `hs1` or the assembly's accession, or a `##contig` `assembly=` of `chm13…`, `t2t…` or `hs1`, states
+  `T2T-CHM13`. The `T2T-CHM13` label cannot vouch for MT (the CHM13 mitochondrion and rCRS are both
+  16,569 bases), so an array labelled T2T-CHM13 keeps MT unread. Value changes on files that already
+  load; no column changes.
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

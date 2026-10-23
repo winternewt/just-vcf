@@ -18,10 +18,11 @@ from just_vcf.coverage import (
     read_coverage,
 )
 from just_vcf.concordance import AbsenceReading, Agreement, ComparisonBasis, Concordance, PairKey, concordance
-from just_vcf.consensus import Consensus, GpReading, RateBasis, consensus, method_error_rates
+from just_vcf.consensus import AlleleFrequencyPrior, Consensus, GpReading, RateBasis, consensus, method_error_rates
 from just_vcf.evidence import (
     GENOTYPE_EVIDENCE,
     GENOTYPE_EVIDENCE_AT,
+    BlockGrade,
     ConfidenceKind,
     GradeBasis,
     VectorPrior,
@@ -106,8 +107,10 @@ __all__ = [
     "AbsenceMeans",
     "AbsenceReading",
     "Agreement",
+    "AlleleFrequencyPrior",
     "AssemblyLabelBasis",
     "BlockAllele",
+    "BlockGrade",
     "BlockKind",
     "CacheClearReport",
     "CacheEntryInfo",

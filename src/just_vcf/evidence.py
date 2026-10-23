@@ -28,6 +28,7 @@ from just_vcf.schema import CONTIG_RANK, BlockKind, EvidenceBasis, GlSource, Var
 __all__ = [
     "GENOTYPE_EVIDENCE",
     "GENOTYPE_EVIDENCE_AT",
+    "BlockGrade",
     "ConfidenceKind",
     "GradeBasis",
     "VectorPrior",
@@ -53,7 +54,9 @@ class GradeBasis(str, Enum):
     GT_ONLY = "gt_only"
     """A genotype written with no quantity: asserted, unquantified (arrays, many VCFs)."""
     BLOCK = "block"
-    """A reference block with no quantity: reference asserted over the block, unquantified."""
+    """A reference block with no quantity the block rule reads (`BlockGrade`): reference asserted over the
+    block, unquantified. Under the default rule that is a block with neither likelihoods nor, where
+    `gq_on_reference` asks for it, a GQ; under another rule, a block lacking what that rule needs."""
     NO_CALL = "no_call"
     """The source wrote that it looked and called nothing (`./.`, a `no_call` block), with no vector."""
     ABSENT_REFERENCE = "absent_reference"
@@ -83,6 +86,28 @@ class VectorPrior(str, Enum):
     EVEN_REMAINDER = "even_remainder"
     """GQ alone: the called genotype gets `1 - 10^(-GQ/10)` and the rest is spread evenly over the
     other genotypes, which the source did not rank."""
+
+
+class BlockGrade(str, Enum):
+    """Which quantity grades a `ref` block (desk #94: the choice is the person's; the default is today's).
+
+    A block's GQ and its likelihoods say different things: GQ is the band's floor, the weakest base the
+    block covers, while its PL is one value for the whole band (docs/SCHEMA.md, "Graded genotype
+    evidence"). The rule governs `ref` blocks only; a `no_call` block is graded by its likelihoods, or
+    is `no_call`, under every rule. A block that lacks what the rule needs is `block` (reference
+    asserted, the number withheld): never graded by another rule's quantity."""
+
+    LIKELIHOODS = "likelihoods"
+    """By its likelihoods (`gl`), as written; without usable ones, by its GQ where `gq_on_reference`
+    asks for it, else `block`. The default."""
+    GQ = "gq"
+    """By its GQ alone (`gq`, `prior = even_remainder`), whatever `gq_on_reference` says: hom-ref gets
+    `1 - 10^(-GQ/10)` and the rest is spread evenly, at the ploidy the block's likelihoods give where
+    it has usable ones (no vector otherwise). Without a GQ, `block`."""
+    LOWER_OF_GQ_AND_LIKELIHOODS = "lower_of_gq_and_likelihoods"
+    """By whichever of the two states less confidence in hom-ref: GQ against the phred its likelihoods
+    give genotype 0 (`-10·log10(1 - p_0)`), the likelihoods on a tie. The row's `grade_basis` says which
+    (`gq` or `gl`). A block lacking either is `block`."""
 
 
 _KIND = {
@@ -175,6 +200,34 @@ def _phred_of_top(log10_values: pl.Expr) -> pl.Expr:
     return -10.0 * (log_others - (1.0 + (log_others * _LN10).exp()).log(10))
 
 
+def _phred_of_first(log10_values: pl.Expr) -> pl.Expr:
+    """-10·log10(1 - p_0) of genotype 0 (hom-ref) from a vector of log10 weights, in log space.
+
+    Infinite where every other genotype has weight zero as written."""
+    element = pl.element()
+    top = element.max()
+    log_total = top + ((element - top) * _LN10).exp().sum().log(10)
+    rest = element.slice(1)
+    rest_top = rest.max()
+    log_rest = pl.when(rest_top == float("-inf")).then(float("-inf")).otherwise(rest_top + ((rest - rest_top) * _LN10).exp().sum().log(10))
+    return -10.0 * (log10_values.list.eval(log_rest - log_total).list.first())
+
+
+def _ref_block_grade(gl: pl.Expr, gq: pl.Expr, gl_ok: pl.Expr, *, gq_on_reference: bool, block_grade: BlockGrade) -> pl.Expr:
+    """Which quantity grades a `ref` block under `block_grade`: `gl`, `gq`, or null where the block lacks
+    what the rule needs (reference asserted, the number withheld). `gl_ok` says its likelihoods are
+    usable; `gq_on_reference` speaks only under the default rule. Shared by `genotype_evidence` and the
+    consensus's block reading, so the two cannot drift."""
+    has_gq = gq.is_not_null()
+    by_gl, by_gq = pl.lit(GradeBasis.GL.value), pl.lit(GradeBasis.GQ.value)
+    if block_grade is BlockGrade.LIKELIHOODS:
+        return pl.when(gl_ok).then(by_gl).when(has_gq & pl.lit(gq_on_reference)).then(by_gq)
+    if block_grade is BlockGrade.GQ:
+        return pl.when(has_gq).then(by_gq)
+    lower = pl.when(gq.cast(pl.Float64) < _phred_of_first(gl)).then(by_gq).otherwise(by_gl)
+    return pl.when(gl_ok & has_gq).then(lower)
+
+
 def _called_index(gt: pl.Expr) -> pl.Expr:
     """The VCF genotype index of a fully called haploid or diploid `gt`; null otherwise."""
     first = gt.list.get(0, null_on_oob=True).cast(pl.Int64)
@@ -239,14 +292,14 @@ def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, facets: pl.LazyF
                    vector_alleles=pl.col("source_alleles"), called_alleles=pl.col("_called_alleles"), keep=keep)  # fmt: skip
 
 
-def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool, facets: pl.LazyFrame, keep: tuple[str, ...] = ()) -> pl.LazyFrame:
+def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool, facets: pl.LazyFrame, keep: tuple[str, ...] = (),
+                     block_grade: BlockGrade = BlockGrade.LIKELIHOODS) -> pl.LazyFrame:  # fmt: skip
     # A block's likelihoods are over [REF, <*>]: two alleles, so three values diploid and two haploid.
     # The frame keeps no REF base for a block, so that slot of `genotype_alleles` is null.
     gl = pl.col("gl").cast(pl.List(pl.Float64))
     genotypes = gl.list.len().cast(pl.Int64)
     block_alleles = pl.concat_list(pl.lit(None, dtype=pl.String), pl.lit("<*>"))
     is_ref = pl.col("block_kind") == BlockKind.REF.value
-    gq_applies = is_ref & pl.col("gq").is_not_null() & pl.lit(gq_on_reference)
     rows = _with_gl_source(blocks, facets).select(
         "facet_id", "chrom", "pos", "end_pos", "gq", *keep,
         pl.lit(EvidenceBasis.REF_BLOCK.value).cast(enum_dtype(EvidenceBasis)).alias("evidence_basis"),
@@ -258,16 +311,18 @@ def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool, facets: pl.Laz
         pl.when(genotypes.is_in([2, 3])).then(genotypes).otherwise(None).alias("_vector_genotypes"),
     )  # fmt: skip
     gl_ok = _usable(pl.col("_gl"), pl.col("_vector_genotypes"), probabilities=False)
+    # A `ref` block by the rule (`BlockGrade`); a `no_call` block by its likelihoods under every rule.
+    ref_basis = _ref_block_grade(pl.col("_gl"), pl.col("gq"), gl_ok, gq_on_reference=gq_on_reference, block_grade=block_grade)
     basis = (
-        pl.when(gl_ok).then(pl.lit(GradeBasis.GL.value))
-        .when(gq_applies).then(pl.lit(GradeBasis.GQ.value))
-        .when(is_ref).then(pl.lit(GradeBasis.BLOCK.value))
+        pl.when(is_ref).then(pl.coalesce(ref_basis, pl.lit(GradeBasis.BLOCK.value)))
+        .when(gl_ok).then(pl.lit(GradeBasis.GL.value))
         .otherwise(pl.lit(GradeBasis.NO_CALL.value))
     )  # fmt: skip
     rows = rows.with_columns(basis.alias("grade_basis"))
     # Without likelihoods a block's ploidy is not in the frame, so a GQ-graded block gets no vector:
-    # the called genotype is hom-ref (index 0) at a ploidy nobody wrote down.
-    return _graded(rows, called_index=pl.when(is_ref).then(pl.lit(0, dtype=pl.Int64)), called_genotypes=pl.lit(None, dtype=pl.Int64),
+    # the called genotype is hom-ref (index 0) at a ploidy nobody wrote down. With usable ones, their
+    # length gives it, and a GQ-graded block's vector is spread over that many genotypes.
+    return _graded(rows, called_index=pl.when(is_ref).then(pl.lit(0, dtype=pl.Int64)), called_genotypes=pl.when(gl_ok).then(pl.col("_vector_genotypes")),
                    vector_alleles=pl.col("_alleles"), called_alleles=pl.col("_alleles"), keep=keep)  # fmt: skip
 
 
@@ -308,7 +363,7 @@ def _graded(rows: pl.LazyFrame, *, called_index: pl.Expr, called_genotypes: pl.E
     ).select(*GENOTYPE_EVIDENCE.names(), *keep)  # fmt: skip
 
 
-def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False) -> pl.LazyFrame:
+def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False, block_grade: BlockGrade | str = BlockGrade.LIKELIHOODS) -> pl.LazyFrame:
     """One graded value per `calls` row and per `blocks` row of `loaded` (`GENOTYPE_EVIDENCE`).
 
     Per row, the first basis that applies (docs/SCHEMA.md, "Graded genotype evidence"):
@@ -324,6 +379,11 @@ def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False) -> pl.La
     - `gt_only` (a call) or `block` (a `ref` block): asserted, unquantified;
     - `no_call`: nothing was called and no vector given.
 
+    A `ref` block is graded by `block_grade` (`BlockGrade`): by its likelihoods (the default, the order
+    above), by its GQ alone, or by the lower of the two; a block lacking what the rule needs is
+    `block`, never graded by another rule's quantity. A `no_call` block is graded as above under every
+    rule.
+
     A vector must have one value per genotype at the row's ploidy (GT's, else diploid), at least two;
     otherwise the row falls to the next basis. `genotype_alleles` names what the vector or
     `genotype_index` indexes: `source_alleles` for a vector, `[source_ref or ref] + alts` for a genotype,
@@ -334,7 +394,11 @@ def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False) -> pl.La
     before blocks at one position. Lazy: nothing is read until collected.
     """
     facets = loaded.facets
-    frame = pl.concat([_calls_evidence(loaded.calls, gq_on_reference, facets), _blocks_evidence(loaded.blocks, gq_on_reference, facets)], how="vertical")
+    block_grade = BlockGrade(block_grade)
+    frame = pl.concat(
+        [_calls_evidence(loaded.calls, gq_on_reference, facets), _blocks_evidence(loaded.blocks, gq_on_reference, facets, block_grade=block_grade)],
+        how="vertical",
+    )
     rank = pl.col("chrom").replace_strict(CONTIG_RANK, default=len(CONTIG_RANK), return_dtype=pl.UInt16)
     origin = pl.col("evidence_basis").cast(pl.String)
     return frame.sort([pl.col("facet_id"), rank, pl.col("chrom"), pl.col("pos"), origin, pl.col("end_pos")], nulls_last=True, maintain_order=True)
@@ -355,6 +419,7 @@ def genotype_evidence_at(
     coverage: Coverage | None = None,
     min_depth: int | None = None,
     gq_on_reference: bool = False,
+    block_grade: BlockGrade | str = BlockGrade.LIKELIHOODS,
     force: bool = False,
 ) -> pl.DataFrame:
     """The graded evidence a one-facet `loaded` holds at each of `sites` (`chrom` canonical, `pos` 1-based).
@@ -368,7 +433,8 @@ def genotype_evidence_at(
     `absent_unknown` otherwise. `variant_class` is the class of variant the question is about; a
     facet's silence speaks only for the classes it called. `force` is `absence_is_reference`'s: it lifts
     a content filter's hold for the class the filter kept (the `.snp.` half of a split delivery). `absence_means` comes along on every row,
-    so `reference` and `weak_reference` stay apart.
+    so `reference` and `weak_reference` stay apart. `gq_on_reference` and `block_grade` are
+    `genotype_evidence`'s.
 
     `coverage` (with `min_depth`, which has no default) adds `callable`, `callable_reason` and the
     covering interval's depths per site, from `callable_sites`. They sit beside the answer and change
@@ -378,6 +444,7 @@ def genotype_evidence_at(
     """
     facet = _one_facet(loaded)
     asked_class = VariantClass(variant_class)
+    block_grade = BlockGrade(block_grade)
     if coverage is not None and min_depth is None:
         raise ValueError("coverage needs min_depth: what depth makes a base callable is the caller's choice")
     asked = (
@@ -415,7 +482,7 @@ def genotype_evidence_at(
     )  # fmt: skip
     graded = pl.concat([
         _calls_evidence(hit_calls, gq_on_reference, loaded.facets, keep=("_site",)),
-        _blocks_evidence(hit_blocks, gq_on_reference, loaded.facets, keep=("_site",)),
+        _blocks_evidence(hit_blocks, gq_on_reference, loaded.facets, keep=("_site",), block_grade=block_grade),
     ])  # fmt: skip
     covered = (
         graded.rename({"pos": "record_pos", "end_pos": "record_end_pos"}).drop("chrom")

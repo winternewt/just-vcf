@@ -4,6 +4,23 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `consensus(prior=)` takes an `AlleleFrequencyPrior`, a caller-supplied allele-frequency table keyed
+  as consensus rows are (`chrom`, `pos`, `ref`, `alt`, `alt_frequency`; `ALLELE_FREQUENCIES`). An
+  allele the table holds gets Hardy-Weinberg genotype priors over its row's ploidy; every other allele
+  keeps the flat prior. `Consensus.support` gains `prior`, naming `flat` or the table on each row. The
+  table is validated (frequency in [0, 1], no allele twice, no nulls, its assembly the facets'), and
+  its name and digest enter the consensus `facet_id` and `derivation_inputs`. Which catalogue, if any,
+  is the person's call (desk #96); nothing is downloaded or packaged, and the default stays flat, with
+  default outputs and `facet_id`s unchanged.
+
+- `genotype_evidence`, `genotype_evidence_at` and `consensus` take `block_grade=` (`BlockGrade`), the
+  rule a gVCF `ref` block is graded by: `likelihoods` (the default, unchanged), `gq`, or
+  `lower_of_gq_and_likelihoods`, which takes whichever of GQ and the likelihoods' confidence in hom-ref
+  is lower. Which one should be the default is the person's call (desk #94). A block lacking what its
+  rule reads is `block`, reference asserted with no number, never graded by another rule's quantity.
+  Default outputs, consensus `facet_id`s included, are unchanged. `gq_on_reference` (desk #95) was
+  already built end to end for calls; tests now cover it in `genotype_evidence_at` and `consensus`.
+
 - `Person` and `check_pedigree` no longer check a merged or consensus facet against the facets it was
   made from, nor stand two of them for one source: computed from its parents, it agreed with them by
   construction and counted as evidence that they are one person (merge audit 4).

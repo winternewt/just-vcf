@@ -24,7 +24,10 @@ are in docs/SCHEMA.md ("A consensus posterior"); in short:
    statement gets the method's genotype error, a block or a silence its silence error
    (`method_error_rates`). A method the atlas never measured gets a stated default, and the row says
    how many of its facets did.
-4. **Posterior** `∝ prior(k) · ∏ L_f(k)`, computed in log space. The prior is flat over the copies.
+4. **Posterior** `∝ prior(k) · ∏ L_f(k)`, computed in log space. The prior is flat over the copies
+   unless the caller supplies an allele-frequency table (`AlleleFrequencyPrior`, desk #96): then an
+   allele the table holds gets Hardy-Weinberg genotype priors from its frequency, and every row says
+   which prior it used.
 """
 
 import hashlib
@@ -36,25 +39,41 @@ from collections.abc import Iterable
 from enum import Enum
 
 import polars as pl
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from just_vcf.atlas import ALL, ALL_BANDS, CI_Z, CONFIDENCE_BANDS, NO_CONFIDENCE, RegionSet, confidence_band
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
 from just_vcf.concordance import _covered, _declared_contigs
-from just_vcf.evidence import GradeBasis, _calls_evidence
+from just_vcf.evidence import BlockGrade, GradeBasis, _calls_evidence, _ref_block_grade
 from just_vcf.links import CONSENSUS, LINEAGE_RELATIONS, canonical_links, links_frame
 from just_vcf.loading import Loaded
 from just_vcf.person import Person, SubjectError, _pieces
 from just_vcf.reference import ReferenceMismatchError
-from just_vcf.schema import BLOCKS, CALLS, CONTIG_RANK, FACETS, LINKS, SCHEMA_VERSION, AbsenceMeans, EvidenceBasis, RefCheck, VariantClass, enum_dtype
+from just_vcf.schema import (
+    BLOCKS,
+    CALLS,
+    CONTIG_RANK,
+    FACETS,
+    LINKS,
+    SCHEMA_VERSION,
+    AbsenceMeans,
+    EvidenceBasis,
+    RefCheck,
+    VariantClass,
+    canonical_chrom_expr,
+    enum_dtype,
+)
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ALLELE_FREQUENCIES",
     "CONSENSUS_SUPPORT",
     "CONSENSUS_VERSION",
     "FACET_RATES",
+    "FLAT_PRIOR",
     "METHOD_RATES",
+    "AlleleFrequencyPrior",
     "Consensus",
     "GpReading",
     "RateBasis",
@@ -150,6 +169,7 @@ CONSENSUS_SUPPORT = pl.Schema(
         "defaulted": pl.UInt32,
         "gp_as_likelihood": pl.UInt32,
         "banded": pl.UInt32,
+        "prior": pl.String,
     }
 )
 """`Consensus.support`: one row per consensus row, in its order. `copies` is the most probable number
@@ -157,7 +177,91 @@ of copies of `alt`, `confidence` `-10·log10(1 - p)` of it from the log-space po
 column is Float32 and can round a tiny remainder to zero). `supported` + `contradicted` + `silent` =
 `facets`, the parents. `defaulted` counts the facets that spoke with a default rate,
 `gp_as_likelihood` those whose posterior was multiplied in (`GpReading.LIKELIHOOD`), `banded` those
-weighted by the measured rate of their row's confidence band rather than their method's average."""
+weighted by the measured rate of their row's confidence band rather than their method's average.
+`prior` names the prior the row's posterior took: `flat`, or the `AlleleFrequencyPrior`'s name where its
+table holds the allele."""
+
+FLAT_PRIOR = "flat"
+"""`consensus(prior=...)`'s default: every number of copies equally likely beforehand."""
+
+ALLELE_FREQUENCIES = pl.Schema({"chrom": pl.String, "pos": pl.UInt32, "ref": pl.String, "alt": pl.String, "alt_frequency": pl.Float64})
+"""An `AlleleFrequencyPrior`'s table: one row per allele, keyed as consensus rows are (`chrom`
+canonical, `pos` 1-based, `ref` and `alt` upper-cased), `alt_frequency` the population frequency of
+`alt` in [0, 1]."""
+
+
+class AlleleFrequencyPrior(BaseModel):
+    """A population prior for `consensus` (desk #96): a caller-supplied allele-frequency table.
+
+    Which catalogue to use, and whether to use one, is the person's decision; nothing is downloaded or
+    packaged. An allele the table holds gets Hardy-Weinberg genotype priors over its row's ploidy from
+    its frequency `f` (diploid `(1-f)², 2f(1-f), f²`; haploid `1-f, f`), the marginal of copies of this
+    ALT against anything else; every other allele keeps the flat prior. A frequency of 0 or 1 makes the
+    genotypes it rules out impossible whatever the facets say."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    name: str
+    """What the table is (a catalogue and its release); each consensus row it reaches names it in
+    `Consensus.support.prior`. Never `flat`, the name of the default."""
+    assembly_label: str
+    """The assembly the table's positions are on; a consensus on another one is refused."""
+    frequencies: pl.DataFrame
+    """`ALLELE_FREQUENCIES`, normalized: contigs canonical, REF and ALT upper-cased, sorted. Validated
+    on the way in: every key column present and non-null, `pos` at least 1, `alt_frequency` a number in
+    [0, 1], no allele twice; anything else is refused, never patched."""
+
+    @field_validator("name")
+    @classmethod
+    def _named(cls, name: str) -> str:
+        if not name.strip():
+            raise ValueError("a prior needs a name: each consensus row it reaches names it")
+        if name == FLAT_PRIOR:
+            raise ValueError(f"`{FLAT_PRIOR}` names the default prior; give the table its own name")
+        return name
+
+    @field_validator("frequencies", mode="before")
+    @classmethod
+    def _validated(cls, frame: object) -> pl.DataFrame:
+        if isinstance(frame, pl.LazyFrame):
+            frame = frame.collect()
+        if not isinstance(frame, pl.DataFrame):
+            raise ValueError(f"frequencies is a polars DataFrame, not {type(frame).__name__}")
+        missing = [name for name in ALLELE_FREQUENCIES.names() if name not in frame.columns]
+        if missing:
+            raise ValueError(f"the allele-frequency table lacks column(s) {', '.join(missing)}")
+        nulls = [name for name in ALLELE_FREQUENCIES.names() if frame[name].null_count()]
+        if nulls:
+            raise ValueError(f"the allele-frequency table has null values in {', '.join(nulls)}")
+        if not frame["pos"].dtype.is_integer() or (frame.height and frame["pos"].min() < 1):
+            raise ValueError("`pos` is a 1-based integer position")
+        if not frame["alt_frequency"].dtype.is_numeric():
+            raise ValueError(f"`alt_frequency` is a number, not {frame['alt_frequency'].dtype}")
+        f = frame["alt_frequency"].cast(pl.Float64)
+        outside = (f.is_nan() | (f < 0.0) | (f > 1.0)).sum()
+        if outside:
+            raise ValueError(f"{outside} allele frequenc(ies) outside [0, 1]")
+        # A catalogue may type its contigs as integers; their names are strings here, as in the frames.
+        table = frame.with_columns(pl.col("chrom").cast(pl.String)).select(
+            canonical_chrom_expr("chrom").alias("chrom"),
+            pl.col("pos").cast(pl.UInt32),
+            pl.col("ref").cast(pl.String).str.to_uppercase(),
+            pl.col("alt").cast(pl.String).str.to_uppercase(),
+            pl.lit(f).alias("alt_frequency"),
+        )
+        empty = table.filter((pl.col("ref") == "") | (pl.col("alt") == "")).height
+        if empty:
+            raise ValueError(f"{empty} row(s) with an empty REF or ALT")
+        twice = table.filter(pl.struct("chrom", "pos", "ref", "alt").is_duplicated()).height
+        if twice:
+            raise ValueError(f"{twice} row(s) name an allele (chrom, pos, REF, ALT) another row names too; one frequency per allele")
+        rank = pl.col("chrom").replace_strict(CONTIG_RANK, default=len(CONTIG_RANK), return_dtype=pl.UInt16)
+        return table.sort([rank, "chrom", "pos", "ref", "alt"])
+
+    @property
+    def sha256(self) -> str:
+        """The digest of the normalized table, as the consensus facet's `derivation_inputs` records it."""
+        return hashlib.sha256(self.frequencies.write_csv().encode()).hexdigest()
 
 
 class Consensus(Loaded):
@@ -640,12 +744,13 @@ def _vector_copies(frame: pl.DataFrame) -> pl.DataFrame:
 
 _READING = pl.Schema(
     {"_site": pl.UInt32, "_reading": pl.String, "_ploidy": pl.Int8, "_hard": pl.Int8, "_q0": pl.Float64, "_q1": pl.Float64, "_q2": pl.Float64, "_gp_lik": pl.Boolean,
-     "_band": pl.String}
+     "_band": pl.String, "_spread": pl.Float64}
 )  # fmt: skip
 """One facet's reading of one allele: `_reading` is `stated`, `site`, `ref_block`, `absence` or one of
 `_SILENT`; a hard reading has `_hard` copies (its ploidy, or null where the source did not say), a
 graded one `_q0.._q2`. A stated one has `_band`, the band of its row's own confidence (`none` where
-the row states none)."""
+the row states none). A block graded by its GQ (`BlockGrade.GQ`) is hard at zero copies with
+`_spread`, the share `10^(-GQ/10)` spread evenly over the other copies once the site's ploidy is known."""
 
 
 def _readings(
@@ -661,6 +766,7 @@ def _readings(
     gp_as: GpReading,
     force: bool,
     duplicates: Counter,
+    block_grade: BlockGrade = BlockGrade.LIKELIHOODS,
 ) -> pl.DataFrame:
     """What one facet says about each allele of `sites` on `chrom` (`_READING`)."""
     key = ["pos", "_ref_key", "alt"]
@@ -734,7 +840,8 @@ def _readings(
     probe = probe.with_columns((pl.col("_reach").is_not_null() & (pl.col("_reach") >= pl.col("_at"))).alias("_covered"))
     blocks = (
         piece.blocks.filter(pl.col("chrom") == chrom)
-        .select(pl.col("pos").cast(pl.Int64).alias("_bstart"), pl.col("end_pos").cast(pl.Int64).alias("_bend"), pl.col("kind").cast(pl.String).alias("_kind"), pl.col("gl").cast(pl.List(pl.Float64)).alias("_gl"))
+        .select(pl.col("pos").cast(pl.Int64).alias("_bstart"), pl.col("end_pos").cast(pl.Int64).alias("_bend"), pl.col("kind").cast(pl.String).alias("_kind"), pl.col("gl").cast(pl.List(pl.Float64)).alias("_gl"),
+                pl.col("gq").cast(pl.Float64).alias("_gq"))
         .sort("_bstart")
         .collect()
     )  # fmt: skip
@@ -742,14 +849,18 @@ def _readings(
         probe = probe.join_asof(blocks, left_on="_at", right_on="_bstart", strategy="backward")
         probe = probe.with_columns(pl.when(pl.col("_bend") >= pl.col("_at")).then(pl.col("_kind")).alias("_kind"))
     else:
-        probe = probe.with_columns(pl.lit(None, dtype=pl.String).alias("_kind"), pl.lit(None, dtype=pl.List(pl.Float64)).alias("_gl"))
+        probe = probe.with_columns(pl.lit(None, dtype=pl.String).alias("_kind"), pl.lit(None, dtype=pl.List(pl.Float64)).alias("_gl"), pl.lit(None, dtype=pl.Float64).alias("_gq"))
     reads_reference = [cls for cls in _SMALL if absence_is_reference(facet, cls, force=force) is True] if chrom in declared else []
     gl = pl.col("_gl")
     usable = (gl.list.len().is_between(2, 3) & gl.list.eval(pl.element().is_finite() | (pl.element() == float("-inf"))).list.all() & gl.list.max().is_finite()).fill_null(False)
     weights = gl.list.eval(((pl.element() - pl.element().max()) * _LN10).exp())
     total = weights.list.sum()
     is_ref = (pl.col("_kind") == "ref").fill_null(False)
-    graded_block = is_ref & usable
+    # The block rule (`BlockGrade`), as `genotype_evidence` applies it; `gq_on_reference` speaks for
+    # calls only here, so a block is graded by GQ only under the rule that says so.
+    rule = _ref_block_grade(gl, pl.col("_gq"), usable, gq_on_reference=False, block_grade=block_grade)
+    graded_block = is_ref & (rule == GradeBasis.GL.value).fill_null(False)
+    gq_block = is_ref & (rule == GradeBasis.GQ.value).fill_null(False)
     absence_reading = probe.select(
         "_site",
         pl.when(pl.col("_covered")).then(pl.lit("covered"))
@@ -757,13 +868,14 @@ def _readings(
         .when(pl.col("_kind").is_not_null()).then(pl.lit("no_call_block"))
         .when(pl.col("variant_class").cast(pl.String).is_in(reads_reference)).then(pl.lit("absence"))
         .otherwise(pl.lit("unknown")).alias("_reading"),
-        pl.when(~pl.col("_covered") & graded_block).then(gl.list.len() - 1).cast(pl.Int8).alias("_ploidy"),
+        pl.when(~pl.col("_covered") & (graded_block | (gq_block & usable))).then(gl.list.len() - 1).cast(pl.Int8).alias("_ploidy"),
         pl.when(~pl.col("_covered") & graded_block).then(None)
         .when(~pl.col("_covered") & (is_ref | (pl.col("_kind").is_null() & pl.col("variant_class").cast(pl.String).is_in(reads_reference)))).then(0)
         .cast(pl.Int8).alias("_hard"),
         pl.when(~pl.col("_covered") & graded_block).then(weights.list.get(0) / total).alias("_q0"),
         pl.when(~pl.col("_covered") & graded_block).then(weights.list.get(1) / total).alias("_q1"),
         pl.when(~pl.col("_covered") & graded_block & (gl.list.len() == 3)).then(weights.list.get(2, null_on_oob=True) / total).alias("_q2"),
+        pl.when(~pl.col("_covered") & gq_block).then((-pl.col("_gq") / 10.0 * _LN10).exp()).alias("_spread"),
     )  # fmt: skip
     pieces = [frame for frame in (stated_reading, site_reading, absence_reading) if frame.height]
     if not pieces:
@@ -821,9 +933,10 @@ def _site_rates(sites: pl.DataFrame, rates: pl.DataFrame, regions: RegionSet | N
     return pl.concat(out)
 
 
-def _posterior(readings: pl.DataFrame, prior: str) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Per allele: ploidy, the log posterior's three entries and the most probable copies; and per
-    reading, whether it supported, contradicted or was silent."""
+def _posterior(readings: pl.DataFrame, site_prior: pl.DataFrame | None, prior_name: str) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Per allele: ploidy, the log posterior's three entries, the most probable copies and the prior
+    taken; and per reading, whether it supported, contradicted or was silent. `site_prior` holds the
+    alleles an `AlleleFrequencyPrior` covers (`_site`, `_af`), None under the flat prior."""
     speaking = ~pl.col("_reading").is_in(list(_SILENT))
     ploidy = (
         readings.filter(speaking & pl.col("_ploidy").is_in([1, 2]))
@@ -837,8 +950,10 @@ def _posterior(readings: pl.DataFrame, prior: str) -> tuple[pl.DataFrame, pl.Dat
         pl.when(speaking & pl.col("_ploidy").is_not_null() & (pl.col("_ploidy") != P)).then(pl.lit("ploidy_differs")).otherwise(pl.col("_reading")).alias("_reading")
     )
     speaking = ~pl.col("_reading").is_in(list(_SILENT))
-    hard = pl.col("_hard")
-    q = [pl.coalesce(pl.col(f"_q{k}"), (hard == k).cast(pl.Float64)) for k in range(3)]
+    hard, spread = pl.col("_hard"), pl.col("_spread")
+    # A GQ-graded block: its hard copies get `1 - spread`, every other copy `spread / P`.
+    spread_q = [pl.when(spread.is_not_null()).then(pl.when(hard == k).then(1.0 - spread).otherwise(spread / P.cast(pl.Float64))) for k in range(3)]
+    q = [pl.coalesce(pl.col(f"_q{k}"), spread_q[k], (hard == k).cast(pl.Float64)) for k in range(3)]
     e = pl.when(pl.col("_reading").is_in(["stated", "site"])).then(pl.col("_ge")).otherwise(pl.col("_se"))
     # The rate of the row's own confidence band, where its method has one measured: a stated reading only.
     banded = pl.coalesce([pl.when(pl.col("_band") == band).then(pl.col(f"_ge_{band}")) for band in CONFIDENCE_BANDS])
@@ -865,12 +980,28 @@ def _posterior(readings: pl.DataFrame, prior: str) -> tuple[pl.DataFrame, pl.Dat
             for k in range(3)
         ],
     )
-    if prior != "flat":
-        raise ValueError(f"prior is 'flat' (every number of copies equally likely beforehand), not {prior!r}")
     sums = work.group_by("_site").agg(
         pl.col("_P").first(),
         *[pl.col(f"_l{k}").sum().alias(f"_s{k}") for k in range(3)],
     )
+    if site_prior is None:
+        # The flat prior adds the same constant to every entry: nothing to add.
+        sums = sums.with_columns(pl.lit(FLAT_PRIOR).alias("_prior"))
+    else:
+        # Hardy-Weinberg over the site's ploidy from the ALT's frequency f, in log space: a zero prior
+        # is -inf and rules that number of copies out.
+        sums = sums.join(site_prior, on="_site", how="left")
+        f, haploid = pl.col("_af"), pl.col("_P") == 1
+        log_f, log_rest = f.log(), (1.0 - f).log()
+        log_prior = [
+            pl.when(haploid).then(log_rest).otherwise(2.0 * log_rest),
+            pl.when(haploid).then(log_f).otherwise(math.log(2.0) + log_f + log_rest),
+            2.0 * log_f,
+        ]
+        sums = sums.with_columns(
+            *[pl.when(f.is_null()).then(pl.col(f"_s{k}")).otherwise(pl.col(f"_s{k}") + log_prior[k]).alias(f"_s{k}") for k in range(3)],
+            pl.when(f.is_null()).then(pl.lit(FLAT_PRIOR)).otherwise(pl.lit(prior_name)).alias("_prior"),
+        ).drop("_af")
     s = [pl.col(f"_s{k}") for k in range(3)]
     s2 = pl.when(pl.col("_P") == 2).then(s[2]).otherwise(float("-inf"))
     top = pl.max_horizontal(s[0], s[1], s2)
@@ -902,12 +1033,13 @@ def consensus(
     *,
     atlas: pl.DataFrame | None,
     regions: RegionSet | None = None,
-    prior: str = "flat",
+    prior: str | AlleleFrequencyPrior = FLAT_PRIOR,
     default_rate: float | None = None,
     scope: str | None = None,
     pass_only: bool = True,
     gp_as: GpReading | str = GpReading.CALL,
     gq_on_reference: bool = False,
+    block_grade: BlockGrade | str = BlockGrade.LIKELIHOODS,
     force: bool = False,
 ) -> Consensus:
     """A consensus facet over one person's facets: per allele, a posterior over its copies (module
@@ -923,7 +1055,14 @@ def consensus(
     class; `atlas=None` needs `default_rate`. `pass_only` reads a row that failed its filters as
     silent; `scope` picks the atlas rows (by default `carried_pass` under `pass_only`, else
     `carried`); `gp_as` says how a posterior is read (`GpReading`); `gq_on_reference` and `force`
-    are `genotype_evidence`'s and `absence_is_reference`'s.
+    are `genotype_evidence`'s and `absence_is_reference`'s, and `gq_on_reference` reaches calls only.
+    `block_grade` (`BlockGrade`) is how a `ref` block covering an allele speaks: by its likelihoods
+    (the default), by its GQ (hom-ref at `1 - 10^(-GQ/10)`, the rest spread evenly over the other
+    copies), or by the lower of the two; a block lacking what the rule needs speaks as zero copies,
+    unquantified, as a block without likelihoods does under the default. `prior` is `flat` (every
+    number of copies equally likely), or an `AlleleFrequencyPrior` on the facets' assembly: an allele
+    its table holds gets Hardy-Weinberg priors from its frequency, the rest keep the flat prior, and
+    `support.prior` names which each row took.
 
     The rows are every sequence ALT allele a parent states in a row it would be read by, on every
     contig, in canonical order. Each is a `calls` row of the consensus facet: `alts = [alt]`,
@@ -931,6 +1070,10 @@ def consensus(
     `[REF, ALT]`), `gt` the most probable, `ref` the REF where a parent read it from the reference.
     """
     gp_as = GpReading(gp_as)
+    block_grade = BlockGrade(block_grade)
+    table = prior if isinstance(prior, AlleleFrequencyPrior) else None
+    if table is None and prior != FLAT_PRIOR:
+        raise ValueError(f"prior is 'flat' (every number of copies equally likely beforehand) or an AlleleFrequencyPrior, not {prior!r}")
     if atlas is None and default_rate is None:
         raise ValueError("without an atlas every facet is weighted by the default rate; pass default_rate=...")
     pieces, parent_links, warnings = _parents(person)
@@ -938,6 +1081,10 @@ def consensus(
     label, digest = _assembly(rows, warnings)
     if regions is not None and regions.assembly_label != label:
         raise ValueError(f"the regions are on {regions.assembly_label}, the facets on {label}; lift one first")
+    if table is not None and table.assembly_label != label:
+        raise ValueError(f"the prior {table.name!r} is on {table.assembly_label}, the facets on {label}; lift one first")
+    if table is not None and gp_as is GpReading.LIKELIHOOD:
+        warnings.append(f"prior {table.name!r} with gp_as=likelihood: a posterior read as a likelihood already holds its source's prior, so a population prior counts more than once")
     classes = regions.classes if regions is not None else (ALL,)
     if regions is None and atlas is not None and "region_class" in atlas.columns and atlas.filter(pl.col("region_class") != ALL).height:
         named = sorted(set(atlas["region_class"].to_list()) - {ALL})
@@ -950,8 +1097,15 @@ def consensus(
     if defaulted:
         warnings.append(f"{len(defaulted)} facet(s) weighted by a default rate in some class (no atlas row for their caller): {', '.join(defaulted)}")
 
-    options = {"prior": prior, "default_rate": default_rate, "scope": scope, "pass_only": pass_only, "gp_as": gp_as.value,
+    options = {"prior": table.name if table is not None else FLAT_PRIOR, "default_rate": default_rate, "scope": scope, "pass_only": pass_only, "gp_as": gp_as.value,
                "gq_on_reference": gq_on_reference, "force": force, "regions": regions.name if regions is not None else None}  # fmt: skip
+    # An option added after facets were made enters the id only when it is not its default, so a
+    # default consensus keeps the id it had: its absence means the default.
+    if block_grade is not BlockGrade.LIKELIHOODS:
+        options["block_grade"] = block_grade.value
+    prior_digest = table.sha256 if table is not None else None
+    if prior_digest is not None:
+        options["prior_sha256"] = prior_digest
     rates_digest = hashlib.sha256(rates.write_csv().encode()).hexdigest()
     facet_id = hashlib.sha256(
         json.dumps({"derived_from": [r["facet_id"] for r in rows], "operation": CONSENSUS, "version": CONSENSUS_VERSION, "options": options, "rates": rates_digest}, sort_keys=True).encode()
@@ -965,6 +1119,7 @@ def consensus(
     silent_counts: Counter[tuple[str, str]] = Counter()
     duplicates: Counter[str] = Counter()
     calls_out, support_out = [], []
+    covered, alleles = 0, 0
     for chrom in contigs:
         evidence = [_evidence(piece, chrom, gq_on_reference) for piece in pieces]
         stated = [_stated_alleles(frame) for frame in evidence]
@@ -987,11 +1142,20 @@ def consensus(
         per_facet = []
         for piece, row, frame, own in zip(pieces, rows, evidence, stated):
             reading = _readings(
-                sites, frame, own, piece, row, chrom, declared[row["facet_id"]], pass_only=pass_only, gp_as=gp_as, force=force, duplicates=duplicates
+                sites, frame, own, piece, row, chrom, declared[row["facet_id"]], pass_only=pass_only, gp_as=gp_as, force=force, duplicates=duplicates,
+                block_grade=block_grade,
             ).with_columns(pl.lit(row["facet_id"]).alias("_facet"))
             per_facet.append(reading)
         readings = pl.concat(per_facet).join(site_rates, on=["_site", "_facet"], how="left")
-        sums, votes = _posterior(readings, prior)
+        site_prior = None
+        if table is not None:
+            site_prior = sites.select("_site", pl.col("pos").cast(pl.UInt32), "_ref_key", pl.col("alt").str.to_uppercase().alias("_alt_key")).join(
+                table.frequencies.filter(pl.col("chrom") == chrom).select("pos", pl.col("ref").alias("_ref_key"), pl.col("alt").alias("_alt_key"), pl.col("alt_frequency").alias("_af")),
+                on=["pos", "_ref_key", "_alt_key"], how="inner",
+            ).select("_site", "_af")  # fmt: skip
+            covered += site_prior.height
+            alleles += sites.height
+        sums, votes = _posterior(readings, site_prior, table.name if table is not None else FLAT_PRIOR)
         for facet, reason, count in votes.filter(pl.col("_vote") == "silent").group_by("_facet", "_reading").len().iter_rows():
             silent_counts[(facet, reason)] += count
         tally = votes.group_by("_site").agg(
@@ -1005,11 +1169,14 @@ def consensus(
         support_out.append(
             done.select(
                 "chrom", "pos", pl.col("_ref_key").alias("ref"), "alt", "variant_class", pl.col("_P").alias("ploidy"), pl.col("_copies").alias("copies"),
-                "confidence", "facets", "supported", "contradicted", "silent", "defaulted", "gp_as_likelihood", "banded",
+                "confidence", "facets", "supported", "contradicted", "silent", "defaulted", "gp_as_likelihood", "banded", pl.col("_prior").alias("prior"),
             ).cast(dict(CONSENSUS_SUPPORT))
         )  # fmt: skip
         calls_out.append(_calls(done, facet_id))
 
+    if table is not None:
+        hint = "; none matched: are its contigs, positions and alleles on the facets' assembly, spelled as the facets spell them?" if covered == 0 else ""
+        warnings.append(f"prior {table.name!r}: {covered} of {alleles} allele(s) found in its table, the rest under the flat prior{hint}")
     for facet, count in sorted(duplicates.items()):
         if count:
             warnings.append(f"facet {facet}: {count} allele(s) stated by several rows; the first row in file order was read")
@@ -1023,7 +1190,8 @@ def consensus(
 
     calls = pl.concat(calls_out) if calls_out else pl.DataFrame(schema=CALLS)
     support = pl.concat(support_out) if support_out else pl.DataFrame(schema=CONSENSUS_SUPPORT)
-    facet_row = _facet_row(facet_id, rows, label, digest, calls, rates_digest)
+    prior_input = {"role": "prior", "name": table.name, "sha256": prior_digest} if table is not None else None
+    facet_row = _facet_row(facet_id, rows, label, digest, calls, rates_digest, prior_input)
     added = links_frame(
         [
             {"from_facet_id": row["facet_id"], "to_facet_id": facet_id, "relation": CONSENSUS,
@@ -1077,7 +1245,8 @@ def _calls(done: pl.DataFrame, facet_id: str) -> pl.DataFrame:
     return frame.select([pl.col(name).cast(dtype) if name in frame.columns else pl.lit(None, dtype=dtype).alias(name) for name, dtype in CALLS.items()])
 
 
-def _facet_row(facet_id: str, rows: list[dict], label: str | None, digest: str | None, calls: pl.DataFrame, rates_digest: str) -> pl.DataFrame:
+def _facet_row(facet_id: str, rows: list[dict], label: str | None, digest: str | None, calls: pl.DataFrame, rates_digest: str,
+               prior_input: dict | None = None) -> pl.DataFrame:  # fmt: skip
     """The consensus facet's `facets` row."""
 
     def shared(name: str) -> object:
@@ -1103,7 +1272,7 @@ def _facet_row(facet_id: str, rows: list[dict], label: str | None, digest: str |
         method_steps=[{"tool": CALLER, "version": str(CONSENSUS_VERSION), "role": "merge", "options": [], "line": None}],
         relation=CONSENSUS,
         contig_map=[{"source": chrom, "chrom": chrom} for chrom in sorted(set(calls["chrom"].to_list()))] if calls.height else [],
-        derivation_inputs=[{"role": "error_rates", "name": "method_error_rates", "sha256": rates_digest}],
+        derivation_inputs=[{"role": "error_rates", "name": "method_error_rates", "sha256": rates_digest}, *([prior_input] if prior_input else [])],
         subject=shared("subject"),
     )
     return pl.DataFrame([row], schema=FACETS)

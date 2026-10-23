@@ -1538,7 +1538,8 @@ reading) into every cache spill and need a version bump each time they move.
 - `dosage`: only a dosage. One number gives no vector (Decision 3), so no vector and no number.
 - `gt_only`: a genotype with at least one allele called and no quantity: asserted, unquantified. A
   half-call (`0/.`) is here even with a GQ: there is no one genotype for GQ to grade.
-- `block`: a `ref` block with no quantity (CGI's native blocks): reference asserted, unquantified.
+- `block`: a `ref` block with no quantity the block rule reads (CGI's native blocks, or a block lacking
+  what `block_grade` asks for): reference asserted, unquantified.
 - `no_call`: the source wrote that it looked and called nothing (`./.`, a `no_call` block) and gave no
   vector: unknown. A no-call that carries likelihoods is graded by them (a gVCF `./.` block with PL
   `0,0,0` is `gl` at 1.76).
@@ -1582,8 +1583,23 @@ a local DeepVariant gVCF (aggregates only): on 1.32M hom-ref calls GQ is within 
 their PL gives (clipped at 99, the highest GQ DeepVariant wrote on them) for 96.6%, which is what `gq_on_reference=True`
 assumes. On its 13.6M reference blocks only 26.9% agree, median difference 49: a block's GQ is the
 band's floor (at most 50 there), its PL is not, so a block graded by its likelihoods (median 291) states more than its
-weakest base supports. Which of the two should grade a block is the person's call; until then a
-block is graded by its likelihoods, as written.
+weakest base supports. Which of the two should grade a block is the person's call (desk #94); until
+then a block is graded by its likelihoods, as written.
+
+**The block rule** (`block_grade=`, `BlockGrade`, on `genotype_evidence`, `genotype_evidence_at` and
+`consensus`) is built for that answer to be a one-line default change. It governs `ref` blocks only;
+a `no_call` block is graded by its likelihoods, or is `no_call`, under every rule.
+
+| Rule | A `ref` block is graded | Lacking what it reads |
+|---|---|---|
+| `likelihoods` (the default) | by its likelihoods (`gl`); without usable ones, by its GQ where `gq_on_reference=True` | `block` |
+| `gq` | by its GQ (`gq`, `prior = even_remainder`), whatever `gq_on_reference` says; the vector is spread over as many genotypes as its likelihoods give where it has usable ones, else none | no GQ: `block` |
+| `lower_of_gq_and_likelihoods` | by whichever states less confidence in hom-ref: GQ against `-10·log10(1 − p_0)` of its likelihoods under a flat prior, the likelihoods on a tie; `grade_basis` says which (`gq` or `gl`) | either missing: `block` |
+
+Genotype 0 is compared, not the likelihoods' top genotype: a block's GQ speaks for hom-ref, and where
+its likelihoods put another genotype first they state less confidence in hom-ref than any GQ but a few
+phred. A block lacking what its rule reads is `block`, reference asserted with the number withheld,
+never graded by another rule's quantity (CLAUDE.md, no silent fallback).
 
 ## The cache under the lazy frames (RM268)
 
@@ -2019,8 +2035,12 @@ each with the other parent silent or reading `other_span`. `normalize` both, or 
 |---|---|---|
 | `stated` | a row states the allele | its vector (`genotype_evidence`'s `gl`, under a flat prior, or `gq`) summed by copies; else its genotype, a point mass. A `gp` row is read as its genotype unless `gp_as = likelihood` |
 | `site` | one row at the position over the same REF span, without the allele (a hom-ref record, another ALT) | zero copies, a point mass: its vector indexes other alleles |
-| `ref_block` | a `ref` block covers the position | the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; else zero copies |
+| `ref_block` | a `ref` block covers the position | by `block_grade` (above, "The block rule"): under the default, the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; graded by its GQ, zero copies at `1 − 10^(−GQ/10)` and the rest spread evenly over the other copies, at the ploidy its likelihoods give, else the site's; lacking what the rule reads, zero copies |
 | `absence` | nothing covers it and `absence_is_reference(facet, class, force=force)` is True on a contig the facet declared or wrote | zero copies |
+
+`gq_on_reference` reaches a row stating the allele, as `genotype_evidence` grades it; it does not
+reach a block, which `block_grade` alone grades (so the default reads a block with a GQ and no
+likelihoods as zero copies, unquantified, whatever `gq_on_reference` says).
 
 Silent otherwise, each kind counted in the warnings per facet: `filtered` (`pass_only` and the row
 failed a filter), `no_call` (no haplotype called and no vector), `covered` (inside another record's
@@ -2080,15 +2100,36 @@ block or an absence the silence error, and becomes the likelihood `L(k) = (1 −
 q(k))/P` over `k = 0..P` copies: a genotype gets `1 − e` and spreads `e` evenly over the rest, and a
 graded vector is tempered so that no facet says more than its method's measured error allows (a PL
 of 3,000 against two facets that disagree is still one facet). The posterior is `prior(k) · ∏ L_f(k)`, normalized, in log
-space in Float64; the prior is flat over the copies (`prior = "flat"`, the only one so far). `P` is
-the ploidy most speaking readings state (diploid on a tie or where none states one); a reading of
+space in Float64; the prior is flat over the copies (`prior = "flat"`, the default) unless the caller
+supplies a population prior (below). `P` is the ploidy most speaking readings state (diploid on a tie or where none states one); a reading of
 another ploidy is silent (`ploidy_differs`). The facets are taken as independent: two callers on
 the same reads are not, so where they agree the posterior is overconfident, and the atlas cannot
 correct that.
 
+**A population prior** (`prior=AlleleFrequencyPrior(name=, assembly_label=, frequencies=)`, desk
+#96). Which catalogue to use, and whether to use one, is the person's decision: nothing is downloaded
+or packaged, and the default stays flat. The table (`ALLELE_FREQUENCIES`) is keyed as consensus rows
+are, `chrom`, `pos`, `ref`, `alt` on the facets' assembly, with `alt_frequency` the population
+frequency of that ALT; VRS ids are not used, since consensus rows carry none. On the way in contigs
+are made canonical as the frames' are (`chr1` is `1`, `chrM` is `MT`) and REF and ALT upper-cased; a
+missing column, a null, a `pos` below 1, a frequency outside [0, 1] (NaN included) or an allele named
+twice is refused, never patched, and so is the name `flat` (the default's). A table on another
+`assembly_label` than the facets' is refused (lift one first), as `regions` is. An allele the table
+holds gets Hardy-Weinberg genotype priors over its row's ploidy from its frequency `f`: diploid
+`(1 − f)², 2f(1 − f), f²`, haploid `1 − f, f`. That is the marginal of copies of this ALT against
+anything else, so a multi-allelic site's rows each take their own ALT's frequency. Every other allele
+keeps the flat prior, and `Consensus.support.prior` names which each row took. A frequency of 0 or 1
+makes the genotypes it rules out impossible whatever the facets say (the confidence is then infinite):
+a catalogue that lists an allele at 0 is a strong statement to multiply in. The warnings count the
+alleles the table held, and say when it held none (most often a table on other contig names or
+another assembly). With `gp_as = likelihood` a warning says the population prior then counts more than
+once. The table's name and the `sha256` of its normalized CSV enter the `facet_id` and the facet's
+`derivation_inputs` (`role = prior`); the flat prior adds nothing, so a default consensus keeps the id
+it had.
+
 **The facet.** `facets`: `caller = "just-vcf consensus"`, `caller_version = CONSENSUS_VERSION`, one
 `merge` step in `method_steps`, `derivation_inputs` one `error_rates` entry whose `sha256` digests
-`Consensus.rates`, `absence_means = unknown`, `variant_classes` counted from its rows, the parents'
+`Consensus.rates` (and a `prior` entry under a population prior), `absence_means = unknown`, `variant_classes` counted from its rows, the parents'
 `assembly_label`, `ref_seqcol_digest`, `callset_type` and `subject` where they share one. `facet_id`
 digests the sorted parent ids, `CONSENSUS_VERSION`, the options and the rates. `calls`, one row per
 allele in canonical order: `alts = [alt]`, `source_alleles = [REF, ALT]`, `source_ref` the REF,
@@ -2102,7 +2143,8 @@ every row `gp`. `blocks` is empty.
 the log-space posterior: `gp` is Float32 and rounds a remainder below about 1e-45 to zero, which
 `genotype_evidence` then reads as infinite), `facets`, `supported`, `contradicted`, `silent` (they
 sum to `facets`), `defaulted`, `gp_as_likelihood` and `banded` (the speaking facets read with a
-default rate, with a posterior multiplied in, and with their row's band rate). A sidecar, not `calls` columns: Decision 6's columns hold what a
+default rate, with a posterior multiplied in, and with their row's band rate), and `prior` (`flat`, or
+the population prior's name where its table held the allele). A sidecar, not `calls` columns: Decision 6's columns hold what a
 source states about a site, and these say how the consensus came about. Rejected: columns in `calls`,
 which every other facet would carry null and which would bump `SCHEMA_VERSION`; and the
 per-facet readings as rows, which copy the parents' calls into a second place.
@@ -2122,6 +2164,17 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-24, layer 7, the options for desk #94–#96): no column of `facets`,
+  `calls` or `blocks` changes, and no default output does. `BlockGrade` (`block_grade=` on
+  `genotype_evidence`, `genotype_evidence_at` and `consensus`) names the rule a `ref` block is graded
+  by: `likelihoods` (the default, as before), `gq`, or `lower_of_gq_and_likelihoods` ("Graded
+  genotype evidence", the block rule). A non-default rule enters the consensus `facet_id`; the default
+  leaves it as it was. `consensus(prior=)` also takes an `AlleleFrequencyPrior`, a caller's
+  allele-frequency table (`ALLELE_FREQUENCIES`, "A consensus posterior"), and `CONSENSUS_SUPPORT`
+  gains `prior` (`flat`, or the table's name), its last column: a sidecar outside the three frames,
+  as `banded` was, so by that precedent no version change; whether it takes one is the lead's call at
+  merge. Every other support column, and every default row, is as before.
 
 - **No version change** (2026-10-23, calibrating the consensus, layers 5 and 7): no column of
   `facets`, `calls` or `blocks` changes. The atlas gains the key columns `a_band` and `b_band` and its

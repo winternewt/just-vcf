@@ -1004,10 +1004,21 @@ null is VCF's "filters not applied"):
 It answers `x_copies` (`one`, `two_or_more`) and `y_present` separately, so a facet whose Y line is
 unusable still says how many X copies it holds, and `inferred_karyotypic_sex`, a GA4GH Phenopackets
 `KaryotypicSex` value (charter invariant 2: the vocabulary is the standard's, the field is
-just-vcf's, since Phenopackets has no place for an inference). Only `XY`, `XXY` and
+just-vcf's, since Phenopackets has no place for an inference). From calls alone only `XY`, `XXY` and
 `UNKNOWN_KARYOTYPE` are estimated, the last always with a reason: `y_present` is `True` or unknown,
-never `False`, because depth at called sites cannot show a Y absent (a man's GATK genome read below the
-present band, close to the two-X range), so `XX` and `XO` wait for a coverage facet. The PAR bounds and the X-degenerate
+never `False` from the calls, because depth at called sites cannot show a Y absent (a man's GATK genome
+read below the present band, close to the two-X range).
+
+`sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM278) of the same person and
+build, paired by the caller. Its `coverage` field (`CoverageRatios`) holds the length-weighted median
+read depth over non-PAR X, over the X-degenerate Y and over chr20 (zero-depth intervals left out on
+chr20 and X, where they are assembly gaps; kept on the Y, where zero is the signal), from intervals
+wholly inside each region and described at every base, and the two ratios. It is a third X line,
+which must agree with the other two, and a second Y line that can show a Y absent: `y_present = False`,
+which names `XX` (two X) and `XO` (one X). Coverage showing no Y where the calls' depth shows one is
+`lines_disagree`. A coverage facet without a build, or on another one, is set aside with
+`coverage.reason` (`coverage_no_build`, `coverage_build_mismatch`), and the answer is the calls' alone.
+The field defaults to null, so nothing changes without coverage. The PAR bounds and the X-degenerate
 Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
 unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 
@@ -1150,6 +1161,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, RM269 with coverage): `sex_chromosome_evidence` takes an
+  optional coverage facet and its result a nullable `coverage` field; it may now answer `XX` and `XO`.
+  Not stored, so no frame changes.
 
 - **No version change** (2026-10-23, RM278 coverage facets): no column of `facets`, `calls` or
   `blocks` changes. `read_coverage`, `alignment_coverage` and `callable_sites` return their own

@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM269 with RM278): the
+  median read depth over non-PAR X and the X-degenerate Y against chr20 is a third X line and a Y line
+  that can show a Y absent, so `XX` and `XO` are now named where the lines agree. Without coverage
+  nothing changes; the result gains a nullable `coverage` field and two reasons
+  (`coverage_no_build`, `coverage_build_mismatch`).
+
 - Coverage as a facet (RM278): `read_coverage` reads mosdepth's per-base, regions, quantized and
   summary outputs and `samtools depth` / `samtools coverage` into a `Coverage` (a `CoverageFacet` and
   a lazy `intervals` frame of depth mean, bounds and described bases per interval);

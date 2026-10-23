@@ -877,7 +877,7 @@ store:
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO wait for a coverage facet, as do XXX, XYY and arrays) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY and arrays wait) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -1068,9 +1068,28 @@ Decisions, each with what was rejected:
   (above); and dropping the Y line altogether, which would lose `XY` and `XXY` where Y depth is high
   and the women measured sit far below.
 
-**Left:** `XX` and `XO` need a Y shown absent, and XXX, XYY and the other classes a copy count:
-both wait for a coverage facet (depth at called sites cannot show a region empty, and does not
-separate one Y from two). An array's female Y probes are no-calls, which may be the absence signal
+**Built 2026-10-23: coverage as an X and a Y line** (RM278). `sex_chromosome_evidence(loaded,
+coverage=…)` reads a coverage facet's length-weighted median depth over non-PAR X, the X-degenerate Y
+and chr20 (`CoverageRatios`, on the result's `coverage` field). X: a third line, one X at a ratio of
+at most 0.625, two from 0.875 to 1.25, and all measured X lines must agree. Y: present at 0.375 or
+more, absent at 0.125 or less, unknown between; absent with one X names `XO`, with two `XX`. Each band
+is the central half of the copy-number gap (one copy 0.5, two 1.0; a Y 0.5, none 0), the rule the
+call-based bands followed; the BAM calibration is below. Decisions, each with what was rejected:
+
+- Coverage shows a Y absent where call-site depth could not: the coverage median runs over every base
+  of the region, the calls' DP only over the sites a caller found something at, which in a genome
+  without a Y are the mismapped stretches. Rejected: an absent band on the calls' Y ratio (it named a
+  man `XO`, above).
+- Coverage showing no Y against calls showing one is `lines_disagree`. Rejected: letting coverage
+  win, which would hide a mispaired coverage facet (another person's BAM).
+- Zero-depth intervals are left out on chr20 and X (assembly gaps; each span holds a centromere) and
+  kept on the X-degenerate Y, which GIAB cuts free of gaps and where zero is the signal. Rejected:
+  counting them everywhere, which lowers both medians by the gaps' share.
+- The coverage facet is paired by the caller and used only on its own build. Rejected: placing it on
+  the facet's build, which would read GRCh37 coordinates against GRCh38 regions.
+
+**Left:** XXX, XYY and the other classes need a copy count past two, which the bands above do not
+read (a Y ratio near 1.0 still reads as one Y present). An array's female Y probes are no-calls, which may be the absence signal
 arrays have and genomes lack. Arrays (no `gt`
 before RM3, no depth) and exomes answer unknown; an array's own lines (female Y probes no-calls,
 AncestryDNA's doubled X letters) are not built. Liftovers of one callset are not yet weighed as one

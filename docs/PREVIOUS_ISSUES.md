@@ -3,6 +3,41 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F21 — A VRS-met allele is read as zero copies in a complex multi-allelic row
+
+Severity: medium · Found 2026-10-23 by RM279 rebuilding the PGP-HMS CGI against freeBayes pairs with
+alleles met by VRS id.
+
+freeBayes writes a haplotype as one multi-allelic row: REF `CGCCC`, ALT `TGCCT,TGCCC`, GT
+`TGCCT/TGCCT`. Its ALT `TGCCC` trims to `C>T`, so its VRS id is CGI's `C>T` (GT `T/T`) and the two
+meet (`key = vrs`). `concordance` then counts the copies of the spelling `TGCCC` in the freeBayes
+genotype, zero, although each `TGCCT` haplotype carries the same `C>T`: a `mismatch` that is only
+representation. 20,434 to 23,014 SNV mismatches on the CGA 2.5.0.44 pair, 2,601 to 2,950 on the
+2.5.0.24 one, up to 5,982 and 4,627 indels (docs/METHOD_ATLAS.md). The `site` path guards the same
+case by reading only a row over the same REF span; the `vrs` path has no guard. The graded
+comparison has the same fault: its distribution counts the copies of the spelling too.
+
+Resolved 2026-10-23: each side's genotype is read for the allele's change in its own row. A haplotype
+that is neither REF nor the met ALT is trimmed against REF like the ALT: a change away from the
+allele's span is not a copy; one of the same length is a copy when its bases over the span are the
+ALT's (`TGCCT` holds `C>T`, `CGCCT` does not); a length change against another length change or a
+substitution is another allele of the site (a `1/2` deletion and insertion of one repeat unit), not a
+copy. What is left, a change of another length that also replaces bases over the span, cannot be
+read: it is open like a null haplotype, never zero copies, and a pair it leaves undecided gets the new
+`agreement` value `unreadable`, counted in a warning and in the atlas's `unreadable` column (never in
+`called_both`). The `site` pairing and the graded distribution read alleles the same way, and the
+atlas counts an allele as carried where `concordance` read a copy of it under another spelling.
+
+Rejected: marking every VRS pair whose row holds a sibling ALT unreadable (it drops the 20,000 SNVs
+the same-length rule reads exactly, and the common multi-allelic indel row); reading only the
+`vrs` pairing (the `site` and `position` pairings read the same genotypes, and the rule gives the old
+answer wherever a genotype holds only REF and the ALT). Code: `concordance._holds`, `_codes`, `_read`,
+`Agreement.UNREADABLE`, `atlas._counts`; tests
+`test_a_vrs_met_allele_is_read_in_terms_of_its_own_change_in_a_complex_row`,
+`test_a_multi_allelic_indel_row_reads_its_other_length_as_another_allele` (tests/test_concordance.py),
+`test_a_complex_row_s_sibling_carries_the_allele_and_an_unreadable_one_is_counted_apart`
+(tests/test_atlas.py).
+
 ## F20 — A CGI vcfBeta's chrY md5 refuses the whole facet
 
 Severity: medium · Found 2026-10-23 by RM279 (the method-error atlas) comparing PGP-HMS CGI vcfBeta

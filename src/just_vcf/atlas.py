@@ -156,6 +156,7 @@ COUNTS = pl.Schema(
         "mismatch": pl.UInt64,
         "ploidy_differs": pl.UInt64,
         "uncalled": pl.UInt64,
+        "unreadable": pl.UInt64,
         "only_a": pl.UInt64,
         "only_b": pl.UInt64,
         "one_sided_reference": pl.UInt64,
@@ -190,6 +191,7 @@ ATLAS = pl.Schema(
         "one_sided_ci_high": pl.Float64,
         "one_sided_reference": pl.UInt64,
         "uncalled": pl.UInt64,
+        "unreadable": pl.UInt64,
         "graded_gl": pl.UInt64,
         "p_same_gl_mean": pl.Float64,
         "graded_gp": pl.UInt64,
@@ -334,7 +336,10 @@ def _passes(side: str) -> pl.Expr:
 
 def _counts(sites: pl.DataFrame, regions: RegionSet) -> pl.DataFrame:
     """Counts per (region class, variant class, scope) over one pair's `sites`."""
-    carries = pl.col("a_gt_alleles").list.contains(pl.col("alt")).fill_null(False) | pl.col("b_gt_alleles").list.contains(pl.col("alt")).fill_null(False)
+    # A genotype carries the allele where it spells it, or where it holds it under another ALT of its
+    # row (a complex row met by VRS id, whose copies `concordance` read from the change).
+    spelled = pl.col("a_gt_alleles").list.contains(pl.col("alt")).fill_null(False) | pl.col("b_gt_alleles").list.contains(pl.col("alt")).fill_null(False)
+    carries = spelled | (pl.col("a_copies") > 0).fill_null(False) | (pl.col("b_copies") > 0).fill_null(False)
     probe = (
         sites.filter(carries)
         .with_columns(pl.col("pos").cast(pl.Int64).alias("_at"), (_passes("a") & _passes("b")).alias("_pass"))

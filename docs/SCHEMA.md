@@ -1780,7 +1780,27 @@ with each, counted in a warning.
 **Genotypes are compared as copies of the allele** in `gt_alleles`, unordered: phase sets are per
 facet and cannot be compared across facets, so `0|1` against `1|0` is a `match`. Copies count only
 this allele, so a split file's `0` for another ALT (bcftools' default) and a `.` (vt, `normalize`)
-read correctly: neither is this allele, and `.` is unknown. `agreement`:
+read correctly: neither is this allele, and `.` is unknown.
+
+Each side's genotype is read against its own row's REF and ALT, so a pair met by VRS id is read in the
+row the id came from. A haplotype caller writes a haplotype as one multi-allelic row (REF `CGCCC`, ALT
+`TGCCT,TGCCC`, GT `TGCCT/TGCCT`): its `TGCCC` trims to `C>T` and meets another facet's `C>T`, and each
+`TGCCT` holds that change too, so counting only the spelling `TGCCC` would read zero copies, a
+mismatch that is only representation (F21). A haplotype that is neither REF nor the ALT is therefore
+read for the allele's change, both trimmed against REF (common prefix, then suffix):
+
+- a change whose span does not meet the allele's span holds REF there: not a copy;
+- of one length with REF and the ALT: a copy when its bases over the allele's span are the ALT's
+  (`TGCCT` holds `C>T` at the first base; `CGCCT` does not);
+- a length change against another length change or a substitution is another allele of the site
+  (a deletion and an insertion of one repeat unit in one row, GT `1/2`): not a copy;
+- anything else, a change of another length that also replaces bases over the allele's span, or a
+  base other than ACGT there, cannot be read. Such a haplotype is never read as zero copies: it is
+  open like a null one, and a pair left undecided by it is `unreadable`, counted in a warning.
+
+The `site` pairing reads the other row the same way, against this allele's REF (the row has the same
+REF span). The graded comparison counts copies by the same reading of each of the row's alleles, and
+a row with an allele that cannot be read gives no distribution. `agreement`:
 
 | Value | When |
 |---|---|
@@ -1788,6 +1808,7 @@ read correctly: neither is this allele, and `.` is unknown. `agreement`:
 | `mismatch` | both fully called and the copies differ; or with a null haplotype, the called ones already contradict (`1/.` against `0/0`) |
 | `ploidy_differs` | both written, with different numbers of haplotypes (a haploid X call against a diploid one) |
 | `uncalled` | a haplotype is null on either side and the rest do not contradict; a whole no-call (`./.`) is the source saying it could not tell, never a mismatch |
+| `unreadable` | a haplotype holds another allele of its row that cannot be read for this one (above) and the rest do not contradict: not decided, and not the source's no-call |
 | `only_a`, `only_b` | only one facet states the allele and the other gave no single row to read against |
 
 **Graded where possible** (charter 7). Each row's vector, in VCF genotype order over its own
@@ -1885,7 +1906,8 @@ counts with one contig's sites in memory at a time. Rejected: `region=` per clas
 whole comparison for each of sixteen classes.
 
 **The unit is a carried allele.** A row counts an allele when at least one side's genotype holds a
-copy of it (its `gt_alleles` contain the ALT, an uncalled haplotype beside it included). An allele a
+copy of it (its `gt_alleles` contain the ALT, an uncalled haplotype beside it included, or its
+`copies` are above zero, where another ALT of a complex row holds the allele). An allele a
 row states and no genotype carries (a DeepVariant `RefCall` `0/0`, a split row's `0` for its ALT,
 `./.` on both sides) says nothing about either method's error and is left out of every count. Scope
 `carried` counts all of them; `carried_pass` keeps those whose every stating row passed its filters
@@ -1904,7 +1926,7 @@ included:
 |---|---|---|
 | `pairs` | `u32` | pairs pooled into the row |
 | `alleles` | `u64` | carried alleles compared |
-| `match`, `mismatch`, `ploidy_differs`, `uncalled`, `only_a`, `only_b` | `u64` | `concordance`'s `agreement` per allele |
+| `match`, `mismatch`, `ploidy_differs`, `uncalled`, `unreadable`, `only_a`, `only_b` | `u64` | `concordance`'s `agreement` per allele |
 | `called_both` | `u64` | `match + mismatch + ploidy_differs`: both sides called a genotype |
 | `discordant` | `u64` | `mismatch + ploidy_differs` |
 | `discordance_rate`, `discordance_ci_low`, `discordance_ci_high` | `f64` | `discordant / called_both` and its 95% Wilson score interval |

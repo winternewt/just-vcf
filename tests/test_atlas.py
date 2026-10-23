@@ -11,7 +11,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceStore, load, resolve_ref
+from just_vcf import ReferenceStore, load, mint_vrs_ids, resolve_ref
 from just_vcf.atlas import (
     ALL,
     ATLAS,
@@ -254,6 +254,24 @@ def test_a_one_sided_allele_the_silent_facet_reads_as_reference_is_counted(tmp_p
     row = atlas.filter((pl.col("variant_class") == "snv") & (pl.col("scope") == "carried")).row(0, named=True)
     # 100 lies in b's ref block; 500 lies in nothing b wrote, and b's absence says nothing.
     assert (row["one_sided_reference"], row["only_a"] + row["only_b"]) == (1, 3)
+
+
+def test_a_complex_row_s_sibling_carries_the_allele_and_an_unreadable_one_is_counted_apart(tmp_path: Path, store: ReferenceStore) -> None:
+    # `b` writes five-base haplotype rows whose second ALT trims to `a`'s SNV (F21). At 100 `a` holds no
+    # copy and b's sibling holds two: carried, a mismatch, though b's genotype never spells `a`'s ALT.
+    # At 300 b's sibling is of another length over the SNV's span: unreadable, not called both.
+    def five(pos: int) -> str:
+        return base("1", pos, 5)
+
+    x = {p: other(five(p)[0]) for p in (100, 300)}
+    sibling = {100: x[100] + five(100)[1:4] + other(five(100)[4]), 300: next(c for c in "ACGT" if c not in five(300)[:2]) + five(300)[2:]}
+    a_rows = [("1", 100, five(100)[0], x[100], "0/0", "PASS", {}), ("1", 300, five(300)[0], x[300], "1/1", "PASS", {})]
+    b_rows = [("1", p, five(p), f"{sibling[p]},{x[p]}{five(p)[1:]}", "1/1", "PASS", {}) for p in (100, 300)]
+    a = mint_vrs_ids(facet(tmp_path, "a", "freeBayes v1.3.6", a_rows, store), store)
+    b = mint_vrs_ids(facet(tmp_path, "b", "HaplotypeCaller", b_rows, store), store)
+    atlas = method_atlas([(a, b)], RegionSet.from_frames("test set", "GRCh38", {}))
+    row = atlas.filter((pl.col("variant_class") == "snv") & (pl.col("scope") == "carried")).row(0, named=True)
+    assert (row["mismatch"], row["unreadable"], row["called_both"], row["discordant"]) == (1, 1, 1, 1)
 
 
 def test_regions_on_another_assembly_are_refused(pair: tuple[Loaded, Loaded]) -> None:

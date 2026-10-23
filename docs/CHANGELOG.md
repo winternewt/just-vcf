@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `concordance` reads each side's genotype for the allele's change in its own row (F21). A complex
+  multi-allelic row met by VRS id (freeBayes REF `CGCCC`, ALT `TGCCT,TGCCC`, GT `TGCCT/TGCCT` against
+  `C>T` `T/T`) now reads two copies instead of zero, where the other ALT holds the same change; one
+  that cannot be read (another length over the allele's span) is never zero copies. New `agreement`
+  value `unreadable` for a pair that leaves undecided, and a matching `unreadable` count in the
+  atlas, outside `called_both`; the graded distribution and the `site` pairing read alleles the same
+  way, and the atlas counts an allele carried where `concordance` read a copy under another spelling.
+  An added enum value and column: minor.
+
 - `scripts/method_atlas.py` mints VRS ids on both facets of a pair once REF is read, so alleles pair
   by VRS id (`--no-mint` pairs by position and spelling, as before); `method_atlas.pairs.tsv` gains a
   `pairing` column. The atlas's two PGP-HMS pairs (CGI vcfBeta against freeBayes) were rebuilt that

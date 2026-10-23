@@ -156,3 +156,41 @@ def test_a_row_without_a_genotype_stays_as_written(tmp_path: Path) -> None:
     rejoined = rejoin_split(load(path))
     assert rejoined.calls.collect().height == 2
     assert "1 split site(s) left as written: a row has no genotype" in rejoined.warnings
+
+
+SV_HEADER = HEADER[:-1] + [
+    '##INFO=<ID=SVTYPE,Number=1,Type=String,Description="Type of structural variant">',
+    '##INFO=<ID=CIPOS,Number=2,Type=Integer,Description="Confidence interval around POS">',
+    '##INFO=<ID=CIEND,Number=2,Type=Integer,Description="Confidence interval around END">',
+    '##INFO=<ID=CN,Number=A,Type=Integer,Description="Copy number per ALT">',
+    '##FORMAT=<ID=CN,Number=1,Type=Integer,Description="Copy number">',
+    HEADER[-1],
+]
+
+
+def test_the_sv_columns_survive_the_join(tmp_path: Path) -> None:
+    """Equal `sv_type` and `copy_number` are kept; per-ALT intervals and copy numbers follow `alts`."""
+    records = [
+        # Written T before G: the joined alts sort G first, and the per-ALT values move with them.
+        "1\t100\t.\tA\tT\t50\tPASS\tSVTYPE=DUP;CIPOS=-5,5;CIEND=-6,6;CN=4\tGT:CN\t0/1:3",
+        "1\t100\t.\tA\tG\t50\tPASS\tSVTYPE=DUP;CIPOS=-1,1;CIEND=-2,2;CN=2\tGT:CN\t1/0:3",
+        # Disagreeing sv_type and copy_number, and one row without intervals.
+        "1\t200\t.\tC\tG\t50\tPASS\tSVTYPE=DUP;CIPOS=-1,1;CN=2\tGT:CN\t1/0:3",
+        "1\t200\t.\tC\tT\t50\tPASS\tSVTYPE=DEL;CN=1\tGT:CN\t0/1:2",
+    ]
+    path = tmp_path / "sv_split.vcf"
+    path.write_text("\n".join([*SV_HEADER, *records]) + "\n")
+    parent = load(path)
+    written = {(r["pos"], r["alts"][0]): r for r in parent.calls.collect().iter_rows(named=True)}
+    assert written[(100, "T")]["cipos"] == [-5, 5] and written[(100, "G")]["alt_copy_numbers"] == [2.0]
+    calls = {r["pos"]: r for r in rejoin_split(parent).calls.collect().iter_rows(named=True)}
+    first = calls[100]
+    assert first["alts"] == ["G", "T"]
+    assert first["sv_type"] == "DUP" and first["copy_number"] == 3.0
+    for name in ("cipos", "ciend", "alt_copy_numbers"):
+        assert first[name] == [*written[(100, "G")][name], *written[(100, "T")][name]], name
+    second = calls[200]
+    assert second["alts"] == ["G", "T"]
+    assert second["sv_type"] is None and second["copy_number"] is None
+    assert second["cipos"] is None and second["ciend"] is None
+    assert second["alt_copy_numbers"] == [2.0, 1.0]

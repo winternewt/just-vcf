@@ -1,15 +1,19 @@
 """RM273: a person (subject) in the schema. The caller supplies the subject; nothing is inferred."""
 
+import gzip
 from pathlib import Path
 
 import polars as pl
 import pytest
 
-from just_vcf import load, rejoin_split
+import test_liftover
+from just_vcf import ReferenceStore, liftover, load, rejoin_split, resolve_ref
 from just_vcf.formats import get_spec
+from just_vcf.links import APPENDED_EXPORT, LIFTOVER_TO, canonical_links
 from just_vcf.loading import Loaded
 from just_vcf.person import SUBJECT_CHECKS, Person, SubjectError, people
-from just_vcf.schema import BLOCKS, CALLS, FACETS
+from just_vcf.schema import BLOCKS, CALLS, FACETS, LINKS
+from test_load_rsid import _two_exports
 
 VCF_HEADER = [
     "##fileformat=VCFv4.2",
@@ -269,3 +273,42 @@ def test_a_check_must_answer_kleene(tmp_path: Path) -> None:
     array, vcf = _two_sources(tmp_path)
     with pytest.raises(TypeError, match="True, False or None"):
         Person.of(array, vcf, check=lambda a, b: 0.9)  # type: ignore[arg-type, return-value]
+
+
+# --- links -------------------------------------------------------------------------------------------
+
+
+def test_a_person_carries_the_links_of_its_facets(tmp_path: Path) -> None:
+    """A lifted facet and its parent: the person holds the lift's lineage link, once, in canonical order."""
+    store = ReferenceStore.open(tmp_path / "store")
+    store.add_fasta(test_liftover.write_fasta(tmp_path / "source.fa", test_liftover.SOURCE), assembly_label="GRCh37")
+    store.add_fasta(test_liftover.write_fasta(tmp_path / "target.fa", test_liftover.TARGET), assembly_label="GRCh38")
+    chain = tmp_path / "source_to_target.chain.gz"
+    chain.write_bytes(gzip.compress(test_liftover.chain_text().encode()))
+    order = sorted(test_liftover.CASES.values(), key=lambda line: (line.split("\t")[0], int(line.split("\t")[1])))
+    path = tmp_path / "source.vcf"
+    path.write_text("\n".join([*test_liftover.HEADER, *order]) + "\n")
+    parent = resolve_ref(load(path, subject="person-a"), store)
+    lifted = liftover(parent, chain, store).loaded
+    expected = canonical_links(lifted.links).collect()
+    assert expected.height == 1 and expected["relation"].to_list() == [LIFTOVER_TO]
+
+    for given in ((parent, lifted), (lifted, parent)):
+        person = Person.of(*given)
+        links = person.links.collect()
+        assert links.schema == LINKS
+        assert links.equals(expected)
+    assert people(parent, lifted)["person-a"].links.collect().equals(expected)
+
+
+def test_a_person_carries_kin_links_once_across_its_facets(tmp_path: Path) -> None:
+    """An appended export loads as two facets linked as kin; split into pieces, the link is kept once."""
+    text, _, _ = _two_exports()
+    path = tmp_path / "genome.txt"
+    path.write_text(text)
+    loaded = load(path, subject="person-a")
+    expected = loaded.links.collect()
+    assert expected["relation"].to_list() == [APPENDED_EXPORT]
+    assert Person.of(loaded).links.collect().equals(expected)
+    alone = Person.of(load(_vcf_file(tmp_path, ["S1"]), subject="person-a"))
+    assert alone.links.collect().is_empty() and alone.links.collect().schema == LINKS

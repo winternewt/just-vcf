@@ -24,6 +24,7 @@ from just_vcf.probes import (
     probe_table,
     reverse_complement,
 )
+from test_load_rsid import _two_exports
 from test_reference import PREAMBLE_23, SEQ, array_text, assert_gt_indexes_ref, write_fasta
 
 CONTIG = SEQ["1"]
@@ -324,6 +325,21 @@ def test_an_absence_on_the_chip_is_a_no_call_and_off_it_not_on_the_chip(tmp_path
     answer = chip_absence(loaded, asked)
     assert answer.sites["absence_cause"].to_list() == ["in_export", "no_call", "not_on_chip", "not_on_chip"]
     assert answer.probe_set is not None and answer.reason.startswith("read against the learned probe set of ancestrydna_v2 on GRCh37")
+
+
+def test_a_load_of_several_facets_is_refused(tmp_path: Path) -> None:
+    """An appended export is two facets: one facet's chip read against both facets' rows would mix them."""
+    text, _, _ = _two_exports()
+    path = tmp_path / "appended.txt"
+    path.write_text(text)
+    appended = load(path)
+    assert appended.facets.collect().height == 2
+    with pytest.raises(ValueError, match="chip_absence takes one facet; this Loaded has 2"):
+        chip_absence(appended, pl.DataFrame({"chrom": ["1"], "pos": [1001]}))
+    exports = [ancestry_export(tmp_path / f"e{i}.txt", [100, 200]) for i in range(3)]
+    with pytest.raises(ValueError, match="learn_probe_sets takes one facet; this Loaded has 2"):
+        learn_probe_sets([*exports, appended])
+    assert not (cache_dir() / "probes" / "learned").exists(), "nothing is written before the refusal"
 
 
 def test_without_a_probe_set_an_absence_has_no_cause(tmp_path: Path) -> None:

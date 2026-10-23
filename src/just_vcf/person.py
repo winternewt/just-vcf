@@ -15,10 +15,11 @@ from enum import Enum
 from itertools import combinations
 
 import polars as pl
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from just_vcf.links import canonical_links
 from just_vcf.loading import Loaded
-from just_vcf.schema import SCHEMA_VERSION, enum_dtype
+from just_vcf.schema import LINKS, SCHEMA_VERSION, empty, enum_dtype
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,8 @@ class Person(BaseModel):
     """The facets one subject label groups, their rows, and what the relatedness check said.
 
     The frames are the facets' own, concatenated in `facet_id` order, so `calls` and `blocks` keep the
-    canonical order (SCHEMA.md Decision 11).
+    canonical order (SCHEMA.md Decision 11). `links` are every link the facets' loads carried, once
+    each, in `canonical_links` order (Decision 12).
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
@@ -62,6 +64,7 @@ class Person(BaseModel):
     facets: pl.LazyFrame
     calls: pl.LazyFrame
     blocks: pl.LazyFrame
+    links: pl.LazyFrame = Field(default_factory=lambda: empty(LINKS))
     checks: pl.DataFrame
     """`SUBJECT_CHECKS`: each pair of the person's sources and what the check said about it."""
     warnings: tuple[str, ...] = ()
@@ -123,6 +126,7 @@ class Person(BaseModel):
             facets=pl.concat([piece.facets for piece in pieces], how="vertical"),
             calls=pl.concat([piece.calls for piece in pieces], how="vertical"),
             blocks=pl.concat([piece.blocks for piece in pieces], how="vertical"),
+            links=canonical_links(pl.concat([piece.links for piece in pieces], how="vertical")),
             checks=checks,
             warnings=tuple(warnings),
             schema_version=versions[0],
@@ -158,7 +162,8 @@ def people(*loaded: Loaded, check: SameSubjectCheck | None = None) -> dict[str, 
 
 
 def _pieces(loaded: tuple[Loaded, ...]) -> list[Loaded]:
-    """Each facet of each `Loaded` as a `Loaded` of its own."""
+    """Each facet of each `Loaded` as a `Loaded` of its own, with the load's links whole: a derived
+    facet's lineage runs through links that do not name it (its parent's own steps)."""
     pieces = []
     for item in loaded:
         for facet_id in item.facets.select("facet_id").collect()["facet_id"].to_list():
@@ -167,6 +172,7 @@ def _pieces(loaded: tuple[Loaded, ...]) -> list[Loaded]:
                     facets=item.facets.filter(pl.col("facet_id") == facet_id),
                     calls=item.calls.filter(pl.col("facet_id") == facet_id),
                     blocks=item.blocks.filter(pl.col("facet_id") == facet_id),
+                    links=item.links,
                     warnings=item.warnings,
                     schema_version=item.schema_version,
                 )

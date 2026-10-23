@@ -27,6 +27,7 @@ from just_vcf.query import (
     StatTable,
     WarningGroup,
     query,
+    redact_paths,
 )
 from just_vcf.schema import AbsenceMeans, BlockKind, VariantClass
 from test_load_vcf import vcf_text
@@ -129,6 +130,14 @@ def test_warnings_lose_the_sample_and_any_path(loaded: Loaded, path: Path) -> No
     assert groups[0] == WarningGroup(reason="row(s) in <path> dropped", count=5, lines=2)
     assert groups[1].count is None and "<sample>" in groups[1].reason
     assert groups[2].reason == "read from <file name>, see <path>"
+
+
+def test_a_path_is_redacted_in_each_of_its_spellings() -> None:
+    """URLs, UNC shares, home-relative and drive paths: header lines write all of them (`##reference=file:///…`)."""
+    for spelling in ("file:///home/XQZNAME/refs/GRCh38.fa", "//nas/XQZNAME/x", "~/XQZNAME", "C:\\Users\\XQZNAME\\dv", "C:\\XQZNAME", "/home/XQZNAME/bin"):
+        assert "XQZNAME" not in redact_paths(f"version {spelling} here"), spelling
+    for kept in ("GRCh37/GRCh38", "chrM/MT", "1/2", "a/b c", "SNV/indel"):
+        assert redact_paths(kept) == kept, kept
 
 
 FORBIDDEN_FIELDS = {"sample", "source_path", "member", "sample_meta", "source_sha256", "pos", "end_pos", "chrom", "ref", "alt", "alts", "ids", "gt", "gt_alleles", "source_gt", "source_ref", "ploidy_statements", "header_contigs"}

@@ -38,7 +38,12 @@ def exports(root: Path, tally: Counter[str]) -> Iterator[Loaded]:
         except Exception as error:  # noqa: BLE001 - one unreadable upload must not end the walk; counted by type
             tally[f"not loaded: {type(error).__name__}"] += 1
             continue
-        facet = loaded.facets.collect().row(0, named=True)
+        facets = loaded.facets.collect()
+        if facets.height != 1:
+            # An appended export (F3): which facet's rows are the chip's export is not known.
+            tally["skipped: several facets in one file"] += 1
+            continue
+        facet = facets.row(0, named=True)
         tally[f"{facet['chip'] or 'chip unknown'} on {facet['assembly_label'] or 'assembly unknown'}"] += 1
         yield loaded
 

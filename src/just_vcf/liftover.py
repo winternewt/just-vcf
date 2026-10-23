@@ -32,7 +32,8 @@ short:
 A lifted row's `source_ref`, `ref_check`, `source_gt`, VRS ids, `cipos` and `ciend` are null: they described the
 source's representation on the source assembly. `gl`, `gp` and `ad` stay indexed over
 `source_alleles`, never reordered (SCHEMA.md Decision 2); a swapped row's `dosage` is withheld, since it
-counted the other allele. Re-mint ids on the target with `mint_vrs_ids`.
+counted the other allele, and so are its `alt_copy_numbers` (INFO CN, one per ALT): the swapped ALT's
+slot now holds the old REF, whose copy number the source did not state. Re-mint ids on the target with `mint_vrs_ids`.
 
 Coordinates: `pos` is 1-based; chains and the store are 0-based half-open. `reference._span` converts
 a row to the store's range and `_to_pos` converts a lifted start back, the only two places (charter 13).
@@ -57,7 +58,7 @@ from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceM
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 2
+LIFT_VERSION = 3
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits."""
 
 RELATION = LIFTOVER_TO
@@ -680,6 +681,7 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
     counts["swapped"] += int(work["_swap"].sum())
     counts["other_contig"] += int(work.select(moved_contig.sum()).item())
     counts["dosage_withheld"] += int(work.select((pl.col("_swap") & pl.col("dosage").is_not_null()).sum()).item())
+    counts["copy_numbers_withheld"] += int(work.select((pl.col("_swap") & pl.col("alt_copy_numbers").is_not_null()).sum()).item())
     counts["phase_cleared"] += int(work.select((moved_contig & pl.col("phased").is_not_null()).sum()).item())
     out = work.with_columns(
         pl.lit(facet_id).alias("facet_id"),
@@ -700,6 +702,7 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
         pl.lit(None, dtype=CALLS["cipos"]).alias("cipos"),
         pl.lit(None, dtype=CALLS["ciend"]).alias("ciend"),
         pl.when(pl.col("_swap")).then(None).otherwise(pl.col("dosage")).alias("dosage"),
+        pl.when(pl.col("_swap")).then(None).otherwise(pl.col("alt_copy_numbers")).alias("alt_copy_numbers"),
         *[pl.when(moved_contig).then(None).otherwise(pl.col(name)).alias(name) for name in ("phased", "phase_sets", "phase_set_kinds")],
         array.alias("_array"),
     )
@@ -748,6 +751,8 @@ def _warnings(counts: Counter[str], reasons: dict[str, int], blocks: int, chain:
         )
     if counts["dosage_withheld"]:
         lines.append(f"{counts['dosage_withheld']} swapped row(s): dosage withheld (it counted the other allele)")
+    if counts["copy_numbers_withheld"]:
+        lines.append(f"{counts['copy_numbers_withheld']} swapped row(s): alt_copy_numbers withheld (the swapped ALT's slot now holds the old REF)")
     if counts["other_contig"]:
         lines.append(f"{counts['other_contig']} row(s) lifted to another contig than their source's; phase sets cleared on {counts['phase_cleared']}")
     for reason, count in reasons.items():

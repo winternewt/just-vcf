@@ -491,6 +491,14 @@ def probe_set(chip: str | None, assembly_label: str | None) -> ProbeSet | str:
                     sites=_on_chip(table))  # fmt: skip
 
 
+def _one_facet(loaded: Loaded, step: str) -> dict:
+    """The facet row of a one-facet `loaded`. Several would mix one facet's chip with every facet's calls."""
+    facets = loaded.facets.collect()
+    if facets.height != 1:
+        raise ValueError(f"{step} takes one facet; this Loaded has {facets.height}")
+    return facets.row(0, named=True)
+
+
 def chip_absence(loaded: Loaded, sites: pl.DataFrame) -> ChipAbsence:
     """Why each of `sites` (`chrom` canonical, `pos` 1-based) is or is not in an array facet's export.
 
@@ -498,8 +506,9 @@ def chip_absence(loaded: Loaded, sites: pl.DataFrame) -> ChipAbsence:
     chip has a probe there and `not_on_chip` where it has none; null for every site when the facet has
     no probe set (not an array, chip or assembly unknown, nothing configured or learned), with the
     reason. Either absence is an unknown genotype (Decision 4); the cause says why it is unknown.
+    `loaded` holds one facet; a load of several (an appended export) is refused with `ValueError`.
     """
-    facet = loaded.facets.collect().row(0, named=True)
+    facet = _one_facet(loaded, "chip_absence")
     asked = sites.select(pl.col("chrom").cast(pl.String), pl.col("pos").cast(pl.Int64)).unique(maintain_order=True)
     if facet["vcf_version"] is not None or facet["callset_type"] not in (None, "array"):
         return ChipAbsence(sites=asked.with_columns(pl.lit(None, dtype=pl.String).alias("absence_cause")), probe_set=None,
@@ -530,13 +539,14 @@ def learn_probe_sets(exports: Iterable[Path | str | Loaded], min_exports: int = 
     set holds every position its exports carry, each with the number of exports that carry it
     (`exports`; `of_exports` is how many were read), and is written only from `min_exports` exports
     or more; a site is on the chip when at least `MIN_EXPORT_SHARE` of them carry it. Learning again
-    replaces the set. Returns the sets written.
+    replaces the set. Returns the sets written. Each export loads as one facet; one that loads as
+    several (an appended export) is refused with `ValueError` before anything is written.
     """
     seen: dict[tuple[str, str], pl.DataFrame] = {}
     counted: dict[tuple[str, str], int] = {}
     for export in exports:
         loaded = export if isinstance(export, Loaded) else load(export)
-        facet = loaded.facets.collect().row(0, named=True)
+        facet = _one_facet(loaded, "learn_probe_sets")
         chip, label = facet["chip"], facet["assembly_label"]
         if facet["vcf_version"] is not None or chip is None or label is None or chip in FAMILY_CHIPS or chip.startswith(ILLUMINA_PREFIX):
             continue

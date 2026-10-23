@@ -19,6 +19,42 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   facet. One gap it found is held as a known gap: a BCF's header build hints are never read, so it
   gets no `assembly_label` where the same header as text gets GRCh37.
 
+- The CLI printed header text unredacted. `sniff` printed `build_evidence`, the whole matched header line
+  (a `##reference=file:///home/<name>/…`); it prints `build_hint` instead, the statement's key and the
+  build it names (`{"kind": "##reference", "label": "GRCh38"}`). `load`, `convert` and `check` printed the
+  facet's free-text fields as read (a `##DeepVariant_version` path landed in `caller_version`); every
+  one `query` redacts (`query.PROVENANCE_TEXT`), and `dropped_fields`, now goes through `query`'s
+  redaction (`query.FacetRedactor`) and then the CLI's labels. The CLI's warnings and refusals also
+  lose anything shaped like a path, by the same rule (`query.redact_paths`), which now also catches
+  `file:///` URLs, `//host` shares and one-component `~/` and `C:\` paths, in `query`'s answers too.
+  Breaking for a script reading `build_evidence` from `sniff --json`.
+
+- `chip_absence` and `learn_probe_sets` refuse a `Loaded` of more than one facet (an appended export)
+  with `ValueError`, as the derived steps do: they read the first facet's chip and assembly against
+  every facet's rows. `scripts/learn_probe_sets.py` skips such a file and counts it.
+
+- `Person` carries `links` (RM275's frame), which it dropped: every link its facets' loads carried,
+  once each, in `canonical_links` order, so a lifted facet grouped with its parent keeps its
+  `liftover_to` link. The CLI's `--facet` narrowing kept no links either, so a step after it lost the
+  load's kin links; it keeps them now. No column changes.
+
+- `rejoin_split` keeps the SV columns RM282 added, which it wrote null: `sv_type` and `copy_number`
+  where the split rows agree, and `cipos`, `ciend` and `alt_copy_numbers` concatenated in the joined
+  `alts` order (null when a row does not state them per ALT, or two rows disagree on one ALT).
+  `REJOIN_VERSION` 2: re-joined facets get new `facet_id`s.
+
+- `liftover` withholds a swapped row's `alt_copy_numbers` (INFO CN, one per ALT), as it withholds its
+  `dosage`: the swapped ALT's slot holds the old REF, whose copy number the source did not state; a
+  warning counts them. `LIFT_VERSION` 3. `NORMALIZE_VERSION` 6, for RM282's change to what `normalize`
+  emits (per-ALT SV columns split with their ALT, a moved row's intervals cleared), which shipped
+  without a bump. Lifted and normalized facets get new `facet_id`s.
+
+- The suite's opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DIR`, `JUST_VCF_MANIFESTS_DIR`,
+  `JUST_VCF_TEST_REFERENCE_DIR`, `JUST_VCF_TEST_CHAIN_DIR`) are empty unless the shell sets them:
+  `tests/conftest.py` no longer reads them from the repo `.env`, and defaults each to `""` so the CLI's
+  `load_dotenv` cannot fill them either. A plain `uv run pytest` never opens a private genome; an opt-in
+  run names the variables on its command line (CLAUDE.md §4, docs/LIVE_SAMPLES.md). No library change.
+
 - In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
   probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
   (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or
@@ -57,8 +93,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 - `load(..., subject=...)` labels a file's facets with the person they belong to, in a new nullable
   `facets.subject` column (RM273). The label is the caller's: nothing fills it from the sample name or
   the file, and `facet_id` does not digest it. Every derived step (`resolve_ref`, `normalize`,
-  `liftover`, `rejoin_split`, `mint_vrs_ids`) carries its parent's. Schema change; the version bump is
-  the lead's at merge.
+  `liftover`, `rejoin_split`, `mint_vrs_ids`) carries its parent's. Schema change, landed in 0.0.12.
 
 - `query(source)` (RM283), the aggregate-only helper beside `load`, for agents and apps: counts per
   facet by contig, variant class (ALT alleles), filter set, genotype class, REF check, evidence basis
@@ -77,7 +112,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   every pair, an appended export from the first export. A plain load has none. `facets.derived_from`
   and `relation` stay for the one-parent case, and `link_disagreements` lists every place the two
   disagree. `LINKS` and `link_disagreements` are exported. No column of the other frames changes; the
-  schema version is not bumped.
+  frame landed in schema 0.0.13.
 
 - A command line, `just-vcf` (RM272): `sniff`, `load` (a summary of each facet), `check` (REF read
   from a reference, `ref_check` and withheld VRS ids counted) and `convert` (to VCF or gVCF through
@@ -98,7 +133,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 - Structural-variant and copy-number VCFs load as SV facets (RM282). Five nullable `calls` columns:
   `sv_type` (INFO SVTYPE as written), `cipos` and `ciend` (two offsets per ALT; VCF 4.2's one pair
   for the record repeated per ALT), `copy_number` (FORMAT CN) and `alt_copy_numbers` (INFO CN, per
-  ALT). `SCHEMA_VERSION` is not bumped in this change; the lead bumps it at merge. Canvas's `<CN0>`,
+  ALT); they landed in schema 0.0.14. Canvas's `<CN0>`,
   `<CN2>`… end at INFO END, and its copy-neutral segments (ALT `.` with END and CN) are calls, not
   reference blocks (F18), so a Canvas facet's absence is `unknown`, not `blocks`. `vrs_withheld`
   gives `sv_no_vrs_model` for an SV allele or breakend (it gave `symbolic`, which now names only

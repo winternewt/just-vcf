@@ -667,7 +667,10 @@ parquet spill of `calls`, three columns, so they cost no second parse of the VCF
 - Each GT slot takes the one allele the rows place there; `0` when no row places an ALT and a row says
   `0`; null when every row is null there. bcftools' `0` and vt's `.` read alike.
 - `ids` and `filters` are unions (sorted; `PASS` only when no row failed a filter); `phased`, the phase
-  sets, `dp` and `qual` are kept when every row agrees and null otherwise.
+  sets, `dp`, `qual`, `sv_type` and `copy_number` are kept when every row agrees and null otherwise.
+- The per-ALT columns, `cipos`, `ciend` (two values per ALT) and `alt_copy_numbers` (one), are each
+  row's values concatenated in the joined `alts` order; null when a row does not state them for each
+  of its ALTs, or two rows giving one ALT disagree.
 - Withheld: `gl`, `gp`, `ad`, `gq`, `dosage`, `source_alleles` (split rows hold REF against one ALT,
   and the full vectors would need the reads, which is calling genotypes), and `source_gt` (no file
   wrote the joined text).
@@ -782,7 +785,9 @@ holding that collection and the target.
    `vrs_errors`, `cipos` and `ciend` are null: they described the source's representation on the
    source assembly (the intervals are offsets a minus-strand block would reverse). `gt`
    indexes `[ref] + alts`. `gl`, `gp`, `ad` and the order of `source_alleles` are the parent's (Decision
-   2: never reordered). A swapped row's `dosage` is null, since it counted the other allele. A row
+   2: never reordered). A swapped row's `dosage` is null, since it counted the other allele, and so
+   are its `alt_copy_numbers`: the swapped ALT's slot holds the old REF, whose copy number the source
+   did not state. A row
    lifted to another contig than its source's has `phased`, `phase_sets` and `phase_set_kinds` null: a
    PS set is keyed per contig, and two sets would otherwise merge. `ids`, `filters`, `qual`, `gq`, `dp`
    and `evidence_basis` are kept. Re-mint ids on the target with `mint_vrs_ids`.
@@ -1175,7 +1180,8 @@ library checks the claim and warns, and it never infers a subject or moves a fac
   else writes it.
 - **Grouped.** `Person.of(*loaded, check=...)` gathers facets that all carry one subject: their
   `facets`, `calls` and `blocks`, concatenated in `facet_id` order, which keeps the canonical order
-  (Decision 11). `people(*loaded, check=...)` returns one `Person` per subject, sorted by subject. A
+  (Decision 11), and `links`, every link the given loads carried, once each in `canonical_links`
+  order (Decision 12). `people(*loaded, check=...)` returns one `Person` per subject, sorted by subject. A
   facet without a subject, or two subjects handed to `Person.of`, is refused with `SubjectError`; one
   `facet_id` given twice is refused, since its rows would count twice.
 - **Checked.** `check` is a relatedness test over two facets, each handed in as a `Loaded` of that one
@@ -1350,22 +1356,26 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
-- **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
-  label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every
-  derived facet. Nullable and additive. `SCHEMA_VERSION` is deliberately left at 0.0.11 on this
-  builder branch; the lead bumps it at merge. `facet_id` does not digest the subject (Decision 5).
+- **No version change** (2026-10-23, the audit of RM282's derived steps): no column changes. Rule
+  changed in `liftover`: a swapped row's `alt_copy_numbers` are null, as its `dosage` is
+  (`LIFT_VERSION` 3). `normalize` gets a new `facet_id` (`NORMALIZE_VERSION` 6) for RM282's rule,
+  which changed its output without a bump: per-ALT SV columns split with their ALT, a moved row's
+  intervals cleared. Rule changed in `rejoin_split`: a joined site keeps `sv_type` and `copy_number`
+  where its rows agree and concatenates `cipos`, `ciend` and `alt_copy_numbers` in its `alts` order,
+  where it wrote them null (`REJOIN_VERSION` 2).
 
-- **No version change** (2026-10-23, RM275, the `links` frame): a fourth frame, `Loaded.links`
-  (Decision 12), and no column of `facets`, `calls` or `blocks` changes. `SCHEMA_VERSION` is not
-  bumped here: the lead bumps it when merging. Rules added: every derived step adds a lineage link and
+- **One facet column, landed in 0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's
+  label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every
+  derived facet. Nullable and additive. `facet_id` does not digest the subject (Decision 5).
+
+- **A fourth frame, landed in 0.0.13** (2026-10-23, RM275, the `links` frame): `Loaded.links`
+  (Decision 12); no column of `facets`, `calls` or `blocks` changes. Rules added: every derived step adds a lineage link and
   carries its parent's; a load of several facets links them (`caller_split`, `appended_export`);
   `link_disagreements` states how `links` agrees with `derived_from` and `relation`.
 
-- **Additive, version not bumped in this change** (2026-10-23, RM282 structural-variant facets): five
+- **Additive, landed in 0.0.14** (2026-10-23, RM282 structural-variant facets): five
   nullable `calls` columns, `sv_type`, `cipos`, `ciend`, `copy_number` and `alt_copy_numbers`
-  (Decision 6, "Structural variants"). A new nullable column is a minor bump by the rule above;
-  `SCHEMA_VERSION` stays 0.0.11 here and is bumped when the lead merges, with the other builders'
-  changes of the same round. Rules changed: `<CN0>`, `<CN2>`… end at INFO `END` (the `end_pos`
+  (Decision 6, "Structural variants"). Rules changed: `<CN0>`, `<CN2>`… end at INFO `END` (the `end_pos`
   rule); an `ALT .` record with a copy number is a call, not a block (Decision 4); `vrs_withheld` gives
   `sv_no_vrs_model` for an SV allele where it gave `symbolic` (`symbolic` now names only symbolic
   alleles that are no variant). Values change on SV and CNV files that already load.

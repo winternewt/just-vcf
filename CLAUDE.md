@@ -36,7 +36,9 @@ decision turned on. Delegation is for finding things, never for deciding them.
 7. **docs/SIBLING_SURVEY.md** and **docs/LANDSCAPE.md** — what just-prs/just-dna-lite already implement,
    and which external tools to take rather than build. Read both before designing a feature.
 8. **docs/FORMATS.md** — how `sniff` recognises a file, how a format is declared, and why the
-   registry order is what it is. Read it before adding or reordering a format.
+   registry order is what it is. Read it before adding or reordering a format. Its generated
+   companion, **docs/FORMAT_REGISTRY.md**, is the per-format spec and the broken-shape corpus;
+   regenerate it with `uv run python scripts/format_registry.py` after changing a spec.
 9. **docs/SCHEMA.md** — the frames every loader emits (RM8). Read it before writing a loader or
    changing a column.
 10. **docs/PGP_HMS.md** — the public test-data source: where the files are, their quirks, what is on

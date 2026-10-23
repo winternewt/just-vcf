@@ -100,6 +100,20 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   assembly. Values change on files that already load: such a file's `chrom` and `contig_map` now say
   `1`…`MT` instead of the accession.
 
+- `write_vcf_zarr(loaded, path)` exports one facet's calls as a VCF Zarr 0.4 store, which polars-bio
+  reads back with `scan_vcf_zarr` (RM276). Rows follow `write_vcf`'s rules (REF from the reference
+  or the file, never the genotype; unwritable rows refused or counted). The VCF Zarr spec has no
+  blocks, so a facet's blocks stay in the parquet store and are counted. Written with the standard
+  library (gzip chunks, no timestamp), so no extra and the same bytes for the same frame.
+
+- A durable store per person (RM276): `Store.open(path, subject=...)` creates or opens a directory
+  the caller names, `store.add(loaded)` writes each facet's four frames as parquet with a manifest
+  (schema version, subject, facet ids, added times in UTC), and `store.loaded()` / `store.person()`
+  read everything back lazily. Facets accumulate: a facet already held is a no-op and adding one never
+  rewrites another; each add is atomic per facet and holds a lock, so concurrent adds are safe. Another
+  schema version or subject is refused, never mixed. No column changes; the schema version is not
+  bumped.
+
 - Schema 0.0.12 (RM273): `facets.subject`; `Person.of` groups one subject's facets and checks the claim.
 
 - `Person.of(*loaded, check=...)` and `people(*loaded, check=...)` group facets by the subject the

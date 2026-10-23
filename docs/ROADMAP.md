@@ -27,9 +27,15 @@ Severity: medium · Status: open (decided by the person in the Part 2 interview,
 The person chose a small links frame (E4): (from, to, relation, provenance), so a facet can have several parents (a merge, a consensus). `derived_from` and `relation` stay on `facets` for the one-parent case. Relations verbatim from GA4GH where it has them (`liftover_to`), just-vcf's own otherwise, documented.
 
 ## RM276 — A durable per-person store
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: medium · Status: built 2026-10-23, awaiting merge (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
 
 The person chose both (E13): a directory per person holding parquet per facet, the links frame and a manifest, read lazily; and a VCF Zarr export (its spec has no gVCF blocks, so blocks stay parquet-only). Facets accumulate; nothing is overwritten (invariant 5).
+
+**Built:** `Store` (docs/SCHEMA.md, "The durable store"): parquet per facet, links per facet, a
+manifest, a lock, lazy reads into `Loaded` and `Person`; and `write_vcf_zarr`, one facet's calls as
+VCF Zarr 0.4, blocks counted and left in the store. **Left:** a migration between schema versions (a
+store of another version is refused, not migrated); `cipos`, `ciend` and `alt_copy_numbers` in the
+Zarr export; whether `Person` should carry the links (`store.loaded().links` has them).
 
 ## RM277 — Concordance between facets
 Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead

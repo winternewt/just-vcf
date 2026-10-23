@@ -545,6 +545,10 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
+Where this table says when a column is null, `tests/test_load_seams.py` holds it per format: it loads
+every format's example and fails on a null column without a stated reason. A column added here gets
+its reasons there, or the loaders fill it.
+
 **Assembly identity from a VCF header (RM4, checked 2026-10-22).**
 
 - `seqcol_digest` cannot be computed from a header. The top-level digest is taken over the `names`

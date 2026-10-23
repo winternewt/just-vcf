@@ -1017,7 +1017,7 @@ wholly inside each region and described at every base, and the two ratios. It is
 which must agree with the other two, and a second Y line that can show a Y absent: `y_present = False`,
 which names `XX` (two X) and `XO` (one X). Coverage showing no Y where the calls' depth shows one is
 `lines_disagree`. A coverage facet without a build, or on another one, is set aside with
-`coverage.reason` (`coverage_no_build`, `coverage_build_mismatch`), and the answer is the calls' alone.
+`coverage.reason` (`coverage_no_build`, `coverage_build_mismatch`), and the answer is the calls' alone. So is a coverage facet whose chr20 depth is too uneven for a whole genome (`coverage_uneven`: under 75% of its bases within half to twice the median, an exome's or a panel's shape).
 The field defaults to null, so nothing changes without coverage. The PAR bounds and the X-degenerate
 Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
 unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.

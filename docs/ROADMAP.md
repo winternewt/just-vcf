@@ -1085,6 +1085,9 @@ call-based bands followed; the BAM calibration is below. Decisions, each with wh
 - Zero-depth intervals are left out on chr20 and X (assembly gaps; each span holds a centromere) and
   kept on the X-degenerate Y, which GIAB cuts free of gaps and where zero is the signal. Rejected:
   counting them everywhere, which lowers both medians by the gaps' share.
+- A coverage facet whose chr20 depth is uneven (under 75% of its bases within half to twice the
+  median: an exome's or a panel's shape) is set aside as `coverage_uneven`. Rejected: trusting the
+  paired facet's `callset_type`, which says what the calls are, not what the reads are.
 - The coverage facet is paired by the caller and used only on its own build. Rejected: placing it on
   the facet's build, which would read GRCh37 coordinates against GRCh38 regions.
 

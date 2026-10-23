@@ -147,6 +147,12 @@ COVERAGE_Y_PRESENT_MIN_RATIO = 0.375
 unknown band is the gap's central half. A mosaic loss of Y in part of the cells lowers the ratio
 toward the band and reads unknown there, not absent."""
 
+COVERAGE_MIN_EVEN_SHARE = 0.75
+"""Share of chr20's described bases (gaps left out) whose interval mean lies between half and twice
+the chr20 median. A whole genome sits near 1; an exome or panel, deep on target and shallow off it,
+sits far under, and its medians say nothing about copies. The 0.75 echoes RM4's whole-genome breadth
+rule; the measured BAMs are in docs/ROADMAP.md RM278."""
+
 MIN_COVERAGE_BASES = 1_000_000
 """Bases a coverage line needs in each region (chr20, non-PAR X, and the X-degenerate Y, which holds
 about 10 Mb on each build), counted over intervals described at every base."""
@@ -204,6 +210,7 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
         "y_not_shown",
         "coverage_no_build",
         "coverage_build_mismatch",
+        "coverage_uneven",
     }
 )
 """Why an answer is unknown. An open vocabulary: a new kind of evidence brings new reasons.
@@ -224,6 +231,8 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
 - `coverage_no_build`, `coverage_build_mismatch`: a coverage facet was given, but it has no assembly
   label, or another one than the facet's, so its regions cannot be placed; it is set aside
   (`coverage.reason` only).
+- `coverage_uneven`: the coverage facet's chr20 depth is not even enough for a whole genome
+  (`COVERAGE_MIN_EVEN_SHARE`): an exome's or a panel's reads; it is set aside (`coverage.reason` only).
 """
 
 
@@ -291,6 +300,8 @@ class CoverageRatios(BaseModel):
     """Why the coverage facet was set aside for this facet; None when it was used."""
     reference_bases: int
     reference_median: float | None
+    reference_even_share: float | None
+    """Share of chr20's bases whose interval mean is within half to twice its median."""
     x_bases: int
     x_median: float | None
     y_bases: int
@@ -403,7 +414,7 @@ def measure_coverage(coverage: Coverage) -> CoverageRatios:
     if label not in ESTIMATE_BUILDS:
         return CoverageRatios(
             **base, reason="coverage_no_build" if label is None else "unsupported_build", reference_bases=0, reference_median=None,
-            x_bases=0, x_median=None, y_bases=0, y_median=None, x_ratio=None, y_ratio=None,
+            reference_even_share=None, x_bases=0, x_median=None, y_bases=0, y_median=None, x_ratio=None, y_ratio=None,
         )
     (_, par1_end), (par2_start, _) = PAR_BOUNDS[label]["X"]
     start, end = pl.col("pos").cast(pl.Int64), pl.col("end_pos").cast(pl.Int64)
@@ -426,13 +437,21 @@ def measure_coverage(coverage: Coverage) -> CoverageRatios:
     (ref_bases, ref_median), (x_bases, x_median), (y_bases, y_median) = (
         _weighted_median(histogram.filter(pl.col("region") == name)) for name in ("reference", "x", "y")
     )
-    reference_ok = ref_bases >= MIN_COVERAGE_BASES and bool(ref_median)
+    reference = histogram.filter(pl.col("region") == "reference")
+    even = (
+        float(reference.filter(pl.col("depth_mean").is_between(ref_median / 2, ref_median * 2))["bases"].sum()) / ref_bases
+        if ref_bases and ref_median
+        else None
+    )
+    uneven = even is not None and even < COVERAGE_MIN_EVEN_SHARE
+    reference_ok = ref_bases >= MIN_COVERAGE_BASES and bool(ref_median) and not uneven
 
     def ratio(bases: int, median: float | None) -> float | None:
         return median / ref_median if reference_ok and bases >= MIN_COVERAGE_BASES and median is not None else None
 
     return CoverageRatios(
-        **base, reason=None, reference_bases=ref_bases, reference_median=ref_median, x_bases=x_bases, x_median=x_median,
+        **base, reason="coverage_uneven" if uneven else None, reference_bases=ref_bases, reference_median=ref_median,
+        reference_even_share=even, x_bases=x_bases, x_median=x_median,
         y_bases=y_bases, y_median=y_median, x_ratio=ratio(x_bases, x_median), y_ratio=ratio(y_bases, y_median),
     )
 

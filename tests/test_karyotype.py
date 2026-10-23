@@ -520,6 +520,17 @@ def test_coverage_on_another_or_no_build_is_set_aside(coverage_build: str | None
     assert (found.inferred_karyotypic_sex, found.x_copies, found.y_reason) == (KaryotypicSex.UNKNOWN_KARYOTYPE, XCopies.TWO_OR_MORE, "y_not_shown")
 
 
+def test_uneven_coverage_is_set_aside() -> None:
+    # An exome's shape: chr20 deep on target, shallow off it. Its medians say nothing about copies.
+    even = coverage_facet(30.0, 0.0)
+    exome_like = pl.concat([even.intervals, pl.DataFrame(windows("20", 5_000_001, 300, 2.0), schema=list(COVERAGE_INTERVALS), orient="row").cast(COVERAGE_INTERVALS).lazy()])
+    found = with_coverage(frame(chr20(), XX[0], XX[1]), Coverage(facet=even.facet, intervals=exome_like))
+    assert found.coverage.reason == "coverage_uneven"
+    assert found.coverage.reference_even_share == pytest.approx(0.6)  # the median falls on the shallow 300
+    assert (found.coverage.x_ratio, found.coverage.y_ratio, found.inferred_karyotypic_sex) == (None, None, KaryotypicSex.UNKNOWN_KARYOTYPE)
+    assert with_coverage(frame(chr20(), XX[0], XX[1]), even).coverage.reference_even_share == 1.0
+
+
 def test_coverage_with_too_few_bases_gives_no_ratio() -> None:
     full = coverage_facet(30.0, 0.0)
     kept = (pl.col("chrom") != "Y") | (pl.col("pos") < X_DEGENERATE_SPAN[0] + 50 * COVERAGE_WINDOW)

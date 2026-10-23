@@ -8,7 +8,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   median read depth over non-PAR X and the X-degenerate Y against chr20 is a third X line and a Y line
   that can show a Y absent, so `XX` and `XO` are now named where the lines agree. Without coverage
   nothing changes; the result gains a nullable `coverage` field and two reasons
-  (`coverage_no_build`, `coverage_build_mismatch`).
+  (`coverage_no_build`, `coverage_build_mismatch`, `coverage_uneven` for an exome-shaped depth).
 
 - Coverage as a facet (RM278): `read_coverage` reads mosdepth's per-base, regions, quantized and
   summary outputs and `samtools depth` / `samtools coverage` into a `Coverage` (a `CoverageFacet` and

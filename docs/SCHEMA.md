@@ -1829,6 +1829,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **No version change** (2026-10-23, the audit of 5b6ec3b..01fca0b): no column changes. Rules
+  changed: a lifted facet's `reference` is null ("Lifting", step 5; `LIFT_VERSION` 6); `reference`
+  and a method step's reference and chain options keep a base name only when it is a known
+  reference's, else `<file>`, and a step's `tool` or `version` written as a path is `<path>`
+  (Decision 5); `chip_absence` reads only a `genotype_table` facet as an array; `write_vcf_zarr`
+  writes a PSL-phased row unphased and names the `fileformat` `write_vcf` would. Values change on
+  facets these reach.
+
 - **An enum member, landed in 0.0.17** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
   (`cgi_haplink`), CGI's `hapLink` as a phase set, just-vcf's own term. Adding a member changes the
   `pl.Enum` dtype of `calls.phase_set_kinds` and of `cis_phased_blocks`' `phase_set_kind`, which is a

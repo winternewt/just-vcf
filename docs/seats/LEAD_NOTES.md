@@ -115,3 +115,7 @@ status lines say what exists. Schema at 0.0.4.
   output was never read and nothing left the machine).
 - **Open, not started**: CLI (MVP row 18; not decided), the rest of Part 2 of docs/MVP_READINESS.md (the
   interview).
+- **2026-10-24, the 7-day quota at 100% (resets 23:59 CEST):** no new builders until then. Two runs were
+  left to finish: the consensus calibration builder (rates by confidence band, commit 78d6ede on its branch,
+  its real-data check written) and merge audit 4 over 01fca0b..ad2f185 (report to the scratchpad's
+  audit4.md). `tests/test_facet_gate.py` is gone from main; `tests/test_load_seams.py` is the one guard.

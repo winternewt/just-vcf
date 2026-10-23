@@ -143,7 +143,15 @@ manifests are read at run time from `JUST_VCF_MANIFESTS_DIR`, each once into a p
   against 21 of 2,313 on v5), with hardly a het. REF agrees with Ensembl's GRCh38 REF on long or short
   for all 154 biallelic v3 sites checked, so the reference read is right; whether those sites are ones
   where the reference carries the rare allele or where 23andMe's I/D mean the other way round needs the
-  same person's WGS (left, below).
+  same person's WGS (left, below). **Checked on one v3 person** (2026-10-23, hu0E7AAF, the export's
+  codes resolved with the gate lifted in memory, against the same person's CGI `var` on GRCh37): of
+  171 resolved homozygous sites, the 44 the export reads hom-alt and the 127 it reads hom-ref all lie
+  inside a CGI reference block with no variant within 2 bases. The join does find CGI indels: the
+  export's only 2 resolved het sites both meet a het indel in the `var` (58,864 indel calls on the
+  contigs read); a small control, but not an empty one. So on those probes 23andMe's I/D is the
+  other way round from Illumina's, not a rare reference allele; v3 stays withheld (now with that
+  evidence in `ID_CALIBRATION`), and a per-probe flip waits for more people. v4 is not checked yet:
+  loading one CGI `var` from Krypton took about 25 minutes.
 - **Strand per probe** (`resolve_ref`, mixed facets only): a withheld row is read by its probe's two
   alleles on the plus strand (`SNP` as written for `RefStrand` `+`, complemented for `-`; the GRCh37 base
   at `MapInfo` is in that pair for all but 2 of 20,000 sampled SNV probes of each manifest). Where the
@@ -151,7 +159,9 @@ manifests are read at run time from `JUST_VCF_MANIFESTS_DIR`, each once into a p
   alleles alone. This is not the repair F13 rejected: F13 showed that no strand column predicts which
   probes FTDNA flipped; the pair decides each row whatever the vendor flipped by.
 - **Absence with a cause** (`chip_absence`, `probe_set`, `learn_probe_sets`): `in_export`, `no_call`
-  or `not_on_chip` per asked site, from the chip's own manifest (`illumina:<manifest>`, configured) or a
+  or `not_on_chip` per asked site (a written `--` is `no_call`, not `in_export`: the lead's call,
+  2026-10-23; rejected: a fourth member for a written no-call, since both say the chip looked and saw
+  nothing, and the row is there for a caller who needs to know it was written), from the chip's own manifest (`illumina:<manifest>`, configured) or a
   set learned from its exports. Learned from every loadable 23andMe and AncestryDNA export under PGP-HMS
   (sites carried by at least half of a chip's exports; every file counts, so a participant's copies of
   one upload count more than once):
@@ -178,6 +188,13 @@ Decisions, each with what was rejected:
   chip's own manifest, which resolves nothing on PGP-HMS (no export's chip has its manifest on disk).
   Risk kept: a vendor's probe for a multi-allelic rsid may test another allele than Illumina's; the
   hom-ref share above is the check, and v3/v4's is the open question.
+- I/D codes resolve only on a chip whose calibration passed (`probes.ID_CALIBRATION`, the lead's
+  call 2026-10-23): `23andme_v5` and `ancestrydna_v2`; the rest withheld, counted
+  `id_orientation_unverified`. Rejected: resolving every chip (v3 and v4 would ship a quarter of their
+  homozygous rows possibly backwards), and flipping v3/v4's codes (nothing yet says which way is
+  wrong). An `illumina:` Final Report is withheld too, though its own manifest defines its `I`: no
+  Final Report with I/D rows has been measured, and the catalog matches rsids across every configured
+  manifest, not only the chip's own.
 - A site is located by its flanks, not by `MapInfo`, which is not the anchor (the gap is one base
   before it for 5,594 GSA probes, at or after it for the rest). REF comes from the reference; the
   manifest gives the inserted bases and the locator only.

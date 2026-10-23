@@ -40,13 +40,13 @@ from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_sn
 from just_vcf import cache
 from just_vcf.contig_names import scaffold_names
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
-from just_vcf.probes import IndelSite, Manifest, catalog_digest, indel_catalog, locate_indel, place_indel, snv_catalog, window_for
+from just_vcf.probes import IndelSite, Manifest, catalog_digest, id_calibration, indel_catalog, locate_indel, place_indel, snv_catalog, window_for
 from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, StrandCheck, canonical_chrom, canonical_order, empty
 from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_reason
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 7
+RESOLVE_VERSION = 8
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes."""
 
 CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
@@ -707,6 +707,9 @@ class _Codes:
     manifests: tuple[Manifest, ...]
     absent: str | None
     """Why `catalog` is None, for the warning; None also when the facet has no code rows at all."""
+    unverified: str | None = None
+    """Why the facet's chip has its codes withheld (`ID_CALIBRATION`): its I/D orientation is not
+    verified. None when the chip's calibration passed, or there are no code rows."""
 
     @property
     def digest(self) -> str | None:
@@ -720,6 +723,9 @@ def _code_catalog(loaded: Loaded, facet: dict, label: str | None) -> _Codes:
     code = pl.col("source_ref").is_null() & pl.col("gt_alleles").list.eval(pl.element().is_in(CODES)).list.any()
     if not loaded.calls.select(code.fill_null(False).any()).collect().item():
         return _Codes(None, (), None)
+    calibration = id_calibration(facet["chip"])
+    if not calibration.resolve:
+        return _Codes(None, (), None, unverified=calibration.evidence if facet["chip"] is None else f"{facet['chip']}: {calibration.evidence}")
     if label is None:
         return _Codes(None, (), "the reference's assembly is unknown, so no manifest's build can be matched with it")
     catalog, manifests = indel_catalog(label)
@@ -810,8 +816,10 @@ def _resolve_codes(work: pl.DataFrame, store: ReferenceStore, contig: Contig, co
     `D` the shorter. The row gets `ref`, `alts` (the called alleles other than REF, as for any array
     row), `gt`, `end_pos`, and `gt_alleles` spelled as the sequences; `source_gt` keeps the codes. A row
     whose rsids name no probe or more than one site, or whose site is not located or cannot be spelled
-    at its position, is left as loaded, each reason counted. Returns `work` with the `_split_*` slots
-    filled for the rows resolved here, and their `gt_alleles` replaced.
+    at its position, is left as loaded, each reason counted. A facet whose chip's I/D orientation is
+    not verified (`probes.ID_CALIBRATION`) has every code row left as loaded, counted
+    `id_orientation_unverified`. Returns `work` with the `_split_*` slots filled for the rows resolved
+    here, and their `gt_alleles` replaced.
     """
     is_code = pl.col("source_ref").is_null() & pl.col("gt_alleles").list.eval(pl.element().is_in(CODES)).list.any().fill_null(False)
     only_codes = pl.col("gt_alleles").list.eval(pl.element().is_null() | pl.element().is_in(CODES)).list.all()
@@ -821,7 +829,9 @@ def _resolve_codes(work: pl.DataFrame, store: ReferenceStore, contig: Contig, co
         counts["code_rows"] += rows.height
         counts["code_mixed"] += rows.filter(~pl.col("_only")).height
         rows = rows.filter(pl.col("_only"))
-        if codes is None or codes.catalog is None:
+        if codes is not None and codes.unverified is not None:
+            counts["code_id_orientation_unverified"] += rows.height
+        elif codes is None or codes.catalog is None:
             counts["code_no_manifest"] += rows.height
         elif rows.height:
             probes = codes.catalog.filter(pl.col("chrom") == rows["chrom"][0])
@@ -985,6 +995,12 @@ def _code_warnings(counts: Counter[str], codes: _Codes | None) -> list[str]:
         lines.append(
             f"{counts['code_resolved']} of {counts['code_rows']} array row(s) with an I/D indel code resolved against the indel "
             f"probes of {used}: matched by rsid, the site located by the probe's flanks in the reference, REF read from it"
+        )
+    if counts["code_id_orientation_unverified"]:
+        unverified = codes.unverified if codes is not None else None
+        lines.append(
+            f"{counts['code_id_orientation_unverified']} array row(s) with an I/D indel code left unread "
+            f"(id_orientation_unverified): the chip's I/D orientation against the manifests' probes is not verified; {unverified}"
         )
     if counts["code_no_manifest"]:
         absent = codes.absent if codes is not None and codes.absent else "no manifest was given"

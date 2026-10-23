@@ -126,7 +126,12 @@ same calls. A facet already read is refused rather than read again.
   row), `gt`, `end_pos`, and `gt_alleles` spelled as the two sequences, so `gt` indexes them like any
   row's; `source_gt` keeps the codes. A row whose rsids name more than one located site, or none, is
   left as loaded, each reason counted. Not affected by `strand_check`: `I` and `D` read the same on
-  either strand. `ref_check` stays null.
+  either strand. `ref_check` stays null. **Gated per chip** (`probes.ID_CALIBRATION`): a vendor's `I`
+  is matched with Illumina's by rsid only on a chip where that was measured to hold, the share of
+  resolved homozygous rows that read hom-ref (`23andme_v5` 98.7%, `ancestrydna_v2` 98.4%, PGP-HMS,
+  2026-10-23). Every other chip (`23andme_v3` and `23andme_v4` at 76%, with the same sites hom-alt in
+  every export, and on v3 hom-ref in the same person's CGI genome; `23andme_v1_v2` on 6 rows; an `illumina:` Final Report, a platform family or an unknown
+  chip, never measured) has its code rows left as loaded, counted `id_orientation_unverified`.
 - Left unread, each reason counted once: I/D codes no manifest probe resolves (above), whole
   no-calls (the probe's REF span is unknown), genotypes that could not be split, spans past the
   contig's end or at POS 0, and every row of a contig that could not be matched with the reference
@@ -481,11 +486,14 @@ hom-ref restoration from absence that just-vcf grows must ask it, and refuse a f
 **On an array, an absence has a cause (RM281).** An array's absence stays `unknown`, but
 `chip_absence(loaded, sites)` says why, per asked site (`chrom` canonical, `pos` 1-based), from the
 probe set of the facet's `chip` on its `assembly_label` (`just_vcf.probes.probe_set`):
-`absence_cause` is `in_export` (the export has a row there, a written no-call included), `no_call`
-(the chip has a probe there and the export reports nothing: a no-call it dropped, or a probe left out
-of this release) or `not_on_chip` (no probe there). Null for every site when there is no probe set:
-not an array, chip or assembly unknown, or nothing configured or learned; the answer carries the
-reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
+`absence_cause` is `in_export` (the export has a genotype there: an allele called in any of its rows
+at the site, or a text it could not split), `no_call` (the chip probed the site and the export gives
+no genotype: a no-call it wrote, `--` or AncestryDNA's `0 0`, every allele null; or, from the probe
+set, a site the export has no row at, a no-call it dropped or a probe left out of this release) or
+`not_on_chip` (no probe there). A written no-call is `no_call` with or without a probe set, since the
+row shows the chip looked. The sites with no row get null when there is no probe set (chip or
+assembly unknown, or nothing configured or learned), and every site when the facet is not an array;
+the answer carries the reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
 (`ProbeSetKind`): `manifest`, the chip's own Illumina manifest when a Final Report names it
 (`illumina:<manifest>`) and it is configured (`JUST_VCF_MANIFESTS_DIR`), its probes on that build
 (`Chr 0` probes are unplaced and left out); or `learned`, the positions at least half of the exports
@@ -1728,6 +1736,17 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   and `phasing_method` now filled from the chain's one `phase` step. A new nullable column is a minor
   bump by the rule above; `SCHEMA_VERSION` stays where it is on this builder branch and the lead bumps
   it at merge with the round's other changes. `facet_id` digests none of them.
+
+- **No version change** (2026-10-23, RM281's written no-calls): no column changes, no enum member
+  added. Rule changed (Decision 4): `chip_absence` gives a site the export writes as a no-call
+  (`--`, `0 0`) `no_call`, where it gave `in_export`; `in_export` now means a genotype. Computed on
+  request, so nothing stored changes.
+
+- **No version change** (2026-10-23, RM281's I/D calibration): no column changes. Rule changed
+  (Decision 2): `I`/`D` codes are resolved only on a chip `probes.ID_CALIBRATION` passes
+  (`23andme_v5`, `ancestrydna_v2`); every other chip's code rows stay as loaded, counted
+  `id_orientation_unverified`. Values change on `23andme_v3`, `23andme_v4`, `23andme_v1_v2`, Final
+  Report and unknown-chip facets when the manifests are configured. `RESOLVE_VERSION` 7.
 
 - **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every

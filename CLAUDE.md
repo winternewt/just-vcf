@@ -247,8 +247,10 @@ uv sync --all-extras         # + reference (pysam), liftover (pyliftover), ances
 uv run pytest -vvv           # the suite; -vvv when diagnosing
 ```
 
-There is no CLI entry point yet. When one lands it is Typer, registered in `[project.scripts]`, and
-it loads `.env` via `python-dotenv` at startup before reading configuration. New configurable values
+The CLI is `just-vcf` (`src/just_vcf/cli.py`): Typer, registered in `[project.scripts]`, and it
+loads `.env` via `python-dotenv` at startup before reading configuration. It is a privacy boundary:
+counts and aggregates only, never a row, a sample name or a path, and a library error's own message
+is never printed. Its exit codes are `cli.ExitCode`. New configurable values
 are read from env vars with sensible defaults, documented in `.env.template`, and listed here:
 
 | Variable | Default | Meaning |

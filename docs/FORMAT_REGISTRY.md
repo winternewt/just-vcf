@@ -94,7 +94,7 @@ Format ids are lowercase snake_case and form an open set: ids are added, never r
 
 ## Detection order
 
-39 formats, 31 of them loadable. Detection tries them in this order.
+39 formats, 32 of them loadable. Detection tries them in this order.
 
 | # | Format | Family | Vendor | Kind | Loads |
 |---|---|---|---|---|---|
@@ -106,7 +106,7 @@ Format ids are lowercase snake_case and form an open set: ids are added, never r
 | 6 | [`cgi_var`](#cgi_var) | `callset_native` | Complete Genomics | signature | yes |
 | 7 | [`cgi_master_var`](#cgi_master_var) | `callset_native` | Complete Genomics | signature | yes |
 | 8 | [`cgi_summary`](#cgi_summary) | `metadata` | Complete Genomics | signature | no |
-| 9 | [`nirvana_json`](#nirvana_json) | `annotated_variants` | Illumina | signature | no |
+| 9 | [`nirvana_json`](#nirvana_json) | `annotated_variants` | Illumina | signature | yes |
 | 10 | [`illumina_final_report`](#illumina_final_report) | `genotype_table` | Illumina | signature | yes |
 | 11 | [`illumina_final_report_headerless`](#illumina_final_report_headerless) | `genotype_table` | Illumina | signature | no |
 | 12 | [`get_evidence_gff`](#get_evidence_gff) | `annotated_variants` | PGP GET-Evidence | signature | yes |
@@ -657,7 +657,7 @@ Illumina Annotation Engine (Nirvana) JSON: a header object, then one position ob
 - **Family:** `annotated_variants`
 - **Vendor:** Illumina
 - **Registry position:** 9 of 39, a signature (`just_vcf.formats.other_tables`)
-- **Loads:** no
+- **Loads:** yes, through `just_vcf.loaders.nirvana`
 - **Delimiter:** not delimited text
 - **Comment prefix:** none
 - **Column names:** the file names no columns; they are the ones listed below, in file order
@@ -691,6 +691,7 @@ Illumina Annotation Engine (Nirvana) JSON: a header object, then one position ob
 **From real files**
 
 - Not NDJSON: line 1 is the header object plus `"positions":[`; each following line is one position object ending in `,`; the file closes with `]}`. Stream it line by line, stripping the trailing comma.
+- Other arrays can follow the positions: the PGP-HMS file closes them with `],"omim":[` and 13,343 OMIM entries before `]}`. The positions end at the first line starting with `]`.
 - Schema v4 (Annotation Engine 1.5) headers do not state the assembly. `dataSources[].version` values such as phyloP `hg19` describe the annotation source, not the coordinates; they are not a build hint.
 - Each position carries VCF-style REF/ALT; `variants[]` repeats them trimmed (`refAllele` `-` for an insertion, `begin` shifted by one). Load from the position level, not from `variants[]`.
 - Filtered records are present (`filters` other than PASS, genotypeQuality 0); keep FILTER, do not drop.

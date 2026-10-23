@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Illumina Annotation Engine (Nirvana) JSON loads (`nirvana_json`, RM2, layer 1): each position object
+  is the VCF record it annotated, so rows get `source_ref`, `alts`, `gt`, `phased`, `gq`, `dp`, `ad`,
+  `qual` and `filters`; the annotations are listed in `dropped_fields`. Several samples load one at a
+  time with `sample=`. 32 of 39 declared formats load. No column changes.
+
 - Six more formats load (RM2, layer 1), through the new `loaders.site_tables`: CASAVA SNP and indel
   tables, SOAPsnp consensus rows, FamilyTreeDNA Big Y CSVs, Color's `variant_set.csv` and GET-Evidence genome
   GFFs. Each writes a reference base beside the genotype, so rows get `source_ref`, `alts` and a `gt`

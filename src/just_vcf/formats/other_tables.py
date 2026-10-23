@@ -55,6 +55,8 @@ NIRVANA_JSON = FormatSpec(
     notes=(
         "Not NDJSON: line 1 is the header object plus `\"positions\":[`; each following line is one position "
         "object ending in `,`; the file closes with `]}`. Stream it line by line, stripping the trailing comma.",
+        "Other arrays can follow the positions: the PGP-HMS file closes them with `],\"omim\":[` and 13,343 "
+        "OMIM entries before `]}`. The positions end at the first line starting with `]`.",
         "Schema v4 (Annotation Engine 1.5) headers do not state the assembly. `dataSources[].version` values "
         "such as phyloP `hg19` describe the annotation source, not the coordinates; they are not a build hint.",
         "Each position carries VCF-style REF/ALT; `variants[]` repeats them trimmed (`refAllele` `-` for an "

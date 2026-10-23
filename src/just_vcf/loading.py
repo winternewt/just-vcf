@@ -25,7 +25,7 @@ from just_vcf.cache import cache_dir, file_sha256
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import Family
 from just_vcf.links import APPENDED_EXPORT, CALLER_SPLIT, kin_links
-from just_vcf.loaders import cgi, keyvalue, rsid_table, site_tables, table, vcf
+from just_vcf.loaders import cgi, keyvalue, nirvana, rsid_table, site_tables, table, vcf
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
     BLOCKS,
@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 
 LOADABLE_FORMATS: frozenset[str] = (
     rsid_table.FORMATS | table.FORMATS | vcf.FORMATS | keyvalue.FORMATS | cgi.FORMATS | site_tables.FORMATS
+    | nirvana.FORMATS
 )
 """Format ids `load` can read. Grows as loaders land."""
 
@@ -190,6 +191,8 @@ def _load(source: Path | str | Sniffed, sample: str | None) -> Loaded:
             return _load_cgi(sniffed)
         if sniffed.format in site_tables.FORMATS:
             return _load_site_table(sniffed)
+        if sniffed.format in nirvana.FORMATS:
+            return _load_nirvana(sniffed, sample)
         return _load_rsid_table(sniffed)
 
 
@@ -271,6 +274,57 @@ def _load_site_table(sniffed: Sniffed) -> Loaded:
     for warning in warnings:
         logger.warning("%s: %s", facet_id, warning)
     return Loaded(facets=_facet_frame(facet), calls=calls, blocks=blocks, warnings=tuple(warnings))
+
+
+def _load_nirvana(sniffed: Sniffed, sample: str | None) -> Loaded:
+    """Illumina's Annotation Engine JSON: the VCF records it annotated, one facet per chosen sample."""
+    source_sha256 = file_sha256(sniffed.path)
+    origin = _origin(sniffed, source_sha256)
+    with _work_copy(origin, "nirvana") as work:
+        return _load_nirvana_copy(sniffed, sample, source_sha256, origin, work / "positions.ndjson")
+
+
+def _load_nirvana_copy(sniffed: Sniffed, sample: str | None, source_sha256: str, origin: cache.Origin, copy: Path) -> Loaded:
+    with open_payload(sniffed) as handle:
+        header, head, other = nirvana.copy_positions(handle, copy)
+    index = nirvana.sample_index(header, sample)
+    options = {} if len(nirvana.samples(header)) == 1 else {"sample_index": index}
+    facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options=options)
+    rows = nirvana.calls_rows(nirvana.scan(copy), index)
+    spilled, _, contigs = _spill(facet_id, nirvana.to_calls_frame(rows, facet_id), empty(BLOCKS), origin)
+    counts = nirvana.stats(spilled)
+    warnings = nirvana.warnings_for(counts, other)
+    classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
+    warnings += class_warnings
+    inference = callset.classify(spilled, list(nirvana.READ_EVIDENCE), None)
+    logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
+    kind = inference.callset_type
+    source_chroms = sorted(set(pl.scan_ndjson(copy, schema={"chromosome": pl.String}).select(pl.col("chromosome").unique()).collect()["chromosome"].drop_nulls().to_list()))
+    facet = {
+        "facet_id": facet_id,
+        "source_sha256": source_sha256,
+        "source_path": str(sniffed.path),
+        "member": sniffed.member,
+        "format_id": sniffed.format,
+        "family": sniffed.family.value if sniffed.family else None,
+        "vendor": get_spec(sniffed.format).vendor,
+        "sample": nirvana.samples(header)[index],
+        "assembly_label": sniffed.build,
+        "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
+        "callset_type": kind.value if kind else None,
+        "absence_means": callset.absence_means(kind, False).value,
+        **classes,
+        "contig_map": contig_map(source_chroms),
+        "dropped_fields": nirvana.dropped_fields(head),
+    }
+    for warning in warnings:
+        logger.warning("%s: %s", facet_id, warning)
+    return Loaded(
+        facets=_facet_frame(facet),
+        calls=canonical_order_per_contig(spilled, contigs),
+        blocks=empty(BLOCKS),
+        warnings=tuple(warnings),
+    )
 
 
 def _load_keyvalue(sniffed: Sniffed) -> Loaded:

@@ -242,7 +242,8 @@ Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; on 2026-10-22 the vendor-table loader, the VCF `source` detector and the VCF dialects `bcf`, `vcf_no_meta`, `vcf_cgi` and `vcf_freebayes_varscan2`, then the `freebayes_varscan2_keyvalue` table and CGI's native `var` and `masterVarBeta`: 25 of the 39 declared formats load, the 9 rsid-table layouts, `vcf` and its four dialects, the key=value table, CGI `var` and `masterVarBeta`, AncestryDNA, FTDNA (both exports), the RSID/RESULT table (MyHeritage), Color, deCODEme, Genos and the Illumina Final Report with plus-strand alleles; Geno 2.0 and Final Reports without positions or plus-strand alleles wait for chip manifests) · Owner: lead
 
 **Shipped 2026-10-23: the site tables** (`loaders/site_tables.py`): CASAVA SNP and indel tables,
-SOAPsnp, Big Y, Color's variant set and GET-Evidence GFFs, 31 of 39 formats now. What still does not load, and why, is
+SOAPsnp, Big Y, Color's variant set and GET-Evidence GFFs; then Nirvana JSON (`loaders/nirvana.py`),
+32 of 39 formats now. What still does not load, and why, is
 in docs/FORMATS.md ("Not loadable yet"); the `oxford_gen` chromosome question waits for the
 person. Builder's choices, each with what was rejected:
 

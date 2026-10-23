@@ -68,6 +68,7 @@ it is registered too late or detects too loosely.
 | `loaders.keyvalue` | `freebayes_varscan2_keyvalue`: one facet per caller (SCHEMA Decision 8) |
 | `loaders.cgi` | `cgi_var`, `cgi_master_var`: Complete Genomics loci into calls and blocks |
 | `loaders.site_tables` | `casava_snp_table`, `casava_indel_table`, `soapsnp_cns`, `ftdna_bigy`, `color_variant_set`, `get_evidence_gff`: tables that state REF at each site |
+| `loaders.nirvana` | `nirvana_json`: the VCF records Illumina's Annotation Engine annotated, one facet per sample |
 
 `loaders.table` reads each file through its spec: the column names from the file (matched against the
 spec's names and aliases, case-insensitively), the delimiter, the coordinate convention and the no-call
@@ -121,6 +122,15 @@ that has `source_ref` and no build (a VCF without lengths or a build hint is ref
 inferring the build from the rows would make `ref_check` confirm the comparison that chose it). Nor
 does any name its caller; `caller` stays null.
 
+`loaders.nirvana` reads a Nirvana JSON's position objects (the lines between the header line, which
+opens `"positions":[`, and the first line starting with `]`; an OMIM or gene section after them holds
+no calls) through an NDJSON working copy, as VCF rows: `refAllele` and `altAlleles` are `source_ref` and
+`alts` (`[]` where a reference record has none), the chosen sample's `genotype` is the GT text, with
+`genotypeQuality`, `totalDepth` and `alleleDepths` as `gq`, `dp` and `ad` (only with one depth per
+allele). The trimmed `variants[]` and every annotation key are listed in `dropped_fields`. A schema-v4
+header names no assembly and no contig lengths, so the build stays unknown. A file of several samples
+loads one at a time (`load(path, sample=…)`).
+
 Not loadable yet, each for a reason the file gives:
 
 - Geno 2.0 (`genographic_geno2`, its headerless variant) and the headerless Final Report name markers
@@ -130,7 +140,6 @@ Not loadable yet, each for a reason the file gives:
 - `oxford_gen` (Gencove) states no chromosome in any field defined to hold one: the member name says
   it, and typed rows repeat it in a column the Oxford format defines as the input's SNP id. A decision
   for the person (layer 1); until then `load` refuses it.
-- `nirvana_json`: loadable from what it states (VCF-shaped position objects), not built yet.
 
 Not facets: `cgi_summary` and `decodeme_info` hold no calls. A CGI summary's coverage fractions and
 called sex are genome-wide figures about the `var` file beside it (provenance of that facet, layer 2),

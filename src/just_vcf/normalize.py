@@ -52,6 +52,7 @@ import polars as pl
 
 from just_vcf import cache
 from just_vcf.liftover import RELATION as LIFT_RELATION
+from just_vcf.links import NORMALIZED, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore
 from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, RefCheck, SplitSignal, canonical_chrom, canonical_order, empty
@@ -61,7 +62,7 @@ logger = logging.getLogger(__name__)
 NORMALIZE_VERSION = 5
 """Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits."""
 
-RELATION = "normalized"
+RELATION = NORMALIZED
 """The derived facet's `relation`."""
 
 REREADS_REF: frozenset[str] = frozenset({LIFT_RELATION})
@@ -141,6 +142,7 @@ def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = 
         facets=facets,
         calls=pl.scan_parquet(parts) if parts else empty(CALLS),
         blocks=loaded.blocks.with_columns(pl.lit(facet_id).alias("facet_id")),
+        links=derived_links(loaded.links, facet["facet_id"], facet_id, RELATION, step="normalize", step_version=str(NORMALIZE_VERSION)),
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )

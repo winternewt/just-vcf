@@ -1,4 +1,4 @@
-"""The frames every loader emits: `facets`, `calls` and `blocks` (docs/SCHEMA.md).
+"""The frames every loader emits: `facets`, `calls` and `blocks`, and the `links` between facets (docs/SCHEMA.md).
 
 This module is the contract in code: column names, dtypes, the closed vocabularies, contig naming
 (SCHEMA.md Decision 7) and the canonical row order (Decision 11). It does no I/O. A test compares the
@@ -260,6 +260,18 @@ BLOCKS = pl.Schema(
     }
 )
 """Reference and no-call intervals, for formats that have them (SCHEMA.md Decision 4)."""
+
+_DERIVATION_INPUTS = pl.List(pl.Struct({"role": pl.String, "name": pl.String, "sha256": pl.String}))
+
+LINKS = pl.Schema(
+    {
+        "from_facet_id": pl.String,
+        "to_facet_id": pl.String,
+        "relation": pl.String,
+        "provenance": pl.Struct({"step": pl.String, "step_version": pl.String, "derivation_inputs": _DERIVATION_INPUTS}),
+    }
+)
+"""One row per link between two facets: the facet graph's edges (SCHEMA.md Decision 12, `just_vcf.links`)."""
 
 
 # Contig names (Decision 7). Every accepted spelling is listed; nothing is stripped by pattern, so

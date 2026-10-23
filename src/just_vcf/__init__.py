@@ -6,6 +6,7 @@ from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
 from just_vcf.callset import absence_is_reference
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
+from just_vcf.links import link_disagreements
 from just_vcf.loading import (
     LOADABLE_FORMATS,
     DamagedBgzfError,
@@ -25,6 +26,7 @@ from just_vcf.schema import (
     BLOCKS,
     CALLS,
     FACETS,
+    LINKS,
     SCHEMA_VERSION,
     AbsenceMeans,
     AssemblyLabelBasis,
@@ -50,6 +52,7 @@ __all__ = [
     "BLOCKS",
     "CALLS",
     "FACETS",
+    "LINKS",
     "LOADABLE_FORMATS",
     "SCHEMA_VERSION",
     "AbsenceMeans",
@@ -91,6 +94,7 @@ __all__ = [
     "absence_is_reference",
     "clear_cache",
     "liftover",
+    "link_disagreements",
     "load",
     "mint_vrs_ids",
     "normalize",

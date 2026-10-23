@@ -469,7 +469,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | null unless stated |
-| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`, `appended_export`). `appended_export`, like `caller_split`, has no parent: a second export appended to a file after the first, in another layout (F3), loaded as its own facet beside the first's; `derived_from` stays null, since neither export was made from the other, and the two share `source_sha256` and `member` (below, "Two exports in one file") |
+| `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`, `appended_export`). `appended_export`, like `caller_split`, has no parent: a second export appended to a file after the first, in another layout (F3), loaded as its own facet beside the first's; `derived_from` stays null, since neither export was made from the other, and the two share `source_sha256` and `member` (below, "Two exports in one file"). A facet with several parents (`merge`) has `derived_from` null and its parents in `links` (Decision 12), which also links a caller split's facets and an appended export to the first; Decision 12 states how the two agree |
 | `contig_map` | `list[struct{source, chrom}]`: how this file's contig names were mapped (Decision 7) |
 | `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
 | `vcf_version` | from `##fileformat`. It decides how `GP` is scaled (Decision 3) |
@@ -927,6 +927,77 @@ follows the seqcol order when it is known. Otherwise it is `1`–`22`, `X`, `Y`,
 names sorted as strings. Nulls sort last. Every loader gets a test that loads a shuffled input and
 compares it with the sorted one.
 
+## Decision 12: the `links` frame (charter 5, RM275)
+
+The facet graph's edges are a fourth lazy frame, `Loaded.links`, one row per link between two facets.
+`facets.derived_from` holds one parent; a merge or a consensus has several, and two facets read from one
+source are related without either being made from the other. The person chose a small links frame
+over a list column on `facets` (2026-10-23, E4). just-vcf's own shape (charter 2), except for the
+relation terms GA4GH defines.
+
+| Column | Meaning |
+|---|---|
+| `from_facet_id` (required) | the facet the link starts at: for lineage, the facet the step read |
+| `to_facet_id` (required) | the facet it ends at: for lineage, the facet the step made |
+| `relation` (required) | one of the relations below. An open vocabulary (`pl.String`); `just_vcf.links.RELATIONS` lists the documented values |
+| `provenance` | `struct{step, step_version, derivation_inputs}`: the public function that made the link (`load`, `rejoin_split`, `normalize`, `liftover`), the version of its rule as a string (the `REJOIN_VERSION`, `NORMALIZE_VERSION` or `LIFT_VERSION` its `facet_id` digests; null for `load`, which has no versioned rule and digests none), and the files this step read besides its parent and its reference collection, in `facets.derivation_inputs`' shape (a liftover's chain; `[]` when it read none) |
+
+**Direction.** A lineage link points from the parent to the facet made from it, as Cat-VRS reads
+`liftover_to`: from the defining allele to the one related to it (the term verbatim, charter 2). So
+`facets.derived_from = P` on facet `C` is the link `P → C` with `C`'s relation.
+
+**Relations.**
+
+| Relation | Kind | Written by | Meaning |
+|---|---|---|---|
+| `liftover_to` | lineage | `liftover` | Cat-VRS's term, verbatim: `to` is `from` lifted to another assembly |
+| `normalized` | lineage | `normalize` | just-vcf's: `to` is `from` split, left-aligned, trimmed and deduplicated |
+| `split_rejoined` | lineage | `rejoin_split` | just-vcf's: `to` is `from` with its pre-split sites joined again |
+| `merge` | lineage, several parents | none yet | just-vcf's: `to` was made from every `from` linked to it (a merge, a consensus) |
+| `caller_split` | kin | `load` | just-vcf's: two facets split by caller from one merge (Decision 8), the merge itself no facet |
+| `appended_export` | kin | `load` | just-vcf's: `to` is the export appended to a file after `from` (Decision 8, "Two exports in one file") |
+
+GA4GH defines no term for the others; Cat-VRS's relations relate alleles across assemblies and
+molecules (`liftover_to`, `transcribed_to`, `translated_to`), and only the first fits a facet.
+
+**Kin links.** A caller split's facets are linked in every pair, from the lower `facet_id` to the
+higher: the merge they came from is not a facet (Decision 8, option A), so there is no hub to link
+them to. An appended export is linked from the first export to the appended one, file order. Neither
+is lineage: `derived_from` stays null on both ends.
+
+**How `links` and `facets` agree** (`just_vcf.links.link_disagreements`, tested on every step):
+
+- `derived_from` set: exactly one lineage link ends at the facet, from `derived_from`, with the
+  facet's `relation`;
+- `derived_from` null and `relation = merge`: two or more `merge` links end at the facet;
+- `derived_from` null and a kin `relation`: no lineage link ends at the facet, and a link of that
+  relation names it;
+- both null: no lineage link ends at the facet.
+
+`facets.derivation_inputs` and a link's `provenance.derivation_inputs` differ by design: the facet's
+is carried from parent to child (a facet normalized after a liftover still names the chain), the
+link's names the files that one step read.
+
+**What a `Loaded` holds.** A plain load: no links, except the kin links of a load that returns two
+facets or more. A derived step returns its parent's links and the one it adds, so a facet three steps
+from its file still says how each step got there when only the last `Loaded` is kept; its links can
+name facets its own `facets` frame does not hold. `resolve_ref` and `mint_vrs_ids` keep the facet's
+`facet_id` and pass its links through. Links are sorted by `from_facet_id`, `to_facet_id`, `relation`,
+each key once (charter 12).
+
+Rejected:
+
+- a `parents: list[str]` column on `facets`: one row per facet cannot carry a provenance per parent,
+  and a kin pair would be written twice;
+- links only into the facets of the `Loaded` at hand: a chain `load → normalize → liftover` would lose
+  its first step's link the moment the middle `Loaded` is dropped;
+- a kin link from a star's hub: a caller split's merge is no facet, and inventing one would be the
+  option Decision 8 rejected;
+- the reference collection in `provenance.derivation_inputs`: it is a seqcol digest, not a file, and
+  the `to` facet's `ref_seqcol_digest` already names it;
+- just-vcf's own package version in `provenance`: a new release would change the links of facets
+  whose `facet_id` it does not change.
+
 ## Other VCF 4.5 points the loaders have to respect
 
 None of these changes a column. Each is a rule a loader follows, and each gets a test.
@@ -1083,6 +1154,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **No version change** (2026-10-23, RM275, the `links` frame): a fourth frame, `Loaded.links`
+  (Decision 12), and no column of `facets`, `calls` or `blocks` changes. `SCHEMA_VERSION` is not
+  bumped here: the lead bumps it when merging. Rules added: every derived step adds a lineage link and
+  carries its parent's; a load of several facets links them (`caller_split`, `appended_export`);
+  `link_disagreements` states how `links` agrees with `derived_from` and `relation`.
+
 - **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
   (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from
   its rows, where it was null. `absence_means` stays `blocks`. Values change on files that already
@@ -1229,7 +1306,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 ## At a glance
 
 - Three frames: `facets` (one row per facet), `calls` (one row per site per facet), `blocks` (reference
-  and no-call intervals, for formats that have them).
+  and no-call intervals, for formats that have them). A fourth, `links`, holds the facet graph's edges
+  (from, to, relation, provenance), so a facet can have several parents (Decision 12).
 - Coordinates: `pos` and `end_pos` are 1-based and inclusive. VRS objects keep 0-based interbase coordinates
   internally, and nothing else does.
 - REF: `ref` only from the assembly sequence; `source_ref` is what the file wrote; `ref_check` compares

@@ -51,9 +51,6 @@ SELECTION_INFO = ("SF",)
 """INFO keys read only to select a part's rows. The structural copy made for a refused header keeps
 them, or the retry could not split the file."""
 
-CALLER_SPLIT = "caller_split"
-"""The just-vcf relation of a facet that holds one caller's rows of a file merging several callers."""
-
 _MERGE_CALLERS = {"FB": "freeBayes", "VS": "VarScan2"}
 """The caller tokens PGP's pipeline puts in the merged inputs' names (`chr1.FB.vcf.gz`), as the
 merge's `##sourceFiles` line records them."""

@@ -9,9 +9,9 @@ usable for one person's facets, and say what they rest on.
 | # | Layer | Estimate | Rests on |
 |---|---|---|---|
 | 1 | Reading facets in | 80% | 25 of 39 formats, SV/CNV, PSL phase sets, BCF stated builds; remaining formats being swung at; F1 and F17 blocked |
-| 2 | Provenance per facet | 75% | as before plus scaffold aliases; the method chain (aligner, post-processing) is being built; coverage building |
+| 2 | Provenance per facet | 82% | caller, version, vendor, callset type, chip, content filter, ploidy lines, subject, derivation inputs, scaffold aliases; coverage facets (RM278); the method chain (aligner, post-processing) is being built |
 | 3 | Identity (comparing facets) | 92% | REF, VRS, assembly inference incl. GRCh36/CHM13, scaffold aliases (F19: a PGP GRCh38 VCF reads 100%); `_fix` patches need a patch store |
-| 4 | A person | 65% | subject, Person with links, the durable store; relatedness (default check) building |
+| 4 | A person | 85% | subject; Person with links and relatedness as its default check (KING-robust, 210 PGP pairs, no false call); the durable store; pedigree as data; somalier blocked (below) |
 | 5 | Agreement measured | 15% | concordance building; atlas and posterior wait for it |
 | 6 | Facet graph and liftover | 90% | links frame, liftover, normalize, rejoin_split |
 | 7 | Graded evidence across sources | 30% | values carried as written; calibration waits for the atlas |
@@ -39,4 +39,7 @@ meanwhile. The desk carries the ones filed there.
   withholds every such block as `phase_unknown`. Built as the first; reversible (SCHEMA Decision 2).
 - **Layer 3, open:** lifting onto GRCh38 `_fix`/`_alt` patch scaffolds needs a store holding patches (an
   NCBI or UCSC full analysis set). Meanwhile 40,099 HG002 rows stay `target_contig_unmatched`.
+- **Layer 4, TRUST.md:** the somalier binary has no row in docs/TRUST.md, so the wrapper (`just_vcf.somalier`)
+  has never been run; only the person sets a source's standing. Meanwhile relatedness uses just-vcf's own
+  KING-robust estimate, which is the default check.
 - **Tooling, open:** ruff as a dev dependency (about 200 findings in the tree).

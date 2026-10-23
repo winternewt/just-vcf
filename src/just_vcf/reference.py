@@ -17,9 +17,10 @@ Before any base is read the reference has to be shown to be the facet's assembly
 one that did not (arrays) by its assembly label against the label the reference's own lengths give.
 An array that states no label either has one inferred from its rows against each collection first
 (F9, `just_vcf.assembly.infer_assembly_from_rows`), or is refused with the scores.
-A primary contig of another length means another assembly, and the whole facet is refused
-(`ReferenceMismatchError`); any other contig that cannot be shown to match is left unresolved, with
-its rows counted in the warnings. Nothing falls back to an unchecked read.
+An autosome of another length or md5 means another assembly, and the whole facet is refused
+(`ReferenceMismatchError`). Any other contig that cannot be shown to match is left unresolved, with
+its rows counted in the warnings: X, Y and MT among them, where assemblies of one build legitimately
+differ (F20). Nothing falls back to an unchecked read.
 
 Coordinates: `pos` is 1-based; the store takes 0-based half-open ranges. `_span` is the one place
 that converts between them (charter 13).
@@ -46,7 +47,7 @@ from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_rea
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 8
+RESOLVE_VERSION = 9
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes."""
 
 CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
@@ -68,7 +69,15 @@ CHR1_LENGTHS: dict[int, str] = {247_249_719: "GRCh36", 249_250_621: "GRCh37", 24
 """Contig 1's length per assembly, the fingerprint that names a reference's assembly. Domain constants."""
 
 PRIMARY: frozenset[str] = frozenset([str(n) for n in range(1, 23)] + ["X", "Y"])
-"""Contigs whose length differing from the reference means another assembly, not another contig."""
+"""The primary chromosomes. `concordance` and `liftover` take one of these whose sequence differs as
+another assembly; `resolve_ref` takes only an autosome so (`AUTOSOMES`)."""
+
+AUTOSOMES: frozenset[str] = frozenset(str(n) for n in range(1, 23))
+"""Contigs whose stated length or md5 differing from the reference means another assembly, so
+`resolve_ref` refuses the facet. X, Y and MT are not among them: assemblies of one build differ there
+legitimately (a PAR N-masked in one release and not in another; Complete Genomics' GRCh37 chrY has
+another md5 than Ensembl's, F20; rCRS against the Yoruba MT), so a mismatch there leaves that contig
+unread and the matching contigs are read."""
 
 LABEL_UNVERIFIABLE: dict[str, frozenset[str]] = {
     "GRCh36": frozenset({"MT"}),
@@ -121,6 +130,9 @@ class ContigCheck(str, Enum):
 
 
 _READABLE = frozenset({ContigCheck.LENGTH, ContigCheck.LABEL})
+
+_MISMATCHES = frozenset({ContigCheck.LENGTH_MISMATCH, ContigCheck.MD5_MISMATCH})
+"""Checks whose warning names each contig with its own row count and what was stated against the reference."""
 
 
 @dataclass(frozen=True)
@@ -294,8 +306,9 @@ def resolve_ref(
     `not_run`), each reason counted once in the warnings.
 
     Raises `ReferenceMismatchError` when no collection can be shown to be the facet's assembly, when
-    a primary contig's stated length or md5 disagrees with the reference, or when more than one
-    collection fits equally and `collection` does not choose.
+    an autosome's stated length or md5 disagrees with the reference, or when more than one collection
+    fits equally and `collection` does not choose. A stated X, Y or MT that disagrees leaves its rows
+    unread, counted per contig in the warnings (F20).
     """
     versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "RESOLVE_VERSION": RESOLVE_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
     cache.sweep_stale(cache.RESOLVE_SPILL, versions)
@@ -475,13 +488,14 @@ def _plan(store: ReferenceStore, digest: str, facet: dict, rows_per_chrom: dict[
             md5s = {entry["md5"].lower() for entry in stated[chrom] if entry["md5"]}
             if lengths != {contig.length}:
                 checks[chrom] = ContigCheck.LENGTH_MISMATCH
-                detail[chrom] = f"stated {', '.join(map(str, sorted(lengths)))}, reference {contig.length}"
+                detail[chrom] = f"length stated {', '.join(map(str, sorted(lengths)))}, reference {contig.length}"
             elif md5s and md5s != {contig.md5}:
                 checks[chrom] = ContigCheck.MD5_MISMATCH
+                detail[chrom] = f"md5 stated {', '.join(sorted(md5s))}, reference {contig.md5}"
             else:
                 checks[chrom] = ContigCheck.LENGTH
-            if checks[chrom] is not ContigCheck.LENGTH and chrom in PRIMARY and refusal is None:
-                refusal = f"contig {chrom}: {checks[chrom].value} ({detail.get(chrom, 'md5 differs')}), so the reference is another assembly"
+            if checks[chrom] is not ContigCheck.LENGTH and chrom in AUTOSOMES and refusal is None:
+                refusal = f"contig {chrom}: {checks[chrom].value} ({detail[chrom]}), so the reference is another assembly"
         elif facet_label is not None and label is not None and facet_label == label:
             unverifiable = chrom in LABEL_UNVERIFIABLE.get(label, frozenset())
             checks[chrom] = ContigCheck.LABEL_UNVERIFIABLE if unverifiable else ContigCheck.LABEL
@@ -537,7 +551,11 @@ def _contig_warnings(plan: _Plan, rows_per_chrom: dict[str, int]) -> list[str]:
         if not names:
             continue
         rows = sum(rows_per_chrom[name] for name in names)
-        shown = ", ".join(f"{name} ({plan.detail[name]})" if name in plan.detail else name for name in names[:10])
+        per_contig = check in _MISMATCHES
+        shown = ", ".join(
+            f"{name} ({rows_per_chrom[name]} rows; {plan.detail[name]})" if per_contig else f"{name} ({plan.detail[name]})" if name in plan.detail else name
+            for name in names[:10]
+        )
         more = f" and {len(names) - 10} more" if len(names) > 10 else ""
         lines.append(f"{rows} row(s) left with REF unread, on {explain[check]}: {shown}{more}")
     aliased = sorted(

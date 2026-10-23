@@ -3,6 +3,35 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F20 — A CGI vcfBeta's chrY md5 refuses the whole facet
+
+Severity: medium · Found 2026-10-23 by RM279 (the method-error atlas) comparing PGP-HMS CGI vcfBeta
+facets against freeBayes.
+
+`resolve_ref` refused a facet when any primary contig (1–22, X, Y) stated a length or md5 the
+reference does not have. Checked with the library on the smallest PGP-HMS vcfBeta against the shared
+store: the header states 25 contigs (1–22, X, Y, M), every autosome, X and M agree with Ensembl
+GRCh37 in length and md5, and Y agrees in length (59,373,566) but not in md5. So the whole facet was
+refused: no `ref`, no `ref_check`, no VRS ids, and the atlas compared the CGI pairs by label only
+(docs/METHOD_ATLAS.md). Assemblies of one build legitimately differ on X, Y and MT (PAR masking in an
+analysis set, rCRS against the Yoruba mitochondrion); an autosome of another sequence is another
+assembly.
+
+Resolved 2026-10-23 by the lead's rule: only an autosome whose stated length or md5 differs refuses
+the facet. A differing X, Y or MT leaves that contig's rows unread (`ref` null, `ref_check`
+`not_run`), and every matching contig is read; the warning names each mismatching contig with its
+row count and the stated against the reference length or md5. A facet with nothing else to read is
+still refused. Measured with the library on the same vcfBeta: 4,166,235 rows, 4,163,187 read (99.93%),
+every one `match`; the 3,048 Y rows stay `not_run`, X (90,020) and MT (36) are read in full, and
+`mint_vrs_ids` then mints 8,316,880 allele ids. `RESOLVE_VERSION` 9.
+
+Rejected: dropping Y from the refusal only (X carries the same PAR, and a masked analysis set
+differs there too); matching Y by length alone when the md5 differs (the md5 is the evidence that the
+bases differ, and reading them would check CGI's REF against a sequence it did not use); changing
+`PRIMARY`, which `concordance` and `liftover` read for their own rules. Code: `reference.AUTOSOMES`,
+`reference._plan`, `reference._contig_warnings`; tests in `tests/test_reference.py`
+(`test_a_sex_chromosome_that_differs_is_left_unread_when_the_autosomes_match` and the two beside it).
+
 ## F19 — UCSC scaffold names do not meet Ensembl's
 
 Severity: medium · Found twice on 2026-10-22/23: by RM3 (`resolve_ref` on PGP-HMS GRCh38 VCFs) and by

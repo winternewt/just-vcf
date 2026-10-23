@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref` refuses a facet only when an autosome's stated length or md5 differs from the
+  reference (F20). A differing X, Y or MT leaves that contig's rows unread (`ref` null, `ref_check`
+  `not_run`) and the matching contigs are read; the warning names each mismatching contig with its
+  row count and the stated against the reference value. A PGP-HMS CGI vcfBeta, refused before over its
+  chrY md5, now gets 99.93% of its rows read, every one matching. `RESOLVE_VERSION` 9; `SCHEMA_VERSION`
+  unchanged. `concordance` across two collections and `liftover` keep their own rule, which refuses on
+  a differing X or Y too.
+
 - Schema 0.0.18: `facets.gl_source` says whether `gl` was read from PL or GL; `genotype_evidence` reports it
   on rows graded `gl`.
 

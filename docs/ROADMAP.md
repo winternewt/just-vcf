@@ -532,7 +532,9 @@ reference-supported positions.
   comes from its contig 1 length (the just-prs fingerprint idea), or a label the caller asserts when
   adding a FASTA, which its lengths must not contradict. Rejected: matching by label alone (hg19 and
   GRCh37 share it and differ on MT), and refusing a facet over any one unmatched contig (an hg19 VCF
-  would lose every autosome over chrM).
+  would lose every autosome over chrM). Since 2026-10-23 (F20) only an autosome that differs refuses
+  the facet; a differing X or Y is left unread like MT, because CGI's vcfBeta states a GRCh37 chrY of
+  the right length and another md5, and refusing on it cost every CGI facet its REF check and VRS ids.
 - **Array ALTs sorted by allele string**, not in genotype order, so two exports of one chip agree.
 - **A store holding several collections** picks the one matching the most rows; a tie is refused
   unless `collection=` names one.

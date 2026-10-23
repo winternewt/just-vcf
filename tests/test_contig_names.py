@@ -208,7 +208,7 @@ def test_a_stated_length_that_is_not_the_reports_leaves_the_scaffold_unread(tmp_
     assert resolved.calls.collect()["ref"].null_count() == len(records) - 1
     assert any(
         line.startswith(f"{len(records) - 1} row(s) left with REF unread")
-        and f"chrUn_KI270394v1 (stated {len(SMALL_SEQ) + 1}, reference {len(SMALL_SEQ)})" in line
+        and f"chrUn_KI270394v1 ({len(records) - 1} rows; length stated {len(SMALL_SEQ) + 1}, reference {len(SMALL_SEQ)})" in line
         for line in resolved.warnings
     )
 

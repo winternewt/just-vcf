@@ -1988,6 +1988,8 @@ source states about a site, and these say how the consensus came about. Rejected
 which every other facet would carry null and which would bump `SCHEMA_VERSION`; and the
 per-facet readings as rows, which copy the parents' calls into a second place.
 
+The first check on a public genome is docs/CONSENSUS.md.
+
 Rejected: a winner per site (charter 8); a joint posterior over a site's union of alleles, which the
 parents' allele lists do not share and which no other just-vcf measurement uses; multiplying GP as a
 likelihood by default (Decision 3: a posterior already holds its source's prior, which would count

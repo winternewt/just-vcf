@@ -109,7 +109,7 @@ Severity: medium · Status: in progress (`method_atlas` and a first atlas over e
 The person chose GIAB stratifications as regions (E8): error and discordance rates by caller and region from multi-facet PGP-HMS people (docs/LIVE_SAMPLES.md). Needs RM277.
 
 ## RM280 — A consensus posterior
-Severity: low · Status: in progress (`consensus` and `method_error_rates` shipped 2026-10-23, docs/SCHEMA.md "A consensus posterior"; left: the person's calls on per-method attribution, GP reading and the default rate; a population prior) · Owner: lead
+Severity: low · Status: in progress (`consensus` and `method_error_rates` shipped 2026-10-23, docs/SCHEMA.md "A consensus posterior", checked on PGP-HMS in docs/CONSENSUS.md; left: rates by the facet's own confidence (the check is underconfident above 10 phred); the person's calls on per-method attribution, GP reading and the default rate; a population prior) · Owner: lead
 
 The person chose after the atlas (E7): a per-site posterior across one person's facets as a derived facet, with RM279's rates as priors; never before them.
 

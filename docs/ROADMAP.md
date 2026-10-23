@@ -77,9 +77,61 @@ Severity: low · Status: open (decided by the person in the Part 2 interview, 20
 The person chose this repo (E14): the declared formats and the broken shapes (F1–F17) documented as a readable spec in docs/ with synthetic examples; no genome data.
 
 ## RM286 — T2T-CHM13
-Severity: low · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: low · Status: built 2026-10-23 except the karyotype calibration (below) · Owner: lead
 
 The person chose after GRCh37/38 (E10): CHM13 in the reference store, the assembly table, liftover chains and the sex-chromosome regions.
+
+**Built 2026-10-23.** Most of the assembly side was already there: `ASSEMBLY_LENGTHS` and
+`CHR1_LENGTHS` carried T2T-CHM13 v2.0's lengths, so a `chr1`… header was labelled and a store could
+name a CHM13 collection. Added:
+
+- T2T-CHM13v2.0's GenBank (`CP068277.2`…) and RefSeq (`NC_060925.1`…) accessions map to canonical
+  `chrom` (`schema.CHM13_ACCESSIONS`, from the NCBI assembly report carried in `assets/`), so an
+  accession-named header is labelled too. VCF build hints state T2T-CHM13 from `chm13`, `t2t`, `hs1`
+  and the assembly accession. The `T2T-CHM13` label cannot vouch for MT: `chm13v2.0.fa` carries the
+  CHM13 mitochondrion, the analysis set's `_maskedY_rCRS` variant rCRS, both 16,569 bases.
+- `PAR_BOUNDS` and `X_DEGENERATE_Y` for T2T-CHM13 (docs/PROVENANCE.md). A T2T facet's sex chromosomes
+  are grouped and measured; the estimate answers `uncalibrated_build`.
+- A store with all three assemblies, built as a new directory from the public FASTAs:
+  `/data/just-dna-cache/reference/store-chm13` (T2T-CHM13 `YsDEAoUZA7_uLIT_YwqS3SUWV03NtbOY`, GRCh38
+  `oLfPx0NOBKKXMIngGeQ4YewtU4Ge_wKz`, GRCh37 `fOP7cqLAXIU31eAMrGsK0WN_Htp__AcH`; the last two equal
+  `store`'s). UCSC's `hg38ToHs1` and `hs1ToHg38` chains are in `/data/just-dna-cache/liftover/`.
+  `tests/test_chm13.py` runs against them with `JUST_VCF_TEST_REFERENCE_DIR=…/store-chm13` and
+  `JUST_VCF_TEST_CHAIN_DIR=/data/just-dna-cache/liftover` (about 2.5 minutes), and skips otherwise.
+
+Decisions, each with what was rejected:
+
+- The CHM13 X-degenerate Y is the T2T consortium's `X-DEG` class less GIAB's XTR and PAR. Rejected:
+  GIAB's nonPAR minus XTR as for GRCh37/38. GIAB's CHM13 set has no ampliconic file, and on a gapless Y
+  that difference keeps the ampliconic, heterochromatic, centromeric and satellite classes.
+- T2T-CHM13 is measured but not estimated (`uncalibrated_build`). Rejected: the GRCh37/38 bands
+  applied unmeasured; its Y region set differs and no T2T genome was among the calibration files.
+- Accessions are matched with their versions, verbatim. Rejected: version-insensitive matching, which
+  would let a later accession version (another sequence) pass as this one.
+- Opt-in tests skip on a store without a T2T collection, through the existing
+  `JUST_VCF_TEST_REFERENCE_DIR`. Rejected: a second store variable.
+
+**Dogfood, 2026-10-23: GIAB's HG002 Q100 v5.0q small-variant benchmark on CHM13v2.0** (public;
+docs/PROVENANCE.md), with the library only. Load: 5,829,374 rows, labelled `T2T-CHM13` (inferred from
+its `chr1`… lengths; the file states no build), `wgs`. `resolve_ref` against store-chm13: 5,829,374 of
+5,829,374 match. Sex-chromosome evidence: `uncalibrated_build`; the file could not have been
+estimated anyway, since dipcall writes non-PAR X and Y haploid (119,112 and 430 rows, all one allele)
+and no DP. Lifted to GRCh38 through `hs1ToHg38`: 4,502,840 lifted (1,644,705 with REF and an ALT
+swapped, 85,844 on minus-strand blocks), and not lifted: 917,871 `no_chain_block`, 167,650
+`allele_not_sequence` (`*`), 142,505 `split_across_blocks`, 75,001 `target_contig_unmatched`, 23,507
+`ref_mismatch_after_lift`.
+
+The 75,001 are a finding: 34,178 of the chain's 856,832 blocks target UCSC's scaffold names
+(`chr1_KI270706v1_random`, `chrUn_…`, and `_fix` patches), which the Ensembl GRCh38 primary assembly
+names `KI270706.1` or does not hold (patches). The rows are counted, not lost silently, but they cannot
+lift onto an Ensembl-named GRCh38 store. A UCSC↔GenBank scaffold alias table would fix the first kind.
+
+**Left:**
+- Calibrating the karyotype thresholds on T2T callsets of known karyotype with FORMAT DP (the HG002
+  benchmark has none); then `ESTIMATE_BUILDS` takes T2T-CHM13.
+- GRCh37's and GRCh38's accessions (`NC_000001.11`, `CM000663.2`…) are not aliased yet, and UCSC
+  scaffold names do not meet Ensembl's (above).
+- Making store-chm13 the default test store, or adding CHM13 to `store`, is the lead's call.
 
 ## RM1 — Final shape and plan
 Severity: blocker · Status: charter drafted, not signed · Owner: user

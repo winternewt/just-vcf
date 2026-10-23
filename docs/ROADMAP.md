@@ -241,6 +241,21 @@ Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 ## RM2 — Loading consumer formats
 Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; on 2026-10-22 the vendor-table loader, the VCF `source` detector and the VCF dialects `bcf`, `vcf_no_meta`, `vcf_cgi` and `vcf_freebayes_varscan2`, then the `freebayes_varscan2_keyvalue` table and CGI's native `var` and `masterVarBeta`: 25 of the 39 declared formats load, the 9 rsid-table layouts, `vcf` and its four dialects, the key=value table, CGI `var` and `masterVarBeta`, AncestryDNA, FTDNA (both exports), the RSID/RESULT table (MyHeritage), Color, deCODEme, Genos and the Illumina Final Report with plus-strand alleles; Geno 2.0 and Final Reports without positions or plus-strand alleles wait for chip manifests) · Owner: lead
 
+**Shipped 2026-10-23: the site tables** (`loaders/site_tables.py`): CASAVA SNP and indel tables,
+SOAPsnp, Big Y, Color's variant set and GET-Evidence GFFs, 31 of 39 formats now. What still does not load, and why, is
+in docs/FORMATS.md ("Not loadable yet"); the `oxford_gen` chromosome question waits for the
+person. Builder's choices, each with what was rejected:
+
+- A one-letter call is one `gt_alleles` entry (CASAVA `Diff`, a plain SOAPsnp base, GET-Evidence
+  `alleles G`). Rejected: doubling it to a homozygous pair, which asserts a diploid call on male X and
+  Y, where the same files write one letter too; the ploidy is the karyotype work's.
+- CASAVA `dp` is `Total Bases`, and `ad` the base counts of `[source_ref] + alts` (the four counts sum
+  to `Bases Used`). Rejected: `dp = Bases Used`, which is the filtered depth GATK calls the AD sum.
+- `Sample Name` is not `facets.sample`: it is free text, in real files a person's name, not a sample
+  column. Rejected: carrying it as the identifying sample, which the spec says to drop.
+- No build is inferred for CASAVA, SOAPsnp or Big Y, and `caller` stays null for all five: neither is
+  stated. Rejected: CASAVA or SOAPsnp as the caller from the layout, which the file does not name.
+
 **Shipped:** content-based detection. `just_vcf.sniff` and the declarative registry in
 `just_vcf.formats` (docs/FORMATS.md). Over the PGP-HMS participants, 8 of about 1,740 files stay unknown,
 all prose or empty.

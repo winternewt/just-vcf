@@ -67,6 +67,7 @@ it is registered too late or detects too loosely.
 | `loaders.table` | `ancestrydna`, `ftdna`, `ftdna_space`, `rsid_result_csv`, `color_genotypes`, `decodeme`, `genos`, `illumina_final_report` |
 | `loaders.keyvalue` | `freebayes_varscan2_keyvalue`: one facet per caller (SCHEMA Decision 8) |
 | `loaders.cgi` | `cgi_var`, `cgi_master_var`: Complete Genomics loci into calls and blocks |
+| `loaders.site_tables` | `casava_snp_table`, `casava_indel_table`, `soapsnp_cns`, `ftdna_bigy`, `color_variant_set`, `get_evidence_gff`: tables that state REF at each site |
 
 `loaders.table` reads each file through its spec: the column names from the file (matched against the
 spec's names and aliases, case-insensitively), the delimiter, the coordinate convention and the no-call
@@ -87,9 +88,54 @@ since neither file's slot order is a phase and `phased` stays null. The facet's 
 blocks make `absence_means = blocks`. A whole PGP-HMS `var` (18.9M rows, bz2) loads in about 3.5
 minutes with a peak of 8.9 GB: the haplotype rows are sorted and grouped in memory.
 
-Not loadable yet: the other tables. Geno 2.0
-(`genographic_geno2`, its headerless variant) and the headerless Final Report name markers without
-positions, so their rows cannot be `calls` rows until a chip manifest places them.
+`loaders.site_tables` reads the tables that write a reference base beside each genotype, as a VCF
+does: `source_ref` is the stated base, `alts` the called alleles other than it (sorted by string, since
+none of these formats orders them), and `gt` indexes `[source_ref] + alts` at load time; `ref` still
+waits for `resolve_ref`. `gt_alleles` has one entry per allele the file names, so a one-letter call
+(CASAVA's `Diff`, a plain SOAPsnp base, a GET-Evidence `alleles G`, every Big Y row) is one entry: the
+list length is what the file wrote, not a ploidy (SCHEMA Decision 2). Per format:
+
+- CASAVA SNP tables: `ad` from the four base counts over `[source_ref] + alts`, `dp` from `Total Bases`;
+  `Call Type` is checked against `Call` and `Ref Base`, not carried. `Sample Name` (free text, a
+  person's name in real files) is never read into a frame. The rows hold SNVs only, so the facet's
+  `content_filter` is `snv_only` from the rows.
+- CASAVA indel tables: `ref/indel` is the reference span over the called allele with `-` padding; the
+  dashes are dropped, so a deletion's ALT or an insertion's REF is the empty allele `""`. `pos` is the
+  span's first base, or for an insertion the base after the insertion point, which therefore sits at
+  `pos - 1` with `end_pos` null (the Genos and CGI rule). Measured on the one PGP-HMS table against
+  NCBI36: `ref_upstream` ends before `pos`, and the deleted bases and `ref_downstream` follow, on every
+  sampled row. `max_gtype` gives `gt`, `Q(max_gtype)` `gq`, `Q(indel)` `qual`, `ref_reads` and
+  `indel_reads` `ad`.
+- SOAPsnp: the IUPAC consensus is the base or the pair it names (sorted); the consensus quality is `gq`,
+  depth `dp`. Three-base codes stay unread. A depth-0 row keeps `dp = 0`.
+- Big Y: every row is chrY (the file names no chromosome, so `contig_map` is `[]`); Known SNP rows have
+  no position and are dropped with a count; `?` is `[null]`.
+- Color's variant set: `Zygosity` gives `gt` (`[0, 1]` or `[1, 1]` over `[Ref, Alt]`); the table ends at
+  its disclaimer; the build comes from `ReferenceVersion` (`GRCh37.p12` reads `GRCh37`).
+- GET-Evidence GFF: a `REF` row is a one-site `ref` block, so the facet's `absence_means` is `blocks`
+  (reference only where a block says so). A row with `ref_allele` is indexed as above; the build-36
+  layout states no REF, so its rows are array-shaped (`gt_alleles` only) until `resolve_ref`.
+
+None of these states a build except GET-Evidence and Color, and `resolve_ref` reads no REF for a facet
+that has `source_ref` and no build (a VCF without lengths or a build hint is refused the same way:
+inferring the build from the rows would make `ref_check` confirm the comparison that chose it). Nor
+does any name its caller; `caller` stays null.
+
+Not loadable yet, each for a reason the file gives:
+
+- Geno 2.0 (`genographic_geno2`, its headerless variant) and the headerless Final Report name markers
+  without positions, so their rows cannot be `calls` rows until a chip manifest places them.
+- `promethease_tab_genotype` is a report on the sites SNPedia knows: no chromosome, no position, and
+  genotypes oriented as SNPedia orients the site, which may be the minus strand.
+- `oxford_gen` (Gencove) states no chromosome in any field defined to hold one: the member name says
+  it, and typed rows repeat it in a column the Oxford format defines as the input's SNP id. A decision
+  for the person (layer 1); until then `load` refuses it.
+- `nirvana_json`: loadable from what it states (VCF-shaped position objects), not built yet.
+
+Not facets: `cgi_summary` and `decodeme_info` hold no calls. A CGI summary's coverage fractions and
+called sex are genome-wide figures about the `var` file beside it (provenance of that facet, layer 2),
+not positions a facet could hold; deCODEme's info member states its sibling's build, which the
+deCODEme loader already reads.
 
 ## Contract gaps the loader step starts from
 

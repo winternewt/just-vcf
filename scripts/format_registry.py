@@ -31,6 +31,7 @@ from just_vcf.formats.spec import Coordinates, Family, FormatSpec, HeaderMode
 from just_vcf.loaders import cgi as cgi_loader
 from just_vcf.loaders import keyvalue as keyvalue_loader
 from just_vcf.loaders import rsid_table as rsid_table_loader
+from just_vcf.loaders import site_tables as site_tables_loader
 from just_vcf.loaders import table as table_loader
 from just_vcf.loaders import vcf as vcf_loader
 from just_vcf.sniff import (
@@ -82,6 +83,7 @@ LOADERS: tuple[tuple[str, frozenset[str]], ...] = (
     ("just_vcf.loaders.table", table_loader.FORMATS),
     ("just_vcf.loaders.keyvalue", keyvalue_loader.FORMATS),
     ("just_vcf.loaders.cgi", cgi_loader.FORMATS),
+    ("just_vcf.loaders.site_tables", site_tables_loader.FORMATS),
 )
 
 MODULES = (vcf, cgi, other_tables, vendor_csv, rsid_tables)

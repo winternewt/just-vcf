@@ -25,7 +25,7 @@ from just_vcf.cache import cache_dir, file_sha256
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import Family
 from just_vcf.links import APPENDED_EXPORT, CALLER_SPLIT, kin_links
-from just_vcf.loaders import cgi, keyvalue, rsid_table, table, vcf
+from just_vcf.loaders import cgi, keyvalue, rsid_table, site_tables, table, vcf
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
     BLOCKS,
@@ -47,7 +47,9 @@ from just_vcf.source import detect_source
 
 logger = logging.getLogger(__name__)
 
-LOADABLE_FORMATS: frozenset[str] = rsid_table.FORMATS | table.FORMATS | vcf.FORMATS | keyvalue.FORMATS | cgi.FORMATS
+LOADABLE_FORMATS: frozenset[str] = (
+    rsid_table.FORMATS | table.FORMATS | vcf.FORMATS | keyvalue.FORMATS | cgi.FORMATS | site_tables.FORMATS
+)
 """Format ids `load` can read. Grows as loaders land."""
 
 SPILL_ROW_GROUP = 200_000
@@ -186,6 +188,8 @@ def _load(source: Path | str | Sniffed, sample: str | None) -> Loaded:
             return _load_keyvalue(sniffed)
         if sniffed.format in cgi.FORMATS:
             return _load_cgi(sniffed)
+        if sniffed.format in site_tables.FORMATS:
+            return _load_site_table(sniffed)
         return _load_rsid_table(sniffed)
 
 
@@ -223,6 +227,50 @@ def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:
     options = {} if read.sample_index is None else {"sample_index": read.sample_index}
     extra = {"sample": read.sample, "dropped_fields": read.dropped_columns, **_chip(sniffed.format, data, read.calls, read.warnings)}
     return _array_loaded(sniffed, _array_facet(sniffed, read.calls, build=build, options=options, extra=extra), read.warnings)
+
+
+def _load_site_table(sniffed: Sniffed) -> Loaded:
+    """A table that states REF at each site (CASAVA, SOAPsnp, GET-Evidence, Big Y, Color's variant set):
+    one facet, its calls, and the reference sites it states as blocks."""
+    spec = site_tables.spec_for(sniffed.format)
+    with open_payload(sniffed) as handle:
+        data = handle.read()
+    read = site_tables.read_site_table(data, spec)
+    source_sha256 = file_sha256(sniffed.path)
+    facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={})
+    calls = canonical_order(site_tables.to_calls_frame(read.calls, facet_id))
+    blocks = empty(BLOCKS) if read.blocks is None else canonical_order(site_tables.to_blocks_frame(read.blocks, facet_id))
+    warnings = list(read.warnings)
+    # Rows with no source_ref (GET-Evidence's build-36 layout) are genotype-table rows: no classes counted.
+    if read.calls["source_ref"].is_not_null().any():
+        classes, class_warnings = _variant_classes(facet_id, calls, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
+        warnings += class_warnings
+    else:
+        classes = {}
+    inference = callset.classify(calls, read.read_evidence, None)
+    logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
+    kind = inference.callset_type
+    build = read.build or sniffed.build
+    facet = {
+        "facet_id": facet_id,
+        "source_sha256": source_sha256,
+        "source_path": str(sniffed.path),
+        "member": sniffed.member,
+        "format_id": sniffed.format,
+        "family": sniffed.family.value if sniffed.family else None,
+        "vendor": get_spec(sniffed.format).vendor,
+        "sample": read.sample,
+        "assembly_label": build,
+        "assembly_label_basis": AssemblyLabelBasis.STATED.value if build else None,
+        "callset_type": kind.value if kind else None,
+        "absence_means": callset.absence_means(kind, read.blocks is not None).value,
+        **classes,
+        "contig_map": contig_map(read.calls["source_chrom"].drop_nulls().unique().to_list()),
+        "dropped_fields": read.dropped_columns,
+    }
+    for warning in warnings:
+        logger.warning("%s: %s", facet_id, warning)
+    return Loaded(facets=_facet_frame(facet), calls=calls, blocks=blocks, warnings=tuple(warnings))
 
 
 def _load_keyvalue(sniffed: Sniffed) -> Loaded:

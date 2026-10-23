@@ -21,7 +21,9 @@ What is written:
   `variant_quality`, `filter_id` (`PASS` first) and `variant_filter`;
 - `sample_id`, `call_genotype` (`-1` an uncalled haplotype, `-2` past the row's ploidy) and
   `call_genotype_phased` (true where every separator after the first slot is `|`, as `write_vcf`
-  writes GT; false on a row phased by a CGI hapLink, which has no field here);
+  writes GT; false on a row phased by a CGI hapLink or with a slot in a VCF 4.5 PSL phase set,
+  neither of which has a field here: the spec's phase is one flag per call, read as PS's set or the
+  chromosome's implicit one, so `true` would put the row in the wrong set);
 - the FORMAT fields any row has: `call_GQ`, `call_DP`, `call_AD`, `call_GL`, `call_GP`, `call_DS`,
   `call_PS` (PS-kind phase sets, as integers), `call_FT`, `call_CN`; and the INFO fields any row has:
   `variant_SVTYPE`, `variant_JUST_VCF_SPLIT`. `call_AD`, `call_GL` and `call_GP` are written only
@@ -30,7 +32,8 @@ What is written:
 Missing values are the spec's: `-1` for integers, the NaN `0x7F800001` for floats, `"."` for
 strings; padding is `-2`, the NaN `0x7F800002` and `""`. The root's attributes name the facet
 (`facet_id`, `source_sha256`, `format_id`, `derived_from`, the schema version) and never its
-`source_path`. Fields not written (`cipos`, `ciend`, `alt_copy_numbers`, `dropped_fields`) are counted
+`source_path`; `vcf_meta_information` gives the `fileformat` `write_vcf` would write for the facet
+(VCF 4.5 where a row holds a PSL phase set, else 4.3). Fields not written (`cipos`, `ciend`, `alt_copy_numbers`, `dropped_fields`) are counted
 in a warning where a row has them.
 """
 
@@ -56,8 +59,11 @@ from just_vcf.writing import (
     ContigNames,
     UnsortedRowsError,
     UnwritableRowsError,
+    VCF_VERSION,
+    VCF_VERSION_PSL,
     _contig_names,
     _has_haplink,
+    _has_psl,
     _Names,
     _ps_text,
     _unwritable,
@@ -143,6 +149,8 @@ def write_vcf_zarr(
     counts = calls.select(
         *[(pl.col("_unwritable") == reason).sum().alias(reason) for reason in _UNWRITABLE_REASONS],
         *[pl.col(name).list.len().fill_null(0).gt(0).sum().alias(f"n_{name}") for name in ("cipos", "ciend", "alt_copy_numbers")],
+        # As `write_vcf` decides its header: over every row, written or not.
+        _has_psl().any().alias("v45"),
     ).collect().row(0, named=True)
     skipped = {reason: counts[reason] for reason in _UNWRITABLE_REASONS if counts[reason]}
     if skipped and not resolved_only:
@@ -175,11 +183,15 @@ def write_vcf_zarr(
     haplinked = rows.filter(pl.col("_haplink")).height
     if haplinked:
         warnings.append(f"{haplinked} row(s) phased by a CGI hapLink, which VCF Zarr has no field for; written unphased")
+    in_psl = rows.filter(pl.col("_psl")).height
+    if in_psl:
+        warnings.append(f"{in_psl} row(s) with a slot in a VCF 4.5 PSL phase set, which VCF Zarr has no field for; written unphased")
 
     partial = path.with_name(path.name + ".partial")
     shutil.rmtree(partial, ignore_errors=True)
     try:
-        written = _write_store(partial, rows, facet, sample_name, names, contig_index, block_count, variants_chunk_size)
+        fileformat = VCF_VERSION_PSL if counts["v45"] else VCF_VERSION
+        written = _write_store(partial, rows, facet, sample_name, names, contig_index, block_count, variants_chunk_size, fileformat)
     except BaseException:
         shutil.rmtree(partial, ignore_errors=True)
         raise
@@ -200,6 +212,7 @@ def _columns() -> list[pl.Expr]:
     """What the export reads from each row."""
     indexable = _vectors_indexable()
     phased = pl.col("phased").list.slice(1)
+    unphaseable = _has_haplink() | _has_psl()
     return [
         pl.col("chrom"),
         pl.col("pos"),
@@ -209,13 +222,15 @@ def _columns() -> list[pl.Expr]:
         pl.col("qual"),
         pl.col("filters"),
         pl.col("gt"),
-        # A row phased by a CGI hapLink is written unphased, as `write_vcf` writes it: no PS says which
-        # set, so `true` would put it in the chromosome's implicit one.
-        (~_has_haplink() & phased.list.len().fill_null(0).gt(0) & phased.list.eval(pl.element().fill_null(False)).list.all()).alias("_phased"),
-        (~_has_haplink() & phased.list.eval(pl.element().fill_null(False)).list.any() & ~phased.list.eval(pl.element().fill_null(False)).list.all())
+        # A row phased by a CGI hapLink, or with a slot in a PSL set, is written unphased: no PS says
+        # which set, so `true` would put it in the chromosome's implicit one. `write_vcf` writes the
+        # hapLink's slots `/` and the PSL ones with PSL, which VCF Zarr has no array for.
+        (~unphaseable & phased.list.len().fill_null(0).gt(0) & phased.list.eval(pl.element().fill_null(False)).list.all()).alias("_phased"),
+        (~unphaseable & phased.list.eval(pl.element().fill_null(False)).list.any() & ~phased.list.eval(pl.element().fill_null(False)).list.all())
         .fill_null(False)
         .alias("_mixed_phase"),
         _has_haplink().alias("_haplink"),
+        (_has_psl() & ~_has_haplink()).alias("_psl"),
         pl.col("gq"),
         pl.col("dp"),
         pl.when(indexable).then(pl.col("ad")).alias("_AD"),
@@ -260,6 +275,7 @@ def _write_store(
     contig_index: dict[str, int],
     block_count: int,
     chunk: int,
+    fileformat: str,
 ) -> list[str]:
     """Every array of the store under `root`; returns their names."""
     root.mkdir(parents=True)
@@ -269,7 +285,7 @@ def _write_store(
         {
             "vcf_zarr_version": VCF_ZARR_VERSION,
             "source": f"just-vcf-{version('just-vcf')}",
-            "vcf_meta_information": [["fileformat", "VCFv4.3"]],
+            "vcf_meta_information": [["fileformat", fileformat]],
             "just_vcf": {
                 "schema_version": SCHEMA_VERSION,
                 "facet_id": facet["facet_id"],

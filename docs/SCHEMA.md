@@ -1676,7 +1676,9 @@ beside it and renamed into place.
   span), `variant_allele` (REF then ALTs), `variant_id` with `variant_id_mask`, `variant_quality`,
   `filter_id` (`PASS` first, then the others sorted) and `variant_filter`; `sample_id`,
   `call_genotype` and `call_genotype_phased` (true where every separator after the first slot is
-  `|`, as `write_vcf` writes GT); and, where any row has them, `call_GQ`, `call_DP`, `call_AD`,
+  `|`, as `write_vcf` writes GT; false, counted in a warning, on a row phased by a CGI hapLink or with
+  a slot in a VCF 4.5 PSL set: the spec has one phase flag per call, read as PS's set or the
+  chromosome's implicit one, and no field for either, so `true` would put the row in the wrong set); and, where any row has them, `call_GQ`, `call_DP`, `call_AD`,
   `call_GL`, `call_GP`, `call_DS`, `call_PS` (PS-kind sets as integers), `call_FT`, `call_CN`,
   `variant_SVTYPE` and `variant_JUST_VCF_SPLIT`. AD, GL and GP are written only where they are
   indexed over the written REF and ALTs. `cipos`, `ciend` and `alt_copy_numbers` are not written yet,
@@ -1685,7 +1687,8 @@ beside it and renamed into place.
   `0x7F800002` for floats, `"."` and `""` for strings. The last chunk is padded whole, as Zarr v2
   stores it. polars-bio hands the integer sentinels back as they are.
 - **The root's attributes** name the facet (`facet_id`, `source_sha256`, `format_id`,
-  `derived_from`, the schema version), never its `source_path`.
+  `derived_from`, the schema version), never its `source_path`. `vcf_meta_information` gives the
+  `fileformat` `write_vcf` would write for the facet: VCF 4.5 where a row holds a PSL set, else 4.3.
 - **Written with the standard library alone**: JSON metadata, `vlen-utf8` strings, `gzip` chunks
   with no timestamp. So it needs no extra, and two writes of one frame give the same bytes (charter
   12). polars-bio's reader takes `gzip` or no compressor and refuses `zlib` (checked 2026-10-23).

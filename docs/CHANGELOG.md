@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf_zarr` writes a row with a slot in a VCF 4.5 PSL phase set unphased, counted in a
+  warning, as it does a hapLink's: VCF Zarr has one phase flag per call and no PSL, so `true` put the
+  row in the chromosome's implicit set. The store's `fileformat` follows `write_vcf` (VCF 4.5 where a
+  row holds a PSL set) instead of always saying 4.3.
+
 - Schema 0.0.17: `phase_set_kinds` gains `cgi_haplink`; CGI hapLinks load as phase sets, and masterVarBeta read
   counts fill `ad`.
 

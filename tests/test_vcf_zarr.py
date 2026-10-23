@@ -20,7 +20,7 @@ from just_vcf.loading import Loaded
 from just_vcf.vcf_zarr import write_vcf_zarr
 from test_load_cgi import LINKED, master_var_text
 from test_load_cgi import write as write_cgi
-from test_write_vcf import RICH, RICH_FORMAT, loaded_from
+from test_write_vcf import RICH, RICH_FORMAT, loaded_from, psl_loaded
 
 GVCF = [
     "1\t100\t.\tG\t<NON_REF>\t.\t.\tEND=113\tGT:GQ:MIN_DP:PL\t0/0:60:23:0,60,900",
@@ -202,3 +202,34 @@ def test_a_cgi_hap_link_is_written_unphased(tmp_path: Path) -> None:
     assert linked > 0 and back.height == loaded.calls.select(pl.len()).collect().item()
     assert not phased.any()
     assert f"{linked} row(s) phased by a CGI hapLink, which VCF Zarr has no field for; written unphased" in written.warnings
+
+
+def test_a_psl_phase_set_is_written_unphased_under_the_header_write_vcf_writes(tmp_path: Path) -> None:
+    """VCF Zarr has one phase flag per call and no PSL: as for a hapLink, a row with a slot in a PSL
+    set is written unphased, since `true` would put it in the chromosome's implicit set. A PS row
+    beside it keeps its phase and its set. The store's `fileformat` is the one `write_vcf` writes."""
+    loaded = psl_loaded(tmp_path)
+    calls = loaded.calls.collect()
+    in_psl = calls["phase_set_kinds"].list.contains("psl").fill_null(False)
+    written = write_vcf_zarr(loaded, tmp_path / "out.vcz")
+    back = read_back(written.path)
+    phased = back.select(pl.col("genotypes").struct.unnest()).get_column("GT_phased").list.first()
+    expected = [
+        not psl and len(row["gt"]) > 1 and all(bool(p) for p in row["phased"][1:])
+        for psl, row in zip(in_psl.to_list(), calls.iter_rows(named=True))
+    ]
+    assert in_psl.sum() > 0 and any(expected), "the fixture has PSL rows and a phased PS row"
+    assert phased.to_list() == expected
+    assert f"{in_psl.sum()} row(s) with a slot in a VCF 4.5 PSL phase set, which VCF Zarr has no field for; written unphased" in written.warnings
+    vcf_header = gzip.decompress(write_vcf(loaded, tmp_path / "out.vcf.gz").path.read_bytes()).decode().splitlines()[0]
+    attrs = json.loads((written.path / ".zattrs").read_text())
+    assert ["fileformat", vcf_header.removeprefix("##fileformat=")] in attrs["vcf_meta_information"]
+    assert vcf_header == "##fileformat=VCFv4.5"
+
+
+def test_a_facet_without_psl_says_vcf_43_as_write_vcf_does(tmp_path: Path) -> None:
+    loaded = loaded_from(tmp_path, RICH, fmt=RICH_FORMAT)
+    written = write_vcf_zarr(loaded, tmp_path / "out.vcz")
+    attrs = json.loads((written.path / ".zattrs").read_text())
+    vcf_header = gzip.decompress(write_vcf(loaded, tmp_path / "out.vcf.gz", resolved_only=True).path.read_bytes()).decode().splitlines()[0]
+    assert attrs["vcf_meta_information"] == [["fileformat", vcf_header.removeprefix("##fileformat=")]]

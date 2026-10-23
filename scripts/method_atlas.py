@@ -44,7 +44,7 @@ def main(
     out: Annotated[Path, typer.Option(help="Output stem")] = Path("data/output/method_atlas"),
     contigs: Annotated[list[str] | None, typer.Option(help="Compare only these contigs (canonical names)")] = None,
 ) -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s", force=True)
     spec = json.loads(plan.read_text())
     store = ReferenceStore.open(Path(spec["reference"]))
     out.parent.mkdir(parents=True, exist_ok=True)

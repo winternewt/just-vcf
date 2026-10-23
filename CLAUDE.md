@@ -261,6 +261,7 @@ are read from env vars with sensible defaults, documented in `.env.template`, an
 |---|---|---|
 | `JUST_VCF_SAMPLES_DIR` | unset | directory of real genomes for opt-in tests and dogfooding; tests skip without it |
 | `JUST_VCF_CACHE_DIR` | platform user cache (`platformdirs`) | rewritten copies of VCFs polars-bio cannot read as they are, and the parquet spills the lazy frames read, each with a manifest; `clear_cache` removes them (RM268); tests point it at `tmp_path` |
+| `JUST_VCF_CACHE_GRACE_DAYS` | `7` | days an entry an older just-vcf version wrote is kept after its last use before the stale-version sweep removes it, since an older session or application sharing the cache may still read it; `0` sweeps at once; anything but a non-negative number is refused |
 | `JUST_VCF_REFERENCE_DIR` | `reference/` under the cache dir | the gtars refget store `resolve_ref` reads REF from; a FASTA given to it is added there once |
 | `JUST_VCF_ANCESTRY_DIR` | unset | directory of ancestry reference panels (docs/ANCESTRY_PANELS.md) for the opt-in panel tests; they skip without it. The library itself takes a panel path as an argument |
 | `JUST_VCF_MANIFESTS_DIR` | unset | directory holding Illumina's manifest zips (docs/PROVENANCE.md). `resolve_ref` reads their indel probes to resolve an array's `I`/`D` codes (RM281, `just_vcf.probes`), each read once into the cache's `probes/`; unset, those rows stay unread, with a warning. The opt-in test that re-derives the packaged chip marker sample reads them too, and skips without them |

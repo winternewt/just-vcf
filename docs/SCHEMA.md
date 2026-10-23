@@ -1604,9 +1604,23 @@ frame stops working when its files go.
   the entry lacks counts as behind (the entry predates the key). An entry with any key ahead, a key
   the running version does not know, or a value that is not a number is a newer install's, or may
   be: kept. Two installs of different versions share the platform user cache, and the older one must
-  not remove the newer one's live spills; the newer one retires the older one's. No current frame
-  reads an old version, so this is safe. Rejected: sweeping every version other than the running
-  one, which made two installs delete each other's spills on every load.
+  not remove the newer one's live spills; the newer one retires the older one's. Rejected: sweeping
+  every version other than the running one, which made two installs delete each other's spills on
+  every load.
+- The older install may still be running, with frames over its entries: two sessions on one cache
+  dir at two `SCHEMA_VERSION`s hit this on 2026-10-23, when the newer one's sweep removed a generation
+  the older one's live frame read and its next `collect` failed (`FileNotFoundError` on
+  `calls-00000.parquet`). So an older entry goes only when (a) no process holds its lock, and (b) its
+  `last_used` is older than the grace period, `JUST_VCF_CACHE_GRACE_DAYS` (7 days unset; `0` sweeps
+  at once, as before; a value that is not a non-negative number is refused, not defaulted). Both are
+  judged again under the entry's lock, so a step that ran between the sweep's scan and its removal
+  keeps its entry. A step that writes or reuses a generation moves `last_used` (installs from before
+  this rule too), so a frame stays safe for the grace period after its step last ran. Nothing marks a
+  `collect`: a frame kept open longer than that, whose step never ran again, can still lose its
+  files. An entry with no manifest takes the newest modification time in it as its last use. The
+  sweep logs how many older entries it kept, and `CacheClearReport.recently_used` lists them. A
+  writer that starts waiting on the lock while the sweep holds it finds the lock file gone and writes
+  the entry afresh.
   An entry with no manifest predates the index: removed only by that sweep, where its name shows an old
   version or where it must be old (a `vcf/` entry, below `REWRITE_VERSION` 7; a `keyvalue/` or `cgi/`
   one, from before those copies were indexed).

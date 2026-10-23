@@ -148,13 +148,31 @@ def legacy_entry(directory: str, name: str, size: int = 500) -> Path:
     return entry
 
 
+PAST_GRACE = cache.GRACE_DAYS + 1
+"""Days back `aged` puts an entry by default: past the default grace period."""
+
+
+def aged(entry: Path, days: float = PAST_GRACE) -> Path:
+    """`entry` as if nothing had used it for `days`: its manifest's `created` and `last_used` moved
+    back, and for an entry with no manifest, every modification time in it."""
+    then = cache._now() - timedelta(days=days)
+    manifest_path = entry.parent / f"{entry.name}.json"
+    if manifest_path.is_file():
+        manifest = cache.CacheEntry.model_validate_json(manifest_path.read_bytes())
+        cache._write_manifest(manifest_path, manifest.model_copy(update={"created": then, "last_used": then}))
+    else:
+        for path in [*entry.rglob("*"), entry]:
+            os.utime(path, (then.timestamp(), then.timestamp()))
+    return entry
+
+
 def test_load_sweeps_the_versions_it_owns_and_nothing_else(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     root = cache.cache_dir()
-    stale_copy = write_entry("vcf", "a" * 32, cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION - 1})
-    unindexed_copy = legacy_entry("vcf", "b" * 32)
-    stale_spill = legacy_entry("frames", f"{'c' * 32}-0.0.1")
-    stale_rejoin = write_entry("frames", f"{'d' * 32}-{SCHEMA_VERSION}", cache.REJOIN_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": 0})
-    stale_resolve = legacy_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}-ref-SQ_ab-c-{RESOLVE_VERSION - 1}")
+    stale_copy = aged(write_entry("vcf", "a" * 32, cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION - 1}))
+    unindexed_copy = aged(legacy_entry("vcf", "b" * 32))
+    stale_spill = aged(legacy_entry("frames", f"{'c' * 32}-0.0.1"))
+    stale_rejoin = aged(write_entry("frames", f"{'d' * 32}-{SCHEMA_VERSION}", cache.REJOIN_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": 0}))
+    stale_resolve = aged(legacy_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}-ref-SQ_ab-c-{RESOLVE_VERSION - 1}"))
     current_unindexed = legacy_entry("frames", f"{'f' * 32}-{SCHEMA_VERSION}")
     not_an_entry = legacy_entry("frames", "notes")
     reference = legacy_entry("reference", "collections")
@@ -182,16 +200,82 @@ def _schema_ahead() -> str:
 def test_the_sweep_removes_older_versions_and_keeps_a_newer_installs_entries(tmp_path: Path) -> None:
     """Two installs of different versions share the user cache: the older one's sweep never removes
     what the newer one wrote, and the newer one's still retires the older one's."""
-    older_copy = write_entry("vcf", "a" * 32, cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION - 1})
-    newer_copy = write_entry("vcf", "b" * 32, cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION + 1})
-    older_layout = write_entry("frames", f"{'c' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT - 1})
-    before_layout = write_entry("frames", f"{'d' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION})
-    newer_schema = write_entry("frames", f"{'e' * 32}-{_schema_ahead()}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": _schema_ahead(), "SPILL_LAYOUT": cache.SPILL_LAYOUT})
-    newer_layout = write_entry("frames", f"{'f' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT + 1})
-    newer_key = write_entry("frames", f"{'9' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT, "FRAMES_VERSION": 1})
+    # Every one of them unused for longer than the grace period, so only its version decides.
+    older_copy = aged(write_entry("vcf", "a" * 32, cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION - 1}))
+    newer_copy = aged(write_entry("vcf", "b" * 32, cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION + 1}))
+    older_layout = aged(write_entry("frames", f"{'c' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT - 1}))
+    before_layout = aged(write_entry("frames", f"{'d' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION}))
+    newer_schema = aged(write_entry("frames", f"{'e' * 32}-{_schema_ahead()}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": _schema_ahead(), "SPILL_LAYOUT": cache.SPILL_LAYOUT}))
+    newer_layout = aged(write_entry("frames", f"{'f' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT + 1}))
+    newer_key = aged(write_entry("frames", f"{'9' * 32}-{SCHEMA_VERSION}", cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT, "FRAMES_VERSION": 1}))
     load(vcf_zip(tmp_path, "one"))
     assert not older_copy.exists() and not older_layout.exists() and not before_layout.exists()
     assert newer_copy.exists() and newer_schema.exists() and newer_layout.exists() and newer_key.exists()
+
+
+def test_an_older_entry_used_within_the_grace_period_is_kept(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """An older install sharing the cache may still read its entries: the sweep waits until nothing
+    has used one for the grace period, judged by `last_used`, or the newest mtime without a manifest."""
+    old_schema = {"SCHEMA_VERSION": "0.0.1", "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+    recent = write_entry("frames", f"{'a' * 32}-0.0.1", cache.FRAMES_SPILL, old_schema)
+    recent_unindexed = legacy_entry("frames", f"{'b' * 32}-0.0.1")
+    just_inside = aged(write_entry("frames", f"{'c' * 32}-0.0.1", cache.FRAMES_SPILL, old_schema), days=cache.GRACE_DAYS - 0.5)
+    past = aged(write_entry("frames", f"{'d' * 32}-0.0.1", cache.FRAMES_SPILL, old_schema))
+    past_unindexed = aged(legacy_entry("frames", f"{'e' * 32}-0.0.1"))
+    # One file touched recently keeps an unindexed entry: it is the only trace of use there is.
+    touched_unindexed = aged(legacy_entry("frames", f"{'f' * 32}-0.0.1"))
+    (touched_unindexed / "input.vcf.gz").touch()
+
+    with caplog.at_level(logging.INFO, logger="just_vcf.cache"):
+        report = cache.sweep_stale(cache.FRAMES_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT})
+
+    kept = {recent, recent_unindexed, just_inside, touched_unindexed}
+    assert {e.path for e in report.recently_used} == {f"frames/{p.name}" for p in kept}
+    assert {e.path for e in report.removed} == {f"frames/{p.name}" for p in (past, past_unindexed)}
+    assert all(p.exists() for p in kept) and not past.exists() and not past_unindexed.exists()
+    assert any("4 older-version frames_spill entr(ies) kept" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(("setting", "days"), [("", cache.GRACE_DAYS), ("30", 30), ("0.5", 0.5), ("0", 0)])
+def test_the_grace_period_is_read_from_the_environment(setting: str, days: float, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JUST_VCF_CACHE_GRACE_DAYS", setting)
+    assert cache.grace_period() == timedelta(days=days)
+    old = {"REWRITE_VERSION": REWRITE_VERSION - 1}
+    inside = aged(write_entry("vcf", "a" * 32, cache.REWRITE_COPY, old), days=days * 0.9)
+    outside = aged(write_entry("vcf", "b" * 32, cache.REWRITE_COPY, old), days=days * 1.1 + 0.001)
+    cache.sweep_stale(cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION})
+    # At 0 every older entry is past the grace period, the one aged 0 days included.
+    assert inside.exists() is (days > 0) and not outside.exists()
+
+
+@pytest.mark.parametrize("setting", ["seven", "-1", "nan", "inf"])
+def test_a_grace_period_that_is_not_a_number_of_days_is_refused(setting: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never the default in its place: a mistyped setting must not quietly change what is deleted."""
+    monkeypatch.setenv("JUST_VCF_CACHE_GRACE_DAYS", setting)
+    old = aged(write_entry("vcf", "a" * 32, cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION - 1}))
+    with pytest.raises(ValueError, match="JUST_VCF_CACHE_GRACE_DAYS"):
+        load(vcf_zip(tmp_path, "one"))
+    assert old.exists()
+
+
+def test_an_entry_used_between_the_scan_and_its_lock_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sweep reads every manifest, then takes each stale entry's lock in turn. An older install's
+    step that ran in between moved `last_used`: the sweep judges the entry again under the lock."""
+    old = {"REWRITE_VERSION": REWRITE_VERSION - 1}
+    origin = Origin(source_sha256="0" * 64, source_path=None)
+    entry = aged(write_entry("vcf", "a" * 32, cache.REWRITE_COPY, old))
+    taking = cache._acquire
+
+    def used_first(lock_path: Path, *, blocking: bool) -> int | None:
+        if not blocking and lock_path == entry.parent / f"{entry.name}.lock":
+            with cache.writing(entry, cache.REWRITE_COPY, old, origin):
+                pass  # the older install's step, reusing its copy
+        return taking(lock_path, blocking=blocking)
+
+    monkeypatch.setattr(cache, "_acquire", used_first)
+    report = cache.sweep_stale(cache.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION})
+    assert [e.path for e in report.recently_used] == [f"vcf/{entry.name}"] and report.removed == ()
+    assert entry.exists()
 
 
 @pytest.mark.parametrize(
@@ -213,12 +297,12 @@ def test_versions_are_ordered_numerically_and_only_behind_is_older(versions: dic
 
 
 def test_each_derived_step_sweeps_its_own_kind(tmp_path: Path, default_store: ReferenceStore) -> None:
-    stale_rejoin = write_entry("frames", f"{'d' * 32}-{SCHEMA_VERSION}", cache.REJOIN_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": 0})
-    stale_resolve = legacy_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}-ref-SQ_ab-c-{RESOLVE_VERSION - 1}")
-    current_resolve = legacy_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}-ref-SQ_ab-c-{RESOLVE_VERSION}")
-    stale_normalize = write_entry(
+    stale_rejoin = aged(write_entry("frames", f"{'d' * 32}-{SCHEMA_VERSION}", cache.REJOIN_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": 0}))
+    stale_resolve = aged(legacy_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}-ref-SQ_ab-c-{RESOLVE_VERSION - 1}"))
+    current_resolve = aged(legacy_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}-ref-SQ_ab-c-{RESOLVE_VERSION}"))
+    stale_normalize = aged(write_entry(
         "frames", f"{'9' * 32}-{SCHEMA_VERSION}", cache.NORMALIZE_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "NORMALIZE_VERSION": 0}
-    )
+    ))
     loaded = rejoin_split(load(vcf_zip(tmp_path, "one")))
     assert not stale_rejoin.exists()
     assert stale_resolve.exists() and stale_normalize.exists()

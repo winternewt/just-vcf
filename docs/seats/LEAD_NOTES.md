@@ -103,5 +103,9 @@ status lines say what exists. Schema at 0.0.4.
   or stop; default stop). Also open: ruff is not a dev dependency (about 200 findings in the tree); the
   local `.env` samples dir has no PGP-HMS, so the opt-in PGP tests skip unless run with
   `JUST_VCF_SAMPLES_DIR=/mnt/krypton/Genomes/genomes`.
+- **Standing rule (the person, 2026-10-23, approving a side agent's note):** a read-only merge audit after
+  every six merged builder branches, because a hand merge once dropped a per-facet field from two loaders
+  while every test passed. Last audits: 2aa5436 (after wave 5) and one running over 2aa5436..5b6ec3b. A
+  guard test (every format's example loaded, no facet column null without a stated reason) is being built.
 - **Open, not started**: CLI (MVP row 18; not decided), the rest of Part 2 of docs/MVP_READINESS.md (the
   interview).

@@ -232,6 +232,17 @@ def test_unphased_facets_give_no_blocks(tmp_path: Path, store: ReferenceStore) -
     assert cis_phased_blocks(minted(phased_vcf(tmp_path, records, {"1": LENGTHS["1"]}), store)).collect().height == 0
 
 
+def test_haploid_calls_are_one_molecule(tmp_path: Path, store: ReferenceStore) -> None:
+    """A haploid GT has no separator, so VCF reads it phased: on a chromosome with one copy (male X
+    outside the PARs, Y, MT) its ALTs are in cis by ploidy, and the implicit set holds them, beside
+    the unphased diploid rows, which are in no set."""
+    records = [snv("1", 10, "1", None), snv("1", 20, "0/1", None), snv("1", 30, "1", None), snv("1", 40, "0", None)]
+    got = blocks_by_key(cis_phased_blocks(minted(phased_vcf(tmp_path, records, {"1": LENGTHS["1"]}), store)).collect())
+    assert set(got) == {("1", None, 0)}
+    assert got[("1", None, 0)]["sites"] == 3
+    assert got[("1", None, 0)]["cpb_id"] == expected_blocks([r for r in records if "/" not in r[4]], store)[("1", None, 0)]
+
+
 def first_gt_phased(path: Path) -> bool:
     """Whether the first record's genotype is phased: a cheap look before a whole load. A zipped
     upload is passed over."""

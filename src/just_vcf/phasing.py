@@ -20,14 +20,16 @@ What a block is:
   file did not. `reference_alleles=True` takes REF slots too, for a caller who knows the facet holds
   no such rows. `*` is never a member: it stands for a deletion that is a member at its own record.
   An allele carried twice (a duplicated record) is one member: a block is a set of alleles in cis.
+- **Haploid calls** have no separator, so VCF reads them phased, and they sit in their chromosome's
+  implicit set even in a file nobody phased. On a chromosome with one copy they are in cis by ploidy.
 
 When a block is withheld, and why (`withheld`; `cpb_id` and `members` are then null): a block that
 leaves out an allele the haplotype carries would carry an id that looks like the haplotype's and is
 not (charter 4), so any slot of the haplotype that cannot be stated withholds the whole block. The
 first such slot in row order gives the reason: its phase is unknown (`phase_unknown`, a VCF 4.4+ slot
-0 polars-bio's rewrite hides, P4, when its allele would be a member), it is uncalled (`uncalled`), its allele has no index into the
-site's alleles (`not_indexed`), or the allele has no VRS id (the reason `vrs_withheld` gives,
-`not_run` when `mint_vrs_ids` has not run). A haplotype with fewer than two members is
+0 polars-bio's rewrite hides, P4, when its allele would be a member), it is uncalled (`uncalled`),
+its allele has no index into the site's alleles (`not_indexed`), or the allele has no VRS id (the
+reason `vrs_withheld` gives, `not_run` when `mint_vrs_ids` has not run). A haplotype with fewer than two members is
 `too_few_members`: the spec requires two, and one allele is an Allele, not a block.
 
 The id is the VRS 2.x computed identifier: `ga4gh:CPB.` + sha512t24u of

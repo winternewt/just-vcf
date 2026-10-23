@@ -73,7 +73,10 @@ The person chose columns with an export on demand (E5): phase sets stay columns;
 
 **Built:** `cis_phased_blocks` (docs/SCHEMA.md, "CisPhasedBlock export"). Left open: no loader reads
 PSL yet, so PSL sets are tested on a rewritten frame only; in a VCF 4.4+ file every slot-0 block with an ALT is
-`phase_unknown` until polars-bio keeps the leading phase indicator (P4).
+`phase_unknown` until polars-bio keeps the leading phase indicator (P4). On a whole imputed genome
+an implicit set is a chromosome, so one symbolic ALT withholds the haplotype's block (a phased Genes
+for Good upload: 45 of 46 withheld `symbolic`); whether a block per window or per contiguous run of
+sequence alleles is wanted is the person's call.
 
 ## RM285 — The format registry as a spec
 Severity: low · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead

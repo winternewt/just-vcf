@@ -1038,9 +1038,16 @@ a stored block table, which every load would pay for and every change to an alle
 - **Withheld, never shortened** (charter 4). A block missing one of the haplotype's alleles would carry
   an id that looks like the haplotype's. So the first slot in row order that cannot be stated gives the
   reason for the whole block: `phase_unknown` (the slot's `phased` is null, as on slot 0 of every VCF
-  4.4+ record, P4, and its allele would be a member: a REF slot by default is not), `uncalled`, `not_indexed` (no `gt` index), or the allele's own `vrs_withheld`
-  reason (`not_run` before `mint_vrs_ids`, `symbolic`, …). Then `too_few_members`: VRS requires two
-  members. The vocabulary is `phasing.CPB_WITHHELD_REASONS`, open like `vrs.WITHHELD_REASONS`.
+  4.4+ record, P4, and its allele would be a member: a REF slot by default is not), `uncalled`,
+  `not_indexed` (no `gt` index), or the allele's own `vrs_withheld` reason (`not_run` before
+  `mint_vrs_ids`, `symbolic`, …). Then `too_few_members`: VRS requires two members. The vocabulary is
+  `phasing.CPB_WITHHELD_REASONS`, open like `vrs.WITHHELD_REASONS`. On a whole imputed genome this
+  bites: an implicit set is a chromosome, and one symbolic ALT on it withholds the haplotype's block
+  (a phased Genes for Good upload: 45 of 46 blocks withheld `symbolic`).
+- **Haploid calls** (no separator, so phased in VCF's reading) sit in their chromosome's implicit set
+  even in a file nobody phased. On one copy (male X outside the PARs, Y, MT) that is true by ploidy, so
+  they make a block. Rejected: leaving out haploid rows, which would drop a true statement to guard
+  against a caller that writes a two-copy region haploid.
 - **Order**: by the set's first row in `calls`, then kind, set name and haplotype.
 - An IRI is not an Allele to vrs-python 2.3: a block whose members are written as `ga4gh:VA.…` strings
   digests to another id there. Resolve the members to Alleles before identifying it again.

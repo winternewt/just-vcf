@@ -1106,9 +1106,13 @@ facet's in this order, each row saying which in `key`:
 2. `position`: the rest, by `(chrom, pos, REF, ALT)` as written, `REF` being `ref` or else
    `source_ref`. Unnormalized indels that were not minted can miss each other here; mint both first.
 3. `site`: an allele the other facet does not state, where it wrote exactly one row at the
-   position: the other genotype is read for copies of this allele (an array's hom-ref row, a
-   DeepVariant `RefCall`, a monomorphic record, the other ALT of a multi-allelic site). Several rows
-   there and none with the allele (a split file) are not read against, counted in a warning.
+   position over the same REF span: the other genotype is read for copies of this allele (an array's
+   hom-ref row, a DeepVariant `RefCall`, a monomorphic record, the other ALT of a multi-allelic
+   site). A row over another span is not read: a haplotype caller's complex allele (`AC>GT` beside
+   another facet's `A>G`) holds no allele of this span, so its genotype would read as zero copies, a
+   mismatch that is only representation. Several rows there and none with the allele (a split file)
+   are not read against, counted in a warning. Either way the allele stays one-sided, `absence =
+   other_alleles`.
 
 An allele stated by several rows of one facet (`normalize` keeps rows that differ, charter 8) pairs
 with each, counted in a warning.

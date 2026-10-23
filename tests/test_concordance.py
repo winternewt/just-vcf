@@ -170,6 +170,18 @@ def test_an_allele_the_other_facet_does_not_state_is_read_against_its_row_there(
     assert (lone["agreement"], lone["key"], lone["absence"], lone["basis"]) == ("only_a", None, "unknown", None)
 
 
+def test_a_row_over_another_span_is_not_read_for_copies(tmp_path: Path, store: ReferenceStore) -> None:
+    # `a` calls an SNV at 100; `b` wrote one row there, an MNV over two bases (a haplotype caller's
+    # complex allele). Its genotype holds no allele of a one-base span, so it says nothing about the
+    # SNV's copies: not a mismatch.
+    ref2 = base("1", 100, 2)
+    a = facet(tmp_path, "a", [snv("1", 100, "0/1")], store)
+    b = facet(tmp_path, "b", [("1", 100, ref2, other(ref2[0]) + other(ref2[1]), "0/1", {})], store)
+    rows = {row["alt"]: row for row in concordance(a, b).sites.collect().iter_rows(named=True)}
+    lone = rows[other(base("1", 100))]
+    assert (lone["agreement"], lone["key"], lone["absence"], lone["b_copies"], lone["b_gt_alleles"]) == ("only_a", None, "other_alleles", None, None)
+
+
 def test_a_silent_facet_says_what_its_absence_means(tmp_path: Path, store: ReferenceStore) -> None:
     a = facet(tmp_path, "a", [snv("1", 100, "0/1"), snv("1", 200, "0/1"), snv("1", 900, "0/1"), snv("2", 50, "0/1")], store)
     gvcf = [

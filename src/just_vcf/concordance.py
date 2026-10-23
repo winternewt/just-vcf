@@ -511,7 +511,7 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
     mine = rest.rename({name: f"{side}_{name}" for name in ("gt_alleles", "filters", "gq")}).with_columns(pl.col("pos").alias(f"{side}_pos"))
     wanted = mine.select("chrom", "pos").unique().lazy()
     rows_there = (
-        other.calls.select("chrom", "pos", "gt_alleles", "filters", "gq")
+        other.calls.select("chrom", "pos", pl.coalesce("ref", "source_ref").str.to_uppercase().alias("_other_ref"), "gt_alleles", "filters", "gq")
         .with_row_index("_other_row")
         .join(wanted, on=["chrom", "pos"], how="semi")
         .group_by("chrom", "pos")
@@ -521,11 +521,14 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
             pl.col("filters").first().alias(f"{other_side}_filters"),
             pl.col("gq").first().alias(f"{other_side}_gq"),
             pl.col("_other_row").first().alias(f"_{other_side}_row"),
+            pl.col("_other_ref").first().alias("_other_ref"),
         )
         .collect()
     )
     mine = mine.join(rows_there, on=["chrom", "pos"], how="left")
-    single = pl.col("_rows") == 1
+    # Read only a row over the same REF span: a longer allele there (a haplotype caller's complex
+    # allele) holds no allele of this span, so its genotype says nothing about this allele's copies.
+    single = ((pl.col("_rows") == 1) & (pl.col("_other_ref") == pl.col("_ref").str.to_uppercase())).fill_null(False)
     several = (pl.col("_rows") > 1).fill_null(False)
     n_several = mine.filter(several).height
     if n_several:

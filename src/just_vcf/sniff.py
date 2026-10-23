@@ -264,7 +264,7 @@ def _match(base: dict, text: str) -> Sniffed:
             matched.append((spec, evidence))
     if matched:
         spec, evidence = matched[0]
-        build, build_evidence, warnings = _build_from_hints(spec, text)
+        build, build_evidence, warnings = build_from_hints(spec, text)
         return Sniffed(
             **base,
             outcome=SniffOutcome.DETECTED,
@@ -300,7 +300,7 @@ def _spec_matches(spec: FormatSpec, text: str, lines: list[str]) -> tuple[str, .
     return evidence
 
 
-def _build_from_hints(spec: FormatSpec, text: str) -> tuple[str | None, str | None, tuple[str, ...]]:
+def build_from_hints(spec: FormatSpec, text: str) -> tuple[str | None, str | None, tuple[str, ...]]:
     """The build the header names. Disagreeing hints make the answer unknown, with a warning."""
     found: list[tuple[str, str]] = []
     for hint in spec.build_hints:

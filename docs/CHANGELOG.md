@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A BCF facet now takes the build its header states (`##reference=…hs37d5.fa` gives GRCh37, basis
+  `stated`), as the same header in a text VCF always did. `sniff` stops at a BCF's magic bytes, so the
+  loader reads the header's build lines itself, by the VCF spec's hints. Before, a BCF's
+  `assembly_label` came only from its contig lengths. Found by the facet guard (`tests/test_load_seams.py`).
+
 - In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
   probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
   (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or

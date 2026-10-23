@@ -42,7 +42,7 @@ from just_vcf.schema import (
     contig_map,
     empty,
 )
-from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
+from just_vcf.sniff import Sniffed, SniffOutcome, build_from_hints, open_payload, sniff
 from just_vcf.source import detect_source
 
 logger = logging.getLogger(__name__)
@@ -627,7 +627,13 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     if (header.version_tuple or (0, 0)) >= (4, 4):
         warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
     versions = {caller.name: caller.version for caller in source.callers}
-    label, basis, label_warnings = _assembly_label(sniffed.build, header.contigs)
+    stated = sniffed.build
+    if binary:
+        # `sniff` stops at a BCF's magic bytes, so the header's build lines are read here, by the same
+        # hints as a text VCF's.
+        stated, _, hint_warnings = build_from_hints(get_spec("vcf"), "\n".join(header.meta))
+        warnings += list(hint_warnings)
+    label, basis, label_warnings = _assembly_label(stated, header.contigs)
     warnings += label_warnings
     stated_filters = callset.stated_content_filters(header.meta)
     # The member's own name inside an archive; the name is read for its words and never logged.

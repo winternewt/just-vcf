@@ -14,6 +14,7 @@ from just_vcf import AbsenceMeans, Loaded, load, read_coverage
 from just_vcf.evidence import (
     GENOTYPE_EVIDENCE,
     GENOTYPE_EVIDENCE_AT,
+    BlockGrade,
     ConfidenceKind,
     GradeBasis,
     VectorPrior,
@@ -251,6 +252,101 @@ def test_blocks_are_graded_by_their_likelihoods_or_asserted(tmp_path: Path) -> N
     keys = graded.select("pos", "evidence_basis").rows()
     assert keys == sorted(keys, key=lambda k: (k[0], k[1])), "canonical order, calls before blocks at one position"
     assert graded.height == pl.collect_all([loaded.calls.select(pl.len()), loaded.blocks.select(pl.len())])[0].item() + 3
+
+
+BLOCKS = {
+    100: (20, (0, 45, 300)),  # GQ below the confidence its PL gives hom-ref
+    200: (60, (0, 30, 300)),  # GQ above it
+    300: (0, (0, 30, 300)),  # GQ 0: a number, no confidence
+    400: (33, None),  # GQ only
+    500: (None, (0, 20, 200)),  # PL only
+    600: (None, None),  # neither
+    700: (40, (20, 0, 50)),  # likelihoods that do not put hom-ref first
+    900: (10, (30, 0, 60)),  # GQ below the top genotype's confidence, above hom-ref's: the likelihoods are lower for hom-ref
+}
+"""`ref` blocks of ten bases at each position: (GQ, PL) as written, None where absent."""
+
+
+def _block_records() -> list[str]:
+    records = []
+    for pos, (gq, pls) in BLOCKS.items():
+        gq_text = "." if gq is None else str(gq)
+        pl_text = "." if pls is None else ",".join(map(str, pls))
+        records.append(f"1\t{pos}\t.\tA\t<NON_REF>\t.\t.\tEND={pos + 9}\tGT:GQ:PL:GP\t0/0:{gq_text}:{pl_text}:.")
+    return [*records, "1\t800\t.\tA\t<*>\t.\t.\tEND=809\tGT:GQ:PL:GP\t./.:30:0,0,0:."]
+
+
+def _flat_pl(pls: tuple[int, ...]) -> list[float]:
+    weights = [10 ** (-v / 10) for v in pls]
+    return [w / sum(weights) for w in weights]
+
+
+def _phred_ref(pls: tuple[int, ...]) -> float:
+    """-10·log10(1 - p_0): the confidence a block's likelihoods give hom-ref, under a flat prior."""
+    return -10 * math.log10(1 - _flat_pl(pls)[0])
+
+
+def _gq_vector(gq: int, genotypes: int) -> list[float]:
+    error = 10 ** (-gq / 10)
+    return [1 - error, *[error / (genotypes - 1)] * (genotypes - 1)]
+
+
+def _expected_block(rule: BlockGrade, gq: int | None, pls: tuple[int, ...] | None) -> tuple[str, float | None, list[float] | None]:
+    """(grade_basis, confidence, genotype_probabilities) of a `ref` block under `rule`, from its own fields
+    by the rule as docs/SCHEMA.md states it."""
+    by_gl = (GradeBasis.GL.value, _phred_top(_flat_pl(pls)) if pls else None, _flat_pl(pls) if pls else None)
+    by_gq = (GradeBasis.GQ.value, float(gq) if gq is not None else None, _gq_vector(gq, len(pls)) if gq is not None and pls else None)
+    withheld = (GradeBasis.BLOCK.value, None, None)
+    if rule is BlockGrade.LIKELIHOODS:
+        return by_gl if pls else withheld
+    if rule is BlockGrade.GQ:
+        return by_gq if gq is not None else withheld
+    if gq is None or pls is None:
+        return withheld
+    return by_gq if gq < _phred_ref(pls) else by_gl
+
+
+@pytest.mark.parametrize("rule", list(BlockGrade))
+def test_each_block_rule_grades_a_reference_block_by_its_own_fields(tmp_path: Path, rule: BlockGrade) -> None:
+    """Desk #94: the three rules, each against blocks whose expected grade is computed here from their GQ
+    and PL. A block lacking what the rule reads is `block`, never graded by another rule's quantity."""
+    loaded = _vcf(tmp_path, _block_records(), fmt=("GT", "GQ", "PL"))
+    graded = _graded(loaded, block_grade=rule)
+    assert graded.schema == GENOTYPE_EVIDENCE
+    for pos, (gq, pls) in BLOCKS.items():
+        row = _row(graded, pos, "ref_block")
+        basis, confidence, vector = _expected_block(rule, gq, pls)
+        assert row["grade_basis"] == basis, (rule, pos)
+        assert row["genotype_index"] == (_flat_pl(pls).index(max(_flat_pl(pls))) if basis == GradeBasis.GL.value else 0), (rule, pos)
+        if confidence is None:
+            assert row["confidence"] is None and row["confidence_kind"] == ConfidenceKind.ASSERTED.value, (rule, pos)
+        else:
+            assert row["confidence"] == pytest.approx(confidence, rel=1e-6), (rule, pos)
+        if vector is None:
+            assert row["genotype_probabilities"] is None, (rule, pos)
+        else:
+            assert row["genotype_probabilities"] == pytest.approx(vector, rel=1e-6), (rule, pos)
+        assert row["prior"] == {GradeBasis.GL.value: VectorPrior.FLAT.value,
+                                GradeBasis.GQ.value: VectorPrior.EVEN_REMAINDER.value if vector else None}.get(basis), (rule, pos)  # fmt: skip
+        assert row["gl_source"] == (GlSource.PL.value if basis == GradeBasis.GL.value else None), (rule, pos)
+    no_call = _row(graded, 800, "ref_block")
+    assert no_call["grade_basis"] == GradeBasis.GL.value, "a no-call block is graded by its likelihoods under every rule"
+    assert no_call["confidence"] == pytest.approx(_phred_top(_flat_pl((0, 0, 0))), rel=1e-6)
+    asked = genotype_evidence_at(loaded, pl.DataFrame({"chrom": ["1"] * len(BLOCKS), "pos": [p + 5 for p in BLOCKS]}), variant_class="snv", block_grade=rule)
+    assert asked["grade_basis"].cast(pl.String).to_list() == graded.filter(pl.col("pos").is_in(list(BLOCKS)))["grade_basis"].cast(pl.String).to_list()
+
+
+def test_the_default_block_rule_is_the_likelihoods_and_gq_on_reference_only_moves_it(tmp_path: Path) -> None:
+    """The default stays what it was: likelihoods first, then GQ only where `gq_on_reference` asks. The
+    other rules do not read `gq_on_reference` for blocks: the rule is the decision."""
+    loaded = _vcf(tmp_path, _block_records(), fmt=("GT", "GQ", "PL"))
+    assert _graded(loaded).equals(_graded(loaded, block_grade="likelihoods"))
+    plain, asked = _row(_graded(loaded), 400, "ref_block"), _row(_graded(loaded, gq_on_reference=True), 400, "ref_block")
+    assert (plain["grade_basis"], asked["grade_basis"]) == (GradeBasis.BLOCK.value, GradeBasis.GQ.value)
+    for rule in (BlockGrade.GQ, BlockGrade.LOWER_OF_GQ_AND_LIKELIHOODS):
+        assert _graded(loaded, block_grade=rule).equals(_graded(loaded, block_grade=rule, gq_on_reference=True))
+    with pytest.raises(ValueError):
+        _graded(loaded, block_grade="lowest")
 
 
 def test_an_array_genotype_is_asserted_and_its_no_call_unknown(tmp_path: Path) -> None:

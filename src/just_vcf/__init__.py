@@ -22,6 +22,7 @@ from just_vcf.consensus import Consensus, GpReading, RateBasis, consensus, metho
 from just_vcf.evidence import (
     GENOTYPE_EVIDENCE,
     GENOTYPE_EVIDENCE_AT,
+    BlockGrade,
     ConfidenceKind,
     GradeBasis,
     VectorPrior,
@@ -108,6 +109,7 @@ __all__ = [
     "Agreement",
     "AssemblyLabelBasis",
     "BlockAllele",
+    "BlockGrade",
     "BlockKind",
     "CacheClearReport",
     "CacheEntryInfo",

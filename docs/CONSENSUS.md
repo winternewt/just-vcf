@@ -130,3 +130,12 @@ it stays calibrated. Two bands are still off, in opposite directions:
 
 Both rest on one pair per PGP method. A second CGI/freeBayes pair, from another participant, would
 let the band rates be pooled over people and show how far they move from one genome to the next.
+
+## Options left to the person
+
+The checks above ran with every default. Three choices that move the consensus are the person's
+(desk #94–#96), each built as an option whose default is what ran here, so an answer is a one-line
+default change; the rules are in docs/SCHEMA.md.
+
+- **#94, how a gVCF reference block speaks** (`block_grade=`): by its likelihoods (the default), by its
+  GQ, or by the lower of the two. The checks have not been run under the other two.

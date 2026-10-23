@@ -26,6 +26,7 @@ from just_vcf.consensus import (
     consensus,
     method_error_rates,
 )
+from just_vcf.evidence import BlockGrade
 from just_vcf.links import CONSENSUS
 from just_vcf.loading import Loaded
 from just_vcf.person import Person
@@ -56,6 +57,7 @@ def write_vcf(path: Path, records: list[tuple]) -> Path:
         '##INFO=<ID=END,Number=1,Type=Integer,Description="End">',
         '##FILTER=<ID=LowQual,Description="Low quality">',
         '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+        '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">',
         '##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred likelihoods">',
         '##FORMAT=<ID=GP,Number=G,Type=Float,Description="Posteriors">',
     ]
@@ -323,6 +325,52 @@ def test_a_reference_block_speaks_with_its_likelihoods(tmp_path: Path, store: Re
     assert at[100]["gp"] == pytest.approx(graded, rel=1e-5)
     asserted = posterior([hard(1, rates["X"]["genotype_error"]), hard(0, rates["Y"]["silence_error"])])
     assert at[155]["gp"] == pytest.approx(asserted, rel=1e-5)
+
+
+def test_each_block_rule_is_how_a_reference_block_speaks(tmp_path: Path, store: ReferenceStore) -> None:
+    """Desk #94 in the consensus: X states a het inside each of Y's reference blocks; Y's block speaks by
+    the rule asked, and a block lacking what the rule reads speaks as zero copies, unquantified."""
+    blocks = {90: (20, [0, 45, 300]), 140: (60, [0, 30, 300]), 240: (33, None), 340: (None, [0, 20, 200])}
+    records = []
+    for start, (gq, pls) in blocks.items():
+        extra = {"END": str(start + 20)} | ({"GQ": str(gq)} if gq is not None else {}) | ({"PL": ",".join(map(str, pls))} if pls else {})
+        records.append(("1", start, base("1", start), "<*>", "0/0", ".", extra))
+    x = facet(tmp_path, "x", "X", "1", [snv("1", start + 10, "0/1") for start in blocks], store)
+    y = facet(tmp_path, "y", "Y", "1", records, store)
+    rates = {r["caller"]: r for r in method_error_rates(TRIANGLE).filter(pl.col("variant_class") == "snv").iter_rows(named=True)}
+    e_x, s_y = rates["X"]["genotype_error"], rates["Y"]["silence_error"]
+
+    def by_gq(gq: int) -> list[float]:
+        error = 10 ** (-gq / 10)
+        return [1 - error, error / 2, error / 2]
+
+    def phred_ref(pls: list[int]) -> float:
+        return -10 * math.log10(1 - flat(pls)[0])
+
+    def speaks(rule: BlockGrade, gq: int | None, pls: list[int] | None) -> list[float]:
+        if rule is BlockGrade.LIKELIHOODS:
+            q = flat(pls) if pls else None
+        elif rule is BlockGrade.GQ:
+            q = by_gq(gq) if gq is not None else None
+        else:
+            q = None if gq is None or pls is None else (by_gq(gq) if gq < phred_ref(pls) else flat(pls))
+        return tempered(q, s_y) if q is not None else hard(0, s_y)
+
+    ids = {}
+    for rule in BlockGrade:
+        result = consensus([x, y], atlas=TRIANGLE, block_grade=rule)
+        ids[rule] = result.facets.collect()["facet_id"].item()
+        at = {row["pos"]: row for row in rows_of(result)}
+        for start, (gq, pls) in blocks.items():
+            expected = posterior([hard(1, e_x), speaks(rule, gq, pls)])
+            assert at[start + 10]["gp"] == pytest.approx(expected, rel=1e-5), (rule, start)
+            assert at[start + 10]["s_silent"] == 0
+    # The rules differ where they should: GQ 20 under the PL's 45 phred, GQ 60 over its 30.
+    assert speaks(BlockGrade.LOWER_OF_GQ_AND_LIKELIHOODS, 20, [0, 45, 300]) == speaks(BlockGrade.GQ, 20, [0, 45, 300])
+    assert speaks(BlockGrade.LOWER_OF_GQ_AND_LIKELIHOODS, 60, [0, 30, 300]) == speaks(BlockGrade.LIKELIHOODS, 60, [0, 30, 300])
+    # A rule asked by name is that rule; the default's id is the one a consensus had before the option.
+    assert len(set(ids.values())) == 3
+    assert consensus([x, y], atlas=TRIANGLE).facets.collect()["facet_id"].item() == ids[BlockGrade.LIKELIHOODS]
 
 
 def test_a_site_row_without_the_allele_reads_as_zero_copies(tmp_path: Path, store: ReferenceStore) -> None:

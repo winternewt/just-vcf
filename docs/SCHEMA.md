@@ -1538,7 +1538,8 @@ reading) into every cache spill and need a version bump each time they move.
 - `dosage`: only a dosage. One number gives no vector (Decision 3), so no vector and no number.
 - `gt_only`: a genotype with at least one allele called and no quantity: asserted, unquantified. A
   half-call (`0/.`) is here even with a GQ: there is no one genotype for GQ to grade.
-- `block`: a `ref` block with no quantity (CGI's native blocks): reference asserted, unquantified.
+- `block`: a `ref` block with no quantity the block rule reads (CGI's native blocks, or a block lacking
+  what `block_grade` asks for): reference asserted, unquantified.
 - `no_call`: the source wrote that it looked and called nothing (`./.`, a `no_call` block) and gave no
   vector: unknown. A no-call that carries likelihoods is graded by them (a gVCF `./.` block with PL
   `0,0,0` is `gl` at 1.76).
@@ -1582,8 +1583,23 @@ a local DeepVariant gVCF (aggregates only): on 1.32M hom-ref calls GQ is within 
 their PL gives (clipped at 99, the highest GQ DeepVariant wrote on them) for 96.6%, which is what `gq_on_reference=True`
 assumes. On its 13.6M reference blocks only 26.9% agree, median difference 49: a block's GQ is the
 band's floor (at most 50 there), its PL is not, so a block graded by its likelihoods (median 291) states more than its
-weakest base supports. Which of the two should grade a block is the person's call; until then a
-block is graded by its likelihoods, as written.
+weakest base supports. Which of the two should grade a block is the person's call (desk #94); until
+then a block is graded by its likelihoods, as written.
+
+**The block rule** (`block_grade=`, `BlockGrade`, on `genotype_evidence`, `genotype_evidence_at` and
+`consensus`) is built for that answer to be a one-line default change. It governs `ref` blocks only;
+a `no_call` block is graded by its likelihoods, or is `no_call`, under every rule.
+
+| Rule | A `ref` block is graded | Lacking what it reads |
+|---|---|---|
+| `likelihoods` (the default) | by its likelihoods (`gl`); without usable ones, by its GQ where `gq_on_reference=True` | `block` |
+| `gq` | by its GQ (`gq`, `prior = even_remainder`), whatever `gq_on_reference` says; the vector is spread over as many genotypes as its likelihoods give where it has usable ones, else none | no GQ: `block` |
+| `lower_of_gq_and_likelihoods` | by whichever states less confidence in hom-ref: GQ against `-10·log10(1 − p_0)` of its likelihoods under a flat prior, the likelihoods on a tie; `grade_basis` says which (`gq` or `gl`) | either missing: `block` |
+
+Genotype 0 is compared, not the likelihoods' top genotype: a block's GQ speaks for hom-ref, and where
+its likelihoods put another genotype first they state less confidence in hom-ref than any GQ but a few
+phred. A block lacking what its rule reads is `block`, reference asserted with the number withheld,
+never graded by another rule's quantity (CLAUDE.md, no silent fallback).
 
 ## The cache under the lazy frames (RM268)
 
@@ -2019,8 +2035,12 @@ each with the other parent silent or reading `other_span`. `normalize` both, or 
 |---|---|---|
 | `stated` | a row states the allele | its vector (`genotype_evidence`'s `gl`, under a flat prior, or `gq`) summed by copies; else its genotype, a point mass. A `gp` row is read as its genotype unless `gp_as = likelihood` |
 | `site` | one row at the position over the same REF span, without the allele (a hom-ref record, another ALT) | zero copies, a point mass: its vector indexes other alleles |
-| `ref_block` | a `ref` block covers the position | the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; else zero copies |
+| `ref_block` | a `ref` block covers the position | by `block_grade` (above, "The block rule"): under the default, the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; graded by its GQ, zero copies at `1 − 10^(−GQ/10)` and the rest spread evenly over the other copies, at the ploidy its likelihoods give, else the site's; lacking what the rule reads, zero copies |
 | `absence` | nothing covers it and `absence_is_reference(facet, class, force=force)` is True on a contig the facet declared or wrote | zero copies |
+
+`gq_on_reference` reaches a row stating the allele, as `genotype_evidence` grades it; it does not
+reach a block, which `block_grade` alone grades (so the default reads a block with a GQ and no
+likelihoods as zero copies, unquantified, whatever `gq_on_reference` says).
 
 Silent otherwise, each kind counted in the warnings per facet: `filtered` (`pass_only` and the row
 failed a filter), `no_call` (no haplotype called and no vector), `covered` (inside another record's
@@ -2122,6 +2142,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-24, layer 7, the options for desk #94–#96): no column of `facets`,
+  `calls` or `blocks` changes, and no default output does. `BlockGrade` (`block_grade=` on
+  `genotype_evidence`, `genotype_evidence_at` and `consensus`) names the rule a `ref` block is graded
+  by: `likelihoods` (the default, as before), `gq`, or `lower_of_gq_and_likelihoods` ("Graded
+  genotype evidence", the block rule). A non-default rule enters the consensus `facet_id`; the default
+  leaves it as it was.
 
 - **No version change** (2026-10-23, calibrating the consensus, layers 5 and 7): no column of
   `facets`, `calls` or `blocks` changes. The atlas gains the key columns `a_band` and `b_band` and its

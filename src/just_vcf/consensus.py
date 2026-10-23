@@ -41,7 +41,7 @@ from pydantic import BaseModel, ConfigDict
 from just_vcf.atlas import ALL, ALL_BANDS, CI_Z, CONFIDENCE_BANDS, NO_CONFIDENCE, RegionSet, confidence_band
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
 from just_vcf.concordance import _covered, _declared_contigs
-from just_vcf.evidence import GradeBasis, _calls_evidence
+from just_vcf.evidence import BlockGrade, GradeBasis, _calls_evidence, _ref_block_grade
 from just_vcf.links import CONSENSUS, LINEAGE_RELATIONS, canonical_links, links_frame
 from just_vcf.loading import Loaded
 from just_vcf.person import Person, SubjectError, _pieces
@@ -640,12 +640,13 @@ def _vector_copies(frame: pl.DataFrame) -> pl.DataFrame:
 
 _READING = pl.Schema(
     {"_site": pl.UInt32, "_reading": pl.String, "_ploidy": pl.Int8, "_hard": pl.Int8, "_q0": pl.Float64, "_q1": pl.Float64, "_q2": pl.Float64, "_gp_lik": pl.Boolean,
-     "_band": pl.String}
+     "_band": pl.String, "_spread": pl.Float64}
 )  # fmt: skip
 """One facet's reading of one allele: `_reading` is `stated`, `site`, `ref_block`, `absence` or one of
 `_SILENT`; a hard reading has `_hard` copies (its ploidy, or null where the source did not say), a
 graded one `_q0.._q2`. A stated one has `_band`, the band of its row's own confidence (`none` where
-the row states none)."""
+the row states none). A block graded by its GQ (`BlockGrade.GQ`) is hard at zero copies with
+`_spread`, the share `10^(-GQ/10)` spread evenly over the other copies once the site's ploidy is known."""
 
 
 def _readings(
@@ -661,6 +662,7 @@ def _readings(
     gp_as: GpReading,
     force: bool,
     duplicates: Counter,
+    block_grade: BlockGrade = BlockGrade.LIKELIHOODS,
 ) -> pl.DataFrame:
     """What one facet says about each allele of `sites` on `chrom` (`_READING`)."""
     key = ["pos", "_ref_key", "alt"]
@@ -734,7 +736,8 @@ def _readings(
     probe = probe.with_columns((pl.col("_reach").is_not_null() & (pl.col("_reach") >= pl.col("_at"))).alias("_covered"))
     blocks = (
         piece.blocks.filter(pl.col("chrom") == chrom)
-        .select(pl.col("pos").cast(pl.Int64).alias("_bstart"), pl.col("end_pos").cast(pl.Int64).alias("_bend"), pl.col("kind").cast(pl.String).alias("_kind"), pl.col("gl").cast(pl.List(pl.Float64)).alias("_gl"))
+        .select(pl.col("pos").cast(pl.Int64).alias("_bstart"), pl.col("end_pos").cast(pl.Int64).alias("_bend"), pl.col("kind").cast(pl.String).alias("_kind"), pl.col("gl").cast(pl.List(pl.Float64)).alias("_gl"),
+                pl.col("gq").cast(pl.Float64).alias("_gq"))
         .sort("_bstart")
         .collect()
     )  # fmt: skip
@@ -742,14 +745,18 @@ def _readings(
         probe = probe.join_asof(blocks, left_on="_at", right_on="_bstart", strategy="backward")
         probe = probe.with_columns(pl.when(pl.col("_bend") >= pl.col("_at")).then(pl.col("_kind")).alias("_kind"))
     else:
-        probe = probe.with_columns(pl.lit(None, dtype=pl.String).alias("_kind"), pl.lit(None, dtype=pl.List(pl.Float64)).alias("_gl"))
+        probe = probe.with_columns(pl.lit(None, dtype=pl.String).alias("_kind"), pl.lit(None, dtype=pl.List(pl.Float64)).alias("_gl"), pl.lit(None, dtype=pl.Float64).alias("_gq"))
     reads_reference = [cls for cls in _SMALL if absence_is_reference(facet, cls, force=force) is True] if chrom in declared else []
     gl = pl.col("_gl")
     usable = (gl.list.len().is_between(2, 3) & gl.list.eval(pl.element().is_finite() | (pl.element() == float("-inf"))).list.all() & gl.list.max().is_finite()).fill_null(False)
     weights = gl.list.eval(((pl.element() - pl.element().max()) * _LN10).exp())
     total = weights.list.sum()
     is_ref = (pl.col("_kind") == "ref").fill_null(False)
-    graded_block = is_ref & usable
+    # The block rule (`BlockGrade`), as `genotype_evidence` applies it; `gq_on_reference` speaks for
+    # calls only here, so a block is graded by GQ only under the rule that says so.
+    rule = _ref_block_grade(gl, pl.col("_gq"), usable, gq_on_reference=False, block_grade=block_grade)
+    graded_block = is_ref & (rule == GradeBasis.GL.value).fill_null(False)
+    gq_block = is_ref & (rule == GradeBasis.GQ.value).fill_null(False)
     absence_reading = probe.select(
         "_site",
         pl.when(pl.col("_covered")).then(pl.lit("covered"))
@@ -757,13 +764,14 @@ def _readings(
         .when(pl.col("_kind").is_not_null()).then(pl.lit("no_call_block"))
         .when(pl.col("variant_class").cast(pl.String).is_in(reads_reference)).then(pl.lit("absence"))
         .otherwise(pl.lit("unknown")).alias("_reading"),
-        pl.when(~pl.col("_covered") & graded_block).then(gl.list.len() - 1).cast(pl.Int8).alias("_ploidy"),
+        pl.when(~pl.col("_covered") & (graded_block | (gq_block & usable))).then(gl.list.len() - 1).cast(pl.Int8).alias("_ploidy"),
         pl.when(~pl.col("_covered") & graded_block).then(None)
         .when(~pl.col("_covered") & (is_ref | (pl.col("_kind").is_null() & pl.col("variant_class").cast(pl.String).is_in(reads_reference)))).then(0)
         .cast(pl.Int8).alias("_hard"),
         pl.when(~pl.col("_covered") & graded_block).then(weights.list.get(0) / total).alias("_q0"),
         pl.when(~pl.col("_covered") & graded_block).then(weights.list.get(1) / total).alias("_q1"),
         pl.when(~pl.col("_covered") & graded_block & (gl.list.len() == 3)).then(weights.list.get(2, null_on_oob=True) / total).alias("_q2"),
+        pl.when(~pl.col("_covered") & gq_block).then((-pl.col("_gq") / 10.0 * _LN10).exp()).alias("_spread"),
     )  # fmt: skip
     pieces = [frame for frame in (stated_reading, site_reading, absence_reading) if frame.height]
     if not pieces:
@@ -837,8 +845,10 @@ def _posterior(readings: pl.DataFrame, prior: str) -> tuple[pl.DataFrame, pl.Dat
         pl.when(speaking & pl.col("_ploidy").is_not_null() & (pl.col("_ploidy") != P)).then(pl.lit("ploidy_differs")).otherwise(pl.col("_reading")).alias("_reading")
     )
     speaking = ~pl.col("_reading").is_in(list(_SILENT))
-    hard = pl.col("_hard")
-    q = [pl.coalesce(pl.col(f"_q{k}"), (hard == k).cast(pl.Float64)) for k in range(3)]
+    hard, spread = pl.col("_hard"), pl.col("_spread")
+    # A GQ-graded block: its hard copies get `1 - spread`, every other copy `spread / P`.
+    spread_q = [pl.when(spread.is_not_null()).then(pl.when(hard == k).then(1.0 - spread).otherwise(spread / P.cast(pl.Float64))) for k in range(3)]
+    q = [pl.coalesce(pl.col(f"_q{k}"), spread_q[k], (hard == k).cast(pl.Float64)) for k in range(3)]
     e = pl.when(pl.col("_reading").is_in(["stated", "site"])).then(pl.col("_ge")).otherwise(pl.col("_se"))
     # The rate of the row's own confidence band, where its method has one measured: a stated reading only.
     banded = pl.coalesce([pl.when(pl.col("_band") == band).then(pl.col(f"_ge_{band}")) for band in CONFIDENCE_BANDS])
@@ -908,6 +918,7 @@ def consensus(
     pass_only: bool = True,
     gp_as: GpReading | str = GpReading.CALL,
     gq_on_reference: bool = False,
+    block_grade: BlockGrade | str = BlockGrade.LIKELIHOODS,
     force: bool = False,
 ) -> Consensus:
     """A consensus facet over one person's facets: per allele, a posterior over its copies (module
@@ -923,7 +934,11 @@ def consensus(
     class; `atlas=None` needs `default_rate`. `pass_only` reads a row that failed its filters as
     silent; `scope` picks the atlas rows (by default `carried_pass` under `pass_only`, else
     `carried`); `gp_as` says how a posterior is read (`GpReading`); `gq_on_reference` and `force`
-    are `genotype_evidence`'s and `absence_is_reference`'s.
+    are `genotype_evidence`'s and `absence_is_reference`'s, and `gq_on_reference` reaches calls only.
+    `block_grade` (`BlockGrade`) is how a `ref` block covering an allele speaks: by its likelihoods
+    (the default), by its GQ (hom-ref at `1 - 10^(-GQ/10)`, the rest spread evenly over the other
+    copies), or by the lower of the two; a block lacking what the rule needs speaks as zero copies,
+    unquantified, as a block without likelihoods does under the default.
 
     The rows are every sequence ALT allele a parent states in a row it would be read by, on every
     contig, in canonical order. Each is a `calls` row of the consensus facet: `alts = [alt]`,
@@ -931,6 +946,7 @@ def consensus(
     `[REF, ALT]`), `gt` the most probable, `ref` the REF where a parent read it from the reference.
     """
     gp_as = GpReading(gp_as)
+    block_grade = BlockGrade(block_grade)
     if atlas is None and default_rate is None:
         raise ValueError("without an atlas every facet is weighted by the default rate; pass default_rate=...")
     pieces, parent_links, warnings = _parents(person)
@@ -952,6 +968,10 @@ def consensus(
 
     options = {"prior": prior, "default_rate": default_rate, "scope": scope, "pass_only": pass_only, "gp_as": gp_as.value,
                "gq_on_reference": gq_on_reference, "force": force, "regions": regions.name if regions is not None else None}  # fmt: skip
+    # An option added after facets were made enters the id only when it is not its default, so a
+    # default consensus keeps the id it had: its absence means the default.
+    if block_grade is not BlockGrade.LIKELIHOODS:
+        options["block_grade"] = block_grade.value
     rates_digest = hashlib.sha256(rates.write_csv().encode()).hexdigest()
     facet_id = hashlib.sha256(
         json.dumps({"derived_from": [r["facet_id"] for r in rows], "operation": CONSENSUS, "version": CONSENSUS_VERSION, "options": options, "rates": rates_digest}, sort_keys=True).encode()
@@ -987,7 +1007,8 @@ def consensus(
         per_facet = []
         for piece, row, frame, own in zip(pieces, rows, evidence, stated):
             reading = _readings(
-                sites, frame, own, piece, row, chrom, declared[row["facet_id"]], pass_only=pass_only, gp_as=gp_as, force=force, duplicates=duplicates
+                sites, frame, own, piece, row, chrom, declared[row["facet_id"]], pass_only=pass_only, gp_as=gp_as, force=force, duplicates=duplicates,
+                block_grade=block_grade,
             ).with_columns(pl.lit(row["facet_id"]).alias("_facet"))
             per_facet.append(reading)
         readings = pl.concat(per_facet).join(site_rates, on=["_site", "_facet"], how="left")

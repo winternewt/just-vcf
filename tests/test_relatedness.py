@@ -7,6 +7,7 @@ the counts a relatedness reports are checked against the genotypes the fixture d
 
 import os
 import random
+import sys
 from pathlib import Path
 
 import polars as pl
@@ -15,6 +16,7 @@ from dotenv import dotenv_values, find_dotenv
 
 from just_vcf import FACETS, Loaded, load
 from just_vcf.assembly import ASSEMBLY_LENGTHS
+from just_vcf.person import Person
 from just_vcf.reference import ReferenceStore
 from just_vcf.relatedness import (
     ASSEMBLY_MISMATCH,
@@ -94,10 +96,10 @@ def write_vcf(path: Path, panel: SitePanel, haplotypes: list[tuple[int, int]], *
     return path
 
 
-def wgs(path: Path) -> Loaded:
+def wgs(path: Path, subject: str | None = None) -> Loaded:
     """A test VCF loaded as a whole genome: absent means reference (the loader cannot tell a small
     file's callset type and gives it `unknown`)."""
-    loaded = load(path)
+    loaded = load(path, subject=subject)
     facets = loaded.facets.with_columns(pl.lit("weak_reference").cast(FACETS["absence_means"]).alias("absence_means"))
     return Loaded(facets=facets, calls=loaded.calls, blocks=loaded.blocks)
 
@@ -262,6 +264,22 @@ def test_pairwise_matches_each_pair(family, tmp_path: Path) -> None:
     assert frame.select("facet_a", "facet_b").rows() == [(ids[i], ids[j]) for i in range(4) for j in range(i + 1, 4)]
     for row, (i, j) in zip(frame.iter_rows(named=True), [(i, j) for i in range(4) for j in range(i + 1, 4)]):
         assert Relatedness(**row) == relatedness(loaded[i], loaded[j], panel)
+
+
+def test_a_person_is_checked_by_same_person_by_default(family, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """RM273's `Person.of` runs `same_person` when no check is named: one person's VCF and array read
+    as one person; an unrelated array under the same label reads as two, and is kept, warned."""
+    panel, _, people = family
+    # The default check reads the package's panel; point it at this fixture's sites instead.
+    monkeypatch.setattr(sys.modules["just_vcf.relatedness"], "packaged_panel", lambda assembly: panel if assembly == "GRCh37" else None)
+    vcf = wgs(write_vcf(tmp_path / "a.vcf", panel, people["a"]), subject="p")
+    array = load(write_23andme(tmp_path / "a.txt", panel, people["a"]), subject="p")
+    stranger = load(write_23andme(tmp_path / "u.txt", panel, people["u"]), subject="p")
+    one = Person.of(vcf, array)
+    assert (one.checks["outcome"].to_list(), one.one_person) == (["same"], True)
+    two = Person.of(vcf, stranger)
+    assert (two.checks["outcome"].to_list(), two.one_person) == (["different"], False)
+    assert any("read as two people" in warning for warning in two.warnings)
 
 
 def test_a_panel_refuses_sites_it_cannot_read_alike() -> None:

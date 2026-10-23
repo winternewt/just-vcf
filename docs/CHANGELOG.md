@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `Person.of` and `people` check a subject's facets with `same_person` (RM274) when no check is named;
+  `check=None` runs none, as no check did before. A pair of facets too small or on two assemblies reads
+  `could_not_tell`. A behaviour change on RM273's API, no column changes.
+
 - GA4GH Pedigree read as supplied data (RM274): `read_pedigree` takes the standard's Phenopacket
   `GA4GHPedigree` message as JSON (both protobuf JSON spellings of a field) into a `Pedigree` with an
   individuals frame and a relationships frame, KIN terms and sex values verbatim. Nothing is inferred

@@ -4,8 +4,9 @@ The caller says whose a file is with `load(..., subject=...)`. This module group
 and checks the claim; it never infers a subject and never moves a facet to another one. The check is a
 relatedness test over pairs of facets, passed in as a callable (`SameSubjectCheck`): `True` says one
 person, `False` two, `None` that it could not tell. A `False` is a warning naming both facets, and the
-facets stay where the caller put them. With no check given, every pair is `not_run`, which is not a
-pass.
+facets stay where the caller put them. The default check is `just_vcf.relatedness.same_person` (RM274),
+KING-robust kinship over the package's site panel; `check=None` runs none, and every pair is then
+`not_run`, which is not a pass.
 """
 
 import logging
@@ -18,6 +19,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.loading import Loaded
+from just_vcf.relatedness import same_person
 from just_vcf.schema import SCHEMA_VERSION, enum_dtype
 
 logger = logging.getLogger(__name__)
@@ -81,7 +83,7 @@ class Person(BaseModel):
         return None
 
     @classmethod
-    def of(cls, *loaded: Loaded, check: SameSubjectCheck | None = None) -> "Person":
+    def of(cls, *loaded: Loaded, check: SameSubjectCheck | None = same_person) -> "Person":
         """One person from facets that all carry one subject.
 
         A facet without a subject, or facets under two subjects, are refused with `SubjectError`; so is
@@ -129,7 +131,7 @@ class Person(BaseModel):
         )
 
 
-def people(*loaded: Loaded, check: SameSubjectCheck | None = None) -> dict[str, Person]:
+def people(*loaded: Loaded, check: SameSubjectCheck | None = same_person) -> dict[str, Person]:
     """Every facet given, grouped into one `Person` per subject, sorted by subject.
 
     The grouping is the caller's labels and nothing else. A facet without a subject is refused with

@@ -1074,8 +1074,11 @@ library checks the claim and warns, and it never infers a subject or moves a fac
   `outcome`: `same`, `different`, `could_not_tell`, `not_run`), and `Person.one_person` is their Kleene
   AND: `False` when any pair is `different`, `True` only when every pair is `same`, `None` otherwise,
   one source alone included. `different` and `could_not_tell` pairs are warnings naming both facet ids;
-  the facets stay where the caller put them. No check given leaves every pair `not_run`, which is not a
-  pass. RM274 brings the library's own check.
+  the facets stay where the caller put them. The default check is `just_vcf.relatedness.same_person`
+  (RM274): KING-robust kinship over the package's site panel, `True` when its interval lies above the
+  same-person floor, `False` below it, `None` across it or when the pair cannot be compared (no shared
+  assembly, too few shared sites). `check=None` runs none and leaves every pair `not_run`, which is not
+  a pass.
 - **One source under two subjects** (a file loaded twice under two labels) is allowed: `people` warns
   in each person concerned, naming the facet ids. Two samples of one VCF under two subjects (a trio)
   are different sources and draw no warning.

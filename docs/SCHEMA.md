@@ -1485,7 +1485,9 @@ positive sum. Otherwise the row falls to the next basis; nothing is patched.
 `loaded` at each `chrom, pos` (`GENOTYPE_EVIDENCE_AT`): one row per record that covers the site (a
 `calls` row from `pos` to `end_pos`, or its `pos` alone where the span is unknown; a `blocks` row over
 its span), graded as above, with the record's span as `record_pos`, `record_end_pos`. A site inside a
-called deletion is not absent. A site nothing covers gets one row, `evidence_basis = absence`:
+called deletion is not absent. A facet's blocks are taken not to overlap one another (a gVCF's and
+CGI's tile the genome), so the block over a site is the last one starting at or before it; only the
+matched records are graded, so a panel's answer does not grade a genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:
 `absent_reference` (asserted, no number, `genotype_index` 0) where `absence_is_reference(facet,
 variant_class)` is True, else `absent_unknown`. Decision 3 rejected a made-up number for an
 unquantified call, and that holds for absence too. `absence_means` comes along on every row, so a

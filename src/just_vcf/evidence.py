@@ -187,7 +187,7 @@ def _called_index(gt: pl.Expr) -> pl.Expr:
     )  # fmt: skip
 
 
-def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool) -> pl.LazyFrame:
+def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, keep: tuple[str, ...] = ()) -> pl.LazyFrame:
     gt, gt_alleles = pl.col("gt"), pl.col("gt_alleles")
     fully_called = gt.is_not_null() & (gt.list.len() > 0) & ~gt.list.eval(pl.element().is_null()).list.any()
     called_any = (
@@ -204,7 +204,7 @@ def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool) -> pl.LazyFrame:
     gq_applies = pl.col("gq").is_not_null() & fully_called & (pl.lit(True) if gq_on_reference else carries_alt)
 
     rows = calls.select(
-        "facet_id", "chrom", "pos", "end_pos", "evidence_basis", "gt", "gq",
+        "facet_id", "chrom", "pos", "end_pos", "evidence_basis", "gt", "gq", *keep,
         pl.col("source_alleles"), called_alleles.alias("_called_alleles"),
         pl.col("gp").cast(pl.List(pl.Float64)).alias("_gp"),
         pl.col("gl").cast(pl.List(pl.Float64)).alias("_gl"),
@@ -227,10 +227,10 @@ def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool) -> pl.LazyFrame:
     )  # fmt: skip
     rows = rows.with_columns(basis.alias("grade_basis"), pl.lit(None, dtype=enum_dtype(BlockKind)).alias("block_kind"))
     return _graded(rows, called_index=pl.col("_called_index"), called_genotypes=pl.col("_called_genotypes"),
-                   vector_alleles=pl.col("source_alleles"), called_alleles=pl.col("_called_alleles"))  # fmt: skip
+                   vector_alleles=pl.col("source_alleles"), called_alleles=pl.col("_called_alleles"), keep=keep)  # fmt: skip
 
 
-def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool) -> pl.LazyFrame:
+def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool, keep: tuple[str, ...] = ()) -> pl.LazyFrame:
     # A block's likelihoods are over [REF, <*>]: two alleles, so three values diploid and two haploid.
     # The frame keeps no REF base for a block, so that slot of `genotype_alleles` is null.
     gl = pl.col("gl").cast(pl.List(pl.Float64))
@@ -239,7 +239,7 @@ def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool) -> pl.LazyFram
     is_ref = pl.col("block_kind") == BlockKind.REF.value
     gq_applies = is_ref & pl.col("gq").is_not_null() & pl.lit(gq_on_reference)
     rows = blocks.select(
-        "facet_id", "chrom", "pos", "end_pos", "gq",
+        "facet_id", "chrom", "pos", "end_pos", "gq", *keep,
         pl.lit(EvidenceBasis.REF_BLOCK.value).cast(enum_dtype(EvidenceBasis)).alias("evidence_basis"),
         pl.col("kind").alias("block_kind"),
         pl.lit(None, dtype=pl.List(pl.Float64)).alias("_gp"),
@@ -258,10 +258,11 @@ def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool) -> pl.LazyFram
     # Without likelihoods a block's ploidy is not in the frame, so a GQ-graded block gets no vector:
     # the called genotype is hom-ref (index 0) at a ploidy nobody wrote down.
     return _graded(rows, called_index=pl.when(is_ref).then(pl.lit(0, dtype=pl.Int64)), called_genotypes=pl.lit(None, dtype=pl.Int64),
-                   vector_alleles=pl.col("_alleles"), called_alleles=pl.col("_alleles"))  # fmt: skip
+                   vector_alleles=pl.col("_alleles"), called_alleles=pl.col("_alleles"), keep=keep)  # fmt: skip
 
 
-def _graded(rows: pl.LazyFrame, *, called_index: pl.Expr, called_genotypes: pl.Expr, vector_alleles: pl.Expr, called_alleles: pl.Expr) -> pl.LazyFrame:
+def _graded(rows: pl.LazyFrame, *, called_index: pl.Expr, called_genotypes: pl.Expr, vector_alleles: pl.Expr, called_alleles: pl.Expr,
+            keep: tuple[str, ...] = ()) -> pl.LazyFrame:  # fmt: skip
     """The graded columns from `grade_basis` and the source quantities on `rows`."""
     basis = pl.col("grade_basis")
     gp, gl = pl.col("_gp"), pl.col("_gl")
@@ -292,7 +293,7 @@ def _graded(rows: pl.LazyFrame, *, called_index: pl.Expr, called_genotypes: pl.E
         .when(is_gq).then(pl.col("gq").cast(pl.Float64))
         .alias("confidence"),
         basis.cast(enum_dtype(GradeBasis)).alias("grade_basis"),
-    ).select(GENOTYPE_EVIDENCE.names())  # fmt: skip
+    ).select(*GENOTYPE_EVIDENCE.names(), *keep)  # fmt: skip
 
 
 def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False) -> pl.LazyFrame:
@@ -368,18 +369,34 @@ def genotype_evidence_at(
         .with_columns(pl.int_range(pl.len(), dtype=pl.UInt32).alias("_site"))
     )  # fmt: skip
     contigs = asked["chrom"].unique().to_list()
-    graded = genotype_evidence(loaded, gq_on_reference=gq_on_reference).filter(pl.col("chrom").is_in(contigs))
-    records = graded.with_columns(
+    # The records are matched first and only the matched rows graded, so a genome's millions of rows
+    # are never graded to answer a panel. A call starting at the site is an equality join, and only
+    # calls spanning more than their first base go through the range join. A facet's blocks do not
+    # overlap one another (a gVCF's and CGI's tile the genome), so the block over a site is the last
+    # one starting at or before it, found by an as-of join.
+    ask = asked.lazy().select("_site", pl.col("chrom").alias("_site_chrom"), pl.col("pos").alias("_site_pos"))
+    calls = loaded.calls.filter(pl.col("chrom").is_in(contigs)).with_columns(
         pl.col("pos").cast(pl.Int64).alias("_start"),
         pl.coalesce(pl.col("end_pos"), pl.col("pos")).cast(pl.Int64).alias("_end"),
-    ).rename({"pos": "record_pos", "end_pos": "record_end_pos", "chrom": "_chrom"})
-    # A record starting at the site is an equality join; only records spanning more than their first
-    # base need the range join, which keeps a gVCF's hundreds of millions of blocks out of it unless
-    # they do span.
-    at_start = asked.lazy().join(records, left_on=["chrom", "pos"], right_on=["_chrom", "_start"], how="inner")
-    spanning = records.filter(pl.col("_end") > pl.col("_start"))
-    inside = asked.lazy().join_where(spanning, pl.col("chrom") == pl.col("_chrom"), pl.col("pos") > pl.col("_start"), pl.col("pos") <= pl.col("_end"))
-    covered = pl.concat([at_start.drop("_end"), inside.drop("_chrom", "_start", "_end")], how="vertical_relaxed").collect()
+    )
+    at_start = calls.join(ask, left_on=["chrom", "_start"], right_on=["_site_chrom", "_site_pos"], how="inner")
+    inside = calls.filter(pl.col("_end") > pl.col("_start")).join_where(
+        ask, pl.col("chrom") == pl.col("_site_chrom"), pl.col("_site_pos") > pl.col("_start"), pl.col("_site_pos") <= pl.col("_end")
+    ).drop("_site_chrom", "_site_pos")
+    hit_calls = pl.concat([at_start, inside], how="vertical_relaxed")
+    blocks = loaded.blocks.filter(pl.col("chrom").is_in(contigs)).with_columns(pl.col("pos").cast(pl.Int64).alias("_start")).sort("chrom", "_start")
+    hit_blocks = (
+        ask.rename({"_site_chrom": "chrom"}).sort("chrom", "_site_pos")
+        .join_asof(blocks, left_on="_site_pos", right_on="_start", by="chrom", strategy="backward", check_sortedness=False)
+        .filter(pl.col("facet_id").is_not_null() & (pl.col("_site_pos") <= pl.col("end_pos").cast(pl.Int64)))
+        .drop("_site_pos", "_start")
+    )  # fmt: skip
+    graded = pl.concat([_calls_evidence(hit_calls, gq_on_reference, keep=("_site",)), _blocks_evidence(hit_blocks, gq_on_reference, keep=("_site",))])
+    covered = (
+        graded.rename({"pos": "record_pos", "end_pos": "record_end_pos"}).drop("chrom")
+        .join(asked.lazy(), on="_site", how="inner")
+        .collect()
+    )  # fmt: skip
     absent = asked.join(covered.select("_site").unique(), on="_site", how="anti")
     reads_reference = absence_is_reference(facet, asked_class) is True
     absence = absent.with_columns(

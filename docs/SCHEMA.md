@@ -1088,9 +1088,9 @@ Rejected, each with its cost:
   move there when a person-level layer pairs facets.
 - Coverage rows in `blocks`: a block is a caller's reference or no-call statement; reads reaching a
   base are not a call, and `absence_means = blocks` would then read depth as reference.
-- Keeping `depth()`'s run-length blocks as they come: a run can end wherever a read starts or ends, so
-  a 30x genome would be of the order of hundreds of millions of rows (an estimate from read counts,
-  not counted), where windows with exact bounds answer the same questions.
+- Keeping `depth()`'s run-length blocks as they come: 498 million runs on a 27 GB BAM (RM278), where
+  windows with exact bounds answer the same questions. `alignment_coverage` reads `depth()`'s
+  per-base mode, which peaks lower than its block mode (docs/ROADMAP.md RM278).
 
 ## The cache under the lazy frames (RM268)
 

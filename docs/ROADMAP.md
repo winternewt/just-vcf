@@ -47,7 +47,7 @@ BAM or CRAM through polars-bio `depth()`, folded into 1,000-base windows with ex
 described bases, tiling the header's contigs with zeros; `callable_sites`/`callable_at` with
 `min_depth` required. Decisions, each with what was rejected: a `Coverage` beside `Loaded`, not a
 fourth frame (the load contract and the cache of every format would change for evidence about an
-alignment); windows, not `depth()`'s raw runs (hundreds of millions of rows at 30x, estimated); a mean
+alignment); windows, not `depth()`'s raw runs (498 million on the 27 GB BAM below); per-base mode, not block mode (block mode's peak grows with the reads, below); a mean
 bounds no base, so regions and summaries answer callable unknown (rejected: reading a mean of 30 as
 "every base above 4"); `min_depth` with no default (rejected: GATK CallableLoci's 4, a convention the
 caller should choose); a BAM's `facet_id` from its header, index and size (rejected: hashing the bytes,
@@ -64,6 +64,29 @@ Substrate findings, polars-bio 0.36 (for the upstream-liaison seat to file; read
   holds a dense `Vec<i32>` per touched contig (its full length) for the whole file before emitting
   anything. Peak memory therefore grows with the genome, not with a window; it cannot be bounded from
   just-vcf.
+- In block mode `merge_dense_results` builds every contig's run-length batches into `pending_batches`
+  before emitting the first, so the peak adds all the runs (498 million on the 27 GB BAM below) to
+  the dense arrays. Per-base mode emits contig by contig. `alignment_coverage` uses per-base mode.
+- Block mode loses depth at a contig's end: on a synthetic BAM whose reads reach a contig's last
+  base it emits no run for that contig at all, and on the 27 GB BAM the last window of 60 contigs
+  read a zero there that per-base mode did not (the only differences across 2.94 million covered
+  windows). Shown by `test_a_read_on_a_contigs_last_base_is_counted`, which fails on block mode.
+- An indexed full scan reads the BAM twice: the dedicated no-coordinate partition scans "from the
+  first alignment record and filter[s] to no-coor rows" (`bio-format-bam/src/physical_exec.rs`), the
+  comment says, rather than seek past the placed reads. Measured as bytes read equal to twice the
+  file (below).
+
+**Measured 2026-10-23** on two private GRCh38 bwa-mem2 BAMs on the Krypton share (aggregates only;
+the machine shared with about eleven other sessions, load 17–31):
+
+| BAM | depth mode | time | peak RSS | bytes read | windows |
+|---|---|---|---|---|---|
+| 27.4 GB | blocks | 18.1 min | 22.6 GB | not recorded | 3,099,848 |
+| 27.4 GB | per-base | 12.7 min | 13.3 GB | 49.6 GB | 3,099,848 |
+| 48.3 GB | blocks | 38.3 min | 33.6 GB | 96.7 GB | 3,099,848 |
+
+Each BAM had a few windows (18 on the first) holding bases deeper than 32,767, reported as wrapped
+(the Int16 finding above).
 
 Left: a cache spill of the windows keyed by `facet_id` (RM268's pattern), so a BAM is read once; a
 quantized output from one depth pass; mosdepth's thresholds file; a person-level layer that pairs a

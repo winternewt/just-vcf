@@ -10,7 +10,7 @@ that wrote none where no read landed. It is read two ways:
   compression from the magic bytes.
 - **`alignment_coverage(path)`** runs polars-bio's `depth()` over a BAM or CRAM (charter: alignment
   processing is the substrate's, used as is; just-vcf walks no CIGAR of its own) and folds its
-  run-length blocks into fixed windows while they stream, so the result is a few million rows for a
+  per-base depth into fixed windows while it streams, so the result is a few million rows for a
   human genome whatever the depth.
 
 Both return a `Coverage`: a `CoverageFacet` (what was read and how) and `intervals`, a lazy frame in
@@ -28,10 +28,13 @@ read from an average.
 polars-bio 0.36's `depth()` writes its depth as Int16 by a wrapping cast from a 32-bit count, so a
 base deeper than 32,767 reads comes out negative (and one deeper than 65,535 as a small positive
 number, which cannot be told apart). Negative depths are left out of every window, counted in
-`unreadable_bases` and in a warning. Its accumulator also holds a 32-bit array the length of every
-contig it touched before it emits anything, about 4 bytes per base of the genome (docs/ROADMAP.md
-RM278 has the measurement); `depth()` takes no region and drops pushed-down filters, so that cannot
-be bounded from here.
+`unreadable_bases` and in a warning. Its accumulator holds a 32-bit array the length of every contig
+it touched for the whole file before it emits anything, about 4 bytes per base of the genome, so the
+peak is bounded by the genome, not by a window: 13.3 GB on a 27 GB GRCh38 BAM (docs/ROADMAP.md
+RM278). `depth()` takes no region and drops pushed-down filters, so a smaller bound cannot be set
+from here. Its run-length block mode is not used: it builds every contig's batches before emitting
+the first, so its peak also grows with the reads, and it drops the depth of a contig whose reads
+reach its last base.
 """
 
 import gzip
@@ -570,8 +573,8 @@ def alignment_coverage(
 ) -> Coverage:
     """Depth over a BAM or CRAM by polars-bio's `depth()`, in fixed windows (module docstring).
 
-    The blocks `depth()` streams are folded into `window`-base windows by Polars' streaming engine
-    and never held whole; the windows tile every contig the header names, with uncovered bases as
+    The per-base rows `depth(per_base=True)` streams are folded into `window`-base windows by
+    Polars' streaming engine and never held whole; the windows tile every contig the header names, with uncovered bases as
     zero (`zero_filled`). The read filters are `depth()`'s own and are recorded in `options`. A CRAM
     needs its reference where htslib-style lookup finds it; polars-bio is given none here.
     """
@@ -587,13 +590,25 @@ def alignment_coverage(
     lengths = [{"source": ref["name"], "chrom": canonical_chrom(ref["name"]), "length": int(ref["length"])} for ref in references]
     index = _index_sha256(path)
     options = {"filter_flag": filter_flag, "min_mapping_quality": min_mapping_quality}
-    blocks = pb.depth(str(path), filter_flag=filter_flag, min_mapping_quality=min_mapping_quality, use_zero_based=False).select(
-        chrom=pl.col("contig"),
-        pos=pl.col("pos_start").cast(pl.Int64),
-        end_pos=pl.col("pos_end").cast(pl.Int64),
-        depth=pl.col("coverage").cast(pl.Int64),
+    # Per-base rows, not run-length blocks: polars-bio 0.36 builds every contig's block batches before
+    # it emits the first, so block mode's peak grows with the reads (22.6 GB on a 27 GB BAM, 33.6 GB on
+    # a 48 GB one); per-base mode emits contig by contig from its dense arrays (13.3 GB on the first).
+    bases = pb.depth(
+        str(path), filter_flag=filter_flag, min_mapping_quality=min_mapping_quality, use_zero_based=False, per_base=True
     )
-    partial = _window_partials(blocks, window).collect(engine="streaming")
+    readable = pl.col("coverage") >= 0
+    depth = pl.when(readable).then(pl.col("coverage").cast(pl.Int64))
+    partial = (
+        bases.group_by(chrom=pl.col("contig"), window=(pl.col("pos").cast(pl.Int64) - 1) // window)
+        .agg(
+            depth_sum=depth.sum().cast(pl.Int64),
+            bases=readable.sum().cast(pl.Int64),
+            depth_min=depth.min(),
+            depth_max=depth.max(),
+            unreadable_bases=(~readable).sum().cast(pl.Int64),
+        )
+        .collect(engine="streaming")
+    )
     finished = _finish_windows(partial, window, lengths=lengths, zero_filled=True)
     warnings: list[str] = []
     unreadable = int(finished["unreadable_bases"].sum())

@@ -105,6 +105,15 @@ def test_alignment_windows_equal_the_reads_depth(tmp_path: Path) -> None:
     assert facet.source_sha256 is None and facet.assembly_label is None
 
 
+def test_a_read_on_a_contigs_last_base_is_counted(tmp_path: Path) -> None:
+    # polars-bio 0.36's block mode emits nothing for a contig whose reads reach its last base (on a
+    # real BAM: the last window of 60 contigs read a zero there); per-base mode counts it.
+    reads = [("chrX", 30, "10M"), ("chrX", 40, "10M"), ("chrY", 0, "40M")]
+    coverage = alignment_coverage(write_bam(tmp_path / "end.bam", reads), window=10)
+    for source, length in CONTIGS:
+        assert rows_of(coverage, source.removeprefix("chr")) == windows_of(depth_of(reads, contig=source), length, 10)
+
+
 def test_alignment_depth_is_deterministic_and_its_id_follows_the_options(tmp_path: Path) -> None:
     path = write_bam(tmp_path / "a.bam", READS)
     first, second = alignment_coverage(path, window=10), alignment_coverage(path, window=10)

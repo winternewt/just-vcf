@@ -50,7 +50,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   files. `write_vcf` has no VCF field for a hapLink: it writes the haplotypes one phases unphased,
   with a warning, since `|` without the set would read back as the chromosome's implicit set;
   `write_vcf_zarr` writes such a row's `call_genotype_phased` false, for the same reason. Adding the enum
-  member changes the `phase_set_kinds` dtype; `SCHEMA_VERSION` is bumped at merge.
+  member changes the `phase_set_kinds` dtype: schema 0.0.17.
 
 - CGI `masterVarBeta` rows carry `ad` (RM2): REF's count is `referenceAlleleReadCount`, each ALT's the
   read count of the slot that carries it, indexed over `source_alleles = [source_ref] + alts`. A row
@@ -94,8 +94,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   family-wide excuse cannot hide one loader that drops a column another fills. A new `FACETS` column
   fails for every format until its reasons are written. The same loads check that each load path
   returns `links` of the `LINKS` schema that agree with its facets, and that `subject` reaches every
-  facet. One gap it found is held as a known gap: a BCF's header build hints are never read, so it
-  gets no `assembly_label` where the same header as text gets GRCh37.
+  facet. One gap it found, a BCF's header build hints never read (no `assembly_label` where the
+  same header as text gets GRCh37), is fixed in the entry above.
 
 - The CLI printed header text unredacted. `sniff` printed `build_evidence`, the whole matched header line
   (a `##reference=file:///home/<name>/…`); it prints `build_hint` instead, the statement's key and the
@@ -139,7 +139,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   or is `too_few_members`. Offering blocks per window instead stays the person's call.
 - VCF 4.4+ phase-set lists are read and written (layer 8). The VCF loader reads FORMAT `PSL` into
   `phase_sets`/`phase_set_kinds` (kind `psl`) per allele, and `PSO` and `PSQ` into two new nullable
-  `calls` columns, `phase_set_ordinals` and `phase_set_qualities` (SCHEMA_VERSION not bumped here). A
+  `calls` columns, `phase_set_ordinals` and `phase_set_qualities` (schema 0.0.15; `liftover` and
+  `rejoin_split` carry them, `LIFT_VERSION` 5 and `REJOIN_VERSION` 3). A
   PSL name on a VCF 4.4+ record's first slot makes that slot phased, which P4 otherwise leaves
   unknown. polars-bio refuses `Number=P` (P10), so such a header is read through the rewritten copy
   declaring `Number=.` (`REWRITE_VERSION` 9); before this, a file with PSL loaded with PSL dropped.
@@ -160,8 +161,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   that declares FORMAT `PS` in its own words (DRAGEN, GATK HaplotypeCaller, DeepVariant, CGI) and the
   phasers above; two phasing steps leave it null with a warning. `##clair3_version` names Clair3 as
   the caller. A `##reference=` that differs from the caller's with no liftover recorded is a warning.
-  The CLI summary prints `reference`, `aligner` and each step's role, tool and version. `SCHEMA_VERSION`
-  is not bumped here.
+  The CLI summary prints `reference`, `aligner` and each step's role, tool and version. Schema
+  0.0.16.
 
 - `chip_absence` separates a written no-call from a call (RM281): a site the export writes as `--`
   (AncestryDNA: `0 0`) is `no_call`, where it was `in_export`, with or without a probe set; `in_export`
@@ -174,7 +175,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   every export; on v3 a same-person CGI genome reads all of them hom-ref, so the codes run the other way
   there), `23andme_v1_v2` (6 rows), Final Reports and unknown chips keep their code rows as
   loaded, with one warning counting them as `id_orientation_unverified` and naming the evidence. A value
-  change on those facets when the manifests are configured; `RESOLVE_VERSION` 7.
+  change on those facets when the manifests are configured; `RESOLVE_VERSION` 8.
 
 - Illumina Annotation Engine (Nirvana) JSON loads (`nirvana_json`, RM2, layer 1): each position object
   is the VCF record it annotated, so rows get `source_ref`, `alts`, `gt`, `phased`, `gq`, `dp`, `ad`,
@@ -223,8 +224,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   that name; stated lengths and chain sizes are checked against it as before. `resolve_ref`,
   `normalize`, `mint_vrs_ids` and `liftover`'s target contigs all go through it, and `resolve_ref`
   says how many rows it read that way. `chrom` keeps the source's spelling. Values change on files
-  that already load: such rows now get `ref`, alignment, VRS ids and lifts. `RESOLVE_VERSION` 5,
-  `NORMALIZE_VERSION` 6 and `LIFT_VERSION` 3 (derived `facet_id`s change), `MINT_VERSION` 3. Measured:
+  that already load: such rows now get `ref`, alignment, VRS ids and lifts. `RESOLVE_VERSION` 7,
+  `NORMALIZE_VERSION` 7 and `LIFT_VERSION` 4 (derived `facet_id`s change), `MINT_VERSION` 3. Measured:
   a PGP-HMS GRCh38 VCF goes from 44,594 rows unread to 0; GIAB HG002 lifted CHM13 → GRCh38 from
   75,001 `target_contig_unmatched` to 40,099 (all on `_fix` patches, which the Ensembl store lacks).
 
@@ -441,7 +442,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   vcfBeta with the same assembly's `var` (0 of 317.7M non-reference bases missed). A smaller CGI VCF
   keeps `blocks`, with a warning. Ancestry reads an omitted site of such a facet as reference outside
   its no-call blocks. A value change on files that already load (`blocks` becomes `reference`), and a
-  new member of the `absence_means` enum (schema bump pending at merge). CGI's native files keep
+  new member of the `absence_means` enum (schema 0.0.11). CGI's native files keep
   `blocks`.
 
 - `facets.dropped_fields` means the same in every loader: `[]` when the loader read the file's fields
@@ -906,7 +907,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   (`ReferenceMismatchError`), and any other unmatched contig (hg19's chrM against GRCh37's MT) is left
   unread, counted in the warnings. I/D codes, no-calls and spans past a contig's end stay unread too.
   `chr`-prefixed and plain names meet through `canonical_chrom`. The facet keeps its id and gains
-  `facets.ref_seqcol_digest` (schema: one new nullable column, version bump at merge). Minor.
+  `facets.ref_seqcol_digest` (schema 0.0.7: one new nullable column). Minor.
 
 - A sites-only VCF (no FORMAT column, no sample) is refused by `load` with the new `NoSampleError`
   (exported), instead of failing inside the parquet spill with a polars conversion error (F8). Minor:

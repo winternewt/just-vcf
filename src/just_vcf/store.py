@@ -248,8 +248,8 @@ class Store:
 
     def person(self, check: SameSubjectCheck | None = None) -> Person:
         """`Person.of` over every facet in the store, with `check` as the relatedness test. Its frames
-        are the store's lazy scans. The links are on `loaded()`; `Person` does not carry them. An empty
-        store has no person yet: `StoreError`."""
+        are the store's lazy scans, and its `links` those `loaded()` reads back. An empty store has no
+        person yet: `StoreError`."""
         if not self.facet_ids:
             raise StoreError("the store holds no facets yet")
         return Person.of(self.loaded(), check=check)

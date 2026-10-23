@@ -1829,11 +1829,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
-- **An enum member, version bump pending** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
+- **An enum member, landed in 0.0.17** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
   (`cgi_haplink`), CGI's `hapLink` as a phase set, just-vcf's own term. Adding a member changes the
   `pl.Enum` dtype of `calls.phase_set_kinds` and of `cis_phased_blocks`' `phase_set_kind`, which is a
-  schema change; `SCHEMA_VERSION` was deliberately left as it is on this builder branch, and the lead
-  bumps it at merge. Rule changes (Decision 2): CGI's native rows fill `phased`, `phase_sets` and
+  schema change, which landed in 0.0.17. Rule changes (Decision 2): CGI's native rows fill `phased`, `phase_sets` and
   `phase_set_kinds` from `hapLink`, where they were null, and `hapLink` leaves `dropped_fields`;
   `cis_phased_blocks` gives one block per hapLink and chromosome; `write_vcf` writes a haplotype
   phased by a hapLink `/`, with no PS (VCF has no field for a hapLink, and `|` without its set would
@@ -1852,13 +1851,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   where its rows agree and concatenates `cipos`, `ciend` and `alt_copy_numbers` in its `alts` order,
   where it wrote them null (`REJOIN_VERSION` 2).
 
-- **One facet column, landed in 0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's
-
-- **Additive, version not bumped in this change** (2026-10-23, PSL/PSO/PSQ phase sets, layer 8): two
+- **Additive, landed in 0.0.15** (2026-10-23, PSL/PSO/PSQ phase sets, layer 8): two
   nullable `calls` columns, `phase_set_ordinals` and `phase_set_qualities` (Decision 2, "How the VCF
   loader reads PSL"), and three columns of the computed `cis_phased_blocks` frame, `withheld_chrom`,
-  `withheld_pos` and `withheld_allele`. A new nullable column is a minor bump by the rule above;
-  `SCHEMA_VERSION` is left as it is on this builder branch for the lead to bump at merge. Values change
+  `withheld_pos` and `withheld_allele`. A new nullable column is a minor bump by the rule above,
+  0.0.15; `liftover` and `rejoin_split` carry the two columns (`LIFT_VERSION` 5, `REJOIN_VERSION` 3). Values change
   on VCF 4.4+ files that declare PSL: they loaded with PSL dropped (or not at all, Number=P, P10), and
   now carry its sets, and `phased[0]` where PSL names the first slot's set.
 
@@ -1866,11 +1863,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   Added outside the three frames: `RELATEDNESS_FRAME` and the two pedigree frames ("Relatedness and
   pedigrees" above). `Person.of`'s default check is now `same_person`.
 
-- **Four facet columns, version not bumped in this change** (2026-10-23, layer 2, the method chain):
+- **Four facet columns, landed in 0.0.16** (2026-10-23, layer 2, the method chain):
   `reference`, `aligner`, `aligner_version` and `method_steps` (Decision 5), all nullable and additive,
   and `phasing_method` now filled from the chain's one `phase` step. A new nullable column is a minor
-  bump by the rule above; `SCHEMA_VERSION` stays where it is on this builder branch and the lead bumps
-  it at merge with the round's other changes. `facet_id` digests none of them.
+  bump by the rule above, 0.0.16. `facet_id` digests none of them.
 
 - **No version change** (2026-10-23, RM281's written no-calls): no column changes, no enum member
   added. Rule changed (Decision 4): `chip_absence` gives a site the export writes as a no-call
@@ -1881,22 +1877,18 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   (Decision 2): `I`/`D` codes are resolved only on a chip `probes.ID_CALIBRATION` passes
   (`23andme_v5`, `ancestrydna_v2`); every other chip's code rows stay as loaded, counted
   `id_orientation_unverified`. Values change on `23andme_v3`, `23andme_v4`, `23andme_v1_v2`, Final
-  Report and unknown-chip facets when the manifests are configured. `RESOLVE_VERSION` 7.
+  Report and unknown-chip facets when the manifests are configured. `RESOLVE_VERSION` 8.
 
-- **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
+- **One facet column, landed in 0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every
   derived facet. Nullable and additive. `facet_id` does not digest the subject (Decision 5).
-
-- **A fourth frame, landed in 0.0.13** (2026-10-23, RM275, the `links` frame): `Loaded.links`
-  (Decision 12); no column of `facets`, `calls` or `blocks` changes. Rules added: every derived step adds a lineage link and
 
 - **No version change** (2026-10-23, RM276, the durable store): `Store` holds the four frames per
   facet as parquet with a manifest, and `write_vcf_zarr` exports one facet's calls ("The durable
   store"). No column of any frame changes; `SCHEMA_VERSION` is not bumped.
 
-- **No version change** (2026-10-23, RM275, the `links` frame): a fourth frame, `Loaded.links`
-  (Decision 12), and no column of `facets`, `calls` or `blocks` changes. `SCHEMA_VERSION` is not
-  bumped here: the lead bumps it when merging. Rules added: every derived step adds a lineage link and
+- **A fourth frame, landed in 0.0.13** (2026-10-23, RM275, the `links` frame): `Loaded.links`
+  (Decision 12), and no column of `facets`, `calls` or `blocks` changes. Rules added: every derived step adds a lineage link and
   carries its parent's; a load of several facets links them (`caller_split`, `appended_export`);
   `link_disagreements` states how `links` agrees with `derived_from` and `relation`.
 
@@ -1909,7 +1901,6 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 - **No version change** (2026-10-23, RM284): no column changes. A computed frame,
   `cis_phased_blocks`, exports the phase sets as VRS CisPhasedBlocks ("CisPhasedBlock export").
-  `SCHEMA_VERSION` was deliberately left as it is on this builder branch.
 
 - **No version change** (2026-10-23, RM281's allele pairs): no column changes. Rule changed (Decision
   2, "The strand of an array's genotypes"): in a `strand_check = mixed` facet, a withheld row whose
@@ -1965,11 +1956,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   no `source_ref` (an array row, a split Living DNA genotype) is aligned and trimmed, where it passed
   through as unchecked. Normalized facets get a new `facet_id` (`NORMALIZE_VERSION` 4).
 
-- **An enum member, version bump pending** (2026-10-23, RM2's CGI question): `AbsenceMeans.REFERENCE`
+- **An enum member, landed in 0.0.11** (2026-10-23, RM2's CGI question): `AbsenceMeans.REFERENCE`
   (`reference`), "every position the file omits was called reference by its producer", just-vcf's own
   term. Adding a member changes the `pl.Enum` dtype of `facets.absence_means`, which is a schema
-  change; `SCHEMA_VERSION` was deliberately left at 0.0.10 on this builder branch, and the lead bumps it
-  at merge. Rule change: a CGAPipeline VCF typed `wgs` gets `reference` where it got `blocks`, and
+  change, which landed in 0.0.11. Rule change: a CGAPipeline VCF typed `wgs` gets `reference` where it got `blocks`, and
   `absence_is_reference` answers True for it (Decision 4). Values change on files that already load.
 
 - **No version change** (2026-10-23, `dropped_fields`): no column changes. Rule stated: `[]` means the
@@ -2012,14 +2002,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 - **No version change** (2026-10-22, RM6's gVCF output): no column changes. Rule added: writing
   blocks back out (Decision 4).
 
-- **Three facet columns, version bump pending** (2026-10-22, RM4's chip detection and F13):
+- **Three facet columns, landed in 0.0.10** (2026-10-22, RM4's chip detection and F13):
   `facets.chip`, `facets.chip_basis` and `facets.strand_check`, all nullable and additive, which by
-  the rule above is a minor bump. `SCHEMA_VERSION` was deliberately left at 0.0.9 on this branch,
-  which runs beside other builders' branches; the lead bumps it at merge. Rule change in `resolve_ref`:
+  the rule above is a minor bump, 0.0.10. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
 
-- **0.0.17** (2026-10-24, the CGI leftovers): `PhaseSetKind.CGI_HAPLINK` (the `phase_set_kinds` dtype gains a
+- **0.0.17** (2026-10-23, the CGI leftovers): `PhaseSetKind.CGI_HAPLINK` (the `phase_set_kinds` dtype gains a
   member); CGI masterVarBeta fills `ad`; CGI `var` 1.x layouts tested.
 
 - **0.0.16** (2026-10-23, layer 2's method chain): `facets.method_steps`, `reference`, `aligner`,

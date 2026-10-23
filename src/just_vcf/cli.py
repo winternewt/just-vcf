@@ -3,9 +3,11 @@
 The CLI is a privacy boundary (RM272, CLAUDE.md §2): it prints counts and aggregates, never a row, a
 sample name, a path or an archive member name. `--sample` takes a name and the output never echoes it.
 Library warnings and refusal messages pass through a redaction of the strings this run knows to be
-labels (the input's path and name, the sample, the archive member); a library error's own message is
-never printed, since several embed the input's path. Every command takes `--json` for a machine-
-readable report on stdout; refusals go to stderr.
+labels (the input's path and name, the sample, the archive member) and of anything shaped like a path;
+a facet's free-text fields (vendor, caller version, phasing method…: header text) pass through
+`query`'s redaction first. `sniff` names the build statement that matched by its key, never its line.
+A library error's own message is never printed, since several embed the input's path. Every command
+takes `--json` for a machine-readable report on stdout; refusals go to stderr.
 
 Exit codes tell a refusal (the library declining a file it understood, `ExitCode`) from a crash (1)
 and from a usage error (2, Typer's own).
@@ -15,7 +17,7 @@ import json
 import logging
 import re
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from enum import IntEnum
 from pathlib import Path
@@ -30,6 +32,7 @@ from just_vcf.liftover import liftover
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.loading import LOADABLE_FORMATS, DamagedBgzfError, Loaded, MultiSampleError, NoSampleError, UnsupportedFormatError, load
 from just_vcf.normalize import normalize
+from just_vcf.query import PROVENANCE_TEXT, FacetRedactor, redact_paths
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, resolve_ref
 from just_vcf.sniff import Sniffed, SniffOutcome, sniff
 from just_vcf.vrs import mint_vrs_ids, vrs_withheld
@@ -121,11 +124,12 @@ class _Redactor:
 
     def __call__(self, text: str) -> str:
         """`text` with every label replaced where it stands as a whole token, longest first, so a
-        label inside a longer word or name (`SAMPLE_7` in `SAMPLE_70`) is left alone."""
-        if not self.secrets:
-            return text
-        alternatives = "|".join(re.escape(secret) for secret in sorted(self.secrets, key=len, reverse=True))
-        return re.sub(rf"(?<![\w.-])(?:{alternatives})(?![\w.-])", REDACTED, text)
+        label inside a longer word or name (`SAMPLE_7` in `SAMPLE_70`) is left alone; then anything
+        shaped like a path, by `query`'s rule (`redact_paths`)."""
+        if self.secrets:
+            alternatives = "|".join(re.escape(secret) for secret in sorted(self.secrets, key=len, reverse=True))
+            text = re.sub(rf"(?<![\w.-])(?:{alternatives})(?![\w.-])", REDACTED, text)
+        return redact_paths(text)
 
 
 class _Refusal(Exception):
@@ -180,7 +184,7 @@ def load_command(ctx: typer.Context, file: _FILE, sample: _SAMPLE = None, as_jso
     with _guarded(ctx, redact, sample):
         loaded = load(file, sample=sample)
         facets = _learn(loaded, redact)
-        report = {"facets": _facet_summaries(loaded, facets), "warnings": _warnings(loaded.warnings, redact)}
+        report = {"facets": _facet_summaries(loaded, facets, redact), "warnings": _warnings(loaded.warnings, redact)}
         _emit(report, as_json)
 
 
@@ -267,7 +271,7 @@ def convert_command(
         final = loaded.facets.collect()
         report = {
             "steps": steps,
-            "facet": _facet_summaries(loaded, final)[0],
+            "facet": _facet_summaries(loaded, final, redact)[0],
             **report,
             "written": {
                 "rows_written": written.rows_written,
@@ -294,11 +298,24 @@ def _sniffed(found: Sniffed, redact: _Redactor) -> dict[str, Any]:
         "kind": found.kind,
         "layers": list(found.layers),
         "build": found.build,
-        "build_evidence": found.build_evidence,
+        "build_hint": _build_hint(found),
         "also_matched": list(found.also_matched),
         "reason": redact(found.reason) if found.reason else None,
         "warnings": _warnings(found.warnings, redact),
     }
+
+
+_HINT_KEY = re.compile(r"^(#+\s*[A-Za-z_][\w.]*)(?:=|\t)")
+
+
+def _build_hint(found: Sniffed) -> dict[str, str] | None:
+    """Which build statement matched: the header key it stands under (`##reference`, `##contig`,
+    `#GENOME_REFERENCE`, or `header line`) and the build it names. Never the line: a `##reference`
+    is often a path (`file:///home/<name>/…`)."""
+    if found.build is None or found.build_evidence is None:
+        return None
+    key = _HINT_KEY.match(found.build_evidence)
+    return {"kind": key.group(1).replace(" ", "") if key else "header line", "label": found.build}
 
 
 _FACET_FIELDS = (
@@ -327,7 +344,15 @@ _FACET_FIELDS = (
 are labels, and can carry a person's name."""
 
 
-def _facet_summaries(loaded: Loaded, facets: pl.DataFrame) -> list[dict[str, Any]]:
+def _facet_text(facets: pl.DataFrame, redact: _Redactor) -> Callable[[Any], Any]:
+    """The redaction of a facet's free-text field: `query`'s (the facets' names and anything shaped like
+    a path), then the labels this run knows. One rule for both commands that print facets."""
+    by_facets = FacetRedactor(facets.to_dicts())
+    return lambda value: None if value is None else redact(by_facets(str(value)))
+
+
+def _facet_summaries(loaded: Loaded, facets: pl.DataFrame, redact: _Redactor) -> list[dict[str, Any]]:
+    text = _facet_text(facets, redact)
     calls, blocks = pl.collect_all(
         [
             loaded.calls.group_by("facet_id").agg(pl.len().alias("rows"), pl.col("chrom").n_unique().alias("contigs")),
@@ -338,9 +363,12 @@ def _facet_summaries(loaded: Loaded, facets: pl.DataFrame) -> list[dict[str, Any
     block_counts = dict(blocks.iter_rows())
     summaries = []
     for index, facet in enumerate(facets.iter_rows(named=True)):
-        summary: dict[str, Any] = {"index": index, **{name: facet[name] for name in _FACET_FIELDS}}
+        summary: dict[str, Any] = {"index": index}
+        for name in _FACET_FIELDS:
+            summary[name] = text(facet[name]) if name in PROVENANCE_TEXT else facet[name]
         summary["variant_classes"] = {entry["variant_class"]: entry["alleles"] for entry in facet["variant_classes"] or []} or None
-        summary["dropped_fields"] = facet["dropped_fields"]
+        dropped = facet["dropped_fields"]
+        summary["dropped_fields"] = None if dropped is None else [text(name) for name in dropped]
         counted = rows.get(facet["facet_id"], {})
         summary["rows"] = counted.get("rows", 0)
         summary["contigs"] = counted.get("contigs", 0)
@@ -350,12 +378,13 @@ def _facet_summaries(loaded: Loaded, facets: pl.DataFrame) -> list[dict[str, Any
 
 
 def _check_summary(resolved: Loaded, inherited: int, redact: _Redactor) -> dict[str, Any]:
-    facet = resolved.facets.collect().row(0, named=True)
+    facets = resolved.facets.collect()
+    facet, text = facets.row(0, named=True), _facet_text(facets, redact)
     ref_check = dict(resolved.calls.group_by("ref_check").len().collect().iter_rows())
     return {
         "facet_id": facet["facet_id"],
-        "format_id": facet["format_id"],
-        "assembly_label": facet["assembly_label"],
+        "format_id": text(facet["format_id"]),
+        "assembly_label": text(facet["assembly_label"]),
         "assembly_label_basis": facet["assembly_label_basis"],
         "ref_seqcol_digest": facet["ref_seqcol_digest"],
         "strand_check": facet["strand_check"],

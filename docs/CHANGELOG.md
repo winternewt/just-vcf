@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The CLI printed header text unredacted. `sniff` printed `build_evidence`, the whole matched header line
+  (a `##reference=file:///home/<name>/…`); it prints `build_hint` instead, the statement's key and the
+  build it names (`{"kind": "##reference", "label": "GRCh38"}`). `load`, `convert` and `check` printed the
+  facet's free-text fields as read (a `##DeepVariant_version` path landed in `caller_version`); every
+  one `query` redacts (`query.PROVENANCE_TEXT`), and `dropped_fields`, now goes through `query`'s
+  redaction (`query.FacetRedactor`) and then the CLI's labels. The CLI's warnings and refusals also
+  lose anything shaped like a path, by the same rule (`query.redact_paths`), which now also catches
+  `file:///` URLs, `//host` shares and one-component `~/` and `C:\` paths, in `query`'s answers too.
+  Breaking for a script reading `build_evidence` from `sniff --json`.
+
 - `chip_absence` and `learn_probe_sets` refuse a `Loaded` of more than one facet (an appended export)
   with `ValueError`, as the derived steps do: they read the first facet's chip and assembly against
   every facet's rows. `scripts/learn_probe_sets.py` skips such a file and counts it.

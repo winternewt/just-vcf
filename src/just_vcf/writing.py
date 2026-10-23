@@ -25,7 +25,10 @@ What is written, and the rules it follows:
   they are indexed over, is the written `[REF] + ALTs`; otherwise they are left out and counted.
 - **VCF 4.3**, not 4.4+: GP is a probability from 4.3 on, which is what `gp` holds, and the writer
   emits no leading phase indicator, so the first haplotype's phase follows 4.3's implicit rule.
-- **INFO** carries `END` where `end_pos` is not the REF span (symbolic alleles), and
+- **INFO** carries `END` where `end_pos` is not the REF span (symbolic alleles), the SV keys
+  `SVTYPE`, `CIPOS`, `CIEND` and `CN` from `sv_type`, `cipos`, `ciend` and `alt_copy_numbers` (FORMAT
+  `CN` is `copy_number`; a copy number that is not whole cannot be written as 4.3's Integer CN and
+  is left out, counted), and
   `JUST_VCF_SPLIT` on rows flagged as one record of a split multi-allelic site (`split_signal`:
   `normalize`'s split rows, and rows RM270 flagged). Those rows are written as the frame holds them,
   with a warning and the tag, so a reader is told that a `0` there may mean another ALT. `load` reads
@@ -69,7 +72,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.bgzf import BgzfWriter
-from just_vcf.loaders.vcf import FORMAT_KEYS, SPLIT_INFO_KEY
+from just_vcf.loaders.vcf import FORMAT_KEYS, SPLIT_INFO_KEY, V43_RESERVED_TYPES
 from just_vcf.loading import Loaded
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _store_for
 from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, BlockKind, RefCheck, canonical_chrom
@@ -90,11 +93,46 @@ _FORMAT_DESCRIPTIONS = {
     "DS": "Expected count of the alternate allele",
     "FT": "Sample filter",
     "PS": "Phase set",
+    "CN": "Copy number of this sample",
 }
 """The FORMAT keys the writer can emit, in the order they are written. Number and Type come from the
 loader's `FORMAT_KEYS`, so a written file declares each key the way the loader reads it back."""
 
 _NO_STRINGS = pl.lit([], dtype=pl.List(pl.String))
+
+_SV_INFO = {
+    "SVTYPE": ("1", "String", "Type of structural variant, as the source wrote it"),
+    "CIPOS": (".", "Integer", "Confidence interval around POS, two values per ALT"),
+    "CIEND": (".", "Integer", "Confidence interval around END, two values per ALT"),
+    "CN": ("A", V43_RESERVED_TYPES["INFO/CN"], "Copy number of each ALT allele, as the source wrote it"),
+}
+"""The structural-variant INFO keys the writer emits (RM282), in the order they are written: CIPOS and
+CIEND as VCF 4.5 declares them (two values per ALT, which is how the frame holds them), CN with the
+Integer Type VCF 4.3 reserves, since the file is 4.3 and polars-bio refuses a 4.3 CN declared Float."""
+
+
+def _whole(value: pl.Expr) -> pl.Expr:
+    """True where a copy number is a whole number. VCF 4.3 reserves CN as Integer, and polars-bio
+    refuses a 4.3 header declaring it Float, so a fractional one is not written (counted)."""
+    return value == value.round()
+
+
+def _whole_list(name: str) -> pl.Expr:
+    return pl.col(name).list.eval(_whole(pl.element()) | pl.element().is_null()).list.all() & (pl.col(name).list.len() > 0)
+
+
+def _sv_info_values() -> dict[str, pl.Expr]:
+    """Each SV INFO key's `KEY=value` text per row, null where the row has no value for it."""
+    texts = {
+        "SVTYPE": pl.col("sv_type"),
+        "CIPOS": _list_text("cipos"),
+        "CIEND": _list_text("ciend"),
+        "CN": pl.when(_whole_list("alt_copy_numbers")).then(
+            pl.col("alt_copy_numbers").list.eval(pl.element().cast(pl.Int64).cast(pl.String).fill_null(".")).list.join(",")
+        ),
+    }
+    return {key: pl.when(text.is_not_null()).then(pl.concat_str(pl.lit(f"{key}="), text)) for key, text in texts.items()}
+
 
 _UNWRITABLE_REASONS = (
     "ref_unresolved",
@@ -256,6 +294,11 @@ def write_vcf(
         warnings.append(
             f"{stats['n_ps_dropped']} row(s) had a phase set VCF 4.3 cannot write as PS (a PSL name, or not an "
             "integer); left out"
+        )
+    if stats["n_cn_fractional"]:
+        warnings.append(
+            f"{stats['n_cn_fractional']} row(s) had a copy number that is not a whole number, which VCF 4.3 "
+            "cannot write (it reserves CN as Integer); left out"
         )
     if stats["n_split"]:
         warnings.append(
@@ -449,6 +492,7 @@ def _format_values(ploidy: int) -> dict[str, pl.Expr]:
         "DS": _number_text(pl.col("dosage")),
         "FT": pl.when(pl.col("sample_filters").list.len() > 0).then(pl.col("sample_filters").list.join(";")),
         "PS": _ps_text(),
+        "CN": pl.when(_whole(pl.col("copy_number"))).then(pl.col("copy_number").cast(pl.Int64).cast(pl.String)),
     }
 
 
@@ -461,8 +505,15 @@ def _scan(calls: pl.LazyFrame) -> dict:
         calls.select(
             *[(pl.col("_unwritable") == reason).sum().alias(f"n_{reason}") for reason in _UNWRITABLE_REASONS],
             *[text.is_not_null().any().alias(f"has_{key}") for key, text in values.items()],
+            *[text.is_not_null().any().alias(f"has_info_{key}") for key, text in _sv_info_values().items()],
             (_has_vector() & ~_vectors_indexable() & pl.col("_unwritable").is_null()).sum().alias("n_vectors_dropped"),
             (pl.col("phase_sets").list.drop_nulls().list.len().fill_null(0).gt(0) & _ps_text().is_null()).sum().alias("n_ps_dropped"),
+            (
+                (pl.col("copy_number").is_not_null() & ~_whole(pl.col("copy_number")).fill_null(True))
+                | (pl.col("alt_copy_numbers").list.len().fill_null(0).gt(0) & ~_whole_list("alt_copy_numbers").fill_null(True))
+            )
+            .sum()
+            .alias("n_cn_fractional"),
             pl.col("split_signal").is_not_null().sum().alias("n_split"),
             (pl.col("end_pos").cast(pl.Int64) != ref_span_end).fill_null(False).any().alias("has_END"),
             pl.concat_list(pl.col("filters").fill_null(_NO_STRINGS), pl.col("sample_filters").fill_null(_NO_STRINGS))
@@ -542,6 +593,9 @@ def _header(facet: dict, sample: str, names: _Names, declared: list[str], stats:
     ]
     if stats["has_END"]:
         lines.append('##INFO=<ID=END,Number=1,Type=Integer,Description="End position of the record">')
+    for key, (number, kind, description) in _SV_INFO.items():
+        if stats[f"has_info_{key}"]:
+            lines.append(f'##INFO=<ID={key},Number={number},Type={kind},Description="{description}">')
     if stats["n_split"]:
         lines.append(
             f'##INFO=<ID={SPLIT_INFO_KEY},Number=1,Type=String,Description="This row looks like one record of a '
@@ -549,6 +603,7 @@ def _header(facet: dict, sample: str, names: _Names, declared: list[str], stats:
         )
     for key in declared:
         number, kind = FORMAT_KEYS[key]
+        kind = V43_RESERVED_TYPES.get(f"FORMAT/{key}", kind)
         lines.append(f'##FORMAT=<ID={key},Number={number},Type={kind},Description="{_FORMAT_DESCRIPTIONS[key]}">')
     lines += alt_lines
     for contig in names.contigs:
@@ -571,7 +626,7 @@ def _line(mapping: dict[str, str], ploidy: int) -> pl.Expr:
     split = pl.when(pl.col("split_signal").is_not_null()).then(
         pl.concat_str(pl.lit(f"{SPLIT_INFO_KEY}="), pl.col("split_signal").cast(pl.String))
     )
-    info = pl.concat_str([end, split], separator=";", ignore_nulls=True)
+    info = pl.concat_str([end, *_sv_info_values().values(), split], separator=";", ignore_nulls=True)
     values = _format_values(ploidy)
     keys = pl.concat_str([pl.when(text.is_not_null()).then(pl.lit(key)) for key, text in values.items()], separator=":", ignore_nulls=True)
     sample = pl.concat_str(list(values.values()), separator=":", ignore_nulls=True)

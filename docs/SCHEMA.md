@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.13.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.14.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -340,6 +340,11 @@ millions of them.
 included), or when it has no ALT (`.`) and an `INFO/END` extent, which is how Illumina's gVCF writes a
 reference block. Either way its GT must assert reference or nothing; a GT calling `<*>` stays a call. A record with `ALT=TC,<*>` is a variant call that also carries the `<*>` allele, and it
 stays in `calls` with `<*>` in `alts`. A monomorphic record (ALT `.`) stays in `calls` too.
+An `ALT .` record to `END` that carries a copy number (FORMAT or INFO `CN`) is a copy-number segment,
+not a block (RM282): Canvas writes its copy-neutral segments so (`GT 0/0`, `CN 2`, 90 of 182 records
+of a PGP-HMS Canvas file, which before RM282 loaded as 90 `ref` blocks and `absence_means = blocks`).
+It states the region's copy number and nothing about the small variants in it, so it is a `calls`
+row with `alts = []`, `end_pos = END` and `copy_number`, and the facet's absence stays `unknown`.
 
 Complete Genomics' native `var` and `masterVarBeta` files state their blocks directly: a `ref` locus is
 a `ref` block, and `no-call`, `no-ref` (an assembly gap) and `PAR-called-in-X` (chrY stretches whose
@@ -563,6 +568,11 @@ With Decisions 1–5 as recommended:
 | `filters` | `list[str]` | the source said `.` or has no filter column. `["PASS"]` is literal. Site-level |
 | `sample_filters` | `list[str]` | FORMAT `FT`: whether *this sample's* genotype passed, separate from the site. Null = not given |
 | `split_signal` | `Enum` | no sign that the row is one record of a multi-allelic site split one row per ALT. Otherwise why it looks so: `marker`, `slot_pattern` or `all_zero_beside_alt` (rule below). In such a row a `0` can mean another ALT, not REF |
+| `sv_type` | `str` | the source wrote no INFO `SVTYPE`. Verbatim, an open vocabulary (`DEL`, `BND`, DRAGEN's `CNV` on a `<DEL>`, Canvas's `LOH`, BreakDancer's `ITX`). Never derived from ALT, which holds the allele type already (structural variants, below) |
+| `cipos` | `list[i32]` | the source wrote no INFO `CIPOS`, or not one pair per ALT. Two offsets from `pos` per ALT, VCF 4.5's shape; an element null where the source wrote `.` (structural variants, below) |
+| `ciend` | `list[i32]` | as `cipos`, from INFO `CIEND`: offsets from the end. Never filled from `cipos`, though VCF 4.5 says a missing CIEND matches it |
+| `copy_number` | `f32` | the source wrote no FORMAT `CN`: this sample's copy number of the segment |
+| `alt_copy_numbers` | `list[f32]` | the source wrote no INFO `CN`, or not one value per ALT. Parallel to `alts`: VCF 4.5's copy number of each ALT allele; a VCF 4.2 INFO CN (`Number=1`, the copy number of the segment) is the one-ALT list |
 
 **`split_signal`.** A file split one row per ALT (bcftools `norm -m-`, Hail, GATK) can write the
 other ALT of a genotype as `0`, so `1/2` at `A>G,T` becomes `1/0` at `A>G` and `0/1` at `A>T`, and
@@ -656,7 +666,7 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    deletion. At a contig's first base there is no base before, and the row stays as written, counted.
 3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
    except the ones a move clears (`source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids`,
-   `vrs_errors`), which say how the source wrote a row, not what it states. So one indel written twice
+   `vrs_errors`, `cipos`, `ciend`), which say how the source wrote a row, not what it states. So one indel written twice
    by the source, once already left-aligned and once further right, with the same genotype and
    evidence, is one row, and the one kept is the row that did not move, with its source REF, check and
    GT text. Rows that state the same allele at one position and differ in anything else (genotype,
@@ -707,8 +717,9 @@ holding that collection and the target.
    and lifts complemented in place like an MNV. A re-anchored indel is not left-aligned on the target
    by `liftover`: the shift that was leftmost on the source is rightmost on the target. Run
    `normalize` on the lifted facet to left-align it there ("Normalizing", step 2).
-4. **What a lifted row carries.** `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and
-   `vrs_errors` are null: they described the source's representation on the source assembly. `gt`
+4. **What a lifted row carries.** `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids`,
+   `vrs_errors`, `cipos` and `ciend` are null: they described the source's representation on the
+   source assembly (the intervals are offsets a minus-strand block would reverse). `gt`
    indexes `[ref] + alts`. `gl`, `gp`, `ad` and the order of `source_alleles` are the parent's (Decision
    2: never reordered). A swapped row's `dosage` is null, since it counted the other allele. A row
    lifted to another contig than its source's has `phased`, `phase_sets` and `phase_set_kinds` null: a
@@ -737,7 +748,8 @@ alleles (P3), so the two must not share a name. The rule follows VCF 4.5's compu
    declared `Number=1` is read as the one-ALT list it is; one that is not one value per ALT cannot be
    matched to its alleles and is not read.
 2. For each allele compute an end:
-   - `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes: the record's INFO `END` where it gives one,
+   - `<DEL>`, `<DUP>`, `<INV>`, `<CNV>` and their subtypes, and the copy-number alleles `<CN0>`,
+     `<CN2>`… (Canvas, the 1000 Genomes SV release; RM282): the record's INFO `END` where it gives one,
      else `pos + abs(SVLEN)`. POS is the base before the event, so `<DEL>` at 200 with `SVLEN=30` ends
      at 230. END is the record's stated end (VCF 4.5 deprecates it but defines it as this very
      maximum, and a missing SVLEN is to be inferred from it); where the two disagree, END is followed
@@ -756,6 +768,44 @@ counted in a warning.
 
 Where REF is not known yet (an array `I`/`D` row) `end_pos` is null. A single-position array call has
 `end_pos = pos`.
+
+**Structural variants (RM282).** An SV or CNV VCF (Manta, DELLY, Canvas, DRAGEN's `.sv`/`.cnv`,
+Sniffles) loads as any VCF does: its symbolic ALTs (`<DEL>`, `<DUP:TANDEM>`, `<INV>`, `<INS>`,
+`<CNV>`, `<CN0>`…) and breakends (`A]2:7000]`, `.A`) are kept verbatim in `alts`, each counted as an
+`sv` allele in `variant_classes`, its extent is `end_pos` (above), and what the caller wrote about the
+event goes to five columns, each just-vcf's own shape (VRS has no Allele for these; charter 2):
+
+- `sv_type` is INFO `SVTYPE` as written. VCF 4.5 deprecates it as redundant with ALT, but callers
+  write a type ALT does not say: DRAGEN's copy-number caller writes `SVTYPE=CNV` on `<DEL>` and `<DUP>`
+  (an abundance claim, VCF 4.5's `SVCLAIM=D`, not an adjacency), Canvas `LOH` on `<CN0>,<CN2>`.
+  Rejected: deriving it from ALT where SVTYPE is absent, which would mix stated and derived values in
+  one column.
+- `cipos` and `ciend` hold two offsets per ALT. VCF 4.2 declared one pair for the record
+  (`Number=2`), and every ALT of a record shares its POS, so that pair is repeated for each ALT; a
+  record with no ALT (a copy-neutral segment) keeps its one pair; any other count is withheld and
+  counted. Rejected: storing the values as written, which leaves every consumer to read the facet's
+  `vcf_version` to know what a list of two means on a two-ALT record. A missing `ciend` stays null:
+  VCF 4.5 says to assume CIPOS, and a consumer applies that rule, the frame does not fill it.
+- `copy_number` is FORMAT `CN`, the sample's total; `alt_copy_numbers` is INFO `CN`, per ALT under
+  VCF 4.5 (its own example: `<CNV>,<CNV>` with `CN=1,2` and FORMAT `CN` 3). The two are kept apart:
+  neither is filled from the other, nor from a `<CNn>` allele's name.
+- A VCF 4.3 header declaring `CN` with a Type other than the Integer 4.3 reserves (it is Float from
+  4.4 on) is refused by polars-bio's reader, so that key is not carried, with a warning and the key in
+  `dropped_fields`; an undeclared `CN` the rows use is declared as the file's version reserves it.
+  `write_vcf` writes VCF 4.3, so it declares `CN` Integer and leaves out, counted, a copy number that
+  is not a whole number.
+
+Each of these is null on a row that is no SV. `normalize` leaves symbolic sites as written; on a
+sequence site it splits, each row keeps its own ALT's pair and copy number, and a row it moves loses
+`cipos` and `ciend` (offsets from the POS the source wrote), as a lifted row does. Comparing SV calls
+across facets (truvari, docs/LANDSCAPE.md) is not built.
+
+Measured 2026-10-23 on the PGP-HMS SV and CNV files (aggregates): a Manta `.sv.` file, 9,373 calls
+(4,366 sequence-written indels, 3,350 breakends, 848 `<DEL>`, 558 `<DUP:TANDEM>`, 251 `<INS>`); a
+Canvas `.cnv.` file, 182 records, 92 copy-number calls and 90 copy-neutral segments; a DRAGEN
+`.cnv.` file, 586 calls (450 `<DEL>`, 136 `<DUP>`, every one with `SVTYPE=CNV` and a FORMAT `CN`);
+two Veritas files (F7's `##CHROM` shape, which loads since 2026-10-22), 5,614 SV calls and 2,632 CNV
+rows whose ALT is the bare word `CNV` (F15: no class, no extent, `end_pos = pos`).
 
 **When an id is minted (RM271, `mint_vrs_ids`).** An id is the VRS 2.x Allele id of the fully
 justified allele, on the refget sequence (`SQ.…`) of the contig in the collection REF was read from
@@ -791,7 +841,9 @@ an id exists. A row with neither `ref` nor `alts` (an array row whose REF was no
 It checks in this fixed order and the first hit wins:
 
 1. **What the allele is**, read from the allele string: `unspecified` (`<*>`), `spanning_deletion`
-   (`*`), `symbolic` (`<DEL>`, `<CNV:TR>`, breakends, `.`-anchored single breakends), `partial_call`
+   (`*`), `sv_no_vrs_model` (an allele `variant_classes` counts as `sv`: `<DEL>`, `<CNV:TR>`, `<CN0>`,
+   breakends, `.`-anchored single breakends; RM282), `symbolic` (a symbolic allele that names no
+   variant: Complete Genomics' `<CGA_NOCALL>` where it stays a call), `partial_call`
    (CGI `?`), `array_code` (23andMe `I`/`D` where the source wrote no REF), `not_sequence` (anything
    else outside `ACGTN`, such as an ambiguity code in ALT).
 2. **Pipeline state**, read from the row: `array_code` (an array row with an `I`/`D` genotype, whose
@@ -1205,6 +1257,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   carries its parent's; a load of several facets links them (`caller_split`, `appended_export`);
   `link_disagreements` states how `links` agrees with `derived_from` and `relation`.
 
+- **Additive, version not bumped in this change** (2026-10-23, RM282 structural-variant facets): five
+  nullable `calls` columns, `sv_type`, `cipos`, `ciend`, `copy_number` and `alt_copy_numbers`
+  (Decision 6, "Structural variants"). A new nullable column is a minor bump by the rule above;
+  `SCHEMA_VERSION` stays 0.0.11 here and is bumped when the lead merges, with the other builders'
+  changes of the same round. Rules changed: `<CN0>`, `<CN2>`… end at INFO `END` (the `end_pos`
+  rule); an `ALT .` record with a copy number is a call, not a block (Decision 4); `vrs_withheld` gives
+  `sv_no_vrs_model` for an SV allele where it gave `symbolic` (`symbolic` now names only symbolic
+  alleles that are no variant). Values change on SV and CNV files that already load.
+
 - **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
   (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from
   its rows, where it was null. `absence_means` stays `blocks`. Values change on files that already
@@ -1288,6 +1349,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
 
+- **0.0.14** (2026-10-23, RM282): `calls.sv_type`, `cipos`, `ciend`, `copy_number`, `alt_copy_numbers`.
+  Additive. Values change: Canvas copy-neutral `ALT .` records are calls, not blocks (F18); `symbolic` in
+  VRS withholding now covers only CGI no-calls, SVs read `sv_no_vrs_model`.
+
 - **0.0.13** (2026-10-23, RM275): a fourth frame, `links` (`Loaded.links`, `schema.LINKS`). Additive.
 
 - **0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's subject label. Additive.
@@ -1369,5 +1434,6 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   vector until concordance can measure one.
 - Identity: `vrs_allele_ids` parallel to `[ref] + alts`, minted by `mint_vrs_ids` once REF is read.
   `vrs_errors` stores only what minting reported; why an id is missing is computed by
-  `vrs_withheld()`. `seqcol_digest` per facet.
+  `vrs_withheld()`. `seqcol_digest` per facet. SV alleles have no id (`sv_no_vrs_model`); what the
+  caller wrote about the event is `sv_type`, `cipos`, `ciend`, `copy_number`, `alt_copy_numbers`.
 - Absence: a facet property (`absence_means`), turned into a row only on request.

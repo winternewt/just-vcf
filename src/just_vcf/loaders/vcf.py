@@ -70,6 +70,7 @@ FORMAT_KEYS: dict[str, tuple[str, str]] = {
     "PS": ("1", "Integer"),
     "LEN": ("1", "Integer"),
     "MIN_DP": ("1", "Integer"),
+    "CN": ("1", "Float"),
 }
 """FORMAT keys the schema carries, with the Number and Type VCF 4.5 reserves for them."""
 
@@ -78,8 +79,27 @@ VECTOR_NUMBERS: dict[str, str] = {"AD": "R", "PL": "G", "GL": "G", "GP": "G", "P
 them with a fixed count is using the name for something else: VarScan2's AD (Number=1) is the ALT
 depth only, CGI's AD (Number=2) counts reads per GT slot, not per allele. Those are not carried."""
 
-INFO_KEYS: dict[str, tuple[str, str]] = {"END": ("1", "Integer"), "SVLEN": ("A", "Integer")}
-"""INFO keys the loader reads, for `end_pos` only, with the Number and Type VCF 4.5 gives them."""
+INFO_KEYS: dict[str, tuple[str, str]] = {
+    "END": ("1", "Integer"),
+    "SVLEN": ("A", "Integer"),
+    "SVTYPE": ("1", "String"),
+    "CIPOS": (".", "Integer"),
+    "CIEND": (".", "Integer"),
+    "CN": ("A", "Float"),
+}
+"""INFO keys the loader reads, with the Number and Type VCF 4.5 gives them: END and SVLEN for
+`end_pos`, and the structural-variant keys the SV columns carry (RM282). VCF 4.5 deprecates SVTYPE
+as redundant with ALT; it is read because callers write a type ALT does not say (DRAGEN's `CNV` on a
+`<DEL>`, Canvas's `LOH`)."""
+
+V43_RESERVED_TYPES: dict[str, str] = {"FORMAT/CN": "Integer", "INFO/CN": "Integer"}
+"""The carried keys whose Type VCF 4.3 reserves differently from VCF 4.5 (CN is Float from 4.4 on).
+polars-bio's reader (noodles) refuses a VCF 4.3 header declaring one of them with another Type, so
+such a key is not carried (`refused_types`), and the loader declares an undeclared one so."""
+
+_LIST_INFO = ("SVLEN", "CIPOS", "CIEND", "CN")
+"""INFO keys read as lists. One declared `Number=1` (VCF 4.2's INFO CN, an older caller's SVLEN) is
+read as the one-value list of a one-ALT record."""
 
 SPLIT_MARKER_ID = "OLD_MULTIALLELIC"
 """The INFO key vt decompose and Glow write on a record split off a multi-allelic site."""
@@ -108,8 +128,10 @@ apart. Anything else is counted as no allele (F15)."""
 CGI_CNV_WINDOW = "<CGA_CNVWIN>"
 """Complete Genomics' 2 kb copy-number window: coverage, not a genotype. Left out of the frames."""
 
-_SV_LENGTH_TYPES = ("DEL", "DUP", "INV", "CNV")
-"""Symbolic allele types whose extent is `SVLEN` bases after POS. INS and breakends end at POS."""
+_SV_LENGTH_TYPES = ("DEL", "DUP", "INV", "CNV", r"CN\d+")
+"""Symbolic allele types whose extent is `SVLEN` bases after POS, or END. INS and breakends end at
+POS. `<CN0>`, `<CN2>`… are copy-number alleles (Canvas, the 1000 Genomes SV release): a segment of
+this contig to END, as `<CNV>` is."""
 
 _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 """An ALT of one of `_SV_LENGTH_TYPES`, subtypes included (`<DUP:TANDEM>`, `<DEL:ME:ALU>`)."""
@@ -117,9 +139,12 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 7
+REWRITE_VERSION = 8
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
-7: every copy has a manifest beside it (RM268), so a copy without one is from an older version."""
+7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
+8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
+them undeclared, and a structural copy keeps them (RM282); an older copy lacks the declarations,
+and polars-bio panics on a requested key its header does not declare."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -146,7 +171,7 @@ _STRUCTURAL_META = ("##fileformat=", "##FILTER=", "##ALT=", "##contig=")
 Everything else is read by `read_header`, not by polars-bio."""
 
 
-def _keep_in_structural_copy(line: str) -> bool:
+def _keep_in_structural_copy(line: str, refused: dict[str, str]) -> bool:
     if line.startswith(_STRUCTURAL_META):
         return True
     declared = re.match(r"^##(INFO|FORMAT)=<(.*)>$", line)
@@ -154,6 +179,8 @@ def _keep_in_structural_copy(line: str) -> bool:
         return False
     kind, body = declared.groups()
     attrs = _attrs(body)
+    if f"{kind}/{attrs.get('ID')}" in refused:
+        return False
     if kind == "INFO":
         return attrs.get("ID") in INFO_KEYS or attrs.get("ID") in SELECTION_INFO or _split_marker_kind(attrs) is not None
     return attrs.get("ID") in FORMAT_KEYS
@@ -187,6 +214,8 @@ class Header:
     """Declared INFO key → Number."""
     format: dict[str, str] = field(default_factory=dict)
     """Declared FORMAT key → Number."""
+    types: dict[str, str] = field(default_factory=dict)
+    """Declared key, namespaced (`FORMAT/CN`) → Type."""
     contigs: list[dict] = field(default_factory=list)
     sample_meta: list[str] = field(default_factory=list)
     format_first: bool = True
@@ -372,6 +401,8 @@ def _parse_header(meta: list[str], columns: list[str]) -> Header:
             continue
         kind, body = structured.groups()
         attrs = _attrs(body)
+        if kind in ("INFO", "FORMAT") and "ID" in attrs:
+            header.types[f"{kind}/{attrs['ID']}"] = attrs.get("Type", "")
         if kind == "INFO" and "ID" in attrs:
             header.info[attrs["ID"]] = attrs.get("Number", ".")
             if marker := _split_marker_kind(attrs):
@@ -415,10 +446,32 @@ def declare(header: Header, missing: list[str]) -> None:
     """Record the loader's declarations of `missing` keys in `header`, as `readable_path` writes them."""
     for name in missing:
         namespace, key = name.split("/", 1)
+        header.types[name] = declared_type(header, name)
         if namespace == "INFO":
             header.info[key] = INFO_KEYS[key][0]
         else:
             header.format[key] = FORMAT_KEYS[key][0]
+
+
+def declared_type(header: Header, name: str) -> str:
+    """The Type the loader declares an undeclared carried key with (`INFO/CN`): VCF 4.5's, except where
+    the file's VCF 4.3 reserves another one (`V43_RESERVED_TYPES`)."""
+    namespace, key = name.split("/", 1)
+    if header.version_tuple == (4, 3) and name in V43_RESERVED_TYPES:
+        return V43_RESERVED_TYPES[name]
+    return (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key][1]
+
+
+def refused_types(header: Header) -> dict[str, str]:
+    """Carried keys a VCF 4.3 header declares with a Type its reserved definition does not have
+    (`V43_RESERVED_TYPES`) → that Type. polars-bio refuses the header, so they are not carried."""
+    if header.version_tuple != (4, 3):
+        return {}
+    return {
+        name: header.types[name]
+        for name, reserved in V43_RESERVED_TYPES.items()
+        if name in header.types and header.types[name] != reserved
+    }
 
 
 @dataclass
@@ -547,10 +600,11 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
         return target
     cache.mkdir(parents=True, exist_ok=True)
     declared: set[tuple[str, str]] = set()
+    refused = refused_types(header)
     with opener() as source, target.open("wb") as raw, BgzfWriter(raw) as out:
         out.write(f"##fileformat={header.version or 'VCFv4.2'}\n".encode())
         for line in header.meta:
-            if line.startswith("##fileformat=") or (structural_only and not _keep_in_structural_copy(line)):
+            if line.startswith("##fileformat=") or (structural_only and not _keep_in_structural_copy(line, refused)):
                 continue
             key = re.match(r"^##(\w+)=<ID=([^,>]+)", line)
             if structural_only and key:
@@ -560,7 +614,8 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
             out.write(f"{line}\n".encode())
         for name in missing:
             namespace, key = name.split("/", 1)
-            number, kind = (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key]
+            number = (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key][0]
+            kind = declared_type(header, name)
             out.write(
                 f'##{namespace}=<ID={key},Number={number},Type={kind},'
                 f'Description="Declared by just-vcf: used by the rows, missing from the header">\n'.encode()
@@ -705,9 +760,11 @@ def read_records(
     carried key is present, as a typed null when the file does not declare it. `extra_info` are INFO
     keys read for selecting rows (`SF`), as lists of strings.
     """
-    info = [key for key in INFO_KEYS if key in header.info] + sorted(header.split_markers) + list(extra_info)
+    refused = refused_types(header)
+    info = [key for key in INFO_KEYS if key in header.info and f"INFO/{key}" not in refused]
+    info += sorted(header.split_markers) + list(extra_info)
     unfit = unfit_keys(header)
-    fmt = [key for key in FORMAT_KEYS if key in header.format and key not in unfit]
+    fmt = [key for key in FORMAT_KEYS if key in header.format and key not in unfit and f"FORMAT/{key}" not in refused]
     multi = len(header.samples) > 1
     frame = scan(path, info, fmt, sample if multi else None)
     if first_record is not None:
@@ -745,9 +802,13 @@ def read_records(
             reshaped += [pl.col(name).list.first().alias(name), (pl.col(name).list.len() > 1).alias(f"_multi_{key}")]
         elif number != "1" and not is_list:
             reshaped.append(pl.concat_list(pl.col(name)).alias(name))
-    if "info_SVLEN" in present and not isinstance(schema["info_SVLEN"], pl.List):
-        # Declared Number=1, as older SV callers do: one value, read as the list of a one-ALT record.
-        reshaped.append(pl.concat_list(pl.col("info_SVLEN")).alias("info_SVLEN"))
+    for key in _LIST_INFO:
+        name = f"info_{key}"
+        if name in present and not isinstance(schema[name], pl.List):
+            # Declared Number=1, as older SV callers do: one value, read as the list of a one-ALT record.
+            reshaped.append(pl.concat_list(pl.col(name)).alias(name))
+    if "info_SVTYPE" in present and isinstance(schema["info_SVTYPE"], pl.List):
+        reshaped.append(pl.col("info_SVTYPE").list.first().alias("info_SVTYPE"))
     frame = frame.with_columns(reshaped)
     # A marker declared with a Number other than 1 comes back as a list: its first value is enough.
     frame = frame.with_columns(
@@ -762,7 +823,11 @@ def read_records(
     )
     return frame.with_columns(
         [pl.lit(None, dtype=_dtype(number, kind)).alias(f"fmt_{key}") for key, (number, kind) in FORMAT_KEYS.items() if f"fmt_{key}" not in present]
-        + [pl.lit(None, dtype=pl.List(pl.Int32) if key == "SVLEN" else pl.Int32).alias(f"info_{key}") for key in INFO_KEYS if f"info_{key}" not in present]
+        + [
+            pl.lit(None, dtype=pl.List(_dtype("1", kind)) if key in _LIST_INFO else _dtype("1", kind)).alias(f"info_{key}")
+            for key, (_, kind) in INFO_KEYS.items()
+            if f"info_{key}" not in present
+        ]
     ).with_columns(pl.col("fmt_GT").cast(pl.String), pl.col("fmt_FT").cast(pl.String))
 
 
@@ -791,6 +856,11 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
         _is_block_record(alts).any().alias("any_block"),
         (alts.list.len().eq(1) & alts.list.first().eq(CGI_CNV_WINDOW)).sum().alias("cnv_windows"),
         alts.list.contains(DASH_DELETION).sum().alias("dash_alts"),
+        *[
+            (pl.col(f"info_{key}").is_not_null() & _ci_pairs(f"info_{key}", alts).is_null()).sum().alias(f"unfit_{key}")
+            for key in ("CIPOS", "CIEND")
+        ],
+        (pl.col("info_CN").is_not_null() & _per_alt("info_CN", alts).is_null()).sum().alias("unfit_info_CN"),
         alts.list.eval(~pl.element().str.contains(_VCF_ALLELE_OR_DASH)).list.any().sum().alias("not_allele_alts"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).is_not_null().sum().alias("gp_rows"),
         (pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.sum() - 1.0).abs().gt(0.02).sum().alias("gp_off_one"),
@@ -981,6 +1051,14 @@ def to_rows(
             f"{stats['end_not_read']} record(s) carry an INFO END that is not their extent (an <INS>, a breakend, "
             "a sequence allele or a symbolic allele of no known span): end_pos does not read it"
         )
+    for key in ("CIPOS", "CIEND"):
+        if stats.get(f"unfit_{key}"):
+            warnings.append(
+                f"{stats[f'unfit_{key}']} {key} value(s) not two per ALT (VCF 4.5) nor one pair for the record "
+                "(VCF 4.2's Number=2) set to null"
+            )
+    if stats.get("unfit_info_CN"):
+        warnings.append(f"{stats['unfit_info_CN']} INFO CN value(s) not one per ALT set to null")
     if stats.get("dash_alts"):
         warnings.append(
             f"{stats['dash_alts']} record(s) write a deletion as ALT `-`, which VCF has no allele for (F12): read as "
@@ -1069,6 +1147,11 @@ def to_rows(
         (pl.lit(None, dtype=pl.String) if v44 or not text_gt else gt_text).alias("source_gt"),
         canonical_chrom_expr("chrom").alias("chrom"),
         pl.col("start").alias("pos"),
+        pl.when(pl.col("info_SVTYPE").is_in(["", "."])).then(None).otherwise(pl.col("info_SVTYPE")).alias("sv_type"),
+        _ci_pairs("info_CIPOS", pl.col("alts")).alias("cipos"),
+        _ci_pairs("info_CIEND", pl.col("alts")).alias("ciend"),
+        pl.col("fmt_CN").cast(pl.Float32, strict=False).alias("copy_number"),
+        _per_alt("info_CN", pl.col("alts")).alias("alt_copy_numbers"),
     )
     full_vector = pl.any_horizontal(pl.col("gl").is_not_null(), pl.col("gp").is_not_null(), pl.col("ad").is_not_null())
     rows = rows.with_columns(
@@ -1096,9 +1179,15 @@ def to_rows(
 def _is_block_record(alts: pl.Expr) -> pl.Expr:
     """A reference-block record, before its GT is looked at: every ALT is `<*>` (GATK, VCF 4.5), or
     there is no ALT and INFO/END gives an extent (Illumina's gVCF: `ALT .` with `END`), or it is
-    Complete Genomics' `<CGA_NOCALL>` span with END."""
+    Complete Genomics' `<CGA_NOCALL>` span with END.
+
+    An `ALT .` record to END that carries a copy number (FORMAT or INFO CN) is a copy-number segment,
+    not a block: Canvas writes its copy-neutral segments so (`GT 0/0`, `CN 2`). It states the copy
+    number of the region and nothing about small variants in it, so it is a `calls` row with
+    `alts = []`, and the facet's absence does not become `blocks`."""
     all_star = alts.list.len().gt(0) & alts.list.eval(pl.element() == "<*>").list.all()
-    illumina = alts.list.len().eq(0) & pl.col("info_END").is_not_null()
+    copy_number = pl.col("fmt_CN").is_not_null() | pl.col("info_CN").is_not_null()
+    illumina = alts.list.len().eq(0) & pl.col("info_END").is_not_null() & ~copy_number
     cgi = alts.list.len().eq(1) & alts.list.first().eq(CGI_NOCALL) & pl.col("info_END").is_not_null()
     return all_star | illumina | cgi
 
@@ -1106,6 +1195,23 @@ def _is_block_record(alts: pl.Expr) -> pl.Expr:
 def _dtype(number: str, kind: str) -> pl.DataType:
     scalar = {"Integer": pl.Int32, "Float": pl.Float32, "String": pl.String}[kind]
     return scalar if number == "1" else pl.List(scalar)
+
+
+def _ci_pairs(name: str, alts: pl.Expr) -> pl.Expr:
+    """A confidence interval (INFO CIPOS or CIEND) as two values per ALT, VCF 4.5's shape: as written
+    when the file wrote one pair per ALT; VCF 4.2's one pair for the record (`Number=2`) repeated for
+    each ALT, since every ALT of a record shares its POS; null for any other count (counted in
+    `scan_stats`). A record with no ALT (a copy-neutral segment) keeps its one pair."""
+    values = pl.col(name).cast(pl.List(pl.Int32), strict=False)
+    width = pl.max_horizontal(alts.list.len().cast(pl.Int64), pl.lit(1, dtype=pl.Int64))
+    repeated = values.list.gather(pl.int_ranges(0, 2 * width).list.eval(pl.element() % 2))
+    return pl.when(values.list.len() == 2 * width).then(values).when(values.list.len() == 2).then(repeated).otherwise(None)
+
+
+def _per_alt(name: str, alts: pl.Expr) -> pl.Expr:
+    """An INFO list with one value per ALT (`Number=A`) as Float32, null where its count is not that."""
+    values = pl.col(name).cast(pl.List(pl.Float32), strict=False)
+    return pl.when(values.list.len() == alts.list.len()).then(values).otherwise(None)
 
 
 def _has_sv(alts: pl.Expr) -> pl.Expr:
@@ -1224,8 +1330,11 @@ def dropped_fields(header: Header, data: list[bytes] = ()) -> list[str]:
     info, fmt = row_keys(list(data))
     info |= set(header.info)
     fmt |= set(header.format)
-    dropped_info = [f"INFO/{key}" for key in info if key not in INFO_KEYS and key not in header.split_markers]
-    dropped_fmt = [f"FORMAT/{key}" for key in fmt if key not in FORMAT_KEYS or key in unfit_keys(header)]
+    refused = refused_types(header)
+    dropped_info = [
+        f"INFO/{key}" for key in info if (key not in INFO_KEYS and key not in header.split_markers) or f"INFO/{key}" in refused
+    ]
+    dropped_fmt = [f"FORMAT/{key}" for key in fmt if key not in FORMAT_KEYS or key in unfit_keys(header) or f"FORMAT/{key}" in refused]
     return sorted(dropped_info) + sorted(dropped_fmt)
 
 

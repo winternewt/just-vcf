@@ -54,6 +54,20 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   `scripts/format_registry.py`; a test fails when the doc and the code disagree, and every shape's
   example is sniffed in the suite. No code or frame changes.
 
+- Structural-variant and copy-number VCFs load as SV facets (RM282). Five nullable `calls` columns:
+  `sv_type` (INFO SVTYPE as written), `cipos` and `ciend` (two offsets per ALT; VCF 4.2's one pair
+  for the record repeated per ALT), `copy_number` (FORMAT CN) and `alt_copy_numbers` (INFO CN, per
+  ALT). `SCHEMA_VERSION` is not bumped in this change; the lead bumps it at merge. Canvas's `<CN0>`,
+  `<CN2>`… end at INFO END, and its copy-neutral segments (ALT `.` with END and CN) are calls, not
+  reference blocks (F18), so a Canvas facet's absence is `unknown`, not `blocks`. `vrs_withheld`
+  gives `sv_no_vrs_model` for an SV allele or breakend (it gave `symbolic`, which now names only
+  symbolic alleles that are no variant, CGI's `<CGA_NOCALL>`). `write_vcf` writes SVTYPE, CIPOS,
+  CIEND and CN back (CN as the Integer VCF 4.3 reserves; a fractional one is left out and counted),
+  and the rows load back equal. A VCF 4.3 header declaring CN Float, which polars-bio refuses, loads
+  without CN, with a warning. `normalize` splits the per-ALT columns with their ALT and clears the
+  intervals of a row it moves, as `liftover` does. `REWRITE_VERSION` 8. Values change on SV and CNV
+  files that already load. Breaking for a consumer matching `vrs_withheld == "symbolic"` on SVs.
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

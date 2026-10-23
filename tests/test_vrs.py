@@ -155,8 +155,8 @@ def test_withheld_alleles_are_null_with_a_reason(tmp_path: Path, store: Referenc
     row = by_pos[("1", 300)]
     assert row["vrs_allele_ids"] == [oracle_id(proxy, sq["1"], 300, row["ref"], a) for a in (row["ref"], snv_alt)] + [None]
     assert withheld("1", 300) == [None, None, "spanning_deletion"]
-    assert withheld("1", 310) == [None, "symbolic"]
-    assert withheld("1", 320) == [None, "symbolic"]
+    assert withheld("1", 310) == [None, "sv_no_vrs_model"]
+    assert withheld("1", 320) == [None, "sv_no_vrs_model"]
     assert withheld("1", 330) == [None, "unspecified"]
     assert withheld("1", 340) == [None, "not_sequence"]
     assert withheld("1", 350) == ["ref_mismatch", "ref_mismatch"]
@@ -173,7 +173,7 @@ def test_withheld_alleles_are_null_with_a_reason(tmp_path: Path, store: Referenc
     warnings = "\n".join(result.warnings)
     assert "4 allele(s) without a VRS id: REF not read from the reference" in warnings
     assert "2 allele(s) without a VRS id: the source REF disagrees with the reference (ref_mismatch)" in warnings
-    assert "2 allele(s) without a VRS id: a symbolic allele or breakend" in warnings
+    assert "2 allele(s) without a VRS id: a structural variant (a symbolic allele or a breakend)" in warnings
 
 
 def test_before_minting_the_reason_is_the_pipeline_state(tmp_path: Path, store: ReferenceStore) -> None:

@@ -15,7 +15,7 @@ import polars as pl
 
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.13"
+SCHEMA_VERSION = "0.0.14"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -244,6 +244,11 @@ CALLS = pl.Schema(
         "filters": pl.List(pl.String),
         "sample_filters": pl.List(pl.String),
         "split_signal": enum_dtype(SplitSignal),
+        "sv_type": pl.String,
+        "cipos": pl.List(pl.Int32),
+        "ciend": pl.List(pl.Int32),
+        "copy_number": pl.Float32,
+        "alt_copy_numbers": pl.List(pl.Float32),
     }
 )
 """One row per site per facet (SCHEMA.md Decision 6)."""

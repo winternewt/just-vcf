@@ -57,9 +57,16 @@ Severity: medium · Status: open (decided by the person in the Part 2 interview,
 The person chose both sources (E9): public vendor manifests (Illumina GSA/OmniExpress are on disk) and probe sets learned from PGP people with an array and a WGS. Resolves I/D codes, strand per probe, and which sites a chip has (absence with a cause). Closes F17.
 
 ## RM282 — Structural-variant facets
-Severity: low · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: low · Status: loading built 2026-10-23, awaiting merge (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
 
 The person chose load with ids withheld (E11): SV calls load as rows with type and `end_pos`, VRS ids withheld with a reason (VRS 2.x has no SV model; charter: never a non-conforming GA4GH value).
+
+**Built:** the SV columns `sv_type`, `cipos`, `ciend`, `copy_number`, `alt_copy_numbers`, `<CNn>`
+extents, copy-number segments kept out of `blocks` (F18), `sv_no_vrs_model`, and the `write_vcf`
+round trip (docs/SCHEMA.md, "Structural variants"). All five PGP-HMS SV and CNV files load. **Left:**
+comparing SV calls across facets (truvari, LANDSCAPE); no DELLY or Sniffles file exists to check
+against (synthetic tests only); and the question whether VRS 2's `CopyNumberCount`/`CopyNumberChange`
+and `Adjacency` should be minted for CNVs and breakends, which the reason's name presumes away.
 
 ## RM283 — An aggregate-only query helper
 Severity: medium · Status: built on a builder branch 2026-10-23 (`just_vcf.query`), waiting for the lead's merge; decided by the person in the Part 2 interview, 2026-10-23 · Owner: lead

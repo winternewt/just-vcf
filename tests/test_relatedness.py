@@ -18,12 +18,14 @@ from just_vcf import FACETS, Loaded, load
 from just_vcf.assembly import ASSEMBLY_LENGTHS
 from just_vcf.person import Person
 from just_vcf.reference import ReferenceStore
+from just_vcf.sniff import sniff
 from just_vcf.relatedness import (
     ASSEMBLY_MISMATCH,
     ASSEMBLY_UNKNOWN,
     BETWEEN_BANDS,
     NO_PANEL,
     RELATEDNESS_FRAME,
+    THIRD_DEGREE_FLOOR,
     TOO_FEW_SITES,
     Relatedness,
     RelationBand,
@@ -326,3 +328,25 @@ def test_the_packaged_panels_are_derived_from_somaliers_sites(test_reference_dir
         frame, _ = relatedness_sites.derive(relatedness_sites.read_sites(Path(value) / name), store, assembly)
         packaged = packaged_panel(assembly).sites.rename({"ref_allele": "ref", "effect_allele": "alt"})
         assert frame.equals(packaged)
+
+
+def _first_of(participant: Path, format_id: str) -> Path:
+    """The participant's first file of `format_id` on GRCh37."""
+    found = next((p for p in sorted(participant.rglob("*")) if p.is_file() and (s := sniff(p)).format == format_id and s.build == "GRCh37"), None)
+    if found is None:
+        pytest.skip(f"no {format_id} file for {participant.name}")
+    return found
+
+
+def test_pgp_arrays_of_one_person_and_of_two(pgp_participants: Path) -> None:
+    """Opt-in, PGP-HMS (public): one participant's 23andMe and AncestryDNA exports read as one person;
+    the 23andMe exports of two participants as unrelated (docs/RELATEDNESS.md has the measured ranges)."""
+    one = load(_first_of(pgp_participants / "hu832966", "23andme"))
+    same = load(_first_of(pgp_participants / "hu832966", "ancestrydna"))
+    other = load(_first_of(pgp_participants / "huF31554", "23andme"))
+    together = relatedness(one, same)
+    assert together.band is RelationBand.SAME_PERSON and together.n_sites > 2_000
+    assert together.n_ibs0 <= together.n_sites // 500
+    apart = relatedness(one, other)
+    assert apart.band in (RelationBand.UNRELATED, RelationBand.UNKNOWN) and apart.kinship < THIRD_DEGREE_FLOOR
+    assert same_person(one, same) is True and same_person(one, other) is False

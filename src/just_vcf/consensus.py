@@ -15,9 +15,13 @@ are in docs/SCHEMA.md ("A consensus posterior"); in short:
    genotype); one row at the position over the same REF span without it (zero copies, `site`); a
    `ref` block over it (zero copies, graded by the block's likelihoods where it has them); its silence
    where `absence_is_reference` says it reads as reference; otherwise nothing.
-3. **An error rate turns a statement into a likelihood**: `L(k) = (1 - e)·q(k) + e·(1 - q(k))/P`,
-   where `q` is the facet's own distribution over copies (a genotype is a point mass), `P` the ploidy.
-   A statement gets the method's genotype error, a block or a silence its silence error
+3. **An error rate turns a statement into a likelihood.** A statement whose row's own confidence
+   falls in a band the atlas measured for its method gets that band's rate `e_b`, the measured share
+   of such rows whose genotype was wrong: `L(top) = 1 - e_b`, and `e_b` shared among the other copies
+   as the row's own distribution `q` ranks them (evenly where it puts nothing there). Any other
+   reading is tempered by its method's average rate: `L(k) = (1 - e)·q(k) + e·(1 - q(k))/P`, where `q`
+   is the facet's own distribution over copies (a genotype is a point mass), `P` the ploidy; a
+   statement gets the method's genotype error, a block or a silence its silence error
    (`method_error_rates`). A method the atlas never measured gets a stated default, and the row says
    how many of its facets did.
 4. **Posterior** `∝ prior(k) · ∏ L_f(k)`, computed in log space. The prior is flat over the copies.
@@ -34,7 +38,7 @@ from enum import Enum
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
-from just_vcf.atlas import ALL, CI_Z, RegionSet
+from just_vcf.atlas import ALL, ALL_BANDS, CI_Z, CONFIDENCE_BANDS, NO_CONFIDENCE, RegionSet, confidence_band
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
 from just_vcf.concordance import _covered, _declared_contigs
 from just_vcf.evidence import GradeBasis, _calls_evidence
@@ -58,7 +62,7 @@ __all__ = [
     "method_error_rates",
 ]
 
-CONSENSUS_VERSION = 1
+CONSENSUS_VERSION = 2
 """Part of the consensus `facet_id` and its links' `step_version`: bumped whenever the rule changes
 what it emits."""
 
@@ -78,7 +82,8 @@ class RateBasis(str, Enum):
     """Atlas rows of the facet's caller at other versions, pooled (the facet's version has none)."""
     DEFAULT = "default"
     """No atlas row for the caller: the stated default (`consensus(default_rate=...)`, else the worst
-    rate any measured method has in that class)."""
+    rate any measured method has in that class). A confidence band is never defaulted: without a
+    measured band a row takes its method's average rate."""
 
 
 class GpReading(str, Enum):
@@ -98,6 +103,7 @@ METHOD_RATES = pl.Schema(
         "caller_version": pl.String,
         "region_class": pl.String,
         "variant_class": enum_dtype(VariantClass),
+        "confidence_band": pl.String,
         "genotype_error": pl.Float64,
         "genotype_attribution": pl.String,
         "silence_error": pl.Float64,
@@ -105,9 +111,11 @@ METHOD_RATES = pl.Schema(
         "compared": pl.UInt64,
     }
 )
-"""What `method_error_rates` returns: one method's error rates per region class and variant class.
-`caller_version` is null for rates pooled over a caller's versions (`by="caller"`). `partners` is how
-many methods its genotype rate rests on, `compared` the fewest alleles one of those pairs compared."""
+"""What `method_error_rates` returns: one method's error rates per region class, variant class and
+confidence band (`all`, its average; else a band of its rows' own confidence, `atlas.CONFIDENCE_BANDS`,
+where the atlas counted one). `caller_version` is null for rates pooled over a caller's versions
+(`by="caller"`). `partners` is how many methods its genotype rate rests on, `compared` the fewest
+alleles one of those pairs compared."""
 
 FACET_RATES = pl.Schema(
     {
@@ -116,12 +124,14 @@ FACET_RATES = pl.Schema(
         "caller_version": pl.String,
         "region_class": pl.String,
         "variant_class": enum_dtype(VariantClass),
+        "confidence_band": pl.String,
         "genotype_error": pl.Float64,
         "silence_error": pl.Float64,
         "rate_basis": enum_dtype(RateBasis),
     }
 )
-"""`Consensus.rates`: the rates each parent facet was weighted by, per region class and variant class."""
+"""`Consensus.rates`: the rates each parent facet was weighted by, per region class, variant class and
+confidence band (`all`, the average every class has; a band only where the atlas measured one)."""
 
 CONSENSUS_SUPPORT = pl.Schema(
     {
@@ -139,13 +149,15 @@ CONSENSUS_SUPPORT = pl.Schema(
         "silent": pl.UInt32,
         "defaulted": pl.UInt32,
         "gp_as_likelihood": pl.UInt32,
+        "banded": pl.UInt32,
     }
 )
 """`Consensus.support`: one row per consensus row, in its order. `copies` is the most probable number
 of copies of `alt`, `confidence` `-10·log10(1 - p)` of it from the log-space posterior (the `gp`
 column is Float32 and can round a tiny remainder to zero). `supported` + `contradicted` + `silent` =
 `facets`, the parents. `defaulted` counts the facets that spoke with a default rate,
-`gp_as_likelihood` those whose posterior was multiplied in (`GpReading.LIKELIHOOD`)."""
+`gp_as_likelihood` those whose posterior was multiplied in (`GpReading.LIKELIHOOD`), `banded` those
+weighted by the measured rate of their row's confidence band rather than their method's average."""
 
 
 class Consensus(Loaded):
@@ -174,9 +186,9 @@ def method_error_rates(atlas: pl.DataFrame, *, scope: str = "carried_pass", by: 
 
     The atlas states how often two methods disagree, not which one erred. With independent rare
     errors a pair's genotype disagreement `d = mismatch / (match + mismatch)` is about the sum of the
-    two methods' error rates. A `ploidy_differs` allele is left out of both: a haploid call against a
-    diploid one on a male X is two conventions, not a wrong genotype, and the consensus does not
-    combine readings of two ploidies anyway. So:
+    two methods' error rates. A haploid call against the same allele's diploid homozygote (a male X
+    written two ways) is a `match` in the atlas (F22), so two conventions are no genotype error; a
+    haploid call against a het stays a mismatch. So:
 
     - **`genotype_error`**, the rate at which a method's stated genotype is wrong: where the method
       forms a triangle with two partners that were also compared with each other, `(d_xy + d_xz -
@@ -187,6 +199,17 @@ def method_error_rates(atlas: pl.DataFrame, *, scope: str = "carried_pass", by: 
       alleles a partner carries that the method left one-sided, the lowest over its partners. It is an
       upper bound: a partner's false calls count against the method too.
 
+    - **by confidence band** (`confidence_band`, beside `all`), from the atlas's cells of both sides'
+      bands of their own rows' confidence: per pair and class, the least-squares fit of each cell's
+      discordance as the sum of one rate per band of each side. One pair fixes the rates only up to
+      a constant moved from one side to the other, as it fixes the average rates only up to the
+      split; the split taken is even in the cell where both sides are at their most confident band
+      (the `half_pair` rule, applied where neither row's confidence explains a disagreement). A band
+      is given where it holds `MIN_BAND_ALLELES` alleles both called and both sides have two such
+      bands; averaged over partners (`genotype_attribution = band`). The `all` rate stays the
+      pooled rule above, so a method's bands, weighted by their alleles, need not average to it.
+      Silence is not banded: a band row carries the method's average silence rate.
+
     No rate goes below the 95% Wilson upper bound of zero events in the alleles it rests on, so a
     method that never disagreed in a million alleles gets about 4e-6, never zero. Rows of `scope` only;
     rows of an unknown caller are left out (an unknown method matches no facet). `by="caller"` pools
@@ -195,7 +218,13 @@ def method_error_rates(atlas: pl.DataFrame, *, scope: str = "carried_pass", by: 
     """
     if by not in ("method", "caller"):
         raise ValueError(f"by is 'method' or 'caller', not {by!r}")
+    # An atlas built before the bands has no band columns, and a row naming no band is pooled.
+    atlas = atlas.with_columns(
+        *[(pl.col(name).fill_null(ALL_BANDS) if name in atlas.columns else pl.lit(ALL_BANDS)).alias(name) for name in ("a_band", "b_band")]
+    )
     rows = atlas.filter((pl.col("scope") == scope) & pl.col("a_caller").is_not_null() & pl.col("b_caller").is_not_null())
+    banded_rows = rows.filter((pl.col("a_band") != ALL_BANDS) | (pl.col("b_band") != ALL_BANDS))
+    rows = rows.filter((pl.col("a_band") == ALL_BANDS) & (pl.col("b_band") == ALL_BANDS))
     if by == "caller":
         rows = rows.filter(pl.col("a_caller") != pl.col("b_caller")).with_columns(
             pl.lit(None, dtype=pl.String).alias("a_caller_version"), pl.lit(None, dtype=pl.String).alias("b_caller_version")
@@ -260,14 +289,111 @@ def method_error_rates(atlas: pl.DataFrame, *, scope: str = "carried_pass", by: 
         )
         .unnest("_m")
         .with_columns(pl.when(pl.col("_version") != unknown).then(pl.col("_version")).alias("caller_version"))
-        .with_columns(pl.col("partners").fill_null(0), pl.col("compared").fill_null(0))
+        .with_columns(pl.col("partners").fill_null(0), pl.col("compared").fill_null(0), pl.lit(ALL_BANDS).alias("confidence_band"))
     )
+    banded = _banded_rates(banded_rows, rates, by, key_a, key_b, sep, unknown)
+    if banded is not None:
+        rates = pl.concat([rates.select(METHOD_RATES.names()).cast(dict(METHOD_RATES)), banded.select(METHOD_RATES.names()).cast(dict(METHOD_RATES))])
     order = {label: rank for rank, label in enumerate([ALL, *sorted(set(rates["region_class"].to_list()) - {ALL})])}
+    bands = {label: rank for rank, label in enumerate([ALL_BANDS, *CONFIDENCE_BANDS])}
     return (
         rates.select(METHOD_RATES.names())
         .cast(dict(METHOD_RATES))
-        .sort(["caller", "caller_version", pl.col("region_class").replace_strict(order, return_dtype=pl.UInt16), "variant_class"], nulls_last=True)
+        .sort(
+            ["caller", "caller_version", pl.col("region_class").replace_strict(order, return_dtype=pl.UInt16), "variant_class",
+             pl.col("confidence_band").replace_strict(bands, default=len(bands), return_dtype=pl.UInt16)],
+            nulls_last=True,
+        )  # fmt: skip
     )
+
+
+MIN_BAND_ALLELES = 1000
+"""The fewest alleles both called a band of one method's confidence must hold, over a pair, for its
+rate to be given: a smaller band is noise (a handful of rows at 99%) and its rows take the average."""
+
+_FIT_TOLERANCE = 1e-12
+_FIT_ROUNDS = 10_000
+
+
+def _additive_fit(cells: dict[tuple[str, str], tuple[int, int]]) -> tuple[dict[str, float], dict[str, float], dict[str, int], dict[str, int]] | None:
+    """`cells` maps (band of side a, band of side b) to (alleles both called, mismatches). Returns each
+    side's rate per band from the least-squares fit of `mismatch / n = e_a(i) + e_b(j)` (weighted by
+    `n`), the two sides' rates shifted so that their most confident bands holding `MIN_BAND_ALLELES`
+    share that cell's disagreement evenly, and each band's alleles; None where either side has fewer
+    than two such bands (nothing to tell its confident rows from its unsure ones)."""
+    bands_a = sorted({i for i, _ in cells}, key=CONFIDENCE_BANDS.index)
+    bands_b = sorted({j for _, j in cells}, key=CONFIDENCE_BANDS.index)
+    n_a = {i: sum(n for (x, _), (n, _m) in cells.items() if x == i) for i in bands_a}
+    n_b = {j: sum(n for (_, y), (n, _m) in cells.items() if y == j) for j in bands_b}
+    graded_a = [i for i in bands_a if i != NO_CONFIDENCE and n_a[i] >= MIN_BAND_ALLELES]
+    graded_b = [j for j in bands_b if j != NO_CONFIDENCE and n_b[j] >= MIN_BAND_ALLELES]
+    if len(graded_a) < 2 or len(graded_b) < 2:
+        return None
+    a = dict.fromkeys(bands_a, 0.0)
+    b = dict.fromkeys(bands_b, 0.0)
+    for _ in range(_FIT_ROUNDS):
+        change = 0.0
+        for i in bands_a:
+            value = sum(m - n * b[j] for (x, j), (n, m) in cells.items() if x == i) / n_a[i]
+            change, a[i] = max(change, abs(value - a[i])), value
+        for j in bands_b:
+            value = sum(m - n * a[i] for (i, y), (n, m) in cells.items() if y == j) / n_b[j]
+            change, b[j] = max(change, abs(value - b[j])), value
+        if change < _FIT_TOLERANCE:
+            break
+    shift = (a[graded_a[-1]] - b[graded_b[-1]]) / 2
+    return {i: v - shift for i, v in a.items()}, {j: v + shift for j, v in b.items()}, n_a, n_b
+
+
+def _banded_rates(rows: pl.DataFrame, pooled: pl.DataFrame, by: str, key_a: pl.Expr, key_b: pl.Expr, sep: str, unknown: str) -> pl.DataFrame | None:
+    """Per method, class and band of its own confidence, from the atlas's cells of both sides' bands
+    (`method_error_rates`): `_additive_fit` per pair and class, each band holding `MIN_BAND_ALLELES`
+    floored at the Wilson bound of its alleles, averaged over partners."""
+    if by == "caller":
+        rows = rows.filter(pl.col("a_caller") != pl.col("b_caller")).with_columns(
+            pl.lit(None, dtype=pl.String).alias("a_caller_version"), pl.lit(None, dtype=pl.String).alias("b_caller_version")
+        )
+    rows = rows.filter((pl.col("a_band") != ALL_BANDS) & (pl.col("b_band") != ALL_BANDS))
+    if rows.is_empty():
+        return None
+    cls = ["region_class", "variant_class"]
+    cells = (
+        rows.with_columns(key_a.alias("_a"), key_b.alias("_b"), pl.col("variant_class").cast(pl.String))
+        .filter(pl.col("_a") != pl.col("_b"))
+        .group_by("_a", "_b", *cls, "a_band", "b_band").agg(pl.col("match", "mismatch").sum())
+        .with_columns((pl.col("match") + pl.col("mismatch")).alias("_n"))
+        .filter(pl.col("_n") > 0)
+        .sort("_a", "_b", *cls, "a_band", "b_band")
+    )  # fmt: skip
+    tables: dict[tuple[str, str, str, str], dict[tuple[str, str], tuple[int, int]]] = {}
+    for row in cells.iter_rows(named=True):
+        tables.setdefault((row["_a"], row["_b"], row["region_class"], row["variant_class"]), {})[(row["a_band"], row["b_band"])] = (row["_n"], row["mismatch"])
+    estimates = []
+    for (x_a, x_b, region, variant), table in tables.items():
+        fit = _additive_fit(table)
+        if fit is None:
+            continue
+        rate_a, rate_b, n_a, n_b = fit
+        for method, rates, counts in ((x_a, rate_a, n_a), (x_b, rate_b, n_b)):
+            for band, rate in rates.items():
+                if counts[band] >= MIN_BAND_ALLELES:
+                    z2 = CI_Z * CI_Z
+                    estimates.append({"_x": method, "region_class": region, "variant_class": variant, "confidence_band": band,
+                                      "_e": max(rate, z2 / (counts[band] + z2)), "_n": counts[band]})  # fmt: skip
+    if not estimates:
+        return None
+    own = pooled.select(
+        pl.concat_str([pl.col("caller"), pl.col("caller_version").fill_null(unknown)], separator=sep).alias("_x"),
+        pl.col("region_class"), pl.col("variant_class").cast(pl.String), "silence_error", "caller", "caller_version",
+    )  # fmt: skip
+    banded = (
+        pl.DataFrame(estimates, schema={"_x": pl.String, "region_class": pl.String, "variant_class": pl.String, "confidence_band": pl.String, "_e": pl.Float64, "_n": pl.Int64})
+        .group_by("_x", *cls, "confidence_band")
+        .agg(pl.col("_e").mean().alias("genotype_error"), pl.len().cast(pl.UInt32).alias("partners"), pl.col("_n").min().cast(pl.UInt64).alias("compared"))
+        .join(own, on=["_x", *cls], how="inner")
+        .with_columns(pl.lit("band").alias("genotype_attribution"))
+    )  # fmt: skip
+    return banded if banded.height else None
 
 
 def _facet_rates(facets: list[dict], atlas: pl.DataFrame | None, classes: tuple[str, ...], default_rate: float | None, scope: str) -> pl.DataFrame:
@@ -284,7 +410,7 @@ def _facet_rates(facets: list[dict], atlas: pl.DataFrame | None, classes: tuple[
             raise ValueError(f"default_rate must lie strictly between 0 and 1, not {default_rate}")
         default = grid.with_columns(pl.lit(default_rate).alias("_dg"), pl.lit(default_rate).alias("_ds"))
     else:
-        worst = by_method.group_by("region_class", "variant_class").agg(
+        worst = by_method.filter(pl.col("confidence_band") == ALL_BANDS).group_by("region_class", "variant_class").agg(
             pl.col("genotype_error").max().alias("_dg"), pl.col("silence_error").max().alias("_ds")
         )
         default = grid.join(worst, on=["region_class", "variant_class"], how="left")
@@ -293,9 +419,10 @@ def _facet_rates(facets: list[dict], atlas: pl.DataFrame | None, classes: tuple[
         caller, version = facet["caller"], facet["caller_version"]
         own = by_method.filter((pl.col("caller") == caller) & pl.col("caller_version").eq_missing(pl.lit(version, dtype=pl.String))) if caller else empty
         kin = by_caller.filter(pl.col("caller") == caller) if caller else empty
+        own_avg, kin_avg = own.filter(pl.col("confidence_band") == ALL_BANDS), kin.filter(pl.col("confidence_band") == ALL_BANDS)
         rows = (
-            grid.join(own.select("region_class", "variant_class", pl.col("genotype_error").alias("_mg"), pl.col("silence_error").alias("_ms")), on=["region_class", "variant_class"], how="left")
-            .join(kin.select("region_class", "variant_class", pl.col("genotype_error").alias("_cg"), pl.col("silence_error").alias("_cs")), on=["region_class", "variant_class"], how="left")
+            grid.join(own_avg.select("region_class", "variant_class", pl.col("genotype_error").alias("_mg"), pl.col("silence_error").alias("_ms")), on=["region_class", "variant_class"], how="left")
+            .join(kin_avg.select("region_class", "variant_class", pl.col("genotype_error").alias("_cg"), pl.col("silence_error").alias("_cs")), on=["region_class", "variant_class"], how="left")
             .join(default, on=["region_class", "variant_class"], how="left")
         )
         measured_m = pl.col("_mg").is_not_null() & pl.col("_ms").is_not_null()
@@ -314,7 +441,19 @@ def _facet_rates(facets: list[dict], atlas: pl.DataFrame | None, classes: tuple[
             raise ValueError(
                 f"facet {facet['facet_id']} has no atlas rate in {where} and no measured method gives a default there; pass default_rate=..."
             )
-        out.append(rows.select(FACET_RATES.names()).cast(dict(FACET_RATES)))
+        out.append(rows.with_columns(pl.lit(ALL_BANDS).alias("confidence_band")).select(FACET_RATES.names()).cast(dict(FACET_RATES)))
+        # Its bands: the method's own where it has any, else the caller's; a band no atlas row
+        # measured is left out, and a row in it takes the average above.
+        bands = own_bands if (own_bands := own.filter(pl.col("confidence_band") != ALL_BANDS)).height else kin.filter(pl.col("confidence_band") != ALL_BANDS)
+        bands = bands.join(grid, on=["region_class", "variant_class"], how="semi")
+        if bands.height:
+            basis = RateBasis.METHOD.value if own_bands.height else RateBasis.CALLER.value
+            out.append(
+                bands.select(
+                    pl.lit(facet["facet_id"]).alias("facet_id"), pl.lit(caller, dtype=pl.String).alias("caller"), pl.lit(version, dtype=pl.String).alias("caller_version"),
+                    "region_class", "variant_class", "confidence_band", "genotype_error", "silence_error", pl.lit(basis).alias("rate_basis"),
+                ).cast(dict(FACET_RATES))
+            )  # fmt: skip
     return pl.concat(out)
 
 
@@ -500,11 +639,13 @@ def _vector_copies(frame: pl.DataFrame) -> pl.DataFrame:
 
 
 _READING = pl.Schema(
-    {"_site": pl.UInt32, "_reading": pl.String, "_ploidy": pl.Int8, "_hard": pl.Int8, "_q0": pl.Float64, "_q1": pl.Float64, "_q2": pl.Float64, "_gp_lik": pl.Boolean}
-)
+    {"_site": pl.UInt32, "_reading": pl.String, "_ploidy": pl.Int8, "_hard": pl.Int8, "_q0": pl.Float64, "_q1": pl.Float64, "_q2": pl.Float64, "_gp_lik": pl.Boolean,
+     "_band": pl.String}
+)  # fmt: skip
 """One facet's reading of one allele: `_reading` is `stated`, `site`, `ref_block`, `absence` or one of
 `_SILENT`; a hard reading has `_hard` copies (its ploidy, or null where the source did not say), a
-graded one `_q0.._q2`."""
+graded one `_q0.._q2`. A stated one has `_band`, the band of its row's own confidence (`none` where
+the row states none)."""
 
 
 def _readings(
@@ -548,6 +689,7 @@ def _readings(
         pl.when(pl.col("_q0").is_null() & pl.col("_called")).then(pl.col("_count")).alias("_hard"),
         "_q0", "_q1", "_q2",
         (pl.col("_q0").is_not_null() & pl.col("_gp_lik")).alias("_gp_lik"),
+        confidence_band(pl.col("confidence")).alias("_band"),
     )  # fmt: skip
 
     rest = sites.join(hit.select("_site"), on="_site", how="anti")
@@ -638,7 +780,9 @@ def _readings(
 def _site_rates(sites: pl.DataFrame, rates: pl.DataFrame, regions: RegionSet | None) -> pl.DataFrame:
     """Per allele and parent, the genotype and silence error rates it is weighted by: the highest rate
     among the region classes holding the allele (`all` where none does), and whether any of those
-    came from the default."""
+    came from the default. `_ge_<band>` is the genotype rate of a row of that confidence band, where
+    the facet has one measured in `all` for the allele's variant class (else null); a class holding
+    the allele that did not measure the band gives its average there."""
     probe = sites.select("_site", "chrom", "variant_class", pl.col("pos").cast(pl.Int64).alias("_at")).sort("chrom", "_at")
     classes = sorted(regions.intervals) if regions is not None else []
     members = {label: _covered(probe, regions.intervals[label]) for label in classes} if regions is not None else {}
@@ -648,22 +792,32 @@ def _site_rates(sites: pl.DataFrame, rates: pl.DataFrame, regions: RegionSet | N
     for facet_id in rates["facet_id"].unique(maintain_order=True).to_list():
         own = rates.filter(pl.col("facet_id") == facet_id)
 
-        def lookup(label: str, column: str) -> pl.Expr:
-            table = own.filter(pl.col("region_class") == label)
+        def lookup(label: str, column: str, band: str = ALL_BANDS) -> pl.Expr:
+            table = own.filter((pl.col("region_class") == label) & (pl.col("confidence_band") == band))
             mapping = dict(zip(table["variant_class"].cast(pl.String).to_list(), table[column].to_list()))
             return pl.col("variant_class").cast(pl.String).replace_strict(mapping, default=None, return_dtype=pl.Float64)
 
         def defaulted(label: str) -> pl.Expr:
-            table = own.filter(pl.col("region_class") == label)
+            table = own.filter((pl.col("region_class") == label) & (pl.col("confidence_band") == ALL_BANDS))
             mapping = dict(zip(table["variant_class"].cast(pl.String).to_list(), (b == RateBasis.DEFAULT.value for b in table["rate_basis"].cast(pl.String).to_list())))
             return pl.col("variant_class").cast(pl.String).replace_strict(mapping, default=False, return_dtype=pl.Boolean)
 
-        def pick(column: str) -> pl.Expr:
-            inside = [pl.when(pl.col(f"_in_{label}")).then(lookup(label, column)) for label in classes]
-            return pl.when(none_held).then(lookup(ALL, column)).otherwise(pl.max_horizontal(inside) if inside else lookup(ALL, column))
+        def pick(column: str, band: str = ALL_BANDS) -> pl.Expr:
+            def rate(label: str) -> pl.Expr:
+                return lookup(label, column) if band == ALL_BANDS else pl.coalesce(lookup(label, column, band), lookup(label, column))
 
+            inside = [pl.when(pl.col(f"_in_{label}")).then(rate(label)) for label in classes]
+            chosen = pl.when(none_held).then(rate(ALL)).otherwise(pl.max_horizontal(inside) if inside else rate(ALL))
+            return chosen if band == ALL_BANDS else pl.when(lookup(ALL, column, band).is_not_null()).then(chosen)
+
+        bands = [band for band in CONFIDENCE_BANDS if own.filter(pl.col("confidence_band") == band).height]
         flag = pl.when(none_held).then(defaulted(ALL)).otherwise(pl.any_horizontal([pl.col(f"_in_{label}") & defaulted(label) for label in classes]) if classes else defaulted(ALL))
-        out.append(held.select("_site", pl.lit(facet_id).alias("_facet"), pick("genotype_error").alias("_ge"), pick("silence_error").alias("_se"), flag.alias("_defaulted")))
+        out.append(
+            held.select(
+                "_site", pl.lit(facet_id).alias("_facet"), pick("genotype_error").alias("_ge"), pick("silence_error").alias("_se"), flag.alias("_defaulted"),
+                *[pick("genotype_error", band).alias(f"_ge_{band}") if band in bands else pl.lit(None, dtype=pl.Float64).alias(f"_ge_{band}") for band in CONFIDENCE_BANDS],
+            )  # fmt: skip
+        )
     return pl.concat(out)
 
 
@@ -686,16 +840,31 @@ def _posterior(readings: pl.DataFrame, prior: str) -> tuple[pl.DataFrame, pl.Dat
     hard = pl.col("_hard")
     q = [pl.coalesce(pl.col(f"_q{k}"), (hard == k).cast(pl.Float64)) for k in range(3)]
     e = pl.when(pl.col("_reading").is_in(["stated", "site"])).then(pl.col("_ge")).otherwise(pl.col("_se"))
-    likelihood = [((1 - e) * q[k] + e * (1 - q[k]) / P.cast(pl.Float64)).log() for k in range(3)]
-    work = work.with_columns(
-        *[pl.when(speaking & (pl.lit(k) <= P)).then(likelihood[k]).alias(f"_l{k}") for k in range(3)],
-        # The copies this facet says: the top of its distribution, the lowest on a tie.
-        pl.when(speaking).then(
-            pl.when(q[0] >= pl.max_horizontal(q[1], pl.when(P == 2).then(q[2]).otherwise(-1.0))).then(0)
-            .when(q[1] >= pl.when(P == 2).then(q[2]).otherwise(-1.0)).then(1)
-            .otherwise(2)
-        ).cast(pl.Int8).alias("_says"),
-    )  # fmt: skip
+    # The rate of the row's own confidence band, where its method has one measured: a stated reading only.
+    banded = pl.coalesce([pl.when(pl.col("_band") == band).then(pl.col(f"_ge_{band}")) for band in CONFIDENCE_BANDS])
+    e_band = pl.when(pl.col("_reading") == "stated").then(banded)
+    tempered = [((1 - e) * q[k] + e * (1 - q[k]) / P.cast(pl.Float64)).log() for k in range(3)]
+    # The copies this facet says: the top of its distribution, the lowest on a tie.
+    says = (
+        pl.when(q[0] >= pl.max_horizontal(q[1], pl.when(P == 2).then(q[2]).otherwise(-1.0))).then(0)
+        .when(q[1] >= pl.when(P == 2).then(q[2]).otherwise(-1.0)).then(1)
+        .otherwise(2)
+    ).cast(pl.Int8)  # fmt: skip
+    work = work.with_columns(pl.when(speaking).then(says).alias("_says"))
+    # A banded row says its top genotype with the band's measured error, and shares that error among
+    # the other copies as its distribution, tempered by the same rate, ranks them: never zero, and
+    # evenly where the row puts nothing there.
+    eb = pl.col("_eb")
+    shaped = [(1 - eb) * q[k] + eb * (1 - q[k]) / P.cast(pl.Float64) for k in range(3)]
+    others = [pl.when((pl.col("_says") != k) & (pl.lit(k) <= P)).then(shaped[k]).otherwise(0.0) for k in range(3)]
+    rest = others[0] + others[1] + others[2]
+    measured = [pl.when(pl.col("_says") == k).then(1.0 - eb).otherwise(eb * shaped[k] / rest).log() for k in range(3)]
+    work = work.with_columns(e_band.alias("_eb")).with_columns(
+        *[
+            pl.when(speaking & (pl.lit(k) <= P)).then(pl.when(pl.col("_eb").is_not_null()).then(measured[k]).otherwise(tempered[k])).alias(f"_l{k}")
+            for k in range(3)
+        ],
+    )
     if prior != "flat":
         raise ValueError(f"prior is 'flat' (every number of copies equally likely beforehand), not {prior!r}")
     sums = work.group_by("_site").agg(
@@ -718,7 +887,7 @@ def _posterior(readings: pl.DataFrame, prior: str) -> tuple[pl.DataFrame, pl.Dat
         (-10.0 * (others.log() - total.log()) / _LN10).alias("confidence"),
     )
     votes = work.join(sums.select("_site", "_copies"), on="_site").select(
-        "_site", "_facet", "_defaulted", "_gp_lik", "_reading",
+        "_site", "_facet", "_defaulted", "_gp_lik", "_reading", pl.col("_eb").is_not_null().alias("_banded"),
         pl.when(~speaking).then(pl.lit("silent")).when(pl.col("_says") == pl.col("_copies")).then(pl.lit("supported")).otherwise(pl.lit("contradicted")).alias("_vote"),
     )  # fmt: skip
     return sums, votes
@@ -770,6 +939,11 @@ def consensus(
     if regions is not None and regions.assembly_label != label:
         raise ValueError(f"the regions are on {regions.assembly_label}, the facets on {label}; lift one first")
     classes = regions.classes if regions is not None else (ALL,)
+    if regions is None and atlas is not None and "region_class" in atlas.columns and atlas.filter(pl.col("region_class") != ALL).height:
+        named = sorted(set(atlas["region_class"].to_list()) - {ALL})
+        warnings.append(
+            f"the atlas has rates in {len(named)} region class(es) but no regions were given: every allele weighted by its method's `all` rate; pass regions=giab_stratifications(...)"
+        )
     scope = scope if scope is not None else ("carried_pass" if pass_only else "carried")
     rates = _facet_rates(rows, atlas, classes, default_rate, scope)
     defaulted = sorted({r["facet_id"] for r in rates.filter(pl.col("rate_basis") == RateBasis.DEFAULT.value).iter_rows(named=True)})
@@ -825,12 +999,13 @@ def consensus(
             *[(pl.col("_vote") == v).sum().cast(pl.UInt32).alias(v) for v in ("supported", "contradicted", "silent")],
             ((pl.col("_vote") != "silent") & pl.col("_defaulted").fill_null(False)).sum().cast(pl.UInt32).alias("defaulted"),
             ((pl.col("_vote") != "silent") & pl.col("_gp_lik")).sum().cast(pl.UInt32).alias("gp_as_likelihood"),
+            ((pl.col("_vote") != "silent") & pl.col("_banded")).sum().cast(pl.UInt32).alias("banded"),
         )
         done = sites.join(sums, on="_site").join(tally, on="_site").sort("_site")
         support_out.append(
             done.select(
                 "chrom", "pos", pl.col("_ref_key").alias("ref"), "alt", "variant_class", pl.col("_P").alias("ploidy"), pl.col("_copies").alias("copies"),
-                "confidence", "facets", "supported", "contradicted", "silent", "defaulted", "gp_as_likelihood",
+                "confidence", "facets", "supported", "contradicted", "silent", "defaulted", "gp_as_likelihood", "banded",
             ).cast(dict(CONSENSUS_SUPPORT))
         )  # fmt: skip
         calls_out.append(_calls(done, facet_id))

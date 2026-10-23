@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The method-error atlas counts each pair per cell of the two sides' confidence bands (`a_band`,
+  `b_band`: `genotype_evidence`'s confidence of each side's row, `0-10` to `100+` phred, `none`),
+  beside the pooled rows (`all`, `all`). `method_error_rates` gives a rate per band of a method's own
+  confidence (`confidence_band`) from those cells, and `consensus` weighs a row in a measured band by
+  that band's rate instead of its method's average, so a confident row of a method is trusted as far
+  as such rows were measured to be right, and an unsure one less (`CONSENSUS_VERSION` 2;
+  `Consensus.support` gains `banded`). A consensus given an atlas with region rows and no `regions`
+  warns. An atlas without band columns reads as before.
+
 - docs/METHOD_ATLAS.md: the two PGP-HMS CGI pairs rebuilt with F21 and F22. SNV discordance falls
   from 3.40% to 0.54% and from 3.07% to 1.02%, indel from 7.95% to 4.98% and from 10.41% to 7.92%;
   the per-region SNV table is now the VRS pairing's, with no complex-row artefact left to take out.

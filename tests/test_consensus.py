@@ -385,6 +385,97 @@ def test_a_posterior_is_read_as_its_call_unless_asked(tmp_path: Path, store: Ref
     assert row["s_gp_as_likelihood"] == 1
 
 
+def cell(a: tuple, b: tuple, a_band: str, b_band: str, *, d: float, n: int = N) -> dict:
+    """An atlas row of one cell of the two sides' confidence bands."""
+    return atlas_row(a, b, d=d, n=n) | {"a_band": a_band, "b_band": b_band}
+
+
+TRUE_X = {"100+": 0.001, "10-20": 0.08}
+TRUE_Y = {"100+": 0.001, "40-60": 0.012}
+"""Each method's error in each band of its own confidence; both at 0.1% where most confident, so the
+even split in that cell is the truth."""
+D_POOLED = 0.046
+
+
+def banded_atlas(a: tuple = X, b: tuple = Y) -> pl.DataFrame:
+    """X against Y: every cell of their bands, the disagreement the sum of the two bands' rates, and a
+    600-allele cell where X is at 60 to 100 (0.4%), too few for a rate of its own."""
+    true = {X: TRUE_X | {"60-100": 0.004}, Y: TRUE_Y}
+    cells = [(i, j, true[X][i] + true[Y][j], N) for i in TRUE_X for j in TRUE_Y] + [("60-100", "100+", 0.005, 600)]
+    rows = [cell(X, Y, i, j, d=d, n=n) if a == X else cell(Y, X, j, i, d=d, n=n) for i, j, d, n in cells]
+    return atlas(*every_class(a, b, D_POOLED), *rows)
+
+
+BANDED = banded_atlas()
+
+
+def test_method_rates_by_band_are_the_additive_fit_of_the_cells() -> None:
+    rates = method_error_rates(BANDED)
+    assert rates.schema == METHOD_RATES
+    snv_all = rates.filter((pl.col("region_class") == "all") & (pl.col("variant_class") == "snv"))
+    got = {(r["caller"], r["confidence_band"]): r for r in snv_all.iter_rows(named=True)}
+    # X's 60-100 band holds 600 alleles, under MIN_BAND_ALLELES: no rate of its own.
+    assert set(got) == {("X", "all"), ("Y", "all"), *(("X", band) for band in TRUE_X), *(("Y", band) for band in TRUE_Y)}
+    for caller, true in (("X", TRUE_X), ("Y", TRUE_Y)):
+        for band, rate in true.items():
+            assert got[(caller, band)]["genotype_error"] == pytest.approx(rate, rel=1e-6), (caller, band)
+            assert got[(caller, band)]["genotype_attribution"] == "band"
+            assert got[(caller, band)]["silence_error"] == got[(caller, "all")]["silence_error"]
+    # The averages are the pooled rule's, as an atlas without the cells gives them.
+    assert got[("X", "all")]["genotype_error"] == pytest.approx(D_POOLED / 2, rel=1e-6)
+    plain = method_error_rates(atlas(*every_class(X, Y, D_POOLED)))
+    assert plain.drop("confidence_band").equals(rates.filter(pl.col("confidence_band") == "all").drop("confidence_band"))
+    # The same cells with the sides the other way round give the same rates.
+    order = ["caller", "region_class", "variant_class", "confidence_band"]
+    flipped = method_error_rates(banded_atlas(Y, X)).sort(order)
+    assert flipped.drop("genotype_error").equals(rates.sort(order).drop("genotype_error"))
+    assert flipped["genotype_error"].to_list() == pytest.approx(rates.sort(order)["genotype_error"].to_list(), rel=1e-9)
+
+
+def test_no_band_rates_where_a_side_cannot_tell_its_rows_apart() -> None:
+    # Y states no confidence on any row: X's bands could be read off, but nothing tells where the
+    # pair's disagreement is Y's, so neither side is banded.
+    flat_y = atlas(*every_class(X, Y, D_POOLED), *[cell(X, Y, i, "none", d=rate + 0.01) for i, rate in TRUE_X.items()])
+    assert set(method_error_rates(flat_y)["confidence_band"].to_list()) == {"all"}
+
+
+def test_a_row_in_a_measured_band_speaks_with_that_band_s_rate(tmp_path: Path, store: ReferenceStore) -> None:
+    # X's hets: one at about 150 phred (band 100+, measured), one at 15 (band 10-20, measured), one at
+    # 35 (band 30-40, not measured: X's average). Y says hom-alt at all three with no confidence (band
+    # `none`, not measured: Y's average).
+    pls = {100: [150, 0, 150], 200: [15, 0, 15], 300: [35, 0, 35]}
+    x = facet(tmp_path, "x", "X", "1", [snv("1", pos, "0/1", PL=",".join(map(str, v))) for pos, v in pls.items()], store)
+    y = facet(tmp_path, "y", "Y", "1", [snv("1", pos, "1/1") for pos in pls], store)
+    result = consensus([x, y], atlas=BANDED)
+    at = {row["pos"]: row for row in rows_of(result)}
+    average = D_POOLED / 2
+
+    def measured(q: list[float], e_b: float) -> list[float]:
+        top = max(range(len(q)), key=lambda k: (q[k], -k))
+        shaped = tempered(q, e_b)
+        rest = sum(v for k, v in enumerate(shaped) if k != top)
+        return [1 - e_b if k == top else e_b * shaped[k] / rest for k in range(len(q))]
+
+    assert at[100]["gp"] == pytest.approx(posterior([measured(flat(pls[100]), TRUE_X["100+"]), hard(2, average)]), rel=1e-5)
+    assert at[200]["gp"] == pytest.approx(posterior([measured(flat(pls[200]), TRUE_X["10-20"]), hard(2, average)]), rel=1e-5)
+    assert at[300]["gp"] == pytest.approx(posterior([tempered(flat(pls[300]), average), hard(2, average)]), rel=1e-5)
+    assert [at[p]["s_banded"] for p in (100, 200, 300)] == [1, 1, 0]
+    # The confident row outweighs Y's average; the unconfident one does not.
+    assert (at[100]["s_copies"], at[200]["s_copies"]) == (1, 2)
+    bands = result.rates.filter((pl.col("caller") == "X") & (pl.col("variant_class") == "snv") & (pl.col("region_class") == "all"))
+    assert set(bands["confidence_band"].to_list()) == {"all", *TRUE_X}
+    assert set(bands.filter(pl.col("confidence_band") != "all")["rate_basis"].cast(pl.String).to_list()) == {RateBasis.METHOD.value}
+
+
+def test_an_atlas_with_region_rows_and_no_regions_is_warned(tmp_path: Path, store: ReferenceStore) -> None:
+    x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "0/1")], store)
+    y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "0/1")], store)
+    assert not any("region class" in line for line in consensus([x, y], atlas=TRIANGLE).warnings)
+    easy = atlas(*[atlas_row(a, b, d=d / 10, region="easy", vc=vc) for a, b, d in ((X, Y, D_XY), (X, Z, D_XZ), (Y, Z, D_YZ)) for vc in ("snv", "mnv", "indel")])
+    result = consensus([x, y], atlas=pl.concat([TRIANGLE, easy]))
+    assert any("1 region class(es) but no regions were given" in line for line in result.warnings)
+
+
 # --------------------------------------------------------------------------------------------------
 # The facet
 

@@ -68,7 +68,13 @@ Digest = Annotated[str, StringConstraints(max_length=MAX_LABEL, pattern=r"^[A-Za
 
 VRS_ALLELE_ID = re.compile(r"^ga4gh:VA\.[A-Za-z0-9_-]{32}$")
 SEQUENCE_ALLELE = re.compile(r"^[ACGTN]*$")
-_PATH_LIKE = re.compile(r"(?<![\w/\\])(?:~|[A-Za-z]:)?(?:[\\/][\w.@+-]+){2,}[\\/]?")
+_PATH_LIKE = re.compile(r"(?<![\w/\\])(?:(?:~|[A-Za-z]:)(?:[\\/]+[\w.@+-]+)+|(?:[\\/]+[\w.@+-]+){2,})[\\/]?")
+"""A path: two components or more (`/home/x/y`, a URL's `///home/x`, `\\\\host\\share`), or one after
+`~` or a drive letter (`~/x`, `C:\\x`). A file name alone is not one: the facet's own names cover it."""
+
+PROVENANCE_TEXT = ("format_id", "vendor", "caller", "caller_version", "phasing_method", "assembly_label", "relation", "vcf_version", "chip", "split_marker", "reference", "aligner", "aligner_version")
+"""Facet columns holding free text from the file's header or its caller (a `##DeepVariant_version`
+can be a path), passed through `FacetRedactor` wherever they are shown: here and in the CLI."""
 _COUNTED = re.compile(r"^(?:(?P<scope>[^:]{1,60} facet): )?(?P<count>\d+) (?P<rest>.+)$", re.DOTALL)
 
 SAMPLE_PLACEHOLDER = "<sample>"
@@ -217,6 +223,9 @@ class FacetProvenance(_Answer):
     caller: Label | None
     caller_version: Label | None
     phasing_method: Label | None
+    reference: Label | None
+    aligner: Label | None
+    aligner_version: Label | None
     assembly_label: Label | None
     assembly_label_basis: AssemblyLabelBasis | None
     seqcol_digest: Digest | None
@@ -379,8 +388,16 @@ def _sort_key(values: tuple[str | None, ...], dimensions: tuple[Dimension, ...])
     return tuple(key)
 
 
-class _Redactor:
-    """Replaces the facets' identifying strings, and anything shaped like a path, in returned text."""
+def redact_paths(text: str) -> str:
+    """`text` with anything shaped like a path replaced by `PATH_PLACEHOLDER`."""
+    return _PATH_LIKE.sub(PATH_PLACEHOLDER, text)
+
+
+class FacetRedactor:
+    """Replaces the facets' identifying strings, and anything shaped like a path, in returned text.
+
+    The one redaction of header and library text: `Query` uses it, and so does the CLI, before it
+    replaces the labels its own run knows (the input's path, `--sample`)."""
 
     def __init__(self, facets: Iterable[Mapping[str, object]]) -> None:
         tokens: dict[str, str] = {}
@@ -402,7 +419,7 @@ class _Redactor:
     def __call__(self, text: str) -> str:
         for pattern, replacement in self._tokens:
             text = pattern.sub(replacement, text)
-        return _PATH_LIKE.sub(PATH_PLACEHOLDER, text)
+        return redact_paths(text)
 
     def optional(self, text: object) -> str | None:
         return None if text is None else self(str(text))
@@ -416,7 +433,7 @@ class Query:
     def __init__(self, loaded: Loaded) -> None:
         self._loaded = loaded
         self._facets: list[dict] = loaded.facets.collect().to_dicts()
-        self._redact = _Redactor(self._facets)
+        self._redact = FacetRedactor(self._facets)
 
     def __repr__(self) -> str:
         return f"Query(facets={tuple(f['facet_id'] for f in self._facets)!r})"
@@ -431,7 +448,7 @@ class Query:
         for facet in self._facets:
             text = {
                 name: self._redact.optional(facet[name])
-                for name in ("format_id", "vendor", "caller", "caller_version", "phasing_method", "assembly_label", "relation", "vcf_version", "chip", "split_marker")
+                for name in PROVENANCE_TEXT
             }
             classes = facet["variant_classes"]
             contig_map = facet["contig_map"]

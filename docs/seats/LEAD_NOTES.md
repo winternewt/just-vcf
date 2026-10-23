@@ -107,5 +107,11 @@ status lines say what exists. Schema at 0.0.4.
   every six merged builder branches, because a hand merge once dropped a per-facet field from two loaders
   while every test passed. Last audits: 2aa5436 (after wave 5) and one running over 2aa5436..5b6ec3b. A
   guard test (every format's example loaded, no facet column null without a stated reason) is being built.
+  Audit 2 (2aa5436..5b6ec3b) found: the CLI printed unredacted header text (a path in `##reference=` or a
+  version line), `chip_absence` mixing facets, `links` dropped by `Person` and the CLI's facet pick,
+  `rejoin_split` dropping SV columns, liftover swaps leaving per-ALT copy numbers, stale version notes.
+  All seven fixes are with one builder, plus conftest defaulting the opt-in variables to empty (the
+  auditor's own first test run read `.env` and could have opened local genomes for a few seconds; its
+  output was never read and nothing left the machine).
 - **Open, not started**: CLI (MVP row 18; not decided), the rest of Part 2 of docs/MVP_READINESS.md (the
   interview).

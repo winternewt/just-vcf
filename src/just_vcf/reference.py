@@ -38,14 +38,15 @@ from gtars.refget import RefgetStore
 
 from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_snv_rows
 from just_vcf import cache
+from just_vcf.contig_names import scaffold_names
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
-from just_vcf.probes import IndelSite, Manifest, catalog_digest, indel_catalog, locate_indel, place_indel, snv_catalog, window_for
+from just_vcf.probes import IndelSite, Manifest, catalog_digest, id_calibration, indel_catalog, locate_indel, place_indel, snv_catalog, window_for
 from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, StrandCheck, canonical_chrom, canonical_order, empty
 from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_reason
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 6
+RESOLVE_VERSION = 8
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes."""
 
 CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
@@ -213,10 +214,23 @@ class ReferenceStore:
 
         A canonical name served by more than one sequence (`1` and `chr1`) lists them all; a caller
         reads none of them. `XY` (array code 25) is served by X (`_REF_SPAN_FOR`).
+
+        A GRCh37 or GRCh38 scaffold is also listed under the other names NCBI's assembly reports give
+        it (F19, `contig_names.scaffold_names`): Ensembl's `KI270706.1` under UCSC's
+        `chr1_KI270706v1_random` and RefSeq's `NT_187361.1`, and the other way round. Only where the
+        sequence's length is the report's for that name, and only under a name the collection does not
+        hold a sequence of its own by: a name is never taken from a pattern, and never over a contig the
+        collection itself calls so.
         """
         by_canonical: dict[str, list[Contig]] = {}
-        for contig in self.contigs(digest):
+        contigs = self.contigs(digest)
+        for contig in contigs:
             by_canonical.setdefault(canonical_chrom(contig.name), []).append(contig)
+        aliased: dict[str, list[Contig]] = {}
+        for contig in contigs:
+            for name in sorted(scaffold_names(contig.name, contig.length) - set(by_canonical)):
+                aliased.setdefault(name, []).append(contig)
+        by_canonical.update(aliased)
         for chrom, served_by in _REF_SPAN_FOR.items():
             by_canonical[chrom] = by_canonical.get(served_by, [])
         return by_canonical
@@ -503,7 +517,8 @@ def _choose(plans: list[_Plan], facet_id: str, explicit: bool) -> _Plan:
 
 
 def _contig_warnings(plan: _Plan, rows_per_chrom: dict[str, int]) -> list[str]:
-    """One line per kind of contig that will not be read, with its rows and contig names."""
+    """One line per kind of contig that will not be read, with its rows and contig names, and one for the
+    scaffolds read under the reference's other name for them (F19)."""
     grouped: dict[ContigCheck, list[str]] = {}
     for chrom, check in plan.checks.items():
         if check not in _READABLE:
@@ -525,6 +540,16 @@ def _contig_warnings(plan: _Plan, rows_per_chrom: dict[str, int]) -> list[str]:
         shown = ", ".join(f"{name} ({plan.detail[name]})" if name in plan.detail else name for name in names[:10])
         more = f" and {len(names) - 10} more" if len(names) > 10 else ""
         lines.append(f"{rows} row(s) left with REF unread, on {explain[check]}: {shown}{more}")
+    aliased = sorted(
+        (chrom, contig.name)
+        for chrom, contig in plan.contigs.items()
+        if plan.checks.get(chrom) in _READABLE and chrom not in _REF_SPAN_FOR and canonical_chrom(contig.name) != chrom
+    )
+    if aliased:
+        rows = sum(rows_per_chrom[chrom] for chrom, _ in aliased)
+        shown = ", ".join(f"{chrom} as {name}" for chrom, name in aliased[:10])
+        more = f" and {len(aliased) - 10} more" if len(aliased) > 10 else ""
+        lines.append(f"{rows} row(s) read on scaffold(s) the reference names otherwise, as NCBI's assembly report pairs them: {shown}{more}")
     return lines
 
 
@@ -682,6 +707,9 @@ class _Codes:
     manifests: tuple[Manifest, ...]
     absent: str | None
     """Why `catalog` is None, for the warning; None also when the facet has no code rows at all."""
+    unverified: str | None = None
+    """Why the facet's chip has its codes withheld (`ID_CALIBRATION`): its I/D orientation is not
+    verified. None when the chip's calibration passed, or there are no code rows."""
 
     @property
     def digest(self) -> str | None:
@@ -695,6 +723,9 @@ def _code_catalog(loaded: Loaded, facet: dict, label: str | None) -> _Codes:
     code = pl.col("source_ref").is_null() & pl.col("gt_alleles").list.eval(pl.element().is_in(CODES)).list.any()
     if not loaded.calls.select(code.fill_null(False).any()).collect().item():
         return _Codes(None, (), None)
+    calibration = id_calibration(facet["chip"])
+    if not calibration.resolve:
+        return _Codes(None, (), None, unverified=calibration.evidence if facet["chip"] is None else f"{facet['chip']}: {calibration.evidence}")
     if label is None:
         return _Codes(None, (), "the reference's assembly is unknown, so no manifest's build can be matched with it")
     catalog, manifests = indel_catalog(label)
@@ -785,8 +816,10 @@ def _resolve_codes(work: pl.DataFrame, store: ReferenceStore, contig: Contig, co
     `D` the shorter. The row gets `ref`, `alts` (the called alleles other than REF, as for any array
     row), `gt`, `end_pos`, and `gt_alleles` spelled as the sequences; `source_gt` keeps the codes. A row
     whose rsids name no probe or more than one site, or whose site is not located or cannot be spelled
-    at its position, is left as loaded, each reason counted. Returns `work` with the `_split_*` slots
-    filled for the rows resolved here, and their `gt_alleles` replaced.
+    at its position, is left as loaded, each reason counted. A facet whose chip's I/D orientation is
+    not verified (`probes.ID_CALIBRATION`) has every code row left as loaded, counted
+    `id_orientation_unverified`. Returns `work` with the `_split_*` slots filled for the rows resolved
+    here, and their `gt_alleles` replaced.
     """
     is_code = pl.col("source_ref").is_null() & pl.col("gt_alleles").list.eval(pl.element().is_in(CODES)).list.any().fill_null(False)
     only_codes = pl.col("gt_alleles").list.eval(pl.element().is_null() | pl.element().is_in(CODES)).list.all()
@@ -796,7 +829,9 @@ def _resolve_codes(work: pl.DataFrame, store: ReferenceStore, contig: Contig, co
         counts["code_rows"] += rows.height
         counts["code_mixed"] += rows.filter(~pl.col("_only")).height
         rows = rows.filter(pl.col("_only"))
-        if codes is None or codes.catalog is None:
+        if codes is not None and codes.unverified is not None:
+            counts["code_id_orientation_unverified"] += rows.height
+        elif codes is None or codes.catalog is None:
             counts["code_no_manifest"] += rows.height
         elif rows.height:
             probes = codes.catalog.filter(pl.col("chrom") == rows["chrom"][0])
@@ -960,6 +995,12 @@ def _code_warnings(counts: Counter[str], codes: _Codes | None) -> list[str]:
         lines.append(
             f"{counts['code_resolved']} of {counts['code_rows']} array row(s) with an I/D indel code resolved against the indel "
             f"probes of {used}: matched by rsid, the site located by the probe's flanks in the reference, REF read from it"
+        )
+    if counts["code_id_orientation_unverified"]:
+        unverified = codes.unverified if codes is not None else None
+        lines.append(
+            f"{counts['code_id_orientation_unverified']} array row(s) with an I/D indel code left unread "
+            f"(id_orientation_unverified): the chip's I/D orientation against the manifests' probes is not verified; {unverified}"
         )
     if counts["code_no_manifest"]:
         absent = codes.absent if codes is not None and codes.absent else "no manifest was given"

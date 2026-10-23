@@ -220,7 +220,9 @@ def test_a_cgi_hap_link_is_no_ps_and_its_haplotypes_are_written_unphased(tmp_pat
     formats = [dict(zip(row[8].split(":"), row[9].split(":"))) for row in body]
     assert len(body) == loaded.calls.select(pl.len()).collect().item() and linked > 0
     assert all("|" not in f["GT"] and "PS" not in f for f in formats)
-    assert any(f"{linked} row(s) had a phase set VCF 4.3 cannot write as PS" in w for w in written.warnings), written.warnings
+    assert any(w.startswith(f"{linked} row(s) phased by a CGI hapLink") for w in written.warnings), written.warnings
+    assert not any("PS phase set that is not an integer" in w for w in written.warnings), "a hapLink is no PS"
+    assert plain_text(written.path).startswith("##fileformat=VCFv4.3"), "no PSL row: nothing asks for 4.5"
     assert all(f.get("AD") == "1,1" for f in formats), "the fixture's counts: one read for REF and for the ALT"
 
 
@@ -370,6 +372,92 @@ def test_htslib_reads_the_output(tmp_path: Path) -> None:
     assert got == expected
     viewed = bcftools.view("--no-header", str(written.path), catch_stdout=True)
     assert len(viewed.splitlines()) == calls.height
+
+
+PSL_FORMAT_LINES = (
+    '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+    '##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set">',
+    '##FORMAT=<ID=PSL,Number=P,Type=String,Description="Phase set list">',
+    '##FORMAT=<ID=PSO,Number=P,Type=Integer,Description="Phase set list ordinal">',
+    '##FORMAT=<ID=PSQ,Number=P,Type=Integer,Description="Phase set list quality">',
+)
+PSL_RECORDS = [
+    "1\t5\t.\tT\tG\t.\tPASS\t.\tGT:PSL\t|0/1:1*5*1,.",
+    "1\t10\t.\tA\tT,G\t.\tPASS\t.\tGT:PSL:PSO:PSQ\t|1/2|1:1*10*1,.,1*5*1:1,.,2:30,.,40",
+    "1\t12\t.\tA\tT\t.\tPASS\t.\tGT:PS\t0|1:12",  # a PS record beside the PSL ones
+    "2\t15\t.\tG\tC\t.\tPASS\t.\tGT:PSL:PSQ\t1|0:.,1*10*1:.,7",
+    "2\t20\t.\tG\tC\t.\tPASS\t.\tGT:PSL\t1|1:1*5*1,.",
+]
+PHASE = ["phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities"]
+
+
+def psl_loaded(tmp_path: Path) -> Loaded:
+    path = tmp_path / "psl.vcf"
+    header = "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "SYNTHETIC_SAMPLE"])
+    path.write_text("\n".join(["##fileformat=VCFv4.5", *CONTIGS, *PSL_FORMAT_LINES, header, *PSL_RECORDS]) + "\n")
+    return load(path)
+
+
+def test_psl_phase_sets_round_trip_under_a_vcf_45_header(tmp_path: Path) -> None:
+    loaded = psl_loaded(tmp_path)
+    written = write_vcf(loaded, tmp_path / "out.vcf.gz")
+    original = loaded.calls.collect()
+    back = load(written.path).calls.collect()
+
+    assert as_set(back, KEY + PHASE) == as_set(original, KEY + PHASE)
+    assert original.filter(pl.col("phase_set_kinds").list.contains("psl")).height == 4
+    assert written.warnings == ()
+    text = plain_text(written.path)
+    assert "##fileformat=VCFv4.5\n" in text
+    for key in ("PSL", "PSO", "PSQ"):
+        assert f"##FORMAT=<ID={key},Number=P," in text
+    lines = {tuple(line.split("\t")[:2]): line.split("\t")[8:] for line in text.splitlines() if not line.startswith("#")}
+    # The first haplotype's phase, named by PSL, goes out as a leading indicator where the implicit one differs.
+    assert lines[("1", "5")] == ["GT:PSL", "|0/1:1*5*1,."]
+    assert lines[("1", "10")] == ["GT:PSL:PSO:PSQ", "|1/2|1:1*10*1,.,1*5*1:1,.,2:30,.,40"]
+    assert lines[("1", "12")] == ["GT:PS", "0|1:12"]
+    assert lines[("2", "15")] == ["GT:PSL:PSQ", "1|0:.,1*10*1:.,7"]
+
+
+def test_htslib_reads_a_psl_output(tmp_path: Path) -> None:
+    """Opt-in, as `test_htslib_reads_the_output`: htslib parses the VCF 4.5 header (`Number=P`) and the
+    PSL, PSO and PSQ values per allele."""
+    pysam = pytest.importorskip("pysam")
+    loaded = psl_loaded(tmp_path)
+    written = write_vcf(loaded, tmp_path / "out.vcf.gz")
+    calls = loaded.calls.collect()
+    with pysam.VariantFile(str(written.path)) as reader:
+        records = list(reader)
+        sample = list(reader.header.samples)[0]
+    assert len(records) == calls.height
+    got = {(r.chrom, r.pos): r.samples[sample].get("PSL") for r in records}
+    expected = {
+        (row["chrom"], row["pos"]): (
+            tuple(name if kind == "psl" else None for name, kind in zip(row["phase_sets"], row["phase_set_kinds"]))
+            if "psl" in (row["phase_set_kinds"] or [])
+            else None
+        )
+        for row in calls.iter_rows(named=True)
+    }
+    assert sum(value is not None for value in expected.values()) == 4
+    assert {key: tuple(None if v in (None, ".") else v for v in value) if value is not None else None for key, value in got.items()} == expected
+
+
+def test_a_first_phase_psl_does_not_name_is_written_and_counted(tmp_path: Path) -> None:
+    """A frame from a VCF 4.3 file knows every first haplotype's phase; written beside a PSL row under
+    4.5, the leading indicator says it, and the rows whose phase just-vcf's own load cannot read back
+    (P4) are counted."""
+    loaded = psl_loaded(tmp_path)
+    calls = loaded.calls.collect().with_columns(
+        pl.when(pl.col("pos") == 12).then(pl.lit([True, False])).otherwise(pl.col("phased")).alias("phased"),
+    )
+    edited = Loaded(facets=loaded.facets, calls=calls.lazy(), blocks=loaded.blocks)
+    written = write_vcf(edited, tmp_path / "out.vcf", compress=False)
+    line = next(line for line in (tmp_path / "out.vcf").read_text().splitlines() if line.startswith("1\t12\t"))
+    assert line.split("\t")[9] == "|0/1:12"
+    assert any(w.startswith("1 row(s) state their first haplotype's phase") for w in written.warnings)
+    back = load(written.path).calls.filter(pl.col("pos") == 12).collect()
+    assert back["phased"].to_list() == [[None, False]]
 
 
 def test_one_facet_only(tmp_path: Path) -> None:

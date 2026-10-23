@@ -203,6 +203,58 @@ def test_library_logging_is_off_while_a_command_runs(tmp_path: Path, caplog: pyt
     assert logging.root.manager.disable == logging.NOTSET
 
 
+PLANTED = {
+    # Every header line whose text reaches a field the CLI prints, each naming someone else inside a path.
+    "##reference=file:///home/Quill_Reference/refs/GRCh38.fa": "Quill_Reference",
+    "##DeepVariant_version=/home/Quill_Deep/bin/deepvariant-1.6.0": "Quill_Deep",
+    "##center=/srv/Quill_Center/sequencing": "Quill_Center",
+    "##eagleVersion=~/Quill_Eagle": "Quill_Eagle",
+}
+CONFLICTING = {
+    # The same fields stated twice: the library's warnings quote both values.
+    "##DeepVariant_version=/home/Quill_Version_A/dv": "Quill_Version_A",
+    "##DeepVariant_version=C:\\Users\\Quill_Version_B\\dv": "Quill_Version_B",
+    "##center=/srv/Quill_Vendor_A/x": "Quill_Vendor_A",
+    "##dataAnalysisProvider=//nas/Quill_Vendor_B/y": "Quill_Vendor_B",
+}
+
+
+@pytest.mark.parametrize("planted", [PLANTED, CONFLICTING], ids=["fields", "warnings"])
+def test_header_text_reaches_no_output_with_a_name_in_it(tmp_path: Path, fasta: Path, planted: dict[str, str]) -> None:
+    records = [(c, p, base(c, p), other(base(c, p)), g) for c, p, _, g in MATCHING]
+    path = vcf(tmp_path / f"{PERSON}.vcf", records, contigs=[*contig_lines(LENGTHS), *planted])
+    loaded = load(path)
+    shown = loaded.facets.collect().row(0, named=True)
+    text = " ".join(str(shown[name]) for name in ("vendor", "caller_version", "phasing_method")) + " ".join(loaded.warnings)
+    names = list(planted.values())
+    reached = [name for name in names if name in text] + [n for n in names if n == "Quill_Reference" and n in (sniff(path).build_evidence or "")]
+    assert sorted(reached) == sorted(names), "each planted name reaches the library's fields or warnings, so the CLI must redact it"
+    runs = [
+        run("sniff", path), run("sniff", path, "--json"),
+        run("load", path), run("load", path, "--json"),
+        run("check", path, "--reference", fasta), run("check", path, "--reference", fasta, "--json"),
+        run("convert", path, tmp_path / "out.vcf", "--plain", "--json"), run("convert", path, tmp_path / "out2.vcf", "--plain"),
+    ]  # fmt: skip
+    for result in runs:
+        assert result.exit_code == 0, (result.exit_code, result.stdout, result.stderr)
+        assert_private(result, PERSON, str(tmp_path), *names)
+    if "Quill_Reference" in names:
+        assert report(runs[1])["build_hint"] == {"kind": "##reference", "label": "GRCh38"}
+        assert "<path>" in report(runs[3])["facets"][0]["caller_version"]
+
+
+def test_narrowing_to_one_facet_keeps_the_links(tmp_path: Path) -> None:
+    """`convert --facet` narrows the load; the facet's kin link must survive into the steps after it."""
+    text, _, _ = _two_exports()
+    path = tmp_path / "genome.txt"
+    path.write_text(text)
+    loaded = load(path)
+    expected = loaded.links.collect()
+    assert expected.height == 1
+    for facet_id in loaded.facets.collect()["facet_id"].to_list():
+        assert cli._one_facet(loaded, facet_id).links.collect().equals(expected)
+
+
 def test_redaction_leaves_ordinary_words_alone(tmp_path: Path) -> None:
     """A file named `export.txt` written to `out.vcf` must not cut "export" or "out" out of a warning."""
     text, _, _ = _two_exports()
@@ -381,3 +433,19 @@ def test_convert_options_that_do_not_fit_are_usage_errors(tmp_path: Path, fasta:
 def test_the_entry_point_is_registered() -> None:
     [script] = [ep for ep in entry_points(group="console_scripts") if ep.name == "just-vcf"]
     assert script.value == "just_vcf.cli:app"
+
+
+def test_load_summary_names_the_method_chain_without_its_options(tmp_path: Path) -> None:
+    path = vcf(tmp_path / f"{PERSON}.vcf", [("1", 100, "A", "G", "0/1")])
+    text = path.read_text().replace(
+        "##fileformat=VCFv4.2\n",
+        "##fileformat=VCFv4.2\n##reference=file:///home/Jane_Roe/ref/hg38.fa\n##DeepVariant_version=1.6.0\n"
+        f"##bcftools_normVersion=1.23.1\n##bcftools_normCommand=norm -m -both -f /home/{PERSON}/hg38.fa -o /home/{PERSON}/out.vcf.gz; "
+        "Date=Tue Mar 19 03:39:45 2024\n",
+    )
+    path.write_text(text)
+    result = run("load", path, "--json")
+    facet = report(result)["facets"][0]
+    assert facet["method_steps"] == ["call DeepVariant 1.6.0", "normalize bcftools norm 1.23.1"]
+    assert (facet["reference"], facet["aligner"]) == ("hg38.fa", None)
+    assert_private(result, PERSON)

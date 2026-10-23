@@ -16,7 +16,9 @@ from just_vcf.probes import (
     ProbeSetKind,
     available_manifests,
     chip_absence,
+    ID_CALIBRATION,
     find_manifest,
+    id_calibration,
     learn_probe_sets,
     locate_indel,
     place_indel,
@@ -24,6 +26,7 @@ from just_vcf.probes import (
     probe_table,
     reverse_complement,
 )
+from test_load_rsid import _two_exports
 from test_reference import PREAMBLE_23, SEQ, array_text, assert_gt_indexes_ref, write_fasta
 
 CONTIG = SEQ["1"]
@@ -211,8 +214,18 @@ def manifests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def export(tmp_path: Path, rows: list[tuple[str, str, int, str]]) -> Path:
+    """A 23andMe export of a few rows: its chip is unknown (too few rows to name the generation)."""
     path = tmp_path / "genome.txt"
     path.write_text(array_text(rows, PREAMBLE_23))
+    return path
+
+
+def coded_export(tmp_path: Path, rows: list[tuple[str, str, int, str]]) -> Path:
+    """An AncestryDNA export, whose header states its chip (`V2.0`: `ancestrydna_v2`, calibrated for
+    I/D codes). A one-letter genotype is a half-call, the second allele written `0`."""
+    body = "".join(f"{rsid}\t{chrom}\t{pos}\t{gt[0]}\t{gt[1] if len(gt) > 1 else '0'}\n" for rsid, chrom, pos, gt in rows)
+    path = tmp_path / "ancestry.txt"
+    path.write_text(ANCESTRY_PREAMBLE + body)
     return path
 
 
@@ -223,14 +236,14 @@ def test_id_codes_are_resolved_against_the_manifests_indel_probes(tmp_path: Path
         ("rs100", "1", 501, "DD"),
         ("rs200", "1", 1001, "DD"),  # insertion site: D is REF
         ("rs200", "1", 1001, "ID"),
-        ("rs200", "1", 1001, "I"),  # half-call or hemizygous: one letter
+        ("rs200", "1", 1001, "I"),  # half-call: one allele written, the other `0`
         ("rs300", "1", 1501, "II"),  # probe not located in the reference
         ("rs400", "1", 1801, "DD"),  # no probe carries the rsid
         ("i5", "1", 2001, "DI"),  # an internal id: nothing to match by
     ]
-    resolved = resolve_ref(load(export(tmp_path, rows)), grch37_store)
+    resolved = resolve_ref(load(coded_export(tmp_path, rows)), grch37_store)
     calls = resolved.calls.collect()
-    by = {(row["ids"][0], row["source_gt"]): row for row in calls.iter_rows(named=True)}
+    by = {(row["ids"][0], row["source_gt"].rstrip("0")): row for row in calls.iter_rows(named=True)}
 
     long_del, short_del = CONTIG[500:504], CONTIG[503]
     assert by[("rs100", "II")]["ref"] == long_del and by[("rs100", "II")]["alts"] == [] and by[("rs100", "II")]["gt"] == [0, 0]
@@ -242,13 +255,13 @@ def test_id_codes_are_resolved_against_the_manifests_indel_probes(tmp_path: Path
     short_ins, long_ins = CONTIG[1000], INSERTED + CONTIG[1000]
     assert by[("rs200", "DD")]["ref"] == short_ins and by[("rs200", "DD")]["gt"] == [0, 0]
     assert by[("rs200", "ID")]["alts"] == [long_ins] and by[("rs200", "ID")]["gt"] == [1, 0]
-    assert by[("rs200", "I")]["gt"] == [1] and by[("rs200", "I")]["gt_alleles"] == [long_ins]
+    assert by[("rs200", "I")]["gt"] == [1, None] and by[("rs200", "I")]["gt_alleles"] == [long_ins, None]
     assert haplotype(CONTIG, 1001, short_ins, long_ins) == CONTIG[:1000] + INSERTED + CONTIG[1000:]
 
     for unread in (("rs300", "II"), ("rs400", "DD"), ("i5", "DI")):
         row = by[unread]
         assert row["ref"] is None and row["gt"] is None and row["gt_alleles"] == list(unread[1]), unread
-    assert all(row["source_gt"] == key[1] for key, row in by.items()), "the codes stay in source_gt"
+    assert all(row["source_gt"].startswith(key[1]) for key, row in by.items()), "the codes stay in source_gt"
     assert_gt_indexes_ref(calls)
     warnings = "\n".join(resolved.warnings)
     assert "6 of 9 array row(s) with an I/D indel code resolved against the indel probes of TEST-1-0_A1" in warnings
@@ -258,7 +271,7 @@ def test_id_codes_are_resolved_against_the_manifests_indel_probes(tmp_path: Path
 
 def test_resolved_codes_normalize_to_the_site_they_name(tmp_path: Path, grch37_store: ReferenceStore, manifests: Path) -> None:
     rows = [("rs100", "1", 501, "DI"), ("rs200", "1", 1001, "ID")]
-    normalized = normalize(resolve_ref(load(export(tmp_path, rows)), grch37_store), grch37_store).calls.collect().sort("pos")
+    normalized = normalize(resolve_ref(load(coded_export(tmp_path, rows)), grch37_store), grch37_store).calls.collect().sort("pos")
     for row, expected in zip(normalized.iter_rows(named=True), (CONTIG[:500] + CONTIG[503:], CONTIG[:1000] + INSERTED + CONTIG[1000:])):
         assert len(row["alts"]) == 1 and row["ref"][0] == row["alts"][0][0], "anchored on its first base"
         assert haplotype(CONTIG, row["pos"], row["ref"], row["alts"][0]) == expected
@@ -266,7 +279,7 @@ def test_resolved_codes_normalize_to_the_site_they_name(tmp_path: Path, grch37_s
 
 def test_codes_stay_unread_without_a_manifest(tmp_path: Path, grch37_store: ReferenceStore, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JUST_VCF_MANIFESTS_DIR", "")
-    resolved = resolve_ref(load(export(tmp_path, [("rs100", "1", 501, "DI"), ("rs1", "1", 10, CONTIG[9] * 2)])), grch37_store)
+    resolved = resolve_ref(load(coded_export(tmp_path, [("rs100", "1", 501, "DI"), ("rs1", "1", 10, CONTIG[9] * 2)])), grch37_store)
     calls = resolved.calls.collect()
     code = calls.filter(pl.col("source_gt") == "DI").row(0, named=True)
     assert code["ref"] is None and code["gt_alleles"] == ["D", "I"]
@@ -280,9 +293,33 @@ def test_a_manifest_on_another_build_reads_no_codes(tmp_path: Path, grch37_store
     directory = tmp_path / "manifests36"
     write_manifest(directory, [probe_row("rs100", "[I/D]", "1", 501, "PLUS", deletion(500, 3)[1], build="36")])
     monkeypatch.setenv("JUST_VCF_MANIFESTS_DIR", str(directory))
-    resolved = resolve_ref(load(export(tmp_path, [("rs100", "1", 501, "DI")])), grch37_store)
+    resolved = resolve_ref(load(coded_export(tmp_path, [("rs100", "1", 501, "DI")])), grch37_store)
     assert resolved.calls.collect()["ref"].to_list() == [None]
     assert any("no manifest with indel probes on GRCh37 is configured" in w for w in resolved.warnings)
+
+
+def test_codes_of_a_chip_whose_orientation_is_unverified_are_withheld(tmp_path: Path, grch37_store: ReferenceStore, manifests: Path) -> None:
+    rows = [("rs100", "1", 501, "DI"), ("rs200", "1", 1001, "DD")]
+    loaded = load(coded_export(tmp_path, rows))
+    resolved = resolve_ref(loaded, grch37_store)
+    assert resolved.calls.collect()["ref"].null_count() == 0, "ancestrydna_v2 is calibrated: its codes resolve"
+    for chip in ("23andme_v3", "23andme_v4", "23andme_v1_v2", "illumina:TEST-1-0_A1", None):
+        relabelled = loaded.model_copy(update={"facets": loaded.facets.with_columns(pl.lit(chip, dtype=pl.String).alias("chip"))})
+        withheld = resolve_ref(relabelled, grch37_store)
+        calls = withheld.calls.collect().sort("pos")
+        assert calls["ref"].to_list() == [None, None] and calls["gt"].to_list() == [None, None], chip
+        assert calls["gt_alleles"].to_list() == [["D", "I"], ["D", "D"]], chip
+        line = next(w for w in withheld.warnings if "id_orientation_unverified" in w)
+        assert line.startswith("2 array row(s) with an I/D indel code left unread (id_orientation_unverified)"), chip
+        assert not any("resolved against the indel probes" in w for w in withheld.warnings), chip
+    unknown = loaded.model_copy(update={"facets": loaded.facets.with_columns(pl.lit(None, dtype=pl.String).alias("chip"))})
+    assert any("the facet's chip is unknown" in w for w in resolve_ref(unknown, grch37_store).warnings)
+
+
+def test_every_calibration_names_its_evidence() -> None:
+    assert {chip for chip, entry in ID_CALIBRATION.items() if entry.resolve} == {"23andme_v5", "ancestrydna_v2"}
+    assert all("2026-10-23" in entry.evidence for entry in ID_CALIBRATION.values())
+    assert not id_calibration("living_dna_sirius").resolve and not id_calibration(None).resolve
 
 
 # --- probe sets and the cause of an absence -------------------------------------------------------
@@ -324,6 +361,40 @@ def test_an_absence_on_the_chip_is_a_no_call_and_off_it_not_on_the_chip(tmp_path
     answer = chip_absence(loaded, asked)
     assert answer.sites["absence_cause"].to_list() == ["in_export", "no_call", "not_on_chip", "not_on_chip"]
     assert answer.probe_set is not None and answer.reason.startswith("read against the learned probe set of ancestrydna_v2 on GRCh37")
+
+
+def test_a_load_of_several_facets_is_refused(tmp_path: Path) -> None:
+    """An appended export is two facets: one facet's chip read against both facets' rows would mix them."""
+    text, _, _ = _two_exports()
+    path = tmp_path / "appended.txt"
+    path.write_text(text)
+    appended = load(path)
+    assert appended.facets.collect().height == 2
+    with pytest.raises(ValueError, match="chip_absence takes one facet; this Loaded has 2"):
+        chip_absence(appended, pl.DataFrame({"chrom": ["1"], "pos": [1001]}))
+    exports = [ancestry_export(tmp_path / f"e{i}.txt", [100, 200]) for i in range(3)]
+    with pytest.raises(ValueError, match="learn_probe_sets takes one facet; this Loaded has 2"):
+        learn_probe_sets([*exports, appended])
+    assert not (cache_dir() / "probes" / "learned").exists(), "nothing is written before the refusal"
+
+
+def test_a_written_no_call_is_a_no_call_not_a_site_in_the_export(tmp_path: Path) -> None:
+    learn_probe_sets([ancestry_export(tmp_path / f"e{i}.txt", [100, 200, 300]) for i in range(3)])
+    person = tmp_path / "person.txt"
+    person.write_text(ANCESTRY_PREAMBLE + "rs100\t1\t100\tA\tG\nrs200\t1\t200\t0\t0\nrs300\t1\t300\tA\t0\n")
+    asked = pl.DataFrame({"chrom": ["1", "1", "1"], "pos": [100, 200, 300]})
+    assert chip_absence(load(person), asked).sites["absence_cause"].to_list() == ["in_export", "no_call", "in_export"]
+    # 23andMe's spelling, and no probe set at all: the written row itself shows the chip probed there.
+    twentythree = export(tmp_path, [("rs100", "1", 100, "AG"), ("rs200", "1", 200, "--"), ("rs201", "1", 200, "--")])
+    answer = chip_absence(load(twentythree), pl.DataFrame({"chrom": ["1", "1", "1"], "pos": [100, 200, 300]}))
+    assert answer.probe_set is None
+    assert answer.sites["absence_cause"].to_list() == ["in_export", "no_call", None]
+
+
+def test_a_site_with_a_genotype_in_any_of_its_rows_is_in_the_export(tmp_path: Path) -> None:
+    twentythree = export(tmp_path, [("rs200", "1", 200, "--"), ("rs201", "1", 200, "CT")])
+    answer = chip_absence(load(twentythree), pl.DataFrame({"chrom": ["1"], "pos": [200]}))
+    assert answer.sites["absence_cause"].to_list() == ["in_export"]
 
 
 def test_without_a_probe_set_an_absence_has_no_cause(tmp_path: Path) -> None:

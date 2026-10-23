@@ -11,8 +11,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 - CGI's `hapLink` is read as phase sets (RM2): a new `PhaseSetKind.CGI_HAPLINK` (`cgi_haplink`); a
   linked haplotype of a `var` or `masterVarBeta` row has `phased` true and the id in `phase_sets`,
   and `cis_phased_blocks` gives one VRS CisPhasedBlock per id and chromosome, the same from both
-  files. `write_vcf` writes neither a hapLink nor a PSL name as PS, and writes the haplotypes they
-  phase unphased, where it wrote `|` (read back as the chromosome's implicit set). Adding the enum
+  files. `write_vcf` has no VCF field for a hapLink: it writes the haplotypes one phases unphased,
+  with a warning, since `|` without the set would read back as the chromosome's implicit set. Adding the enum
   member changes the `phase_set_kinds` dtype; `SCHEMA_VERSION` is bumped at merge.
 
 - CGI `masterVarBeta` rows carry `ad` (RM2): REF's count is `referenceAlleleReadCount`, each ALT's the
@@ -20,6 +20,120 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   with an empty count, a partly called allele or counts that contradict each other keeps `ad` null,
   counted in a load warning by reason (`loaders.cgi.AD_WITHHELD_REASONS`). The read count columns
   leave `dropped_fields`. A value change on masterVarBeta facets; no column changes.
+
+- Schema 0.0.16: the method chain on the facet (`method_steps`, `reference`, `aligner`, `aligner_version`);
+  the CLI and `query` pass `reference` and the aligner through their path and name redaction.
+
+- Schema 0.0.15: `calls.phase_set_ordinals`, `phase_set_qualities` (VCF 4.4+ PSO/PSQ); PSL phase sets load and
+  write back under VCF 4.5.
+
+- A BCF facet now takes the build its header states (`##reference=…hs37d5.fa` gives GRCh37, basis
+  `stated`), as the same header in a text VCF always did. `sniff` stops at a BCF's magic bytes, so the
+  loader reads the header's build lines itself, by the VCF spec's hints. Before, a BCF's
+  `assembly_label` came only from its contig lengths. Found by the facet guard (`tests/test_load_seams.py`).
+
+- A guard against merge seams in the loaders (`tests/test_load_seams.py`): every loadable format's
+  spec example, a BCF written from the `vcf` one and the appended-export table are loaded from a zip
+  through `load`, and any `facets` column left null fails unless the test states why null is right for
+  that format, caller, family or every facet. A reason has to hold for every facet it covers, so a
+  family-wide excuse cannot hide one loader that drops a column another fills. A new `FACETS` column
+  fails for every format until its reasons are written. The same loads check that each load path
+  returns `links` of the `LINKS` schema that agree with its facets, and that `subject` reaches every
+  facet. One gap it found is held as a known gap: a BCF's header build hints are never read, so it
+  gets no `assembly_label` where the same header as text gets GRCh37.
+
+- The CLI printed header text unredacted. `sniff` printed `build_evidence`, the whole matched header line
+  (a `##reference=file:///home/<name>/…`); it prints `build_hint` instead, the statement's key and the
+  build it names (`{"kind": "##reference", "label": "GRCh38"}`). `load`, `convert` and `check` printed the
+  facet's free-text fields as read (a `##DeepVariant_version` path landed in `caller_version`); every
+  one `query` redacts (`query.PROVENANCE_TEXT`), and `dropped_fields`, now goes through `query`'s
+  redaction (`query.FacetRedactor`) and then the CLI's labels. The CLI's warnings and refusals also
+  lose anything shaped like a path, by the same rule (`query.redact_paths`), which now also catches
+  `file:///` URLs, `//host` shares and one-component `~/` and `C:\` paths, in `query`'s answers too.
+  Breaking for a script reading `build_evidence` from `sniff --json`.
+
+- `chip_absence` and `learn_probe_sets` refuse a `Loaded` of more than one facet (an appended export)
+  with `ValueError`, as the derived steps do: they read the first facet's chip and assembly against
+  every facet's rows. `scripts/learn_probe_sets.py` skips such a file and counts it.
+
+- `Person` carries `links` (RM275's frame), which it dropped: every link its facets' loads carried,
+  once each, in `canonical_links` order, so a lifted facet grouped with its parent keeps its
+  `liftover_to` link. The CLI's `--facet` narrowing kept no links either, so a step after it lost the
+  load's kin links; it keeps them now. No column changes.
+
+- `rejoin_split` keeps the SV columns RM282 added, which it wrote null: `sv_type` and `copy_number`
+  where the split rows agree, and `cipos`, `ciend` and `alt_copy_numbers` concatenated in the joined
+  `alts` order (null when a row does not state them per ALT, or two rows disagree on one ALT).
+  `REJOIN_VERSION` 2: re-joined facets get new `facet_id`s.
+
+- `liftover` withholds a swapped row's `alt_copy_numbers` (INFO CN, one per ALT), as it withholds its
+  `dosage`: the swapped ALT's slot holds the old REF, whose copy number the source did not state; a
+  warning counts them. `LIFT_VERSION` 3. `NORMALIZE_VERSION` 6, for RM282's change to what `normalize`
+  emits (per-ALT SV columns split with their ALT, a moved row's intervals cleared), which shipped
+  without a bump. Lifted and normalized facets get new `facet_id`s.
+
+- The suite's opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DIR`, `JUST_VCF_MANIFESTS_DIR`,
+  `JUST_VCF_TEST_REFERENCE_DIR`, `JUST_VCF_TEST_CHAIN_DIR`) are empty unless the shell sets them:
+  `tests/conftest.py` no longer reads them from the repo `.env`, and defaults each to `""` so the CLI's
+  `load_dotenv` cannot fill them either. A plain `uv run pytest` never opens a private genome; an opt-in
+  run names the variables on its command line (CLAUDE.md §4, docs/LIVE_SAMPLES.md). No library change.
+
+- A withheld CisPhasedBlock names the first slot that withheld it: three new columns of
+  `cis_phased_blocks`, `withheld_chrom`, `withheld_pos` and `withheld_allele` (RM284), so the one
+  symbolic ALT that withholds a chromosome's implicit set can be found. Null when the block has an id
+  or is `too_few_members`. Offering blocks per window instead stays the person's call.
+- VCF 4.4+ phase-set lists are read and written (layer 8). The VCF loader reads FORMAT `PSL` into
+  `phase_sets`/`phase_set_kinds` (kind `psl`) per allele, and `PSO` and `PSQ` into two new nullable
+  `calls` columns, `phase_set_ordinals` and `phase_set_qualities` (SCHEMA_VERSION not bumped here). A
+  PSL name on a VCF 4.4+ record's first slot makes that slot phased, which P4 otherwise leaves
+  unknown. polars-bio refuses `Number=P` (P10), so such a header is read through the rewritten copy
+  declaring `Number=.` (`REWRITE_VERSION` 9); before this, a file with PSL loaded with PSL dropped.
+  `write_vcf` writes VCF 4.5 when a row holds a PSL set (PSL, PSO, PSQ, a leading GT phase indicator
+  where it differs from the implicit one, CN declared Float), and 4.3 otherwise, as before; a PSL facet
+  round-trips through `load`, and htslib reads it. `cis_phased_blocks` keeps a PSL record's
+  implicit-set slots out of its PSL sets.
+
+- A facet records its method chain (layer 2, charter 6): four new nullable `facets` columns from the
+  `source` detector. `method_steps` lists every step the header records, in the order they ran, each
+  with its tool, version, role (`align`, `call`, `filter`, `normalize`, `merge`, `lift`, `annotate`,
+  `phase`, `other`), key options (paths written `<path>`, a reference or chain by its base name, no
+  sample names) and the meta key it came from: GATK in its three header styles, DRAGEN, bcftools,
+  vcftools, freeBayes, starling, Clair3, SnpEff, VEP, gvcftools, CrossMap, Eagle, WhatsHap, SHAPEIT4
+  and HapCUT2. Dated steps (GATK, DRAGEN, bcftools) are put in date order, because htsjdk sorts meta
+  lines by text. `reference` is `##reference=`'s base name or the caller's; `aligner` and
+  `aligner_version` are DRAGEN's when it mapped the reads. `phasing_method` now also names a caller
+  that declares FORMAT `PS` in its own words (DRAGEN, GATK HaplotypeCaller, DeepVariant, CGI) and the
+  phasers above; two phasing steps leave it null with a warning. `##clair3_version` names Clair3 as
+  the caller. A `##reference=` that differs from the caller's with no liftover recorded is a warning.
+  The CLI summary prints `reference`, `aligner` and each step's role, tool and version. `SCHEMA_VERSION`
+  is not bumped here.
+
+- `chip_absence` separates a written no-call from a call (RM281): a site the export writes as `--`
+  (AncestryDNA: `0 0`) is `no_call`, where it was `in_export`, with or without a probe set; `in_export`
+  now means the export has a genotype there. `AbsenceCause` keeps its three members; the meaning of
+  `in_export` narrows, a value change for any caller reading it on no-call sites.
+
+- `resolve_ref` resolves `I`/`D` indel codes only on a chip whose calibration passed (RM281,
+  `just_vcf.probes.ID_CALIBRATION`): `23andme_v5` and `ancestrydna_v2`, where 98.7% and 98.4% of the
+  resolved homozygous rows read hom-ref. `23andme_v3` and `23andme_v4` (76%, the same sites hom-alt in
+  every export; on v3 a same-person CGI genome reads all of them hom-ref, so the codes run the other way
+  there), `23andme_v1_v2` (6 rows), Final Reports and unknown chips keep their code rows as
+  loaded, with one warning counting them as `id_orientation_unverified` and naming the evidence. A value
+  change on those facets when the manifests are configured; `RESOLVE_VERSION` 7.
+
+- Illumina Annotation Engine (Nirvana) JSON loads (`nirvana_json`, RM2, layer 1): each position object
+  is the VCF record it annotated, so rows get `source_ref`, `alts`, `gt`, `phased`, `gq`, `dp`, `ad`,
+  `qual` and `filters`; the annotations are listed in `dropped_fields`. Several samples load one at a
+  time with `sample=`. 32 of 39 declared formats load. No column changes.
+
+- Six more formats load (RM2, layer 1), through the new `loaders.site_tables`: CASAVA SNP and indel
+  tables, SOAPsnp consensus rows, FamilyTreeDNA Big Y CSVs, Color's `variant_set.csv` and GET-Evidence genome
+  GFFs. Each writes a reference base beside the genotype, so rows get `source_ref`, `alts` and a `gt`
+  over `[source_ref] + alts` at load; CASAVA rows also `ad` and `dp` (indels `ad`, `gq`, `qual`, the
+  padding dashes dropped, insertion points at the base before them), SOAPsnp `gq` and `dp`;
+  GET-Evidence's `REF` rows are `ref` blocks (`absence_means = blocks`). Big Y's Known SNP rows, which
+  have no position, are dropped with a count. 31 of 39 declared formats load. No column changes.
+  docs/FORMATS.md says why each remaining format does not load, and which are not facets.
 
 - In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
   probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
@@ -47,6 +161,64 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   says so. A value change on array facets with I/D rows when the manifests are configured. Tests see
   `JUST_VCF_MANIFESTS_DIR` empty; the opt-in manifest test takes the new `manifests_dir` fixture.
 
+- A GRCh37 or GRCh38 scaffold now meets the reference store under any name NCBI's assembly reports
+  give it (F19): UCSC's `chr1_KI270706v1_random`, GenBank's and Ensembl's `KI270706.1`, RefSeq's
+  `NT_187361.1`, GRCh37's `chr4_gl000194_random`. `ReferenceStore.contigs_by_chrom` lists a contig
+  under its report names only where its length is the report's and the collection holds no contig of
+  that name; stated lengths and chain sizes are checked against it as before. `resolve_ref`,
+  `normalize`, `mint_vrs_ids` and `liftover`'s target contigs all go through it, and `resolve_ref`
+  says how many rows it read that way. `chrom` keeps the source's spelling. Values change on files
+  that already load: such rows now get `ref`, alignment, VRS ids and lifts. `RESOLVE_VERSION` 5,
+  `NORMALIZE_VERSION` 6 and `LIFT_VERSION` 3 (derived `facet_id`s change), `MINT_VERSION` 3. Measured:
+  a PGP-HMS GRCh38 VCF goes from 44,594 rows unread to 0; GIAB HG002 lifted CHM13 → GRCh38 from
+  75,001 `target_contig_unmatched` to 40,099 (all on `_fix` patches, which the Ensembl store lacks).
+
+- GRCh37's and GRCh38's assembled-molecule accessions map to canonical `chrom`, as T2T-CHM13's do
+  (`CM000663.2`, `NC_000001.11` → `1`; `J01415.2`, `NC_012920.1` → `MT`), from NCBI's GRCh37.p13 and
+  GRCh38.p14 assembly reports, now carried in `assets/` and derived into the package table
+  `contig_names.tsv` (`just_vcf.contig_names`, F19). A header named by accession is labelled with its
+  assembly. Values change on files that already load: such a file's `chrom` and `contig_map` now say
+  `1`…`MT` instead of the accession.
+
+- `write_vcf_zarr(loaded, path)` exports one facet's calls as a VCF Zarr 0.4 store, which polars-bio
+  reads back with `scan_vcf_zarr` (RM276). Rows follow `write_vcf`'s rules (REF from the reference
+  or the file, never the genotype; unwritable rows refused or counted). The VCF Zarr spec has no
+  blocks, so a facet's blocks stay in the parquet store and are counted. Written with the standard
+  library (gzip chunks, no timestamp), so no extra and the same bytes for the same frame.
+
+- A durable store per person (RM276): `Store.open(path, subject=...)` creates or opens a directory
+  the caller names, `store.add(loaded)` writes each facet's four frames as parquet with a manifest
+  (schema version, subject, facet ids, added times in UTC), and `store.loaded()` / `store.person()`
+  read everything back lazily. Facets accumulate: a facet already held is a no-op and adding one never
+  rewrites another; each add is atomic per facet and holds a lock, so concurrent adds are safe. Another
+  schema version or subject is refused, never mixed. No column changes; the schema version is not
+  bumped.
+
+- `Person.of` and `people` check a subject's facets with `same_person` (RM274) when no check is named;
+  `check=None` runs none, as no check did before. A pair of facets too small or on two assemblies reads
+  `could_not_tell`. A behaviour change on RM273's API, no column changes.
+
+- GA4GH Pedigree read as supplied data (RM274): `read_pedigree` takes the standard's Phenopacket
+  `GA4GHPedigree` message as JSON (both protobuf JSON spellings of a field) into a `Pedigree` with an
+  individuals frame and a relationships frame, KIN terms and sex values verbatim. Nothing is inferred
+  from it or into it; a document without its required parts raises `PedigreeError`.
+
+- somalier as an optional second opinion on relatedness (RM274): `just_vcf.somalier.somalier_relate`
+  writes each facet at the panel's positions with `write_vcf`, runs `somalier extract` and `relate`,
+  and reads `pairs.tsv` into the relatedness frame (`method = somalier`, its `relatedness` kept
+  verbatim, half of it as `kinship`). Without a `somalier` binary on PATH it raises
+  `SomalierNotFoundError`. Not run on this machine: docs/TRUST.md has no row for its binary yet.
+
+- Relatedness between facets (RM274): `relatedness(a, b)` gives KING-robust kinship (between-family
+  form), IBS0, IBS2, the shared site counts, a jackknife standard error and a band (`same_person`,
+  `first_degree`, `second_degree`, `third_degree`, `unrelated`, or `unknown` with a reason);
+  `pairwise_relatedness` does every pair of facets across several `Loaded` as a frame, and
+  `same_person(a, b)` answers True, False or None. Sites come from a panel of 15,289 autosomal,
+  strand-unambiguous SNVs per build (GRCh37, GRCh38) derived from somalier's site VCFs and shipped in
+  the package (`relatedness_sites.json`); genotypes are read as ancestry reads them, now from the core
+  module `just_vcf.site_genotypes`, so arrays and whole genomes compare alike. New API, no column
+  changes.
+
 - Schema 0.0.12 (RM273): `facets.subject`; `Person.of` groups one subject's facets and checks the claim.
 
 - `Person.of(*loaded, check=...)` and `people(*loaded, check=...)` group facets by the subject the
@@ -59,8 +231,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 - `load(..., subject=...)` labels a file's facets with the person they belong to, in a new nullable
   `facets.subject` column (RM273). The label is the caller's: nothing fills it from the sample name or
   the file, and `facet_id` does not digest it. Every derived step (`resolve_ref`, `normalize`,
-  `liftover`, `rejoin_split`, `mint_vrs_ids`) carries its parent's. Schema change; the version bump is
-  the lead's at merge.
+  `liftover`, `rejoin_split`, `mint_vrs_ids`) carries its parent's. Schema change, landed in 0.0.12.
 
 - `query(source)` (RM283), the aggregate-only helper beside `load`, for agents and apps: counts per
   facet by contig, variant class (ALT alleles), filter set, genotype class, REF check, evidence basis
@@ -79,7 +250,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   every pair, an appended export from the first export. A plain load has none. `facets.derived_from`
   and `relation` stay for the one-parent case, and `link_disagreements` lists every place the two
   disagree. `LINKS` and `link_disagreements` are exported. No column of the other frames changes; the
-  schema version is not bumped.
+  frame landed in schema 0.0.13.
 
 - A command line, `just-vcf` (RM272): `sniff`, `load` (a summary of each facet), `check` (REF read
   from a reference, `ref_check` and withheld VRS ids counted) and `convert` (to VCF or gVCF through
@@ -100,7 +271,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 - Structural-variant and copy-number VCFs load as SV facets (RM282). Five nullable `calls` columns:
   `sv_type` (INFO SVTYPE as written), `cipos` and `ciend` (two offsets per ALT; VCF 4.2's one pair
   for the record repeated per ALT), `copy_number` (FORMAT CN) and `alt_copy_numbers` (INFO CN, per
-  ALT). `SCHEMA_VERSION` is not bumped in this change; the lead bumps it at merge. Canvas's `<CN0>`,
+  ALT); they landed in schema 0.0.14. Canvas's `<CN0>`,
   `<CN2>`… end at INFO END, and its copy-neutral segments (ALT `.` with END and CN) are calls, not
   reference blocks (F18), so a Canvas facet's absence is `unknown`, not `blocks`. `vrs_withheld`
   gives `sv_no_vrs_model` for an SV allele or breakend (it gave `symbolic`, which now names only
@@ -132,6 +303,31 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   `T2T-CHM13`. The `T2T-CHM13` label cannot vouch for MT (the CHM13 mitochondrion and rCRS are both
   16,569 bases), so an array labelled T2T-CHM13 keeps MT unread. Value changes on files that already
   load; no column changes.
+
+- `sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM269 with RM278): the
+  median read depth over non-PAR X and the X-degenerate Y against chr20 is a third X line and a Y line
+  that can show a Y absent, so `XX` and `XO` are now named where the lines agree. Without coverage
+  nothing changes; the result gains a nullable `coverage` field and two reasons
+  (`coverage_no_build`, `coverage_build_mismatch`, `coverage_uneven` for an exome-shaped depth).
+
+- Coverage as a facet (RM278): `read_coverage` reads mosdepth's per-base, regions, quantized and
+  summary outputs and `samtools depth` / `samtools coverage` into a `Coverage` (a `CoverageFacet` and
+  a lazy `intervals` frame of depth mean, bounds and described bases per interval);
+  `alignment_coverage` runs polars-bio's `depth()` over a BAM or CRAM and folds its per-base depth
+  into 1,000-base windows while it streams (13.3 GB peak, 12.7 minutes on a 27 GB BAM);
+  `callable_sites` and `callable_at` say per position whether the reads reached a `min_depth`, `True`, `False` or unknown with a reason. A headerless
+  three-column file that could be a BED3 is refused unless `kind=` states it. Nothing in `facets`,
+  `calls` or `blocks` changes, so `SCHEMA_VERSION` stays (docs/SCHEMA.md, "Coverage facets").
+
+- `concordance(a, b, *, region=None)` compares two facets of one person on one assembly, allele by
+  allele (RM277). Alleles meet by VRS id where both facets minted one, else by position, REF and ALT,
+  else against the other facet's one row at the position. Each row states the agreement (match,
+  mismatch, ploidy differs, uncalled, one-sided), what a silent facet's absence means, and, where both
+  rows carry likelihoods or both posteriors, `p_same`, the probability the two hold the same copies of
+  the allele (likelihoods under a named flat prior). A summary counts alleles by agreement and variant
+  class. Disagreement is kept, never resolved. Facets on different assemblies are refused. New public
+  names: `concordance`, `Concordance`, `Agreement`, `PairKey`, `AbsenceReading`, `ComparisonBasis`.
+  No column changes; `SCHEMA_VERSION` is unchanged.
 
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but

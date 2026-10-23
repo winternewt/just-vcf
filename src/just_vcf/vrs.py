@@ -43,7 +43,7 @@ from just_vcf.schema import CALLS, SCHEMA_VERSION, RefCheck, empty
 
 logger = logging.getLogger(__name__)
 
-MINT_VERSION = 2
+MINT_VERSION = 3
 """Part of the spill key: bumped whenever the rule changes what `mint_vrs_ids` writes."""
 
 MINT_ERRORS: frozenset[str] = frozenset({"no_contig", "refused"})

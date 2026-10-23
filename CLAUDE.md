@@ -265,6 +265,8 @@ are read from env vars with sensible defaults, documented in `.env.template`, an
 | `JUST_VCF_ANCESTRY_DIR` | unset | directory of ancestry reference panels (docs/ANCESTRY_PANELS.md) for the opt-in panel tests; they skip without it. The library itself takes a panel path as an argument |
 | `JUST_VCF_MANIFESTS_DIR` | unset | directory holding Illumina's manifest zips (docs/PROVENANCE.md). `resolve_ref` reads their indel probes to resolve an array's `I`/`D` codes (RM281, `just_vcf.probes`), each read once into the cache's `probes/`; unset, those rows stay unread, with a warning. The opt-in test that re-derives the packaged chip marker sample reads them too, and skips without them |
 
+In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DIR`, `JUST_VCF_MANIFESTS_DIR`, `JUST_VCF_TEST_REFERENCE_DIR`, `JUST_VCF_TEST_CHAIN_DIR`) are empty unless the shell sets them: `tests/conftest.py` defaults each to `""`, so a plain `uv run pytest` never opens a private genome because the repo `.env` names one. An opt-in run passes them on the command line, e.g. `JUST_VCF_SAMPLES_DIR=/data/genomes uv run pytest -q tests/test_load_vcf.py`.
+
 **Timestamps: store ISO-8601 UTC, display local.** Never write a naive `YYYY-MM-DD HH:MM:SS`.
 
 ---
@@ -369,6 +371,10 @@ These were learned the expensive way in the sibling repos. Each is a prohibition
 - **A test that means "no credential" must say so** — neutralize in an autouse fixture with
   `setenv(VAR, "")`, not `delenv`.
 - **Suspect ordering whenever a test passes alone and fails in the suite.**
+- **The facet guard (`tests/test_load_seams.py`) loads every loadable format's `example`** and fails
+  on any `facets` column left null without a reason in its `NULL_REASONS`, and on a reason that no
+  longer holds. Each loader builds its own facet row, so a column added or filled in one loader must
+  be decided there for all of them. Update the table in the same commit; never loosen it to pass.
 
 ---
 

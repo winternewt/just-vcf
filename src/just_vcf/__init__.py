@@ -4,6 +4,19 @@ from importlib.metadata import version
 
 from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
 from just_vcf.callset import absence_is_reference
+from just_vcf.coverage import (
+    Callability,
+    Coverage,
+    CoverageFacet,
+    CoverageFormat,
+    Resolution,
+    UnsupportedCoverageError,
+    alignment_coverage,
+    callable_at,
+    callable_sites,
+    read_coverage,
+)
+from just_vcf.concordance import AbsenceReading, Agreement, ComparisonBasis, Concordance, PairKey, concordance
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.links import link_disagreements
@@ -21,11 +34,13 @@ from just_vcf.loading import (
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
 from just_vcf.probes import AbsenceCause, ChipAbsence, ProbeSet, ProbeSetKind, chip_absence, learn_probe_sets, probe_set
+from just_vcf.pedigree import Pedigree, PedigreeError, read_pedigree
 from just_vcf.person import SUBJECT_CHECKS, Person, SameSubjectCheck, SubjectCheckOutcome, SubjectError, people
 from just_vcf.query import Dimension, GenotypeClass, Presence, PresenceBasis, Query, query
 from just_vcf.phasing import cis_phased_blocks
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
+from just_vcf.relatedness import Relatedness, RelationBand, SitePanel, pairwise_relatedness, relatedness, same_person
 from just_vcf.schema import (
     BLOCKS,
     CALLS,
@@ -47,6 +62,8 @@ from just_vcf.schema import (
     VariantClass,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
+from just_vcf.store import Store, StoreAdded, StoredFacet, StoreError, StoreManifest, StoreVersionError
+from just_vcf.vcf_zarr import VCF_ZARR_VERSION, VcfZarrWritten, write_vcf_zarr
 from just_vcf.writing import BlockAllele, ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
 from just_vcf.vrs import mint_vrs_ids, vrs_withheld
 
@@ -61,28 +78,40 @@ __all__ = [
     "SCHEMA_VERSION",
     "AbsenceCause",
     "SUBJECT_CHECKS",
+    "VCF_ZARR_VERSION",
     "AbsenceMeans",
+    "AbsenceReading",
+    "Agreement",
     "AssemblyLabelBasis",
     "BlockAllele",
     "BlockKind",
     "CacheClearReport",
     "CacheEntryInfo",
+    "Callability",
     "CallsetType",
     "ChipAbsence",
     "ChipBasis",
+    "ComparisonBasis",
+    "Concordance",
     "Chain",
     "ContentFilter",
     "ContentFilterBasis",
     "ContigNames",
+    "Coverage",
+    "CoverageFacet",
+    "CoverageFormat",
     "DamagedBgzfError",
     "Dimension",
     "Lifted",
     "Loaded",
     "MultiSampleError",
     "NoSampleError",
+    "PairKey",
     "EvidenceBasis",
     "GenotypeClass",
     "KaryotypicSex",
+    "Pedigree",
+    "PedigreeError",
     "PhaseSetKind",
     "ProbeSet",
     "ProbeSetKind",
@@ -93,27 +122,43 @@ __all__ = [
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
+    "Relatedness",
+    "RelationBand",
     "SameSubjectCheck",
+    "Resolution",
     "SexChromosomeEvidence",
+    "SitePanel",
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
+    "Store",
+    "StoreAdded",
+    "StoreError",
+    "StoreManifest",
+    "StoreVersionError",
+    "StoredFacet",
     "StrandCheck",
     "SubjectCheckOutcome",
     "SubjectError",
     "TableLayoutError",
     "UnsortedRowsError",
+    "UnsupportedCoverageError",
     "UnsupportedFormatError",
     "UnwritableRowsError",
     "VariantClass",
     "VcfWritten",
+    "VcfZarrWritten",
     "XCopies",
     "__version__",
     "absence_is_reference",
     "chip_absence",
     "cis_phased_blocks",
+    "alignment_coverage",
+    "callable_at",
+    "callable_sites",
     "clear_cache",
     "learn_probe_sets",
+    "concordance",
     "liftover",
     "link_disagreements",
     "load",
@@ -123,14 +168,20 @@ __all__ = [
     "query",
     "open_payload",
     "probe_set",
+    "pairwise_relatedness",
     "read_chain",
+    "read_pedigree",
+    "read_coverage",
     "reference_dir",
     "rejoin_split",
+    "relatedness",
     "resolve_ref",
+    "same_person",
     "sex_chromosome_evidence",
     "sniff",
     "table_samples",
     "vcf_samples",
     "vrs_withheld",
     "write_vcf",
+    "write_vcf_zarr",
 ]

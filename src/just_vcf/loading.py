@@ -25,7 +25,7 @@ from just_vcf.cache import cache_dir, file_sha256
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import Family
 from just_vcf.links import APPENDED_EXPORT, CALLER_SPLIT, kin_links
-from just_vcf.loaders import cgi, keyvalue, rsid_table, table, vcf
+from just_vcf.loaders import cgi, keyvalue, nirvana, rsid_table, site_tables, table, vcf
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
     BLOCKS,
@@ -42,12 +42,15 @@ from just_vcf.schema import (
     contig_map,
     empty,
 )
-from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
+from just_vcf.sniff import Sniffed, SniffOutcome, build_from_hints, open_payload, sniff
 from just_vcf.source import detect_source
 
 logger = logging.getLogger(__name__)
 
-LOADABLE_FORMATS: frozenset[str] = rsid_table.FORMATS | table.FORMATS | vcf.FORMATS | keyvalue.FORMATS | cgi.FORMATS
+LOADABLE_FORMATS: frozenset[str] = (
+    rsid_table.FORMATS | table.FORMATS | vcf.FORMATS | keyvalue.FORMATS | cgi.FORMATS | site_tables.FORMATS
+    | nirvana.FORMATS
+)
 """Format ids `load` can read. Grows as loaders land."""
 
 SPILL_ROW_GROUP = 200_000
@@ -186,6 +189,10 @@ def _load(source: Path | str | Sniffed, sample: str | None) -> Loaded:
             return _load_keyvalue(sniffed)
         if sniffed.format in cgi.FORMATS:
             return _load_cgi(sniffed)
+        if sniffed.format in site_tables.FORMATS:
+            return _load_site_table(sniffed)
+        if sniffed.format in nirvana.FORMATS:
+            return _load_nirvana(sniffed, sample)
         return _load_rsid_table(sniffed)
 
 
@@ -223,6 +230,101 @@ def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:
     options = {} if read.sample_index is None else {"sample_index": read.sample_index}
     extra = {"sample": read.sample, "dropped_fields": read.dropped_columns, **_chip(sniffed.format, data, read.calls, read.warnings)}
     return _array_loaded(sniffed, _array_facet(sniffed, read.calls, build=build, options=options, extra=extra), read.warnings)
+
+
+def _load_site_table(sniffed: Sniffed) -> Loaded:
+    """A table that states REF at each site (CASAVA, SOAPsnp, GET-Evidence, Big Y, Color's variant set):
+    one facet, its calls, and the reference sites it states as blocks."""
+    spec = site_tables.spec_for(sniffed.format)
+    with open_payload(sniffed) as handle:
+        data = handle.read()
+    read = site_tables.read_site_table(data, spec)
+    source_sha256 = file_sha256(sniffed.path)
+    facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={})
+    calls = canonical_order(site_tables.to_calls_frame(read.calls, facet_id))
+    blocks = empty(BLOCKS) if read.blocks is None else canonical_order(site_tables.to_blocks_frame(read.blocks, facet_id))
+    warnings = list(read.warnings)
+    # Rows with no source_ref (GET-Evidence's build-36 layout) are genotype-table rows: no classes counted.
+    if read.calls["source_ref"].is_not_null().any():
+        classes, class_warnings = _variant_classes(facet_id, calls, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
+        warnings += class_warnings
+    else:
+        classes = {}
+    inference = callset.classify(calls, read.read_evidence, None)
+    logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
+    kind = inference.callset_type
+    build = read.build or sniffed.build
+    facet = {
+        "facet_id": facet_id,
+        "source_sha256": source_sha256,
+        "source_path": str(sniffed.path),
+        "member": sniffed.member,
+        "format_id": sniffed.format,
+        "family": sniffed.family.value if sniffed.family else None,
+        "vendor": get_spec(sniffed.format).vendor,
+        "sample": read.sample,
+        "assembly_label": build,
+        "assembly_label_basis": AssemblyLabelBasis.STATED.value if build else None,
+        "callset_type": kind.value if kind else None,
+        "absence_means": callset.absence_means(kind, read.blocks is not None).value,
+        **classes,
+        "contig_map": contig_map(read.calls["source_chrom"].drop_nulls().unique().to_list()),
+        "dropped_fields": read.dropped_columns,
+    }
+    for warning in warnings:
+        logger.warning("%s: %s", facet_id, warning)
+    return Loaded(facets=_facet_frame(facet), calls=calls, blocks=blocks, warnings=tuple(warnings))
+
+
+def _load_nirvana(sniffed: Sniffed, sample: str | None) -> Loaded:
+    """Illumina's Annotation Engine JSON: the VCF records it annotated, one facet per chosen sample."""
+    source_sha256 = file_sha256(sniffed.path)
+    origin = _origin(sniffed, source_sha256)
+    with _work_copy(origin, "nirvana") as work:
+        return _load_nirvana_copy(sniffed, sample, source_sha256, origin, work / "positions.ndjson")
+
+
+def _load_nirvana_copy(sniffed: Sniffed, sample: str | None, source_sha256: str, origin: cache.Origin, copy: Path) -> Loaded:
+    with open_payload(sniffed) as handle:
+        header, head, other = nirvana.copy_positions(handle, copy)
+    index = nirvana.sample_index(header, sample)
+    options = {} if len(nirvana.samples(header)) == 1 else {"sample_index": index}
+    facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options=options)
+    rows = nirvana.calls_rows(nirvana.scan(copy), index)
+    spilled, _, contigs = _spill(facet_id, nirvana.to_calls_frame(rows, facet_id), empty(BLOCKS), origin)
+    counts = nirvana.stats(spilled)
+    warnings = nirvana.warnings_for(counts, other)
+    classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
+    warnings += class_warnings
+    inference = callset.classify(spilled, list(nirvana.READ_EVIDENCE), None)
+    logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
+    kind = inference.callset_type
+    source_chroms = sorted(set(pl.scan_ndjson(copy, schema={"chromosome": pl.String}).select(pl.col("chromosome").unique()).collect()["chromosome"].drop_nulls().to_list()))
+    facet = {
+        "facet_id": facet_id,
+        "source_sha256": source_sha256,
+        "source_path": str(sniffed.path),
+        "member": sniffed.member,
+        "format_id": sniffed.format,
+        "family": sniffed.family.value if sniffed.family else None,
+        "vendor": get_spec(sniffed.format).vendor,
+        "sample": nirvana.samples(header)[index],
+        "assembly_label": sniffed.build,
+        "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
+        "callset_type": kind.value if kind else None,
+        "absence_means": callset.absence_means(kind, False).value,
+        **classes,
+        "contig_map": contig_map(source_chroms),
+        "dropped_fields": nirvana.dropped_fields(head),
+    }
+    for warning in warnings:
+        logger.warning("%s: %s", facet_id, warning)
+    return Loaded(
+        facets=_facet_frame(facet),
+        calls=canonical_order_per_contig(spilled, contigs),
+        blocks=empty(BLOCKS),
+        warnings=tuple(warnings),
+    )
 
 
 def _load_keyvalue(sniffed: Sniffed) -> Loaded:
@@ -598,6 +700,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             "key(s) declared with a Type VCF 4.3 reserves otherwise, which polars-bio refuses, not carried: "
             + ", ".join(f"{name} (Type={kind}, 4.3 reserves {vcf.V43_RESERVED_TYPES[name]})" for name, kind in sorted(refused.items()))
         )
+    if any_number := vcf.any_number_keys(header):
+        warnings.append(
+            "FORMAT key(s) declared Number=P, which polars-bio refuses (P10), read through a copy declaring "
+            f"Number=. with each value's count checked against GT: {', '.join(any_number)}"
+        )
     if not header.meta:
         warnings.append(
             "no meta lines: read under a synthesised header (##fileformat=VCFv4.2 and the carried keys the "
@@ -630,9 +737,16 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     if gl_phred:
         warnings.append("CGAPipeline writes GL in phred units (GQ is the gap between the two best): read as GL / 10")
     if (header.version_tuple or (0, 0)) >= (4, 4):
-        warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
+        warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld "
+            "(phased[0] is read where PSL names the first slot's set)")
     versions = {caller.name: caller.version for caller in source.callers}
-    label, basis, label_warnings = _assembly_label(sniffed.build, header.contigs)
+    stated = sniffed.build
+    if binary:
+        # `sniff` stops at a BCF's magic bytes, so the header's build lines are read here, by the same
+        # hints as a text VCF's.
+        stated, _, hint_warnings = build_from_hints(get_spec("vcf"), "\n".join(header.meta))
+        warnings += list(hint_warnings)
+    label, basis, label_warnings = _assembly_label(stated, header.contigs)
     warnings += label_warnings
     stated_filters = callset.stated_content_filters(header.meta)
     # The member's own name inside an archive; the name is read for its words and never logged.
@@ -703,6 +817,10 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 # What the header states (array or imputed content) wins; RM4 infers the rest from the rows.
                 "callset_type": kind.value if kind else None,
                 "phasing_method": source.phasing_method,
+                "reference": source.reference,
+                "aligner": source.aligner,
+                "aligner_version": source.aligner_version,
+                "method_steps": [step.as_row() for step in source.steps],
                 "relation": CALLER_SPLIT if part.split else None,
                 "sample": part.sample,
                 "assembly_label": label,

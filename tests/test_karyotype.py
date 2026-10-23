@@ -5,7 +5,20 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import BLOCKS, FACETS, KaryotypicSex, Loaded, XCopies, load, sex_chromosome_evidence
+from just_vcf import (
+    BLOCKS,
+    FACETS,
+    Coverage,
+    CoverageFacet,
+    CoverageFormat,
+    KaryotypicSex,
+    Loaded,
+    Resolution,
+    XCopies,
+    load,
+    sex_chromosome_evidence,
+)
+from just_vcf.coverage import COVERAGE_INTERVALS
 from just_vcf.karyotype import (
     MIN_X_SITES,
     MIN_Y_SITES,
@@ -22,7 +35,7 @@ from just_vcf.karyotype import (
     estimate,
     measure,
 )
-from just_vcf.schema import CALLS, CallsetType, conform, empty
+from just_vcf.schema import CALLS, AssemblyLabelBasis, CallsetType, conform, empty
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 GIAB = ASSETS / "giab_stratifications_v3.6_xy"
@@ -485,3 +498,111 @@ def test_each_facet_of_a_load_gets_its_own_answer() -> None:
         ("f", "freeBayes", KaryotypicSex.XXY),
         ("g", "VarScan2", KaryotypicSex.XY),
     ]
+
+
+# --- With a coverage facet (RM278) -----------------------------------------------------------------
+
+COVERAGE_WINDOW = 10_000
+X_DEGENERATE_SPAN = (11_674_124, 13_984_473)  # GRCh38's longest X-degenerate interval, 2.3 Mb
+
+
+def windows(chrom: str, start: int, count: int, depth: float) -> list[tuple]:
+    return [
+        (chrom, start + i * COVERAGE_WINDOW, start + (i + 1) * COVERAGE_WINDOW - 1, depth, int(depth), int(depth) + 1, COVERAGE_WINDOW, None)
+        for i in range(count)
+    ]
+
+
+def coverage_facet(x_depth: float, y_depth: float, *, build: str | None = "GRCh38", chr20_gap: int = 0) -> Coverage:
+    """30x on chr20 (with `chr20_gap` zero windows, an assembly gap), `x_depth` over 2 Mb of non-PAR X,
+    `y_depth` over 2 Mb inside the X-degenerate Y."""
+    rows_ = windows("20", 1_000_001, 200, 30.0) + windows("20", 3_000_001, chr20_gap, 0.0)
+    rows_ += windows("X", X_START, 200, x_depth) + windows("Y", X_DEGENERATE_SPAN[0], 200, y_depth)
+    intervals = pl.DataFrame(rows_, schema=list(COVERAGE_INTERVALS), orient="row").cast(COVERAGE_INTERVALS).lazy()
+    facet = CoverageFacet(
+        facet_id="cov", format_id=CoverageFormat.ALIGNMENT_DEPTH, source_path="synthetic", source_sha256=None, assembly_label=build,
+        assembly_label_basis=None if build is None else AssemblyLabelBasis.STATED, contig_lengths=None, resolution=Resolution.WINDOW,
+        window=COVERAGE_WINDOW, options={}, zero_filled=True, dropped_fields=[], warnings=[],
+    )
+    return Coverage(facet=facet, intervals=intervals)
+
+
+def with_coverage(calls: pl.LazyFrame, coverage: Coverage, build: str = "GRCh38") -> SexChromosomeEvidence:
+    facets = conform(pl.LazyFrame({"facet_id": ["f"], "assembly_label": [build], "callset_type": ["wgs"]}), FACETS)
+    (found,) = sex_chromosome_evidence(Loaded(facets=facets, calls=calls, blocks=empty(BLOCKS)), coverage=coverage)
+    return found
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "x_depth", "y_depth", "expected"),
+    [
+        # Coverage shows a Y absent, which call-site depth never could: XX and XO are named.
+        (XX[0], XX[1], 30.0, 0.6, KaryotypicSex.XX),
+        (XY[0], XX[1], 15.0, 0.0, KaryotypicSex.XO),
+        # Coverage shows a Y the calls did not: XY.
+        (XY[0], XX[1], 15.0, 15.0, KaryotypicSex.XY),
+        (XX[0], XY[1], 30.0, 15.0, KaryotypicSex.XXY),
+    ],
+)
+def test_coverage_names_xx_and_xo(x: pl.DataFrame, y: pl.DataFrame, x_depth: float, y_depth: float, expected: KaryotypicSex) -> None:
+    found = with_coverage(frame(chr20(), x, y), coverage_facet(x_depth, y_depth))
+    assert (found.inferred_karyotypic_sex, found.reason) == (expected, None)
+    assert found.y_present is (expected in (KaryotypicSex.XY, KaryotypicSex.XXY))
+    assert found.coverage.reason is None
+    assert (found.coverage.x_ratio, found.coverage.y_ratio) == (pytest.approx(x_depth / 30), pytest.approx(y_depth / 30))
+
+
+def test_coverage_absent_against_a_call_depth_present_is_unknown() -> None:
+    found = with_coverage(frame(chr20(), *XY), coverage_facet(15.0, 0.0))
+    assert (found.inferred_karyotypic_sex, found.reason, found.y_reason) == (KaryotypicSex.UNKNOWN_KARYOTYPE, "y_unusable", "lines_disagree")
+
+
+def test_a_coverage_y_between_the_bands_is_intermediate() -> None:
+    found = with_coverage(frame(chr20(), XX[0], XX[1]), coverage_facet(30.0, 7.5))
+    assert (found.inferred_karyotypic_sex, found.y_present, found.y_reason) == (KaryotypicSex.UNKNOWN_KARYOTYPE, None, "intermediate")
+
+
+def test_a_coverage_x_that_disagrees_with_the_het_share_is_unknown() -> None:
+    found = with_coverage(frame(chr20(), XX[0], XX[1]), coverage_facet(15.0, 0.0))
+    assert (found.x_copies, found.x_copies_reason, found.reason) == (None, "lines_disagree", "lines_disagree")
+
+
+def test_coverage_alone_decides_y_where_the_calls_carry_no_depth() -> None:
+    # A liftover that dropped FORMAT/DP: the het share gives two X, coverage shows no Y.
+    found = with_coverage(frame(chr20(dp=None), x_calls(1200, 800, None), y_calls(1000, None)), coverage_facet(30.0, 0.0))
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XX
+
+
+def test_assembly_gaps_on_chr20_do_not_pull_the_reference_down() -> None:
+    # 300 zero windows against 200 at 30x: counted, the median would be zero and no ratio measured.
+    found = with_coverage(frame(chr20(), XX[0], XX[1]), coverage_facet(30.0, 0.0, chr20_gap=300))
+    assert found.coverage.reference_median == 30.0
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XX
+
+
+@pytest.mark.parametrize(("coverage_build", "reason"), [("GRCh37", "coverage_build_mismatch"), (None, "coverage_no_build")])
+def test_coverage_on_another_or_no_build_is_set_aside(coverage_build: str | None, reason: str) -> None:
+    found = with_coverage(frame(chr20(), XX[0], XX[1]), coverage_facet(30.0, 0.0, build=coverage_build))
+    assert found.coverage.reason == reason
+    assert (found.coverage.x_ratio, found.coverage.y_ratio) == (None, None)
+    # Without its line the answer is the calls' alone: two X, Y not shown.
+    assert (found.inferred_karyotypic_sex, found.x_copies, found.y_reason) == (KaryotypicSex.UNKNOWN_KARYOTYPE, XCopies.TWO_OR_MORE, "y_not_shown")
+
+
+def test_uneven_coverage_is_set_aside() -> None:
+    # An exome's shape: chr20 deep on target, shallow off it. Its medians say nothing about copies.
+    even = coverage_facet(30.0, 0.0)
+    exome_like = pl.concat([even.intervals, pl.DataFrame(windows("20", 5_000_001, 300, 2.0), schema=list(COVERAGE_INTERVALS), orient="row").cast(COVERAGE_INTERVALS).lazy()])
+    found = with_coverage(frame(chr20(), XX[0], XX[1]), Coverage(facet=even.facet, intervals=exome_like))
+    assert found.coverage.reason == "coverage_uneven"
+    assert found.coverage.reference_even_share == pytest.approx(0.6)  # the median falls on the shallow 300
+    assert (found.coverage.x_ratio, found.coverage.y_ratio, found.inferred_karyotypic_sex) == (None, None, KaryotypicSex.UNKNOWN_KARYOTYPE)
+    assert with_coverage(frame(chr20(), XX[0], XX[1]), even).coverage.reference_even_share == 1.0
+
+
+def test_coverage_with_too_few_bases_gives_no_ratio() -> None:
+    full = coverage_facet(30.0, 0.0)
+    kept = (pl.col("chrom") != "Y") | (pl.col("pos") < X_DEGENERATE_SPAN[0] + 50 * COVERAGE_WINDOW)
+    found = with_coverage(frame(chr20(), XX[0], XX[1]), Coverage(facet=full.facet, intervals=full.intervals.filter(kept)))
+    assert (found.coverage.y_bases, found.coverage.y_ratio) == (500_000, None)
+    assert found.y_reason == "y_not_shown"

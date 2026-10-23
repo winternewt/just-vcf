@@ -12,12 +12,12 @@ Severity: high · Status: open (decided by the person in the Part 2 interview, 2
 Typer, registered in `[project.scripts]`, loading `.env` with python-dotenv (CLAUDE.md §4): `just-vcf sniff`, `load` (a summary of the facets), `convert` (to VCF/gVCF via `write_vcf`, optionally through `resolve_ref`, `normalize`, `liftover`, `mint_vrs_ids`) and `check`. Output is counts and aggregates only, never rows: the CLI is a privacy boundary like E12.
 
 ## RM273 — A person (subject) in the schema
-Severity: high · Status: in progress (subject and Person shipped 2026-10-23; the default check waits for RM274) · Owner: lead
+Severity: high · Status: in progress (subject and Person shipped 2026-10-23; the default check is RM274's `same_person`) · Owner: lead
 
 The person chose "Both: supplied, checked" (E1): the caller supplies a subject id when loading; nothing is inferred and facets are never regrouped by the library. The library checks the claim with relatedness (RM274) and warns on a mismatch. Most of the extended shape sits on this: RM275, RM276, RM277, RM280.
 
 ## RM274 — Relatedness and families
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: medium · Status: in progress (KING-robust relatedness, `same_person` as RM273's default check, the somalier wrapper and GA4GH Pedigree reading shipped 2026-10-23; left: somalier run for real once docs/TRUST.md has its row, pedigree compared with measured bands, a first-degree split by IBS0) · Owner: lead
 
 The person chose both (E6): somalier (MIT) as an optional subprocess, skipped cleanly when absent, and just-vcf's own relatedness on the frames (IBS/KING-style over a validated site panel, so arrays work too). Pedigrees as supplied GA4GH Pedigree data. Feeds RM273's check.
 
@@ -27,9 +27,15 @@ Severity: medium · Status: open (decided by the person in the Part 2 interview,
 The person chose a small links frame (E4): (from, to, relation, provenance), so a facet can have several parents (a merge, a consensus). `derived_from` and `relation` stay on `facets` for the one-parent case. Relations verbatim from GA4GH where it has them (`liftover_to`), just-vcf's own otherwise, documented.
 
 ## RM276 — A durable per-person store
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: medium · Status: built 2026-10-23, awaiting merge (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
 
 The person chose both (E13): a directory per person holding parquet per facet, the links frame and a manifest, read lazily; and a VCF Zarr export (its spec has no gVCF blocks, so blocks stay parquet-only). Facets accumulate; nothing is overwritten (invariant 5).
+
+**Built:** `Store` (docs/SCHEMA.md, "The durable store"): parquet per facet, links per facet, a
+manifest, a lock, lazy reads into `Loaded` and `Person`; and `write_vcf_zarr`, one facet's calls as
+VCF Zarr 0.4, blocks counted and left in the store. **Left:** a migration between schema versions (a
+store of another version is refused, not migrated); `cipos`, `ciend` and `alt_copy_numbers` in the
+Zarr export; whether `Person` should carry the links (`store.loaded().links` has them).
 
 ## RM277 — Concordance between facets
 Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
@@ -37,9 +43,65 @@ Severity: medium · Status: open (decided by the person in the Part 2 interview,
 The person chose graded where possible (E2): GL/GP compared where both facets carry them, hard genotypes otherwise, and every row says which. Kept as data, never resolved to a winner (invariant 8). Needs RM273 and VRS ids (RM271).
 
 ## RM278 — Coverage as a facet
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: medium · Status: in progress (built 2026-10-23: readers, BAM depth, callable) · Owner: lead
 
 The person chose summaries and BAM depth (E3): mosdepth/samtools summaries, and polars-bio's `depth()` over a BAM the person has (scope note of 2026-09-28). Absence with a cause. RM269's XX and XO labels wait for this (the person chose to wait, 2026-10-23).
+
+**Built 2026-10-23** (`just_vcf.coverage`; docs/SCHEMA.md "Coverage facets"): `read_coverage` for
+mosdepth's four outputs and `samtools depth`/`coverage`, told by content; `alignment_coverage` over a
+BAM or CRAM through polars-bio `depth()`, folded into 1,000-base windows with exact mean, min, max and
+described bases, tiling the header's contigs with zeros; `callable_sites`/`callable_at` with
+`min_depth` required. Decisions, each with what was rejected: a `Coverage` beside `Loaded`, not a
+fourth frame (the load contract and the cache of every format would change for evidence about an
+alignment); windows, not `depth()`'s raw runs (498 million on the 27 GB BAM below); per-base mode, not block mode (block mode's peak grows with the reads, below); a mean
+bounds no base, so regions and summaries answer callable unknown (rejected: reading a mean of 30 as
+"every base above 4"); `min_depth` with no default (rejected: GATK CallableLoci's 4, a convention the
+caller should choose); a BAM's `facet_id` from its header, index and size (rejected: hashing the bytes,
+a second full read); a headerless three-column file whose rows read as intervals is refused unless `kind=` states it (rejected: taking it as `samtools depth`, which reads a BED3 as depths). mosdepth's thresholds file is refused for now.
+
+Substrate findings, polars-bio 0.36 (for the upstream-liaison seat to file; read in the mirror under
+`data/interim/`, `bio-function-pileup` and `polars-bio/src/pileup.rs`):
+
+- `depth()`'s output column `coverage` is Int16, written by `prev_cov as i16` from a 32-bit count, so a
+  base deeper than 32,767 comes out negative and one past 65,535 as a wrong positive. Shown by a test
+  (`test_a_depth_past_int16_is_left_out_and_counted`, 32,770 reads over five bases). Mitigated here:
+  negative depths are left out of their window and counted in a warning.
+- `DepthTableProvider::scan` drops pushed-down filters and `depth()` takes no region, and `PileupExec`
+  holds a dense `Vec<i32>` per touched contig (its full length) for the whole file before emitting
+  anything. Peak memory therefore grows with the genome, not with a window; it cannot be bounded from
+  just-vcf.
+- In block mode `merge_dense_results` builds every contig's run-length batches into `pending_batches`
+  before emitting the first, so the peak adds all the runs (498 million on the 27 GB BAM below) to
+  the dense arrays. Per-base mode emits contig by contig. `alignment_coverage` uses per-base mode.
+- Block mode loses depth at a contig's end: on a synthetic BAM whose reads reach a contig's last
+  base it emits no run for that contig at all, and on the 27 GB BAM the last window of 60 contigs
+  read a zero there that per-base mode did not (the only differences across 2.94 million covered
+  windows). Shown by `test_a_read_on_a_contigs_last_base_is_counted`, which fails on block mode.
+- An indexed full scan reads the BAM twice: the dedicated no-coordinate partition scans "from the
+  first alignment record and filter[s] to no-coor rows" (`bio-format-bam/src/physical_exec.rs`), the
+  comment says, rather than seek past the placed reads. Measured as bytes read equal to twice the
+  file (below).
+
+**Measured 2026-10-23** on two private GRCh38 bwa-mem2 BAMs on the Krypton share (aggregates only;
+the machine shared with about eleven other sessions, load average 17–60):
+
+| BAM | depth mode | time | peak RSS | bytes read | windows |
+|---|---|---|---|---|---|
+| 27.4 GB | blocks | 18.1 min | 22.6 GB | not recorded | 3,099,848 |
+| 27.4 GB | per-base | 12.7 min | 13.3 GB | 49.6 GB | 3,099,848 |
+| 48.3 GB | blocks | 38.3 min | 33.6 GB | 96.7 GB | 3,099,848 |
+| 42.1 GB | per-base | 20.4 min | 16.3 GB | 83.1 GB | 3,099,848 |
+| 39.2 GB | per-base | 16.7 min | 13.6 GB | 78.5 GB | 3,099,848 |
+
+The four come from three person folders (the 48.3 and 39.2 GB BAMs are two libraries in one folder,
+which docs/LIVE_SAMPLES.md says are different people).
+
+Each BAM had a few windows (18 on the first) holding bases deeper than 32,767, reported as wrapped
+(the Int16 finding above).
+
+Left: a cache spill of the windows keyed by `facet_id` (RM268's pattern), so a BAM is read once; a
+quantized output from one depth pass; mosdepth's thresholds file; a person-level layer that pairs a
+coverage facet with callsets.
 
 ## RM279 — A method-error atlas
 Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
@@ -81,7 +143,15 @@ manifests are read at run time from `JUST_VCF_MANIFESTS_DIR`, each once into a p
   against 21 of 2,313 on v5), with hardly a het. REF agrees with Ensembl's GRCh38 REF on long or short
   for all 154 biallelic v3 sites checked, so the reference read is right; whether those sites are ones
   where the reference carries the rare allele or where 23andMe's I/D mean the other way round needs the
-  same person's WGS (left, below).
+  same person's WGS (left, below). **Checked on one v3 person** (2026-10-23, hu0E7AAF, the export's
+  codes resolved with the gate lifted in memory, against the same person's CGI `var` on GRCh37): of
+  171 resolved homozygous sites, the 44 the export reads hom-alt and the 127 it reads hom-ref all lie
+  inside a CGI reference block with no variant within 2 bases. The join does find CGI indels: the
+  export's only 2 resolved het sites both meet a het indel in the `var` (58,864 indel calls on the
+  contigs read); a small control, but not an empty one. So on those probes 23andMe's I/D is the
+  other way round from Illumina's, not a rare reference allele; v3 stays withheld (now with that
+  evidence in `ID_CALIBRATION`), and a per-probe flip waits for more people. v4 is not checked yet:
+  loading one CGI `var` from Krypton took about 25 minutes.
 - **Strand per probe** (`resolve_ref`, mixed facets only): a withheld row is read by its probe's two
   alleles on the plus strand (`SNP` as written for `RefStrand` `+`, complemented for `-`; the GRCh37 base
   at `MapInfo` is in that pair for all but 2 of 20,000 sampled SNV probes of each manifest). Where the
@@ -89,7 +159,9 @@ manifests are read at run time from `JUST_VCF_MANIFESTS_DIR`, each once into a p
   alleles alone. This is not the repair F13 rejected: F13 showed that no strand column predicts which
   probes FTDNA flipped; the pair decides each row whatever the vendor flipped by.
 - **Absence with a cause** (`chip_absence`, `probe_set`, `learn_probe_sets`): `in_export`, `no_call`
-  or `not_on_chip` per asked site, from the chip's own manifest (`illumina:<manifest>`, configured) or a
+  or `not_on_chip` per asked site (a written `--` is `no_call`, not `in_export`: the lead's call,
+  2026-10-23; rejected: a fourth member for a written no-call, since both say the chip looked and saw
+  nothing, and the row is there for a caller who needs to know it was written), from the chip's own manifest (`illumina:<manifest>`, configured) or a
   set learned from its exports. Learned from every loadable 23andMe and AncestryDNA export under PGP-HMS
   (sites carried by at least half of a chip's exports; every file counts, so a participant's copies of
   one upload count more than once):
@@ -116,6 +188,13 @@ Decisions, each with what was rejected:
   chip's own manifest, which resolves nothing on PGP-HMS (no export's chip has its manifest on disk).
   Risk kept: a vendor's probe for a multi-allelic rsid may test another allele than Illumina's; the
   hom-ref share above is the check, and v3/v4's is the open question.
+- I/D codes resolve only on a chip whose calibration passed (`probes.ID_CALIBRATION`, the lead's
+  call 2026-10-23): `23andme_v5` and `ancestrydna_v2`; the rest withheld, counted
+  `id_orientation_unverified`. Rejected: resolving every chip (v3 and v4 would ship a quarter of their
+  homozygous rows possibly backwards), and flipping v3/v4's codes (nothing yet says which way is
+  wrong). An `illumina:` Final Report is withheld too, though its own manifest defines its `I`: no
+  Final Report with I/D rows has been measured, and the catalog matches rsids across every configured
+  manifest, not only the chip's own.
 - A site is located by its flanks, not by `MapInfo`, which is not the anchor (the gap is one base
   before it for 5,594 GSA probes, at or after it for the rest). REF comes from the reference; the
   manifest gives the inserted bases and the locator only.
@@ -159,9 +238,12 @@ Severity: low · Status: built 2026-10-23 on a builder branch, awaiting the lead
 
 The person chose columns with an export on demand (E5): phase sets stay columns; VRS CisPhasedBlock objects are minted only when asked.
 
-**Built:** `cis_phased_blocks` (docs/SCHEMA.md, "CisPhasedBlock export"). Left open: no loader reads
-PSL yet, so PSL sets are tested on a rewritten frame only; in a VCF 4.4+ file every slot-0 block with an ALT is
-`phase_unknown` until polars-bio keeps the leading phase indicator (P4). On a whole imputed genome
+**Built:** `cis_phased_blocks` (docs/SCHEMA.md, "CisPhasedBlock export"). The VCF loader reads PSL,
+PSO and PSQ since 2026-10-23, and `write_vcf` writes them back under VCF 4.5, so PSL sets are tested on
+a loaded facet against vrs-python. Left open: in a VCF 4.4+ file a slot-0 block with an ALT is
+`phase_unknown` until polars-bio keeps the leading phase indicator (P4), unless PSL names that slot's set.
+A withheld block names the first allele that withheld it (`withheld_chrom`, `withheld_pos`,
+`withheld_allele`). On a whole imputed genome
 an implicit set is a chromosome, so one symbolic ALT withholds the haplotype's block (a phased Genes
 for Good upload: 45 of 46 withheld `symbolic`); whether a block per window or per contiguous run of
 sequence alleles is wanted is the person's call.
@@ -220,12 +302,11 @@ The 75,001 are a finding: 34,178 of the chain's 856,832 blocks target UCSC's sca
 (`chr1_KI270706v1_random`, `chrUn_…`, and `_fix` patches), which the Ensembl GRCh38 primary assembly
 names `KI270706.1` or does not hold (patches). The rows are counted, not lost silently, but they cannot
 lift onto an Ensembl-named GRCh38 store. A UCSC↔GenBank scaffold alias table would fix the first kind.
+It does since 2026-10-23 (F19, docs/PREVIOUS_ISSUES.md): 40,099 left, all on `_fix` patches.
 
 **Left:**
 - Calibrating the karyotype thresholds on T2T callsets of known karyotype with FORMAT DP (the HG002
   benchmark has none); then `ESTIMATE_BUILDS` takes T2T-CHM13.
-- GRCh37's and GRCh38's accessions (`NC_000001.11`, `CM000663.2`…) are not aliased yet, and UCSC
-  scaffold names do not meet Ensembl's (above).
 - Making store-chm13 the default test store, or adding CHM13 to `store`, is the lead's call.
 
 ## RM1 — Final shape and plan
@@ -239,7 +320,23 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (detection shipped 2026-09-29; 23andMe-layout and plain VCF loaders shipped 2026-09-30; on 2026-10-22 the vendor-table loader, the VCF `source` detector and the VCF dialects `bcf`, `vcf_no_meta`, `vcf_cgi` and `vcf_freebayes_varscan2`, then the `freebayes_varscan2_keyvalue` table and CGI's native `var` and `masterVarBeta`: 25 of the 39 declared formats load, the 9 rsid-table layouts, `vcf` and its four dialects, the key=value table, CGI `var` and `masterVarBeta`, AncestryDNA, FTDNA (both exports), the RSID/RESULT table (MyHeritage), Color, deCODEme, Genos and the Illumina Final Report with plus-strand alleles; Geno 2.0 and Final Reports without positions or plus-strand alleles wait for chip manifests) · Owner: lead
+Severity: high · Status: in progress (on 2026-10-23, 32 of the 39 declared formats load: the earlier 25, plus the CASAVA SNP and indel tables, SOAPsnp, FTDNA Big Y, Color's variant set, GET-Evidence GFF and Nirvana JSON; `oxford_gen` waits for a decision (docs/LAYERS.md), Geno 2.0 and Final Reports without positions wait for chip manifests, `promethease_tab_genotype` has no positions, `cgi_summary` and `decodeme_info` are not facets) · Owner: lead
+
+**Shipped 2026-10-23: the site tables** (`loaders/site_tables.py`): CASAVA SNP and indel tables,
+SOAPsnp, Big Y, Color's variant set and GET-Evidence GFFs; then Nirvana JSON (`loaders/nirvana.py`),
+32 of 39 formats now. What still does not load, and why, is
+in docs/FORMATS.md ("Not loadable yet"); the `oxford_gen` chromosome question waits for the
+person. Builder's choices, each with what was rejected:
+
+- A one-letter call is one `gt_alleles` entry (CASAVA `Diff`, a plain SOAPsnp base, GET-Evidence
+  `alleles G`). Rejected: doubling it to a homozygous pair, which asserts a diploid call on male X and
+  Y, where the same files write one letter too; the ploidy is the karyotype work's.
+- CASAVA `dp` is `Total Bases`, and `ad` the base counts of `[source_ref] + alts` (the four counts sum
+  to `Bases Used`). Rejected: `dp = Bases Used`, which is the filtered depth GATK calls the AD sum.
+- `Sample Name` is not `facets.sample`: it is free text, in real files a person's name, not a sample
+  column. Rejected: carrying it as the identifying sample, which the spec says to drop.
+- No build is inferred for CASAVA, SOAPsnp or Big Y, and `caller` stays null for all five: neither is
+  stated. Rejected: CASAVA or SOAPsnp as the caller from the layout, which the file does not name.
 
 **Shipped:** content-based detection. `just_vcf.sniff` and the declarative registry in
 `just_vcf.formats` (docs/FORMATS.md). Over the PGP-HMS participants, 8 of about 1,740 files stay unknown,
@@ -275,6 +372,36 @@ starling) were added from the PGP-HMS headers. Decisions:
   carry one caller each (Decision 8).
 - `ploidy_statements` keeps lines verbatim with no vocabulary, as RM269's critique recommends; an
   option's path value is written `<path>`.
+
+**Shipped 2026-10-23: the method chain** (layer 2, charter 6), `source.method_chain`: `facets.method_steps`,
+`reference`, `aligner`, `aligner_version`, and `phasing_method` from the chain. Measured over 392
+PGP-HMS VCF headers and 52 local ones (the Krypton copy of `/data/genomes`, ancestry panels left out):
+`reference` 95% and 38% (DeepVariant writes no `##reference`), at least one step 80% and 83%, a step
+after the call 76% and 48%, `phasing_method` 34% and 38%, `aligner` 2% and 2% (DRAGEN only; no header
+on disk copies a BAM's `@PG` lines). Decisions, each with what was rejected:
+
+- Step order is header order, except dated steps (GATK, DRAGEN, bcftools), sorted by their stated
+  date among the places they hold: every GATK pipeline header on disk lists ApplyRecalibration before
+  HaplotypeCaller, because htsjdk sorts meta lines by text. Rejected: header order alone, which is
+  wrong for every GATK header; and a sort of all steps by date, which has nowhere to put the undated.
+- `reference` is `##reference=`, the coordinate system the rows are on, with the caller's reference
+  only as a fallback. Rejected: the caller's reference first, which for a file lifted by a tool that
+  records nothing (Picard) names the reference the rows are no longer on. When the two differ and no
+  `lift` step is recorded, a warning says so (four local headers, the Picard lifts).
+- A caller phased its own calls only where FORMAT `PS` is declared in the caller's own words
+  (`_CALLER_PHASE_SETS`). Rejected: any `PS` declaration, which credits the caller with a phaser's work.
+  HaplotypeCaller's PGT/PID alone is not a phase step: no `calls` column carries it.
+- Phasers with no header on disk get a rule only where their source code shows the line they write
+  (WhatsHap, SHAPEIT4, HapCUT2). Beagle, SHAPEIT5 and DRAGEN's `--vc-enable-phasing` without a `PS`
+  declaration have no rule: no header on disk, no source read.
+- `options` come from a list kept per tool, never the whole command: GATK writes forty defaults, and a
+  command carries inputs, outputs and sample names. Rejected: every option with paths redacted, which
+  still keeps `--vc-sample-name`.
+- One call step per caller name, at its first line, collecting its command lines' options; every
+  other line is its own step. Rejected: one step per caller line, which repeats a caller run per
+  chromosome.
+- The role vocabulary is open (`schema.STEP_ROLES`, a string column): `other` holds a conversion or a
+  gvcftools pass, and a new role is additive.
 
 **Open from `vcf_cgi` (2026-10-22):** a vcfBeta lists its no-called spans and half-calls but, in the
 rows counted, never a reference-called record, which suggests an absent position was called
@@ -365,6 +492,7 @@ Header evidence found while declaring the VCF formats:
 | `##DRAGENCommandLine`, `##source=DRAGEN_SNV` | DRAGEN |
 | `##GATKCommandLine*`, `##source=HaplotypeCaller…`, `##UnifiedGenotyper=` | GATK |
 | `##DeepVariant_version=` | DeepVariant |
+| `##clair3_version=` | Clair3 |
 | `##source=Platypus_Version_*` | Platypus |
 | `##source=GenerateSVCandidates` | Manta |
 | `##source=aengine` | FamilyTreeDNA Big Y |
@@ -433,7 +561,9 @@ of 83 rows; the rest need the site's alleles, F17. Checked 2026-10-23: CGI's nat
 write indels without the anchor base, as the empty allele `""`. A CGI deletion's REF is read and
 `normalize` anchors it; a CGI or Genos insertion point's anchor base is not read, and neither is REF
 for Genos's multi-base rows, whose span the file states, so `normalize` cannot reach them yet); emitting
-reference-supported positions; an opt-in test against a real assembly; mapping UCSC `_random`/`chrUn_` names to the accessions Ensembl uses (by the accession inside the name, checked by length). A VCF with neither
+reference-supported positions; an opt-in test against a real assembly. UCSC's scaffold names meet
+Ensembl's accessions since 2026-10-23, through NCBI's assembly reports rather than the accession inside
+the name (F19, docs/PREVIOUS_ISSUES.md). A VCF with neither
 `##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array
 without a stated build has it inferred from its rows (F9, below).
 
@@ -1011,7 +1141,7 @@ store:
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO wait for a coverage facet, as do XXX, XYY and arrays) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY and arrays wait) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -1203,9 +1333,39 @@ Decisions, each with what was rejected:
   (above); and dropping the Y line altogether, which would lose `XY` and `XXY` where Y depth is high
   and the women measured sit far below.
 
-**Left:** `XX` and `XO` need a Y shown absent, and XXX, XYY and the other classes a copy count:
-both wait for a coverage facet (depth at called sites cannot show a region empty, and does not
-separate one Y from two). An array's female Y probes are no-calls, which may be the absence signal
+**Built 2026-10-23: coverage as an X and a Y line** (RM278). `sex_chromosome_evidence(loaded,
+coverage=…)` reads a coverage facet's length-weighted median depth over non-PAR X, the X-degenerate Y
+and chr20 (`CoverageRatios`, on the result's `coverage` field). X: a third line, one X at a ratio of
+at most 0.625, two from 0.875 to 1.25, and all measured X lines must agree. Y: present at 0.375 or
+more, absent at 0.125 or less, unknown between; absent with one X names `XO`, with two `XX`. Each band
+is the central half of the copy-number gap (one copy 0.5, two 1.0; a Y 0.5, none 0), the rule the
+call-based bands followed. Decisions, each with what was rejected:
+
+Calibration, 2026-10-23, on the four private BAMs of RM278's table (aggregates only, pooled, no file
+named or classed): every X and Y coverage ratio lay within 0.034 of its nearest copy-number
+expectation (0, 0.5 or 1.0), so every file fell inside a class band with at least 0.09 to spare; each
+file's X and Y pair was one of the usual two (one X with a Y, two X without); chr20's even share was
+0.972 or more. The X-degenerate Y coverage of the files without a Y read near 0, against 0.35–0.40
+from the calls' DP on the local two-X VCFs: the call-site line sees the mismapped stretches only.
+Four files from three person folders confirm the bands' placement, not their width.
+
+- Coverage shows a Y absent where call-site depth could not: the coverage median runs over every base
+  of the region, the calls' DP only over the sites a caller found something at, which in a genome
+  without a Y are the mismapped stretches. Rejected: an absent band on the calls' Y ratio (it named a
+  man `XO`, above).
+- Coverage showing no Y against calls showing one is `lines_disagree`. Rejected: letting coverage
+  win, which would hide a mispaired coverage facet (another person's BAM).
+- Zero-depth intervals are left out on chr20 and X (assembly gaps; each span holds a centromere) and
+  kept on the X-degenerate Y, which GIAB cuts free of gaps and where zero is the signal. Rejected:
+  counting them everywhere, which lowers both medians by the gaps' share.
+- A coverage facet whose chr20 depth is uneven (under 75% of its bases within half to twice the
+  median: an exome's or a panel's shape) is set aside as `coverage_uneven`. Rejected: trusting the
+  paired facet's `callset_type`, which says what the calls are, not what the reads are.
+- The coverage facet is paired by the caller and used only on its own build. Rejected: placing it on
+  the facet's build, which would read GRCh37 coordinates against GRCh38 regions.
+
+**Left:** XXX, XYY and the other classes need a copy count past two, which the bands above do not
+read (a Y ratio near 1.0 still reads as one Y present). An array's female Y probes are no-calls, which may be the absence signal
 arrays have and genomes lack. Arrays (no `gt`
 before RM3, no depth) and exomes answer unknown; an array's own lines (female Y probes no-calls,
 AncestryDNA's doubled X letters) are not built. Liftovers of one callset are not yet weighed as one

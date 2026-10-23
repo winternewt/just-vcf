@@ -1,7 +1,8 @@
 """The frames every loader emits: `facets`, `calls` and `blocks`, and the `links` between facets (docs/SCHEMA.md).
 
 This module is the contract in code: column names, dtypes, the closed vocabularies, contig naming
-(SCHEMA.md Decision 7) and the canonical row order (Decision 11). It does no I/O. A test compares the
+(SCHEMA.md Decision 7) and the canonical row order (Decision 11). It does no I/O of its own (GRCh37's and
+GRCh38's accessions come from the package table `just_vcf.contig_names` reads). A test compares the
 column lists here with the tables in docs/SCHEMA.md, so the two cannot drift apart silently.
 
 Closed vocabularies are `str` enums with a matching `pl.Enum` dtype. Vocabularies that grow
@@ -13,9 +14,10 @@ from enum import Enum
 
 import polars as pl
 
+from just_vcf.contig_names import PRIMARY_ACCESSIONS
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.14"
+SCHEMA_VERSION = "0.0.16"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -174,6 +176,16 @@ def enum_dtype(vocabulary: type[Enum]) -> pl.Enum:
     return pl.Enum([member.value for member in vocabulary])
 
 
+STEP_ROLES: frozenset[str] = frozenset({"align", "call", "filter", "normalize", "merge", "lift", "annotate", "phase", "other"})
+"""What a step of `facets.method_steps` did (SCHEMA.md Decision 5). An open vocabulary that grows
+additively, so the column is `pl.String`: `other` holds a step the header records whose role is none
+of the rest (a format conversion, a gvcftools pass)."""
+
+METHOD_STEP = pl.Struct(
+    {"tool": pl.String, "version": pl.String, "role": pl.String, "options": pl.List(pl.String), "line": pl.String}
+)
+"""One step of the method chain a header records, in the order the steps ran (`just_vcf.source`)."""
+
 _CONTIG_MAP = pl.List(pl.Struct({"source": pl.String, "chrom": pl.String}))
 
 FACETS = pl.Schema(
@@ -200,6 +212,10 @@ FACETS = pl.Schema(
         "content_filter": enum_dtype(ContentFilter),
         "content_filter_basis": enum_dtype(ContentFilterBasis),
         "phasing_method": pl.String,
+        "reference": pl.String,
+        "aligner": pl.String,
+        "aligner_version": pl.String,
+        "method_steps": pl.List(METHOD_STEP),
         "derived_from": pl.String,
         "relation": pl.String,
         "contig_map": _CONTIG_MAP,
@@ -237,6 +253,8 @@ CALLS = pl.Schema(
         "phased": pl.List(pl.Boolean),
         "phase_sets": pl.List(pl.String),
         "phase_set_kinds": pl.List(enum_dtype(PhaseSetKind)),
+        "phase_set_ordinals": pl.List(pl.UInt32),
+        "phase_set_qualities": pl.List(pl.UInt16),
         "gl": pl.List(pl.Float32),
         "gp": pl.List(pl.Float32),
         "dosage": pl.Float32,
@@ -310,10 +328,12 @@ CHM13_ACCESSIONS: dict[str, str] = {
 }
 """T2T-CHM13v2.0's sequence accessions → canonical `chrom`, versions verbatim, from NCBI's assembly
 report for GCA_009914755.4 (docs/PROVENANCE.md). An accession names one sequence of one assembly, so
-mapping it is safe in a way a bare `chr` strip is not. GRCh37's and GRCh38's accessions are not
-listed yet (docs/ROADMAP.md, RM286)."""
+mapping it is safe in a way a bare `chr` strip is not. GRCh37's and GRCh38's assembled molecules map
+the same way (`just_vcf.contig_names.PRIMARY_ACCESSIONS`, F19); their scaffolds keep their source
+name and are matched against a reference store by `contig_names.scaffold_names`."""
 
 CONTIG_ALIASES.update(CHM13_ACCESSIONS)
+CONTIG_ALIASES.update(PRIMARY_ACCESSIONS)
 
 CONTIG_RANK: dict[str, int] = {name: rank for rank, name in enumerate([*_PRIMARY, "MT", "XY"])}
 """Sort rank of the canonical names; any other contig sorts after them, by name."""

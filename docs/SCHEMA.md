@@ -1061,7 +1061,9 @@ Rules:
   their own intervals.
 - **The kind is read from the content**, compression from the magic bytes. A `samtools depth` with
   several depth columns is refused (one alignment file per facet), as are mosdepth's thresholds file and
-  anything whose rows are not positions.
+  anything whose rows are not positions. A headerless three-column file whose third column always
+  exceeds the second is refused too: a BED3 of intervals and a `samtools depth` near a contig's start
+  (chrM, thousands deep) look the same. `kind=` states the format where the content cannot.
 - **The build** is stated by the caller, or inferred from contig lengths where the source gives them
   (an alignment header, mosdepth's summary). Otherwise it is null.
 - **An alignment file is not hashed**: `source_sha256` is null and `facet_id` digests its header, its

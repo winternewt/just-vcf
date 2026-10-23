@@ -15,7 +15,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   a lazy `intervals` frame of depth mean, bounds and described bases per interval);
   `alignment_coverage` runs polars-bio's `depth()` over a BAM or CRAM and folds its blocks into
   1,000-base windows while they stream; `callable_sites` and `callable_at` say per position whether
-  the reads reached a `min_depth`, `True`, `False` or unknown with a reason. Nothing in `facets`,
+  the reads reached a `min_depth`, `True`, `False` or unknown with a reason. A headerless
+  three-column file that could be a BED3 is refused unless `kind=` states it. Nothing in `facets`,
   `calls` or `blocks` changes, so `SCHEMA_VERSION` stays (docs/SCHEMA.md, "Coverage facets").
 
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no

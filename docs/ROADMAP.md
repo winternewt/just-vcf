@@ -51,7 +51,7 @@ alignment); windows, not `depth()`'s raw runs (hundreds of millions of rows at 3
 bounds no base, so regions and summaries answer callable unknown (rejected: reading a mean of 30 as
 "every base above 4"); `min_depth` with no default (rejected: GATK CallableLoci's 4, a convention the
 caller should choose); a BAM's `facet_id` from its header, index and size (rejected: hashing the bytes,
-a second full read). mosdepth's thresholds file is refused for now.
+a second full read); a headerless three-column file whose rows read as intervals is refused unless `kind=` states it (rejected: taking it as `samtools depth`, which reads a BED3 as depths). mosdepth's thresholds file is refused for now.
 
 Substrate findings, polars-bio 0.36 (for the upstream-liaison seat to file; read in the mirror under
 `data/interim/`, `bio-function-pileup` and `polars-bio/src/pileup.rs`):

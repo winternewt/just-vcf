@@ -178,7 +178,13 @@ _SAMTOOLS_COVERAGE_HEADER = ["#rname", "startpos", "endpos", "numreads", "covbas
 _BIN_LABEL = re.compile(r"^(\d+):(\d+|inf)$")
 
 
-def read_coverage(path: Path | str, *, window: int | None = DEFAULT_WINDOW, assembly_label: str | None = None) -> Coverage:
+def read_coverage(
+    path: Path | str,
+    *,
+    window: int | None = DEFAULT_WINDOW,
+    assembly_label: str | None = None,
+    kind: CoverageFormat | None = None,
+) -> Coverage:
     """Read a depth tool's output into a coverage facet (module docstring for the formats).
 
     `window` folds per-base sources (`per_base_bed`, `samtools_depth`) into fixed windows while they
@@ -186,12 +192,16 @@ def read_coverage(path: Path | str, *, window: int | None = DEFAULT_WINDOW, asse
     read whole, for small or targeted files. The other formats keep their own intervals.
     `assembly_label` states the build where the file cannot (no format but mosdepth's summary gives
     contig lengths); a stated label disagreeing with the lengths is kept, with a warning.
+    `kind` states the format where the content cannot tell it (a headerless three-column file whose
+    rows read as intervals is refused without it).
     """
     path = Path(path)
     if window is not None and window < 1:
         raise ValueError("window must be a positive number of bases, or None")
+    if kind is CoverageFormat.ALIGNMENT_DEPTH:
+        raise ValueError("alignment depth is computed by alignment_coverage, not read from a file")
     lines = _head_lines(path)
-    kind = _coverage_kind(lines)
+    kind = kind or _coverage_kind(lines)
     sha256 = _sha256(path)
     warnings: list[str] = []
     dropped: list[str] = []
@@ -298,6 +308,11 @@ def _coverage_kind(lines: list[str]) -> CoverageFormat:
             raise UnsupportedCoverageError(
                 f"samtools depth output with {width - 2} depth columns: one alignment file per facet; "
                 "run samtools depth on one file, or read each column as its own file"
+            )
+        if not lines[0].startswith("#CHROM") and all(int(f[2]) > int(f[1]) for f in body):
+            raise UnsupportedCoverageError(
+                "three columns without a header whose third always exceeds the second: a BED3 of intervals "
+                "or a samtools depth output, the rows cannot tell; pass kind=CoverageFormat.SAMTOOLS_DEPTH if it is one"
             )
         return CoverageFormat.SAMTOOLS_DEPTH
     if lines[0].startswith("#chrom\tstart\tend\tregion"):

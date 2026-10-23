@@ -205,6 +205,17 @@ def test_samtools_depth_without_zero_rows_leaves_windows_partly_described(tmp_pa
     assert row["depth_mean"] == pytest.approx(sum(depth[p] for p in expected[3]) / len(expected[3]))
 
 
+def test_a_headerless_three_column_file_of_intervals_needs_its_kind_stated(tmp_path: Path) -> None:
+    # A BED3 and a samtools depth near a contig's start (chrM at thousands deep) look alike.
+    path = write(tmp_path / "x.txt", ["chrM\t1\t3000", "chrM\t2\t3010", "chrM\t3\t3021"])
+    with pytest.raises(UnsupportedCoverageError, match="kind=CoverageFormat.SAMTOOLS_DEPTH"):
+        read_coverage(path)
+    stated = read_coverage(path, window=None, kind=CoverageFormat.SAMTOOLS_DEPTH)
+    assert stated.intervals.select("chrom", "pos", "depth_min").collect().rows() == [("MT", 1, 3000), ("MT", 2, 3010), ("MT", 3, 3021)]
+    # Further in, depth stays under the position: no ambiguity.
+    assert read_coverage(write(tmp_path / "y.txt", ["chr1\t10001\t3", "chr1\t10002\t4"])).facet.format_id is CoverageFormat.SAMTOOLS_DEPTH
+
+
 def test_samtools_depth_of_several_files_is_refused(tmp_path: Path) -> None:
     path = write(tmp_path / "d.txt", ["#CHROM\tPOS\ta.bam\tb.bam", "chr1\t11\t1\t2"])
     with pytest.raises(UnsupportedCoverageError, match="2 depth columns"):

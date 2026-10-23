@@ -422,6 +422,7 @@ def test_htslib_reads_a_psl_output(tmp_path: Path) -> None:
         )
         for row in calls.iter_rows(named=True)
     }
+    assert sum(value is not None for value in expected.values()) == 4
     assert {key: tuple(None if v in (None, ".") else v for v in value) if value is not None else None for key, value in got.items()} == expected
 
 

@@ -630,7 +630,8 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     if gl_phred:
         warnings.append("CGAPipeline writes GL in phred units (GQ is the gap between the two best): read as GL / 10")
     if (header.version_tuple or (0, 0)) >= (4, 4):
-        warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
+        warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld "
+            "(phased[0] is read where PSL names the first slot's set)")
     versions = {caller.name: caller.version for caller in source.callers}
     label, basis, label_warnings = _assembly_label(sniffed.build, header.contigs)
     warnings += label_warnings

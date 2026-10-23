@@ -13,7 +13,8 @@ reported in the warnings.
 Coordinates stay 1-based (`use_zero_based=False` is passed, never assumed). `end_pos` is computed
 here from VCF 4.5's END rule, not taken from polars-bio, whose `end` is one short for symbolic SVs
 (P3). polars-bio drops a GT's leading phase indicator (P4), so in a VCF 4.4+ file the first
-haplotype's `phased` entry is withheld rather than reported from the rewritten text.
+haplotype's `phased` entry is withheld rather than reported from the rewritten text, except where a
+PSL name says it is phased (`_phase_sets`).
 """
 
 import hashlib

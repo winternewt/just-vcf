@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A BCF facet now takes the build its header states (`##reference=…hs37d5.fa` gives GRCh37, basis
+  `stated`), as the same header in a text VCF always did. `sniff` stops at a BCF's magic bytes, so the
+  loader reads the header's build lines itself, by the VCF spec's hints. Before, a BCF's
+  `assembly_label` came only from its contig lengths. Found by the facet gate below.
+
 - The CGI convergence tests (opt-in, PGP-HMS): one assembly's `var` and `masterVarBeta` give the same
   blocks and sites, and its `var` and `vcfBeta` agree on 4,138,184 sites, with 27,505 partial calls
   vcfBeta writes `.`, 356,513 loci vcfBeta writes as no-calls, and 1,665 (0.04%) left where vcfBeta

@@ -99,3 +99,13 @@ def test_contig_dictionary_follows_idx(tmp_path: Path) -> None:
     bcf = to_bcf(text, tmp_path / "idx.bcf")
     calls = load(bcf).calls.collect()
     assert list(zip(calls["chrom"], calls["pos"], strict=True)) == [("1", 100), ("2", 7)]
+
+
+def test_a_bcf_header_states_its_build_as_a_text_header_does(tmp_path: Path) -> None:
+    """`sniff` stops at the BCF magic, so the loader reads the header's build lines itself (found by
+    the facet gate, tests/test_facet_gate.py)."""
+    text = write(tmp_path, vcf_text(RECORDS[1:2], fmt=FMT, extra_meta=("##reference=file:///ref/hs37d5.fa",)), "built.vcf")
+    bcf = to_bcf(text, tmp_path / "built.bcf")
+    assert sniff(bcf).build is None, "the binary head carries no build hint"
+    facets = [load(path).facets.collect().row(0, named=True) for path in (text, bcf)]
+    assert [(f["assembly_label"], f["assembly_label_basis"]) for f in facets] == [("GRCh37", "stated")] * 2

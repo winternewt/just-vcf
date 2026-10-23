@@ -35,8 +35,17 @@ not about who their people are.
   and a difference counted (`n_vrs_differ`). On one assembly there should be none.
 - **somalier.** `just_vcf.somalier.somalier_relate` runs somalier (MIT) when its binary is on PATH and
   reads its `pairs.tsv` into the same frame. Not run on this machine: docs/TRUST.md has no row for it.
-- **Pedigrees.** `read_pedigree` reads a GA4GH Pedigree as supplied; nothing compares it with the
-  measured bands yet.
+- **Pedigrees.** `read_pedigree` reads a GA4GH Pedigree as supplied. `expected_kinship` reads what it
+  says each pair's kinship should be: the pedigree kinship coefficient through its parent links
+  (KIN:003 and the terms under it, KIN:032 the other way), stated degrees where a term fixes one (full
+  and half siblings, twins, grandparents, parental siblings, cousins), founders unrelated where nothing
+  links them (basis `assumed`). Which term allows which kinship is just-vcf's own reading of KIN, listed
+  in the `just_vcf.pedigree` docstring; a term that allows two (a sibling of either kind, a cousin)
+  allows both bands. `check_pedigree` sets that beside the measured relatedness of the facets whose
+  `subject` is each individual's id: `agrees` when every band the measured interval (kinship ± 2 SE)
+  reaches is allowed, `disagrees` when none is, otherwise `cannot_tell` with a reason. A disagreement
+  is a row and, through `people(..., pedigree=...)`, a warning naming facet ids. It never corrects the
+  pedigree or relabels a facet.
 
 ## Measured on PGP-HMS
 
@@ -83,4 +92,10 @@ What the table says:
 - Facets on different builds are not compared. Lifting one first (`liftover`) makes them comparable.
 - The jackknife captures the sampling of sites, not the spread of real relationships (two second-degree
   relatives share anywhere from about 0.09 to 0.17), so a band near a floor can be `unknown` for a
-  genuine relative.
+  genuine relative. The pedigree check compares a pedigree's expected value with the measured band and
+  so shares this: a real cousin can read `unrelated` (and `disagrees`), a real half sibling `third_degree`.
+  The fixture's first cousins at 9,000 sites read `agrees` or `cannot_tell`, never `disagrees`, which is
+  what the test asks; no PGP-HMS pedigree is on this machine to measure it on.
+- A pedigree is checked pair by pair; its internal consistency (a grandparent stated where the parent
+  links say otherwise) is not validated. That is an OWL reasoner's work over KIN. A stated term takes
+  precedence over the parent links for its own pair.

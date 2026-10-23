@@ -1288,8 +1288,26 @@ supplies, read into frames of its own. docs/RELATEDNESS.md has the method.
 - **`PEDIGREE_INDIVIDUALS`** (`pedigree_id`, `individual_id`, `sex`) and **`PEDIGREE_RELATIONSHIPS`**
   (`pedigree_id`, `individual_id`, `relation_id`, `relation_label`, `relative_id`): a GA4GH Pedigree as
   the caller supplied it, the KIN term and sex value as written. `individual_id` is `relation` of
-  `relative_id`, the standard's direction. A pedigree individual is not a `subject` and nothing joins
-  the two yet.
+  `relative_id`, the standard's direction.
+- **`EXPECTED_KINSHIP`** (`expected_kinship(pedigree)`): one row per pair of the pedigree's
+  individuals, in its order: `pedigree_id`, `individual_id`, `relative_id`, `relation_id` and
+  `relation_label` (the first statement relating the two, verbatim, null when none does), `basis`
+  (`stated`, `derived` through parent links, or `assumed`: no biological path, founders taken as
+  unrelated), `expected_kinship` (null unless the pedigree allows one value), `expected_bands` (every
+  band the allowed values fall in, least related first) and `expected_reason` (why there is none:
+  `term_without_degree`, `more_than_two_parents`, `statements_conflict`; an open vocabulary). Which KIN
+  term allows which kinship is just-vcf's own reading (KIN has no kinship values); the
+  `just_vcf.pedigree` docstring lists it.
+- **`PEDIGREE_CHECKS`** (`check_pedigree(pedigree, *people_or_loaded)`): `EXPECTED_KINSHIP`'s columns,
+  then `facet_a` (the individual's) and `facet_b` (the relative's), the measured `band`, `kinship`,
+  `kinship_se`, `ibs0`, `n_sites` and `relatedness_reason`, and `agreement` (`agrees`: every band the
+  measured interval reaches is allowed; `disagrees`: none is; `cannot_tell`), with `reason` for
+  `cannot_tell` (`no_facet`, a pedigree reason, a relatedness reason, or `between_bands` when the
+  interval reaches allowed and other bands). A pedigree individual is matched to facets by its
+  `individual_id` as `subject` (RM273), each source once as `Person.checks` stands it; one row per pair
+  of those facets, one row with null facets when an individual has none. The pedigree is never changed
+  and nothing is relabelled (charter invariant 8). `people(..., pedigree=...)` runs it and warns each
+  person in a disagreeing pair, naming facet ids and bands, never a subject.
 
 ## Sex-chromosome evidence: computed per facet, not stored (RM269)
 
@@ -1816,6 +1834,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, RM274's pedigree check, layer 4): two computed frames outside the
+  three, `EXPECTED_KINSHIP` and `PEDIGREE_CHECKS` ("Relatedness and pedigrees" above). No column of
+  `facets`, `calls` or `blocks` changes; a pedigree individual is now matched to a `subject` by id.
 
 - **An enum member, version bump pending** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
   (`cgi_haplink`), CGI's `hapLink` as a phase set, just-vcf's own term. Adding a member changes the

@@ -288,15 +288,18 @@ def pairwise_relatedness(
     panel: SitePanel | None = None,
     *,
     min_sites: int = DEFAULT_MIN_SITES,
+    pairs: Sequence[tuple[int, int]] | None = None,
 ) -> pl.DataFrame:
     """KING-robust relatedness of every pair of facets across `loaded`, one row per pair.
 
     Facets are taken in order, each `Loaded`'s facets in its `facets` order; a pair is `(i, j)` with
-    `i < j`. Each facet's calls are read once. Columns are `RELATEDNESS_FRAME`.
+    `i < j`. `pairs` limits the rows to those index pairs, in the order given. Each facet's calls are
+    read once. Columns are `RELATEDNESS_FRAME`.
     """
     facets = [(item, facet) for item in loaded for facet in facets_of(item)]
-    pairs = [(i, j) for i in range(len(facets)) for j in range(i + 1, len(facets))]
-    return _pairs(facets, panel, min_sites, pairs)
+    if pairs is None:
+        pairs = [(i, j) for i in range(len(facets)) for j in range(i + 1, len(facets))]
+    return _pairs(facets, panel, min_sites, list(pairs))
 
 
 def same_person(a: Loaded, b: Loaded, panel: SitePanel | None = None, *, min_sites: int = DEFAULT_MIN_SITES) -> bool | None:

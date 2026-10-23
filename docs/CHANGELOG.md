@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A supplied GA4GH Pedigree is checked against measured relatedness (RM274, layer 4).
+  `expected_kinship(pedigree)` gives each pair of individuals its expected kinship and bands, through
+  parent links, stated KIN degrees, or the founders-unrelated assumption, each row saying which.
+  `check_pedigree(pedigree, *people_or_loaded)` matches individuals to facets by subject and reports
+  `agrees`, `disagrees` or `cannot_tell` with a reason per pair of facets; `people(..., pedigree=...)`
+  warns on disagreements naming facet ids. Nothing in the pedigree is changed. `pairwise_relatedness`
+  takes `pairs=` to measure only the pairs asked for. No schema version change: two computed frames.
+
 - Schema 0.0.17: `phase_set_kinds` gains `cgi_haplink`; CGI hapLinks load as phase sets, and masterVarBeta read
   counts fill `ad`.
 

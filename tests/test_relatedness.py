@@ -16,7 +16,9 @@ from dotenv import dotenv_values, find_dotenv
 
 from just_vcf import FACETS, Loaded, load, mint_vrs_ids, resolve_ref
 from just_vcf.assembly import ASSEMBLY_LENGTHS
-from just_vcf.person import Person
+from just_vcf.pedigree import BAND_ORDER, Pedigree, pedigree_from_dict
+from just_vcf.person import NO_FACET, PEDIGREE_CHECKS, Person, check_pedigree
+from just_vcf.person import people as people_of
 from just_vcf.reference import ReferenceStore
 from just_vcf.sniff import sniff
 from just_vcf.relatedness import (
@@ -54,10 +56,11 @@ def _length(contig: str) -> int:
 
 @pytest.fixture(scope="module")
 def family() -> tuple[SitePanel, list[float], dict[str, list[tuple[int, int]]]]:
-    """A panel, its ALT frequencies, and the haplotype pairs of seven people (ALT = 1).
+    """A panel, its ALT frequencies, and the haplotype pairs of eleven people (ALT = 1).
 
-    `a`, `b`, `e` and `u` are founders; `c` is the child of `a` and `b`, `s` a full sibling of `c`,
-    `g` the child of `c` and `e` (so `a`'s grandchild).
+    `a`, `b`, `e`, `u`, `d` and `f` are founders; `c` is the child of `a` and `b`, `s` a full sibling
+    of `c`, `g` the child of `c` and `e` (so `a`'s grandchild), `h` the child of `a` and `d`, `k` the
+    child of `s` and `f`.
     """
     rng = random.Random(SEED)
     n = SITES_PER_CONTIG * len(CONTIGS)
@@ -82,6 +85,11 @@ def family() -> tuple[SitePanel, list[float], dict[str, list[tuple[int, int]]]]:
     people["c"] = child(people["a"], people["b"])
     people["s"] = child(people["a"], people["b"])
     people["g"] = child(people["c"], people["e"])
+    # Drawn after the others, so their genotypes stay as they were: `h` a half sibling of `c` (by `a`
+    # and the founder `d`), `k` a first cousin of `g` (by `s` and the founder `f`).
+    people |= {name: founder() for name in ("d", "f")}
+    people["h"] = child(people["a"], people["d"])
+    people["k"] = child(people["s"], people["f"])
     return SitePanel(assembly_label="GRCh37", sites=sites, source="synthetic"), freq, people
 
 
@@ -282,6 +290,109 @@ def test_a_person_is_checked_by_same_person_by_default(family, tmp_path: Path, m
     two = Person.of(vcf, stranger)
     assert (two.checks["outcome"].to_list(), two.one_person) == (["different"], False)
     assert any("read as two people" in warning for warning in two.warnings)
+
+
+KIN_MOTHER, KIN_FATHER, KIN_TWIN = "KIN:027", "KIN:028", "KIN:010"
+
+
+def _family_pedigree(links: list[tuple[str, str, str]], people: str) -> Pedigree:
+    return pedigree_from_dict(
+        {
+            "id": "SYNTHETIC",
+            "individuals": [{"subject": {"id": f"subject-{p}"}} for p in people],
+            "relationships": [
+                {"individual_id": f"subject-{a}", "relation": {"id": term}, "relative_id": f"subject-{b}"} for a, term, b in links
+            ],
+        }
+    )
+
+
+@pytest.fixture
+def family_on_panel(family, monkeypatch: pytest.MonkeyPatch):
+    """The family's panel as the package's GRCh37 panel, so the default reads it."""
+    panel, _, people = family
+    monkeypatch.setattr(sys.modules["just_vcf.relatedness"], "packaged_panel", lambda assembly: panel if assembly == "GRCh37" else None)
+    return panel, people
+
+
+def test_a_pedigree_is_checked_against_measured_bands(family_on_panel, tmp_path: Path) -> None:
+    """Every relationship the family fixture drew, stated as parent links only, read against KING."""
+    panel, people = family_on_panel
+    parents = {"c": "ab", "s": "ab", "g": "ce", "h": "ad", "k": "sf"}
+    links = [(parent, KIN_MOTHER if i == 0 else KIN_FATHER, child) for child, pair in parents.items() for i, parent in enumerate(pair)]
+    pedigree = _family_pedigree(links, "abcsegdhfku")
+    with_facets = "abcsgdhku"  # `e` and `f` have none
+    loaded = [wgs(write_vcf(tmp_path / f"{x}.vcf", panel, people[x]), subject=f"subject-{x}") for x in with_facets]
+    before = (pedigree.individuals.clone(), pedigree.relationships.clone())
+    frame = check_pedigree(pedigree, *loaded)
+    assert frame.schema == PEDIGREE_CHECKS
+    assert pedigree.individuals.equals(before[0]) and pedigree.relationships.equals(before[1])
+    rows = {frozenset((r["individual_id"][-1], r["relative_id"][-1])): r for r in frame.iter_rows(named=True)}
+    assert len(rows) == frame.height == 11 * 10 // 2  # one facet each: one row per pair of individuals
+    for pair, row in rows.items():
+        if not set(pair) <= set(with_facets):
+            assert (row["agreement"], row["reason"], row["facet_a"]) == ("cannot_tell", NO_FACET, None)
+            continue
+        found = relatedness(*(loaded[with_facets.index(x)] for x in (row["individual_id"][-1], row["relative_id"][-1])), panel)
+        assert (row["kinship"], row["band"]) == (found.kinship, found.band.value)
+        low, high = (BAND_ORDER.index(band_of(found.kinship + side * 2 * found.kinship_se)) for side in (-1, 1))
+        reached = set(BAND_ORDER[low : high + 1])
+        allowed = {RelationBand(value) for value in row["expected_bands"]}
+        if reached <= allowed:
+            assert row["agreement"] == "agrees"
+        else:
+            assert row["agreement"] == ("disagrees" if not reached & allowed else "cannot_tell")
+    # Each kind the fixture drew, and what its band must read.
+    for pair, kinship, agreement in (
+        ("ac", 0.25, "agrees"),  # parent and child
+        ("cs", 0.25, "agrees"),  # full siblings
+        ("ch", 0.125, "agrees"),  # half siblings
+        ("ag", 0.125, "agrees"),  # grandparent
+        ("sg", 0.125, "agrees"),  # aunt or uncle
+        ("ab", 0.0, "agrees"),  # founders
+        ("au", 0.0, "agrees"),
+    ):
+        row = rows[frozenset(pair)]
+        assert (row["expected_kinship"], row["agreement"]) == (kinship, agreement), pair
+    cousins = rows[frozenset("gk")]
+    assert cousins["expected_kinship"] == 0.0625 and cousins["agreement"] in ("agrees", "cannot_tell")
+    assert not frame.filter(pl.col("agreement") == "disagrees").height
+
+
+def test_a_stated_relationship_the_genotypes_contradict_is_kept_and_warned(family_on_panel, tmp_path: Path) -> None:
+    """`u` stated as `c`'s father, and an MZ twin stated for `a`'s second file: the false father reads
+    `disagrees`, the twin `agrees`; `people` warns naming facet ids, never a subject."""
+    panel, people = family_on_panel
+    pedigree = _family_pedigree([("a", KIN_MOTHER, "c"), ("u", KIN_FATHER, "c"), ("a", KIN_TWIN, "t")], "acut")
+    loaded = [wgs(write_vcf(tmp_path / f"{x}.vcf", panel, people[x]), subject=f"subject-{x}") for x in "acu"]
+    twin = load(write_23andme(tmp_path / "t.txt", panel, people["a"]), subject="subject-t")
+    frame = check_pedigree(pedigree, *loaded, twin)
+    rows = {frozenset((r["individual_id"][-1], r["relative_id"][-1])): r for r in frame.iter_rows(named=True)}
+    assert (rows[frozenset("uc")]["expected_bands"], rows[frozenset("uc")]["band"], rows[frozenset("uc")]["agreement"]) == (
+        ["first_degree"],
+        "unrelated",
+        "disagrees",
+    )
+    assert (rows[frozenset("at")]["band"], rows[frozenset("at")]["agreement"]) == ("same_person", "agrees")
+    assert rows[frozenset("ac")]["agreement"] == "agrees"
+    # Grouped with the pedigree: the warning sits on both people of the pair and names their facets.
+    grouped = people_of(*loaded, twin, pedigree=pedigree)
+    ids = {x: item.facets.select("facet_id").collect().item() for x, item in zip("acu", loaded)}
+    for subject in ("subject-c", "subject-u"):
+        (warning,) = [w for w in grouped[subject].warnings if "pedigree" in w]
+        assert f"{ids['u']}/{ids['c']}" in warning or f"{ids['c']}/{ids['u']}" in warning
+    assert not [w for w in grouped["subject-a"].warnings if "pedigree" in w]
+    assert all("subject-" not in w for person in grouped.values() for w in person.warnings)
+    # The pedigree check is its own request: with no subject check, it still runs.
+    unchecked = people_of(*loaded, twin, check=None, pedigree=pedigree)
+    assert any("pedigree" in w for w in unchecked["subject-u"].warnings)
+
+
+def test_a_person_given_as_a_person_reads_as_its_loads(family_on_panel, tmp_path: Path) -> None:
+    panel, people = family_on_panel
+    pedigree = _family_pedigree([("a", KIN_MOTHER, "c")], "ac")
+    loaded = [wgs(write_vcf(tmp_path / f"{x}.vcf", panel, people[x]), subject=f"subject-{x}") for x in "ac"]
+    assert check_pedigree(pedigree, *people_of(*loaded, check=None).values()).equals(check_pedigree(pedigree, *loaded))
 
 
 def test_a_panel_refuses_sites_it_cannot_read_alike() -> None:

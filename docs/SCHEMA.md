@@ -1010,8 +1010,11 @@ just-vcf's, since Phenopackets has no place for an inference). Only `XY`, `XXY` 
 `UNKNOWN_KARYOTYPE` are estimated, the last always with a reason: `y_present` is `True` or unknown,
 never `False`, because depth at called sites cannot show a Y absent (a man's GATK genome read below the
 present band, close to the two-X range), so `XX` and `XO` wait for a coverage facet. The PAR bounds and the X-degenerate
-Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
-unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
+Y come from GIAB's stratifications for GRCh37 and GRCh38, and for T2T-CHM13 from GIAB's (PAR, XTR) with
+the T2T consortium's X-degenerate class (docs/PROVENANCE.md); other builds answer unknown
+(`unsupported_build`). The thresholds were measured on GRCh37 and GRCh38 genomes only, so a T2T-CHM13
+facet is grouped and measured, and its estimate withheld (`uncalibrated_build`, RM286) until T2T callsets
+of known karyotype are measured. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 
 ## The cache under the lazy frames (RM268)
 

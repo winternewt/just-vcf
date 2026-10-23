@@ -1034,7 +1034,8 @@ Decisions, each with what was rejected:
 - The allele balance is reported, not used: no calibration says where a mosaic begins.
 - X copies stay known when the karyotype is not (`y_unusable`, `no_depth`): what just-prs needs for
   dosage (S1).
-- T2T-CHM13 answers `unsupported_build`, not `no_build`: it has a label but no region set here.
+- T2T-CHM13 answered `unsupported_build`, not `no_build`: it had a label but no region set. Since RM286
+  it has region sets and answers `uncalibrated_build`, measured but not estimated.
 - The header's ploidy lines are carried and the caller's haploid genotypes counted, never as evidence.
 - Y presence is never `False`. Rejected: an absent band under a threshold, which named a man `XO`
   (above); and dropping the Y line altogether, which would lose `XY` and `XXY` where Y depth is high

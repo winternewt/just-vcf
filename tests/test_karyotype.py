@@ -9,8 +9,11 @@ from just_vcf import BLOCKS, FACETS, KaryotypicSex, Loaded, XCopies, load, sex_c
 from just_vcf.karyotype import (
     MIN_X_SITES,
     MIN_Y_SITES,
+    ESTIMATE_BUILDS,
     ONE_X_MAX_HET_SHARE,
     PAR_BOUNDS,
+    REGION_BUILDS,
+    REGION_SET,
     TWO_X_MAX_DEPTH_RATIO,
     TWO_X_MIN_HET_SHARE,
     UNKNOWN_REASONS,
@@ -21,14 +24,18 @@ from just_vcf.karyotype import (
 )
 from just_vcf.schema import CALLS, CallsetType, conform, empty
 
-GIAB = Path(__file__).resolve().parent.parent / "assets" / "giab_stratifications_v3.6_xy"
+ASSETS = Path(__file__).resolve().parent.parent / "assets"
+GIAB = ASSETS / "giab_stratifications_v3.6_xy"
+T2T_CLASSES = ASSETS / "t2t_chm13v2.0_annotation" / "chm13v2.0_chrXY_sequence_class_v1.bed"
+GIAB_PREFIX = {"GRCh37": "GRCh37", "GRCh38": "GRCh38", "T2T-CHM13": "CHM13"}
+"""The assembly label → the prefix GIAB names its files with."""
 
 # --- The regions, re-derived from the GIAB files ---------------------------------------------------
 
 
 def bed(build: str, name: str) -> list[tuple[int, int]]:
     """A GIAB BED as 0-based half-open `(start, end)` pairs, sorted."""
-    lines = (GIAB / f"{build}_{name}.bed").read_text().splitlines()
+    lines = (GIAB / f"{GIAB_PREFIX[build]}_{name}.bed").read_text().splitlines()
     return sorted((int(start), int(end)) for _, start, end, *_ in (line.split("\t") for line in lines if line.strip()))
 
 
@@ -74,7 +81,7 @@ def test_par_bounds_are_the_giab_par_arms(build: str) -> None:
         assert PAR_BOUNDS[build][chrom] == expected
 
 
-@pytest.mark.parametrize("build", sorted(X_DEGENERATE_Y))
+@pytest.mark.parametrize("build", ["GRCh37", "GRCh38"])
 def test_x_degenerate_y_is_nonpar_minus_xtr_minus_ampliconic(build: str) -> None:
     derived = subtract(bed(build, "chrY_nonPAR"), bed(build, "chrY_XTR") + bed(build, "chrY_ampliconic"))
     (_, par1_end), (par2_start, _) = PAR_BOUNDS[build]["Y"]
@@ -85,6 +92,47 @@ def test_x_degenerate_y_is_nonpar_minus_xtr_minus_ampliconic(build: str) -> None
     assert len(closed) - len(kept) == (1 if build == "GRCh38" else 0)
     for start, end in kept:
         assert not any(s < end and start <= e for s, e in (to_closed(*i) for i in bed(build, "chrY_XTR") + bed(build, "chrY_ampliconic")))
+
+
+def t2t_classes(chrom: str) -> dict[str, list[tuple[int, int]]]:
+    """The T2T sequence-class BED for one chromosome: class name → 0-based half-open intervals."""
+    found: dict[str, list[tuple[int, int]]] = {}
+    for line in T2T_CLASSES.read_text().splitlines():
+        name, start, end, kind, *_ = line.split("\t")
+        if name == f"chr{chrom}":
+            found.setdefault(kind, []).append((int(start), int(end)))
+    return found
+
+
+def test_t2t_x_degenerate_y_is_the_t2t_class_less_giabs_xtr_and_par() -> None:
+    classes = t2t_classes("Y")
+    derived = subtract(sorted(classes["X-DEG"]), bed("T2T-CHM13", "chrY_XTR") + bed("T2T-CHM13", "chrY_PAR"))
+    closed = tuple(to_closed(s, e) for s, e in derived)
+    assert X_DEGENERATE_Y["T2T-CHM13"] == closed
+    # Only the two bases the class file's second X-DEG interval shares with XTR2 were dropped.
+    assert sum(e - s for s, e in classes["X-DEG"]) - sum(e - s for s, e in derived) == 2
+    (_, par1_end), (par2_start, _) = PAR_BOUNDS["T2T-CHM13"]["Y"]
+    assert all(par1_end < start and end < par2_start for start, end in closed)
+    nonpar = bed("T2T-CHM13", "chrY_nonPAR")
+    assert all(any(s <= start - 1 and end <= e for s, e in nonpar) for start, end in closed)
+
+
+def test_t2t_classes_agree_with_giab_on_the_par_and_the_xtr() -> None:
+    for chrom in ("X", "Y"):
+        classes = t2t_classes(chrom)
+        assert sorted(classes["PAR1"] + classes["PAR2"]) == bed("T2T-CHM13", f"chr{chrom}_PAR")
+    y = t2t_classes("Y")
+    assert sorted(y["XTR1"] + y["XTR2"]) == bed("T2T-CHM13", "chrY_XTR")
+
+
+def test_giabs_t2t_nonpar_less_xtr_is_not_x_degenerate() -> None:
+    """The rejected derivation: on a gapless Y, nonPAR minus XTR keeps the ampliconic, heterochromatic,
+    centromeric and satellite classes, most of the male-specific Y."""
+    rest = subtract(bed("T2T-CHM13", "chrY_nonPAR"), bed("T2T-CHM13", "chrY_XTR"))
+    classes = t2t_classes("Y")
+    xdeg = sum(e - s for s, e in classes["X-DEG"])
+    assert sum(e - s for s, e in rest) > 4 * xdeg
+    assert all(any(s <= start and end <= e for s, e in rest) for start, end in classes["HET"] + classes["CEN"])
 
 
 # --- Synthetic calls ----------------------------------------------------------------------------
@@ -310,7 +358,7 @@ def test_allele_balance_reads_ad_at_the_called_alt() -> None:
     ("build", "kind", "reason"),
     [
         (None, CallsetType.WGS, "no_build"),
-        ("T2T-CHM13", CallsetType.WGS, "unsupported_build"),
+        ("GRCh36", CallsetType.WGS, "unsupported_build"),
         ("GRCh38", CallsetType.WES, "not_wgs"),
         ("GRCh38", None, "not_wgs"),
     ],
@@ -322,6 +370,27 @@ def test_no_estimate_without_a_build_or_a_genome(build: str | None, kind: Callse
     assert ("x_nonpar" in found.ploidy) is (build == "GRCh38")
     if reason == "not_wgs":
         assert found.x_heterozygosity.het_share == 0.6
+
+
+T2T_Y_START = 2_500_000  # inside T2T-CHM13's first X-degenerate interval (2,458,321–2,727,072)
+
+
+def test_t2t_is_measured_on_its_own_regions_but_not_estimated() -> None:
+    """RM286: T2T-CHM13 has region sets, but the thresholds were measured on GRCh37/38 only."""
+    assert ESTIMATE_BUILDS < REGION_BUILDS and "T2T-CHM13" in REGION_BUILDS - ESTIMATE_BUILDS
+    y = rows("Y", T2T_Y_START, 1000, [1, 1], 18, step=20)
+    par = rows("X", 100_000, 500, [0, 1], REF_DP)  # PAR1 on T2T-CHM13 (to 2,394,410)
+    found = evidence(frame(chr20(), XY[0], y, par), "T2T-CHM13")
+    assert (found.inferred_karyotypic_sex, found.reason, found.x_copies, found.y_present) == (
+        KaryotypicSex.UNKNOWN_KARYOTYPE, "uncalibrated_build", None, None,
+    )  # fmt: skip
+    assert found.region_set == REGION_SET["T2T-CHM13"] and "T2T chm13v2.0 chrXY sequence classes" in found.region_set
+    assert found.ploidy["par"].two == 500 and found.ploidy["x_nonpar"].two == 2000
+    assert (found.depth.y_sites, found.depth.y_ratio, found.depth.x_ratio) == (1000, 18 / REF_DP, 0.5)
+    assert "X-degenerate Y depth ratio 0.600" in found.detail
+    # The same evidence on a calibrated build (its Y rows placed in GRCh38's X-degenerate Y) is estimated.
+    grch38 = evidence(frame(chr20(), *XY), "GRCh38")
+    assert grch38.inferred_karyotypic_sex is KaryotypicSex.XY
 
 
 def test_reasons_are_a_closed_list_checked_on_the_model() -> None:

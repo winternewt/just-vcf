@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `scripts/method_atlas.py` mints VRS ids on both facets of a pair once REF is read, so alleles pair
+  by VRS id (`--no-mint` pairs by position and spelling, as before); `method_atlas.pairs.tsv` gains a
+  `pairing` column. The atlas's two PGP-HMS pairs (CGI vcfBeta against freeBayes) were rebuilt that
+  way, with CGI's REF read since F20: one-sided indels fall from 99% to 53%, and docs/METHOD_ATLAS.md
+  now gives their indel and one-sided rates, with two conventions counted apart (X haploid against
+  diploid, and freeBayes's complex rows holding an allele under another spelling).
+
 - `resolve_ref` refuses a facet only when an autosome's stated length or md5 differs from the
   reference (F20). A differing X, Y or MT leaves that contig's rows unread (`ref` null, `ref_check`
   `not_run`) and the matching contigs are read; the warning names each mismatching contig with its

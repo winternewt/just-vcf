@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref` resolves `I`/`D` indel codes only on a chip whose calibration passed (RM281,
+  `just_vcf.probes.ID_CALIBRATION`): `23andme_v5` and `ancestrydna_v2`, where 98.7% and 98.4% of the
+  resolved homozygous rows read hom-ref. `23andme_v3` and `23andme_v4` (76%, the same sites hom-alt in
+  every export), `23andme_v1_v2` (6 rows), Final Reports and unknown chips keep their code rows as
+  loaded, with one warning counting them as `id_orientation_unverified` and naming the evidence. A value
+  change on those facets when the manifests are configured; `RESOLVE_VERSION` 7.
+
 - In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
   probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
   (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or

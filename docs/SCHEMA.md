@@ -126,7 +126,12 @@ same calls. A facet already read is refused rather than read again.
   row), `gt`, `end_pos`, and `gt_alleles` spelled as the two sequences, so `gt` indexes them like any
   row's; `source_gt` keeps the codes. A row whose rsids name more than one located site, or none, is
   left as loaded, each reason counted. Not affected by `strand_check`: `I` and `D` read the same on
-  either strand. `ref_check` stays null.
+  either strand. `ref_check` stays null. **Gated per chip** (`probes.ID_CALIBRATION`): a vendor's `I`
+  is matched with Illumina's by rsid only on a chip where that was measured to hold, the share of
+  resolved homozygous rows that read hom-ref (`23andme_v5` 98.7%, `ancestrydna_v2` 98.4%, PGP-HMS,
+  2026-10-23). Every other chip (`23andme_v3` and `23andme_v4` at 76%, with the same sites hom-alt in
+  every export; `23andme_v1_v2` on 6 rows; an `illumina:` Final Report, a platform family or an unknown
+  chip, never measured) has its code rows left as loaded, counted `id_orientation_unverified`.
 - Left unread, each reason counted once: I/D codes no manifest probe resolves (above), whole
   no-calls (the probe's REF span is unknown), genotypes that could not be split, spans past the
   contig's end or at POS 0, and every row of a contig that could not be matched with the reference
@@ -1345,6 +1350,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, RM281's I/D calibration): no column changes. Rule changed
+  (Decision 2): `I`/`D` codes are resolved only on a chip `probes.ID_CALIBRATION` passes
+  (`23andme_v5`, `ancestrydna_v2`); every other chip's code rows stay as loaded, counted
+  `id_orientation_unverified`. Values change on `23andme_v3`, `23andme_v4`, `23andme_v1_v2`, Final
+  Report and unknown-chip facets when the manifests are configured. `RESOLVE_VERSION` 7.
 
 - **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every

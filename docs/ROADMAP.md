@@ -116,6 +116,13 @@ Decisions, each with what was rejected:
   chip's own manifest, which resolves nothing on PGP-HMS (no export's chip has its manifest on disk).
   Risk kept: a vendor's probe for a multi-allelic rsid may test another allele than Illumina's; the
   hom-ref share above is the check, and v3/v4's is the open question.
+- I/D codes resolve only on a chip whose calibration passed (`probes.ID_CALIBRATION`, the lead's
+  call 2026-10-23): `23andme_v5` and `ancestrydna_v2`; the rest withheld, counted
+  `id_orientation_unverified`. Rejected: resolving every chip (v3 and v4 would ship a quarter of their
+  homozygous rows possibly backwards), and flipping v3/v4's codes (nothing yet says which way is
+  wrong). An `illumina:` Final Report is withheld too, though its own manifest defines its `I`: no
+  Final Report with I/D rows has been measured, and the catalog matches rsids across every configured
+  manifest, not only the chip's own.
 - A site is located by its flanks, not by `MapInfo`, which is not the anchor (the gap is one base
   before it for 5,594 GSA probes, at or after it for the rest). REF comes from the reference; the
   manifest gives the inserted bases and the locator only.

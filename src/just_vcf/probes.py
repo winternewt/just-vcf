@@ -98,6 +98,41 @@ MAX_PREFIX = 64
 """The most reference bases `place_indel` puts between an export's position and the site it names."""
 
 
+@dataclass(frozen=True)
+class IdCalibration:
+    """Whether a chip's `I`/`D` codes are resolved against the manifests' indel probes, and on what evidence."""
+
+    resolve: bool
+    evidence: str
+
+
+_HOM_ALT_SITES = (
+    "resolved homozygous I/D rows read hom-ref only 76%, the same sites hom-alt in every export (2 PGP-HMS exports, 2026-10-23): "
+    "the reference may carry the rare allele there, or the chip's I/D may mean the other way round"
+)
+
+ID_CALIBRATION: dict[str, IdCalibration] = {
+    "23andme_v5": IdCalibration(True, "resolved homozygous I/D rows read hom-ref 98.7% (2 PGP-HMS exports, 2026-10-23)"),
+    "ancestrydna_v2": IdCalibration(True, "resolved homozygous I/D rows read hom-ref 98.4% (1 PGP-HMS export, 2026-10-23)"),
+    "23andme_v3": IdCalibration(False, _HOM_ALT_SITES),
+    "23andme_v4": IdCalibration(False, _HOM_ALT_SITES),
+    "23andme_v1_v2": IdCalibration(False, "6 resolved homozygous rows in one PGP-HMS export (2026-10-23), too few to calibrate"),
+}
+"""Per chip, whether its `I`/`D` codes may be resolved by rsid against the manifests' indel probes
+(RM281). The codes name no sequence: matching a vendor's probe to Illumina's by rsid assumes both
+mean the same allele by `I`, and the check is the share of resolved homozygous rows that then read
+hom-ref, which a person's genome makes most of them. A chip resolves only where that share was
+measured and held; a chip not listed here (an unknown chip, an `illumina:` Final Report, a platform
+family) has no calibration and is withheld too."""
+
+
+def id_calibration(chip: str | None) -> IdCalibration:
+    """`ID_CALIBRATION`'s entry for `chip`, or a withholding one saying there is none."""
+    if chip is None:
+        return IdCalibration(False, "the facet's chip is unknown, so no calibration of its I/D codes applies")
+    return ID_CALIBRATION.get(chip, IdCalibration(False, f"no calibration of {chip}'s I/D codes has been measured"))
+
+
 def reverse_complement(sequence: str) -> str:
     return sequence.translate(_COMPLEMENT)[::-1]
 

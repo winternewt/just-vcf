@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- An array's absence gets a cause (RM281): `chip_absence(loaded, sites)` says per site whether the
+  export has a row there (`in_export`), the chip has a probe there and the export reports nothing
+  (`no_call`), or the chip has no probe there (`not_on_chip`); null with a reason when the facet has no
+  probe set. `probe_set(chip, assembly_label)` is the chip's own manifest for an `illumina:<manifest>`
+  chip (configured), or a set learned from exports of the chip by `learn_probe_sets`, written into the
+  cache's `probes/learned/` (`scripts/learn_probe_sets.py` walks a directory of exports). Platform
+  families named by marker overlap get none. New public names: `chip_absence`, `ChipAbsence`,
+  `AbsenceCause`, `probe_set`, `ProbeSet`, `ProbeSetKind`, `learn_probe_sets`. No column changes.
+
 - `resolve_ref` resolves an array's `I`/`D` indel codes (23andMe, AncestryDNA, Final Reports) against
   the indel probes of the Illumina manifests under `JUST_VCF_MANIFESTS_DIR` (RM281, `just_vcf.probes`):
   a row is matched with a probe by rsid, the probe's site is located in the reference by its flanks,

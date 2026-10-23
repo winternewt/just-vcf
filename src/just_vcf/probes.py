@@ -26,6 +26,13 @@ found by their flanks at exactly one place; on the strand `SourceStrand` gives f
 manifest's `MapInfo` is not the anchor: the gap lies one base before it for 5,594 probes, at or after
 it, up to several bases on in a repeat, for the rest.
 
+**Probe sets and the cause of an absence.** Which sites a chip has turns an array's absence, still an
+unknown genotype, into one with a cause (`chip_absence`): `no_call` where the chip has a probe and the
+export reports nothing, `not_on_chip` where it has none. A chip's probe set is its own manifest where a
+Final Report names one (`illumina:<manifest>`, configured), or one learned from exports of the chip
+(`learn_probe_sets`, written into the cache) for the vendors that publish none. A platform family named
+by marker overlap has none: which version's probes it carries is not known.
+
 Coordinates: `map_info` and the exports' `pos` are 1-based; a gap is the 0-based index of the first
 base after the left flank, so an insertion goes before that base and a deletion starts at it.
 """
@@ -37,13 +44,18 @@ import logging
 import os
 import re
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import Enum
 from functools import cache
 from pathlib import Path
 
 import polars as pl
+from pydantic import BaseModel, ConfigDict
 
 from just_vcf.cache import cache_dir, file_sha256
+from just_vcf.chip import ILLUMINA_PREFIX
+from just_vcf.loading import Loaded, load
 from just_vcf.schema import canonical_chrom
 
 logger = logging.getLogger(__name__)
@@ -335,3 +347,170 @@ def place_indel(window: str, start: int, site: IndelSite, pos: int) -> tuple[str
     long_allele, short_allele = prefix + seq + pad, prefix + pad
     return (long_allele, short_allele) if site.reference_carries else (short_allele, long_allele)
 
+
+# --- probe sets: which sites a chip has ------------------------------------------------------------
+
+
+class ProbeSetKind(str, Enum):
+    """Where a chip's probe set comes from."""
+
+    MANIFEST = "manifest"
+    """The chip's own manifest: an Illumina chip a Final Report names (`illumina:<manifest>`), on disk."""
+    LEARNED = "learned"
+    """The sites the exports of this chip were seen to carry (`learn_probe_sets`), for a vendor that
+    publishes no manifest. As complete as the exports it was learned from."""
+
+
+class AbsenceCause(str, Enum):
+    """What a site's absence from an array export means, given the chip's probe set. Null = unknown."""
+
+    IN_EXPORT = "in_export"
+    """Not absent: the export has a row at the site (a called genotype or a written no-call)."""
+    NO_CALL = "no_call"
+    """The chip has a probe at the site and the export reports nothing there: a no-call the export
+    dropped, or a probe the vendor left out of this release. Unknown genotype, never reference."""
+    NOT_ON_CHIP = "not_on_chip"
+    """No probe of the chip is at the site: the export could not have said anything about it."""
+
+
+class ProbeSet(BaseModel):
+    """A chip's sites on one assembly: 1-based `pos` on canonical `chrom`."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    chip: str
+    kind: ProbeSetKind
+    source: str
+    """The manifest's descriptor and sha256, or how many exports a learned set was read from."""
+    assembly_label: str
+    sites: pl.DataFrame
+
+
+class ChipAbsence(BaseModel):
+    """`chip_absence`'s answer: each asked site with its `absence_cause`, the probe set it was read
+    against, and why the cause is null where it is."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    sites: pl.DataFrame
+    probe_set: ProbeSet | None
+    reason: str
+
+
+FAMILY_CHIPS: frozenset[str] = frozenset({"illumina_gsa", "illumina_omniexpress"})
+"""Chips named as a platform family by marker overlap (`just_vcf.chip`), whose version is not known."""
+
+LEARNED_VERSION = 1
+"""Part of a learned probe set's file name: bumped whenever `learn_probe_sets` would learn differently."""
+
+MIN_LEARNING_EXPORTS = 3
+"""Exports of one chip on one assembly a learned probe set needs: fewer cannot tell a chip's site from
+one export's oddity, and the set is not written."""
+
+
+def _learned_path(chip: str, assembly_label: str) -> Path:
+    return cache_dir() / "probes" / "learned" / f"{chip}-{assembly_label}-{LEARNED_VERSION}.parquet"
+
+
+def probe_set(chip: str | None, assembly_label: str | None) -> ProbeSet | str:
+    """The probe set of `chip` on `assembly_label`, or why there is none.
+
+    An `illumina:<manifest>` chip takes that manifest's mapped probes, when the manifest is configured.
+    Any other chip takes the set `learn_probe_sets` wrote into the cache. A platform family named by
+    marker overlap (`illumina_gsa`, `illumina_omniexpress`) has none: its version is not known, and
+    another version's manifest would put probes on the chip that it may not carry.
+    """
+    if chip is None:
+        return "the facet's chip is unknown"
+    if assembly_label is None:
+        return "the facet's assembly is unknown"
+    if chip.startswith(ILLUMINA_PREFIX):
+        descriptor = chip[len(ILLUMINA_PREFIX) :]
+        manifest = find_manifest(descriptor)
+        if manifest is None:
+            return f"the manifest {descriptor} is not configured (JUST_VCF_MANIFESTS_DIR)"
+        sites = probe_table(manifest).filter(
+            (pl.col("assembly_label") == assembly_label) & pl.col("chrom").is_not_null() & pl.col("map_info").is_not_null()
+        ).select("chrom", pl.col("map_info").alias("pos")).unique().sort("chrom", "pos")  # fmt: skip
+        if sites.is_empty():
+            return f"the manifest {descriptor} maps no probe to {assembly_label}"
+        return ProbeSet(chip=chip, kind=ProbeSetKind.MANIFEST, source=f"{descriptor} (sha256 {manifest.sha256[:12]}…)",
+                        assembly_label=assembly_label, sites=sites)  # fmt: skip
+    if chip in FAMILY_CHIPS:
+        return f"{chip} is a platform family named by marker overlap; which version's probes the chip carries is not known"
+    path = _learned_path(chip, assembly_label)
+    if not path.is_file():
+        return f"no probe set for {chip} on {assembly_label} has been learned (learn_probe_sets)"
+    table = pl.read_parquet(path)
+    exports = int(table["of_exports"].max() or 0)
+    return ProbeSet(chip=chip, kind=ProbeSetKind.LEARNED, source=f"learned from {exports} export(s)", assembly_label=assembly_label,
+                    sites=table.select("chrom", "pos"))  # fmt: skip
+
+
+def chip_absence(loaded: Loaded, sites: pl.DataFrame) -> ChipAbsence:
+    """Why each of `sites` (`chrom` canonical, `pos` 1-based) is or is not in an array facet's export.
+
+    `absence_cause` is `in_export` where the export has a row there, else `no_call` where the facet's
+    chip has a probe there and `not_on_chip` where it has none; null for every site when the facet has
+    no probe set (not an array, chip or assembly unknown, nothing configured or learned), with the
+    reason. Either absence is an unknown genotype (Decision 4); the cause says why it is unknown.
+    """
+    facet = loaded.facets.collect().row(0, named=True)
+    asked = sites.select(pl.col("chrom").cast(pl.String), pl.col("pos").cast(pl.Int64)).unique(maintain_order=True)
+    if facet["vcf_version"] is not None or facet["callset_type"] not in (None, "array"):
+        return ChipAbsence(sites=asked.with_columns(pl.lit(None, dtype=pl.String).alias("absence_cause")), probe_set=None,
+                           reason="the facet is not an array export")  # fmt: skip
+    found = probe_set(facet["chip"], facet["assembly_label"])
+    present = loaded.calls.select("chrom", pl.col("pos").cast(pl.Int64)).unique().collect().with_columns(pl.lit(True).alias("_in"))
+    marked = asked.join(present, on=["chrom", "pos"], how="left", maintain_order="left").with_columns(pl.col("_in").fill_null(False))
+    if isinstance(found, str):
+        cause = pl.when(pl.col("_in")).then(pl.lit(AbsenceCause.IN_EXPORT.value)).otherwise(None)
+        return ChipAbsence(sites=marked.with_columns(cause.alias("absence_cause")).drop("_in"), probe_set=None, reason=found)
+    on_chip = marked.join(found.sites.with_columns(pl.lit(True).alias("_on")), on=["chrom", "pos"], how="left", maintain_order="left")
+    cause = (
+        pl.when(pl.col("_in")).then(pl.lit(AbsenceCause.IN_EXPORT.value))
+        .when(pl.col("_on").fill_null(False)).then(pl.lit(AbsenceCause.NO_CALL.value))
+        .otherwise(pl.lit(AbsenceCause.NOT_ON_CHIP.value))
+    )  # fmt: skip
+    return ChipAbsence(sites=on_chip.with_columns(cause.alias("absence_cause")).drop("_in", "_on"), probe_set=found,
+                       reason=f"read against the {found.kind.value} probe set of {found.chip} on {found.assembly_label}: {found.source}")  # fmt: skip
+
+
+def learn_probe_sets(exports: Iterable[Path | str | Loaded], min_exports: int = MIN_LEARNING_EXPORTS) -> list[ProbeSet]:
+    """Learn each chip's sites from array exports of it, and write them into the cache for `probe_set`.
+
+    For a vendor that publishes no manifest (23andMe, AncestryDNA, Living DNA), the sites a chip has are
+    the positions its exports carry: 23andMe and AncestryDNA write a row for every probe, no-calls
+    included. Each export counts under its facet's `chip` and `assembly_label`; an export with either
+    unknown, a VCF, a platform family or a chip with its own manifest (`illumina:`) is passed over. A
+    set is the union of its exports' positions, each with the number of exports that carry it
+    (`exports`; `of_exports` is how many were read), and is written only from `min_exports` exports
+    or more. Learning again replaces the set. Returns the sets written.
+    """
+    seen: dict[tuple[str, str], pl.DataFrame] = {}
+    counted: dict[tuple[str, str], int] = {}
+    for export in exports:
+        loaded = export if isinstance(export, Loaded) else load(export)
+        facet = loaded.facets.collect().row(0, named=True)
+        chip, label = facet["chip"], facet["assembly_label"]
+        if facet["vcf_version"] is not None or chip is None or label is None or chip in FAMILY_CHIPS or chip.startswith(ILLUMINA_PREFIX):
+            continue
+        sites = loaded.calls.select("chrom", pl.col("pos").cast(pl.Int64)).unique().collect().with_columns(pl.lit(1, dtype=pl.UInt32).alias("exports"))
+        key = (chip, label)
+        counted[key] = counted.get(key, 0) + 1
+        before = seen.get(key)
+        seen[key] = sites if before is None else pl.concat([before, sites]).group_by("chrom", "pos").agg(pl.col("exports").sum())
+    written = []
+    for (chip, label), sites in sorted(seen.items()):
+        if counted[(chip, label)] < min_exports:
+            logger.info("probe sets: %s on %s seen in %d export(s), %d needed; not written", chip, label, counted[(chip, label)], min_exports)
+            continue
+        table = sites.sort("chrom", "pos").with_columns(pl.lit(counted[(chip, label)], dtype=pl.UInt32).alias("of_exports"))
+        target = _learned_path(chip, label)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staged = target.with_name(f".{target.name}.{os.getpid()}-{os.urandom(4).hex()}")
+        table.write_parquet(staged)
+        os.replace(staged, target)
+        written.append(ProbeSet(chip=chip, kind=ProbeSetKind.LEARNED, source=f"learned from {counted[(chip, label)]} export(s)",
+                                assembly_label=label, sites=table.select("chrom", "pos")))  # fmt: skip
+    return written

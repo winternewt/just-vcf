@@ -431,6 +431,25 @@ for consumers that restore hom-ref themselves (just-prs, just-dna-lite). A posit
 hom-ref restoration from absence that just-vcf grows must ask it, and refuse a facet with a
 `content_filter` unless called with `force=True`.
 
+**On an array, an absence has a cause (RM281).** An array's absence stays `unknown`, but
+`chip_absence(loaded, sites)` says why, per asked site (`chrom` canonical, `pos` 1-based), from the
+probe set of the facet's `chip` on its `assembly_label` (`just_vcf.probes.probe_set`):
+`absence_cause` is `in_export` (the export has a row there, a written no-call included), `no_call`
+(the chip has a probe there and the export reports nothing: a no-call it dropped, or a probe left out
+of this release) or `not_on_chip` (no probe there). Null for every site when there is no probe set:
+not an array, chip or assembly unknown, or nothing configured or learned; the answer carries the
+reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
+(`ProbeSetKind`): `manifest`, the chip's own Illumina manifest when a Final Report names it
+(`illumina:<manifest>`) and it is configured (`JUST_VCF_MANIFESTS_DIR`), its probes on that build
+(`Chr 0` probes are unplaced and left out); or `learned`, the union of the positions the exports of
+that chip carry, written into the cache by `learn_probe_sets` from three exports or more, for a vendor
+that publishes no manifest (23andMe and AncestryDNA write a row per probe, no-calls included). A
+platform family named by marker overlap (`illumina_gsa`, `illumina_omniexpress`) has none: another
+version's manifest would put probes on the chip that it may not carry. A learned set is as complete as
+the exports it was learned from; `of_exports` and each site's `exports` count say how many. The cause
+is computed on request, not stored: it changes when a probe set is learned or configured, and the facet
+does not.
+
 `content_filter` comes from the strongest evidence that settles it, and each weaker piece that
 disagrees is a warning naming both sides; the strongest is kept:
 

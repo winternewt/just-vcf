@@ -19,6 +19,7 @@ from just_vcf.loading import (
 )
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
+from just_vcf.probes import AbsenceCause, ChipAbsence, ProbeSet, ProbeSetKind, chip_absence, learn_probe_sets, probe_set
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
 from just_vcf.schema import (
@@ -52,6 +53,7 @@ __all__ = [
     "FACETS",
     "LOADABLE_FORMATS",
     "SCHEMA_VERSION",
+    "AbsenceCause",
     "AbsenceMeans",
     "AssemblyLabelBasis",
     "BlockAllele",
@@ -59,6 +61,7 @@ __all__ = [
     "CacheClearReport",
     "CacheEntryInfo",
     "CallsetType",
+    "ChipAbsence",
     "ChipBasis",
     "Chain",
     "ContentFilter",
@@ -72,6 +75,8 @@ __all__ = [
     "EvidenceBasis",
     "KaryotypicSex",
     "PhaseSetKind",
+    "ProbeSet",
+    "ProbeSetKind",
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
@@ -89,12 +94,15 @@ __all__ = [
     "XCopies",
     "__version__",
     "absence_is_reference",
+    "chip_absence",
     "clear_cache",
+    "learn_probe_sets",
     "liftover",
     "load",
     "mint_vrs_ids",
     "normalize",
     "open_payload",
+    "probe_set",
     "read_chain",
     "reference_dir",
     "rejoin_split",

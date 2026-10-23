@@ -21,11 +21,13 @@ from just_vcf.loading import (
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
 from just_vcf.probes import AbsenceCause, ChipAbsence, ProbeSet, ProbeSetKind, chip_absence, learn_probe_sets, probe_set
+from just_vcf.pedigree import Pedigree, PedigreeError, read_pedigree
 from just_vcf.person import SUBJECT_CHECKS, Person, SameSubjectCheck, SubjectCheckOutcome, SubjectError, people
 from just_vcf.query import Dimension, GenotypeClass, Presence, PresenceBasis, Query, query
 from just_vcf.phasing import cis_phased_blocks
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
+from just_vcf.relatedness import Relatedness, RelationBand, SitePanel, pairwise_relatedness, relatedness, same_person
 from just_vcf.schema import (
     BLOCKS,
     CALLS,
@@ -86,6 +88,8 @@ __all__ = [
     "EvidenceBasis",
     "GenotypeClass",
     "KaryotypicSex",
+    "Pedigree",
+    "PedigreeError",
     "PhaseSetKind",
     "ProbeSet",
     "ProbeSetKind",
@@ -96,8 +100,11 @@ __all__ = [
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
+    "Relatedness",
+    "RelationBand",
     "SameSubjectCheck",
     "SexChromosomeEvidence",
+    "SitePanel",
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
@@ -133,10 +140,14 @@ __all__ = [
     "query",
     "open_payload",
     "probe_set",
+    "pairwise_relatedness",
     "read_chain",
+    "read_pedigree",
     "reference_dir",
     "rejoin_split",
+    "relatedness",
     "resolve_ref",
+    "same_person",
     "sex_chromosome_evidence",
     "sniff",
     "table_samples",

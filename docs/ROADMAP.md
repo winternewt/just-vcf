@@ -12,12 +12,12 @@ Severity: high · Status: open (decided by the person in the Part 2 interview, 2
 Typer, registered in `[project.scripts]`, loading `.env` with python-dotenv (CLAUDE.md §4): `just-vcf sniff`, `load` (a summary of the facets), `convert` (to VCF/gVCF via `write_vcf`, optionally through `resolve_ref`, `normalize`, `liftover`, `mint_vrs_ids`) and `check`. Output is counts and aggregates only, never rows: the CLI is a privacy boundary like E12.
 
 ## RM273 — A person (subject) in the schema
-Severity: high · Status: in progress (subject and Person shipped 2026-10-23; the default check waits for RM274) · Owner: lead
+Severity: high · Status: in progress (subject and Person shipped 2026-10-23; the default check is RM274's `same_person`) · Owner: lead
 
 The person chose "Both: supplied, checked" (E1): the caller supplies a subject id when loading; nothing is inferred and facets are never regrouped by the library. The library checks the claim with relatedness (RM274) and warns on a mismatch. Most of the extended shape sits on this: RM275, RM276, RM277, RM280.
 
 ## RM274 — Relatedness and families
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: medium · Status: in progress (KING-robust relatedness, `same_person` as RM273's default check, the somalier wrapper and GA4GH Pedigree reading shipped 2026-10-23; left: somalier run for real once docs/TRUST.md has its row, pedigree compared with measured bands, a first-degree split by IBS0) · Owner: lead
 
 The person chose both (E6): somalier (MIT) as an optional subprocess, skipped cleanly when absent, and just-vcf's own relatedness on the frames (IBS/KING-style over a validated site panel, so arrays work too). Pedigrees as supplied GA4GH Pedigree data. Feeds RM273's check.
 

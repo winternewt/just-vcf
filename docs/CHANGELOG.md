@@ -131,6 +131,31 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   schema version or subject is refused, never mixed. No column changes; the schema version is not
   bumped.
 
+- `Person.of` and `people` check a subject's facets with `same_person` (RM274) when no check is named;
+  `check=None` runs none, as no check did before. A pair of facets too small or on two assemblies reads
+  `could_not_tell`. A behaviour change on RM273's API, no column changes.
+
+- GA4GH Pedigree read as supplied data (RM274): `read_pedigree` takes the standard's Phenopacket
+  `GA4GHPedigree` message as JSON (both protobuf JSON spellings of a field) into a `Pedigree` with an
+  individuals frame and a relationships frame, KIN terms and sex values verbatim. Nothing is inferred
+  from it or into it; a document without its required parts raises `PedigreeError`.
+
+- somalier as an optional second opinion on relatedness (RM274): `just_vcf.somalier.somalier_relate`
+  writes each facet at the panel's positions with `write_vcf`, runs `somalier extract` and `relate`,
+  and reads `pairs.tsv` into the relatedness frame (`method = somalier`, its `relatedness` kept
+  verbatim, half of it as `kinship`). Without a `somalier` binary on PATH it raises
+  `SomalierNotFoundError`. Not run on this machine: docs/TRUST.md has no row for its binary yet.
+
+- Relatedness between facets (RM274): `relatedness(a, b)` gives KING-robust kinship (between-family
+  form), IBS0, IBS2, the shared site counts, a jackknife standard error and a band (`same_person`,
+  `first_degree`, `second_degree`, `third_degree`, `unrelated`, or `unknown` with a reason);
+  `pairwise_relatedness` does every pair of facets across several `Loaded` as a frame, and
+  `same_person(a, b)` answers True, False or None. Sites come from a panel of 15,289 autosomal,
+  strand-unambiguous SNVs per build (GRCh37, GRCh38) derived from somalier's site VCFs and shipped in
+  the package (`relatedness_sites.json`); genotypes are read as ancestry reads them, now from the core
+  module `just_vcf.site_genotypes`, so arrays and whole genomes compare alike. New API, no column
+  changes.
+
 - Schema 0.0.12 (RM273): `facets.subject`; `Person.of` groups one subject's facets and checks the claim.
 
 - `Person.of(*loaded, check=...)` and `people(*loaded, check=...)` group facets by the subject the

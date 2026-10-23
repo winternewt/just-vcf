@@ -155,7 +155,7 @@ def test_a_person_holds_its_facets_rows_in_facet_id_order(tmp_path: Path) -> Non
 
 def test_without_a_check_every_pair_is_not_run_and_nothing_passes(tmp_path: Path) -> None:
     array, vcf = _two_sources(tmp_path)
-    person = Person.of(array, vcf)
+    person = Person.of(array, vcf, check=None)
     assert person.checks.schema == SUBJECT_CHECKS
     assert person.checks["outcome"].to_list() == ["not_run"]
     assert person.one_person is None, "a check that did not run is not a check that passed"

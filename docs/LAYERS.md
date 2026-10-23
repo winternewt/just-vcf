@@ -29,17 +29,20 @@ meanwhile. The desk carries the ones filed there.
 - **Layer 4, desk #72:** who is who in felis, ksuhaster and newton. Meanwhile those folders are never
   treated as one person's facets.
 - **Layer 5/7, desk #80:** merge duplicate rows that differ only in record id. Meanwhile both stay.
-- **Layer 3, open:** mint SVs as VRS 2 CopyNumber/Adjacency objects, or keep withholding (RM282).
+- **Layer 3, desk #89:** mint SVs as VRS 2 CopyNumber/Adjacency objects, or keep withholding (RM282).
   Meanwhile withheld (`sv_no_vrs_model`).
-- **Layer 8, open:** offer CisPhasedBlocks per window, so one symbolic allele does not withhold a whole
+- **Layer 8, desk #90:** offer CisPhasedBlocks per window, so one symbolic allele does not withhold a whole
   chromosome's block (RM284). Meanwhile whole blocks.
 - **Layer 4, desk #73:** may Privé's ancestry files be redistributed as a fixture. Meanwhile local only.
 - **Layer 8, a reading to veto:** when a 4.4+ record's first slot carries a PSL name, the loader reads it
   as phased (`phased[0] = true`); VCF 4.5 writes an unphased allele as `.`. The alternative is null, which
   withholds every such block as `phase_unknown`. Built as the first; reversible (SCHEMA Decision 2).
-- **Layer 3, open:** lifting onto GRCh38 `_fix`/`_alt` patch scaffolds needs a store holding patches (an
-  NCBI or UCSC full analysis set). Meanwhile 40,099 HG002 rows stay `target_contig_unmatched`.
-- **Layer 4, TRUST.md:** the somalier binary has no row in docs/TRUST.md, so the wrapper (`just_vcf.somalier`)
+- **Layer 3, the lead's call (not now):** lifting onto GRCh38 `_fix`/`_alt` patch scaffolds needs a store
+  holding patches (an NCBI or UCSC full analysis set); 40,099 HG002 rows stay `target_contig_unmatched`.
+  Deferred: patch scaffolds carry almost no personal-genome calls.
+- **Layer 4, desk #88:** the somalier binary has no row in docs/TRUST.md, so the wrapper (`just_vcf.somalier`)
   has never been run; only the person sets a source's standing. Meanwhile relatedness uses just-vcf's own
   KING-robust estimate, which is the default check.
-- **Tooling, open:** ruff as a dev dependency (about 200 findings in the tree).
+- **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
+- **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
+  says safe to drop); dropping stashes is the person's.

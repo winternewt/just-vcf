@@ -6,6 +6,7 @@ from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
 from just_vcf.callset import absence_is_reference
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
+from just_vcf.links import link_disagreements
 from just_vcf.loading import (
     LOADABLE_FORMATS,
     DamagedBgzfError,
@@ -20,6 +21,8 @@ from just_vcf.loading import (
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
 from just_vcf.pedigree import Pedigree, PedigreeError, read_pedigree
+from just_vcf.person import SUBJECT_CHECKS, Person, SameSubjectCheck, SubjectCheckOutcome, SubjectError, people
+from just_vcf.query import Dimension, GenotypeClass, Presence, PresenceBasis, Query, query
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
 from just_vcf.relatedness import Relatedness, RelationBand, SitePanel, pairwise_relatedness, relatedness, same_person
@@ -27,6 +30,7 @@ from just_vcf.schema import (
     BLOCKS,
     CALLS,
     FACETS,
+    LINKS,
     SCHEMA_VERSION,
     AbsenceMeans,
     AssemblyLabelBasis,
@@ -52,8 +56,10 @@ __all__ = [
     "BLOCKS",
     "CALLS",
     "FACETS",
+    "LINKS",
     "LOADABLE_FORMATS",
     "SCHEMA_VERSION",
+    "SUBJECT_CHECKS",
     "AbsenceMeans",
     "AssemblyLabelBasis",
     "BlockAllele",
@@ -67,26 +73,35 @@ __all__ = [
     "ContentFilterBasis",
     "ContigNames",
     "DamagedBgzfError",
+    "Dimension",
     "Lifted",
     "Loaded",
     "MultiSampleError",
     "NoSampleError",
     "EvidenceBasis",
+    "GenotypeClass",
     "KaryotypicSex",
     "Pedigree",
     "PedigreeError",
     "PhaseSetKind",
+    "Person",
+    "Presence",
+    "PresenceBasis",
+    "Query",
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
     "Relatedness",
     "RelationBand",
+    "SameSubjectCheck",
     "SexChromosomeEvidence",
     "SitePanel",
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
     "StrandCheck",
+    "SubjectCheckOutcome",
+    "SubjectError",
     "TableLayoutError",
     "UnsortedRowsError",
     "UnsupportedFormatError",
@@ -98,9 +113,12 @@ __all__ = [
     "absence_is_reference",
     "clear_cache",
     "liftover",
+    "link_disagreements",
     "load",
     "mint_vrs_ids",
     "normalize",
+    "people",
+    "query",
     "open_payload",
     "pairwise_relatedness",
     "read_chain",

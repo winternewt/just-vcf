@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 import polars as pl
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from just_vcf import bgzf, cache, callset
 from just_vcf.assembly import infer_assembly, sorted_name_length_pairs_digest
@@ -24,11 +24,13 @@ from just_vcf.chip import ChipOutcome, detect_chip, header_lines
 from just_vcf.cache import cache_dir, file_sha256
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import Family
+from just_vcf.links import APPENDED_EXPORT, CALLER_SPLIT, kin_links
 from just_vcf.loaders import cgi, keyvalue, rsid_table, table, vcf
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
     BLOCKS,
     FACETS,
+    LINKS,
     SCHEMA_VERSION,
     AbsenceMeans,
     AssemblyLabelBasis,
@@ -125,13 +127,17 @@ class Loaded(BaseModel):
     facets: pl.LazyFrame
     calls: pl.LazyFrame
     blocks: pl.LazyFrame
+    links: pl.LazyFrame = Field(default_factory=lambda: empty(LINKS))
+    """The facet graph's edges (SCHEMA.md Decision 12): none for a plain load of one facet; the kin
+    links of a load that returns several; a derived facet's lineage, its ancestors' links included."""
     warnings: tuple[str, ...] = ()
     """Rows the loader could not take as written, one line per reason with a count."""
     schema_version: str = SCHEMA_VERSION
 
 
-def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
-    """Load `source` (a path, or a `sniff` result for it) into the three frames.
+def load(source: Path | str | Sniffed, sample: str | None = None, subject: str | None = None) -> Loaded:
+    """Load `source` (a path, or a `sniff` result for it) into the three frames, and the `links` between
+    its facets when it holds several.
 
     `sample` picks one sample of a multi-sample VCF or of a table with a sample column (an Illumina
     Final Report); several samples and no choice is refused with `MultiSampleError`, and a sites-only
@@ -140,6 +146,11 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
     is ignored for formats that hold one person by construction. A BGZF input with a block that does
     not read back is refused with `DamagedBgzfError`, naming the facet and the block's offset.
 
+    `subject` is the caller's label for the person the file belongs to (RM273), written to every facet
+    the file loads as and inherited by every derived facet. Nothing fills it otherwise: not the sample
+    name, not the file's contents. It does not enter `facet_id`, which identifies the data, not the
+    claim. An empty or blank label is refused with `ValueError`.
+
     A VCF's or Complete Genomics or key=value table's rows are spilled to parquet under `cache_dir()`,
     as a generation the same rows find again (`just_vcf.cache.Spill`), so a load run again never
     touches the files an earlier `Loaded` reads. An input polars-bio cannot read as it is is first
@@ -147,6 +158,15 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
     entries an older `REWRITE_VERSION`, `SCHEMA_VERSION`, `SPILL_LAYOUT` or `WORK_VERSION` wrote
     (`just_vcf.cache.sweep_stale`).
     """
+    if subject is not None and not subject.strip():
+        raise ValueError("subject must be a non-empty label, or None for no subject")
+    loaded = _load(source, sample)
+    if subject is None:
+        return loaded
+    return loaded.model_copy(update={"facets": loaded.facets.with_columns(pl.lit(subject, dtype=FACETS["subject"]).alias("subject"))})
+
+
+def _load(source: Path | str | Sniffed, sample: str | None) -> Loaded:
     cache.sweep_stale(cache.REWRITE_COPY, {"REWRITE_VERSION": vcf.REWRITE_VERSION})
     cache.sweep_stale(cache.FRAMES_SPILL, _FRAMES_VERSIONS)
     cache.sweep_stale(cache.WORK_COPY, _WORK_VERSIONS)
@@ -184,13 +204,14 @@ def _load_rsid_table(sniffed: Sniffed) -> Loaded:
     # Its chip is not inferred: the 23andMe rule reads the first layout's rows, and no rule reads this one.
     # Nor is its build stated: the preamble that states one belongs to the first export, so the label
     # stays unknown until `resolve_ref` scores this export's own rows (F9).
-    second = _array_facet(sniffed, appended.calls, build=None, options={"part": 1}, extra={"relation": rsid_table.APPENDED_EXPORT, "dropped_fields": []})
+    second = _array_facet(sniffed, appended.calls, build=None, options={"part": 1}, extra={"relation": APPENDED_EXPORT, "dropped_fields": []})
     warnings.append(
         f"a second export in another layout (an allele per column) follows the first {appended.after_rows} data "
-        f"row(s): its {appended.calls.height} row(s) are their own facet (relation {rsid_table.APPENDED_EXPORT})"
+        f"row(s): its {appended.calls.height} row(s) are their own facet (relation {APPENDED_EXPORT})"
     )
     warnings += [f"appended export facet: {w}" for w in appended.warnings]
-    return _multi_facet_loaded([first[0], second[0]], [first[1], second[1]], [empty(BLOCKS)] * 2, warnings)
+    links = kin_links([first[0]["facet_id"], second[0]["facet_id"]], APPENDED_EXPORT)
+    return _multi_facet_loaded([first[0], second[0]], [first[1], second[1]], [empty(BLOCKS)] * 2, warnings, links)
 
 
 def _load_table(sniffed: Sniffed, sample: str | None) -> Loaded:
@@ -246,7 +267,7 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
                 "callset_type": kind.value if kind else None,
                 "absence_means": callset.absence_means(kind, False).value,
                 **classes,
-                "relation": vcf.CALLER_SPLIT,
+                "relation": CALLER_SPLIT,
                 "assembly_label": sniffed.build,
                 "assembly_label_basis": AssemblyLabelBasis.STATED.value if sniffed.build else None,
                 "contig_map": contig_map(counts["chroms"]),
@@ -255,7 +276,8 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
         )
         calls_parts.append(canonical_order_per_contig(spilled, contigs))
         warnings += [f"{caller} facet: {w}" for w in [*keyvalue.warnings_for(counts, prefix), *class_warnings]]
-    return _multi_facet_loaded(facets, calls_parts, [empty(BLOCKS)] * len(facets), warnings)
+    links = kin_links([facet["facet_id"] for facet in facets], CALLER_SPLIT)
+    return _multi_facet_loaded(facets, calls_parts, [empty(BLOCKS)] * len(facets), warnings, links)
 
 
 def _load_cgi(sniffed: Sniffed) -> Loaded:
@@ -405,9 +427,9 @@ def _spill_files(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origi
 
 
 def _multi_facet_loaded(
-    facets: list[dict], calls: list[pl.LazyFrame], blocks: list[pl.LazyFrame], warnings: list[str]
+    facets: list[dict], calls: list[pl.LazyFrame], blocks: list[pl.LazyFrame], warnings: list[str], links: pl.LazyFrame
 ) -> Loaded:
-    """One `Loaded` from several facets of one source, in `facet_id` order."""
+    """One `Loaded` from several facets of one source, in `facet_id` order, with the links between them."""
     order = sorted(range(len(facets)), key=lambda i: facets[i]["facet_id"])
     for warning in warnings:
         logger.warning("%s: %s", facets[order[0]]["facet_id"], warning)
@@ -415,6 +437,7 @@ def _multi_facet_loaded(
         facets=pl.concat([_facet_frame(facets[i]) for i in order], how="vertical"),
         calls=_concat([calls[i] for i in order]),
         blocks=_concat([blocks[i] for i in order]),
+        links=links,
         warnings=tuple(warnings),
     )
 
@@ -670,7 +693,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 # What the header states (array or imputed content) wins; RM4 infers the rest from the rows.
                 "callset_type": kind.value if kind else None,
                 "phasing_method": source.phasing_method,
-                "relation": vcf.CALLER_SPLIT if part.split else None,
+                "relation": CALLER_SPLIT if part.split else None,
                 "sample": part.sample,
                 "assembly_label": label,
                 "assembly_label_basis": basis.value if basis else None,
@@ -712,6 +735,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         facets=frame,
         calls=_concat([calls_parts[i] for i in order]),
         blocks=_concat([blocks_parts[i] for i in order]),
+        links=kin_links([facets[i]["facet_id"] for i in order if facets[i]["relation"] == CALLER_SPLIT], CALLER_SPLIT),
         warnings=tuple(warnings),
     )
 

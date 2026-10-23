@@ -25,6 +25,7 @@ import polars as pl
 
 from just_vcf.formats import get_spec
 from just_vcf.formats.spec import FormatSpec
+from just_vcf.links import APPENDED_EXPORT  # noqa: F401 (kept importable here; defined in just_vcf.links)
 from just_vcf.loaders.text import (
     chrom_columns,
     ids_expr,
@@ -62,10 +63,6 @@ start with `rs`, `i`, `AX-` or a chromosome number."""
 
 APPENDED_EXPORT_ROWS = 1_000
 """Rows of one other width the file must end with before `read_calls` reads them as a second export."""
-
-APPENDED_EXPORT = "appended_export"
-"""`facets.relation` of an export appended to a file after another one, read as its own facet (F3).
-just-vcf's own term (SCHEMA.md Decision 5): GA4GH has none for two exports in one file."""
 
 _TWO_ALLELE_FIELDS = ("rsid", "chromosome", "position", "allele1", "allele2")
 _TWO_ALLELE_NO_CALL = ("0",)

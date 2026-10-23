@@ -97,13 +97,15 @@ def snv(chrom: str, pos: int, gt: str, filt: str = "PASS", alt: int = 0, **extra
 
 def atlas_row(a: tuple[str, str | None], b: tuple[str, str | None], *, d: float, region: str = "all", vc: str = "snv",
               only_a: int = 0, only_b: int = 0, n: int = N, ploidy: int = 0) -> dict:  # fmt: skip
-    """An atlas row of scope `carried_pass` whose genotype mismatch is `d` over `n` alleles both called
-    at one ploidy, beside `ploidy` alleles called at two."""
+    """An atlas row of scope `carried_pass` whose genotype mismatch is `d` over `n` alleles both called,
+    `ploidy` of the matches a haploid call against the same allele's homozygote (counted as a match since
+    F22, as `pool_counts` writes it)."""
+    assert ploidy <= n - round(d * n)
     return {
         "scope": "carried_pass", "a_caller": a[0], "a_caller_version": a[1], "b_caller": b[0], "b_caller_version": b[1],
         "region_class": region, "variant_class": vc, "match": n - round(d * n), "mismatch": round(d * n),
-        "ploidy_differs": ploidy, "called_both": n + ploidy, "discordant": round(d * n) + ploidy,
-        "alleles": n + ploidy + only_a + only_b, "only_a": only_a, "only_b": only_b,
+        "ploidy_differs": ploidy, "called_both": n, "discordant": round(d * n),
+        "alleles": n + only_a + only_b, "only_a": only_a, "only_b": only_b,
     }  # fmt: skip
 
 
@@ -200,10 +202,10 @@ def test_rates_by_caller_pool_versions_and_drop_self_pairs() -> None:
 
 
 def test_a_ploidy_difference_is_no_genotype_error() -> None:
-    # A male X: half the alleles both called differ only in ploidy. The atlas's discordance counts
-    # them; the genotype rate does not.
-    rows = atlas(atlas_row(X, Y, d=0.01, ploidy=N))
-    assert rows["discordant"][0] / rows["called_both"][0] > 0.5
+    # A male X: half the alleles both called differ only in ploidy, `a` against `a/a`. The atlas counts
+    # them as matches (F22), and the genotype rate takes them as agreement: compared over all of them,
+    # the pair's discordance halved between the two.
+    rows = atlas(atlas_row(X, Y, d=0.01, ploidy=N // 2))
     rates = {r["caller"]: r for r in method_error_rates(rows).iter_rows(named=True)}
     assert rates["X"]["genotype_error"] == pytest.approx(0.005, rel=1e-6)
     assert rates["X"]["compared"] == N
@@ -522,6 +524,28 @@ def test_a_person_is_taken_as_its_facets(tmp_path: Path, store: ReferenceStore) 
     from_person = consensus(person, atlas=TRIANGLE)
     assert from_person.calls.collect().equals(consensus(parents, atlas=TRIANGLE).calls.collect())
     assert from_person.facets.collect()["subject"].item() == "p"
+
+
+def test_a_consensus_is_no_evidence_its_parents_are_one_person(tmp_path: Path, store: ReferenceStore) -> None:
+    # Computed from its parents, a consensus agrees with them by construction: checked beside them it
+    # would vouch for the very pairing it assumed. Two of them must not collapse into one source either.
+    parents = [
+        facet(tmp_path, n, c, "1", [snv("1", 100, g)], store, subject="p")
+        for n, c, g in (("x", "X", "0/1"), ("y", "Y", "0/1"))
+    ]
+    first = consensus(parents, atlas=TRIANGLE)
+    second = consensus(parents, atlas=TRIANGLE, default_rate=0.2, pass_only=False)
+    checked: list[frozenset[str]] = []
+
+    def check(a: Loaded, b: Loaded) -> bool:
+        checked.append(frozenset(one.facets.collect()["facet_id"].item() for one in (a, b)))
+        return True
+
+    person = Person.of(*parents, first, second, check=check)
+    ids = {one.facets.collect()["facet_id"].item() for one in parents}
+    assert checked == [frozenset(ids)]
+    assert person.facets.collect().height == 4
+    assert person.checks.height == 1
 
 
 def test_refusals(tmp_path: Path, store: ReferenceStore) -> None:

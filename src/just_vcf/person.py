@@ -18,7 +18,7 @@ from itertools import combinations
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
-from just_vcf.links import canonical_links
+from just_vcf.links import MULTI_PARENT_RELATIONS, canonical_links
 from just_vcf.loading import Loaded
 from just_vcf.pedigree import BAND_ORDER, EXPECTED_KINSHIP, Pedigree, expected_kinship
 from just_vcf.relatedness import (
@@ -351,7 +351,10 @@ def _pieces(loaded: tuple[Loaded, ...]) -> list[Loaded]:
 
 
 def _source(facet: dict) -> tuple:
-    """What a facet's data was read from: the bytes, the archive member and the sample column."""
+    """What a facet's data was read from: the bytes, the archive member and the sample column. A facet
+    made from several (a merge, a consensus) was read from no file, so it is a source of its own."""
+    if facet["relation"] in MULTI_PARENT_RELATIONS:
+        return ("derived", facet["facet_id"])
     return (facet["source_sha256"], facet["member"], facet["sample"])
 
 
@@ -359,6 +362,10 @@ def _standing(facets: list[dict]) -> list[int]:
     """The index of the facet standing for each source, in `facets` order (which is `facet_id` order)."""
     standing: dict[tuple, int] = {}
     for index, facet in enumerate(facets):
+        # A facet made from several of them is no evidence of its own: checked against its parents it
+        # would agree with what it was computed from.
+        if facet["relation"] in MULTI_PARENT_RELATIONS:
+            continue
         key = _source(facet)
         held = standing.get(key)
         # A facet read from the file stands for its source over one derived from it; facets are in

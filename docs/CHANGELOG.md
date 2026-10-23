@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `Person` and `check_pedigree` no longer check a merged or consensus facet against the facets it was
+  made from, nor stand two of them for one source: computed from its parents, it agreed with them by
+  construction and counted as evidence that they are one person (merge audit 4).
 - The stale-version sweep in `load` and the derived steps no longer removes an older version's cache
   entry that was used in the last `JUST_VCF_CACHE_GRACE_DAYS` (default 7; `0` restores sweeping at
   once). Two sessions on one cache dir at two `SCHEMA_VERSION`s showed why: the newer one's sweep
@@ -109,7 +112,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 - `genotype_evidence` and `genotype_evidence_at` gain `gl_source`: on a row graded `gl`, the key its likelihoods were read from (`gl`, `pl`, `gl_over_pl`), from `facets.gl_source`; null on every other basis. `grade_basis` is unchanged: GL and PL stay one basis, `gl`.
 
-- `facets.gl_source` names the FORMAT key a VCF facet's `gl` is read from: `gl`, `pl`, or `gl_over_pl` where the header declares both (GL per row, PL where a row's GL is missing). Null where the facet carries no likelihoods. A new `facets` column; `SCHEMA_VERSION` is bumped at merge.
+- `facets.gl_source` names the FORMAT key a VCF facet's `gl` is read from: `gl`, `pl`, or `gl_over_pl` where the header declares both (GL per row, PL where a row's GL is missing). Null where the facet carries no likelihoods. A new `facets` column; `SCHEMA_VERSION` 0.0.18.
 
 - `method_atlas(pairs, regions)` (RM279, `just_vcf.atlas`): discordance and one-sided rates per
   (each side's caller and version, region class, variant class, scope) over pairs of one person's

@@ -2137,7 +2137,7 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `variant_calls`, so `chip_absence` refuses a Big Y facet as not an array. Values change on facets
   these reach.
 
-- **A facet column, landed in 0.0.18** (2026-10-23, the lead's decision on GL and PL): `facets.gl_source` (`schema.GlSource`: `gl`, `pl`, `gl_over_pl`) names the FORMAT key `gl` is read from (Decision 5). Adding a column changes the `facets` schema; `SCHEMA_VERSION` was deliberately left as it is on this builder branch, and the lead bumps it at merge. No rule changes: `gl` loads as before.
+- **A facet column, landed in 0.0.18** (2026-10-23, the lead's decision on GL and PL): `facets.gl_source` (`schema.GlSource`: `gl`, `pl`, `gl_over_pl`) names the FORMAT key `gl` is read from (Decision 5). Adding a column changes the `facets` schema; `SCHEMA_VERSION` went to 0.0.18 at merge. No rule changes: `gl` loads as before.
 
 - **No version change** (2026-10-23, the audit of 5b6ec3b..01fca0b): no column changes. Rules
   changed: a lifted facet's `reference` is null ("Lifting", step 5; `LIFT_VERSION` 6); `reference`
@@ -2147,16 +2147,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   writes a PSL-phased row unphased and names the `fileformat` `write_vcf` would. Values change on
   facets these reach.
 
-- **An enum member, landed in 0.0.17** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
-
 - **No version change** (2026-10-23, RM274's pedigree check, layer 4): two computed frames outside the
   three, `EXPECTED_KINSHIP` and `PEDIGREE_CHECKS` ("Relatedness and pedigrees" above). No column of
   `facets`, `calls` or `blocks` changes; a pedigree individual is now matched to a `subject` by id.
 
-- **An enum member, version bump pending** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
+- **An enum member, landed in 0.0.17** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
   (`cgi_haplink`), CGI's `hapLink` as a phase set, just-vcf's own term. Adding a member changes the
   `pl.Enum` dtype of `calls.phase_set_kinds` and of `cis_phased_blocks`' `phase_set_kind`, which is a
-  schema change, which landed in 0.0.17. Rule changes (Decision 2): CGI's native rows fill `phased`, `phase_sets` and
+  schema change. Rule changes (Decision 2): CGI's native rows fill `phased`, `phase_sets` and
   `phase_set_kinds` from `hapLink`, where they were null, and `hapLink` leaves `dropped_fields`;
   `cis_phased_blocks` gives one block per hapLink and chromosome; `write_vcf` writes a haplotype
   phased by a hapLink `/`, with no PS (VCF has no field for a hapLink, and `|` without its set would

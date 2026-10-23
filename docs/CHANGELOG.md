@@ -48,8 +48,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 - `load(..., subject=...)` labels a file's facets with the person they belong to, in a new nullable
   `facets.subject` column (RM273). The label is the caller's: nothing fills it from the sample name or
   the file, and `facet_id` does not digest it. Every derived step (`resolve_ref`, `normalize`,
-  `liftover`, `rejoin_split`, `mint_vrs_ids`) carries its parent's. Schema change; the version bump is
-  the lead's at merge.
+  `liftover`, `rejoin_split`, `mint_vrs_ids`) carries its parent's. Schema change, landed in 0.0.12.
 
 - `query(source)` (RM283), the aggregate-only helper beside `load`, for agents and apps: counts per
   facet by contig, variant class (ALT alleles), filter set, genotype class, REF check, evidence basis
@@ -68,7 +67,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   every pair, an appended export from the first export. A plain load has none. `facets.derived_from`
   and `relation` stay for the one-parent case, and `link_disagreements` lists every place the two
   disagree. `LINKS` and `link_disagreements` are exported. No column of the other frames changes; the
-  schema version is not bumped.
+  frame landed in schema 0.0.13.
 
 - A command line, `just-vcf` (RM272): `sniff`, `load` (a summary of each facet), `check` (REF read
   from a reference, `ref_check` and withheld VRS ids counted) and `convert` (to VCF or gVCF through
@@ -89,7 +88,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 - Structural-variant and copy-number VCFs load as SV facets (RM282). Five nullable `calls` columns:
   `sv_type` (INFO SVTYPE as written), `cipos` and `ciend` (two offsets per ALT; VCF 4.2's one pair
   for the record repeated per ALT), `copy_number` (FORMAT CN) and `alt_copy_numbers` (INFO CN, per
-  ALT). `SCHEMA_VERSION` is not bumped in this change; the lead bumps it at merge. Canvas's `<CN0>`,
+  ALT); they landed in schema 0.0.14. Canvas's `<CN0>`,
   `<CN2>`… end at INFO END, and its copy-neutral segments (ALT `.` with END and CN) are calls, not
   reference blocks (F18), so a Canvas facet's absence is `unknown`, not `blocks`. `vrs_withheld`
   gives `sv_no_vrs_model` for an SV allele or breakend (it gave `symbolic`, which now names only

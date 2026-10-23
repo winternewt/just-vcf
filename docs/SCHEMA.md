@@ -1346,22 +1346,18 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
-- **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
+- **One facet column, landed in 0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every
-  derived facet. Nullable and additive. `SCHEMA_VERSION` is deliberately left at 0.0.11 on this
-  builder branch; the lead bumps it at merge. `facet_id` does not digest the subject (Decision 5).
+  derived facet. Nullable and additive. `facet_id` does not digest the subject (Decision 5).
 
-- **No version change** (2026-10-23, RM275, the `links` frame): a fourth frame, `Loaded.links`
-  (Decision 12), and no column of `facets`, `calls` or `blocks` changes. `SCHEMA_VERSION` is not
-  bumped here: the lead bumps it when merging. Rules added: every derived step adds a lineage link and
+- **A fourth frame, landed in 0.0.13** (2026-10-23, RM275, the `links` frame): `Loaded.links`
+  (Decision 12); no column of `facets`, `calls` or `blocks` changes. Rules added: every derived step adds a lineage link and
   carries its parent's; a load of several facets links them (`caller_split`, `appended_export`);
   `link_disagreements` states how `links` agrees with `derived_from` and `relation`.
 
-- **Additive, version not bumped in this change** (2026-10-23, RM282 structural-variant facets): five
+- **Additive, landed in 0.0.14** (2026-10-23, RM282 structural-variant facets): five
   nullable `calls` columns, `sv_type`, `cipos`, `ciend`, `copy_number` and `alt_copy_numbers`
-  (Decision 6, "Structural variants"). A new nullable column is a minor bump by the rule above;
-  `SCHEMA_VERSION` stays 0.0.11 here and is bumped when the lead merges, with the other builders'
-  changes of the same round. Rules changed: `<CN0>`, `<CN2>`… end at INFO `END` (the `end_pos`
+  (Decision 6, "Structural variants"). Rules changed: `<CN0>`, `<CN2>`… end at INFO `END` (the `end_pos`
   rule); an `ALT .` record with a copy number is a call, not a block (Decision 4); `vrs_withheld` gives
   `sv_no_vrs_model` for an SV allele where it gave `symbolic` (`symbolic` now names only symbolic
   alleles that are no variant). Values change on SV and CNV files that already load.

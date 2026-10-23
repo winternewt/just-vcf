@@ -19,14 +19,18 @@ from just_vcf.links import SPLIT_REJOINED, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck, canonical_order_per_contig
 
-REJOIN_VERSION = 1
-"""Part of the derived `facet_id`: bumped whenever the join rule changes what it emits."""
+REJOIN_VERSION = 2
+"""Part of the derived `facet_id`: bumped whenever the join rule changes what it emits (2: the SV
+columns kept, RM282)."""
 
 RELATION = SPLIT_REJOINED
 """The derived facet's `relation`."""
 
-_KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "dp", "qual")
+_KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "dp", "qual", "sv_type", "copy_number")
 """Columns a joined row keeps only when every row of its group agrees; otherwise null (not known)."""
+
+_PER_ALT = {"cipos": 2, "ciend": 2, "alt_copy_numbers": 1}
+"""Columns holding this many values per ALT: a joined row concatenates them in its `alts` order."""
 
 
 def rejoin_split(loaded: Loaded) -> Loaded:
@@ -161,7 +165,28 @@ def _join(rows: list[dict]) -> dict | str:
     for name in _KEPT_WHEN_EQUAL:
         values = [row[name] for row in rows]
         joined[name] = values[0] if all(value == values[0] for value in values) else None
+    for name, width in _PER_ALT.items():
+        joined[name] = _per_alt(rows, extended, alts, name, width)
     return joined
+
+
+def _per_alt(rows: list[dict], extended: list[list[str]], alts: list[str], name: str, width: int) -> list | None:
+    """`name`'s values in `alts` order, `width` per ALT. Null (not known) unless every row with ALTs
+    states one set per ALT and rows giving the same extended ALT agree on it."""
+    by_alt: dict[str, list] = {}
+    for row, row_alts in zip(rows, extended):
+        if not row_alts:
+            continue
+        values = row[name]
+        if values is None or len(values) != width * len(row_alts):
+            return None
+        for index, allele in enumerate(row_alts):
+            part = list(values[width * index : width * (index + 1)])
+            if by_alt.setdefault(allele, part) != part:
+                return None
+    if not alts:
+        return None
+    return [value for allele in alts for value in by_alt[allele]]
 
 
 def _filters(lists) -> list[str] | None:

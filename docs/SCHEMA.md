@@ -663,7 +663,10 @@ parquet spill of `calls`, three columns, so they cost no second parse of the VCF
 - Each GT slot takes the one allele the rows place there; `0` when no row places an ALT and a row says
   `0`; null when every row is null there. bcftools' `0` and vt's `.` read alike.
 - `ids` and `filters` are unions (sorted; `PASS` only when no row failed a filter); `phased`, the phase
-  sets, `dp` and `qual` are kept when every row agrees and null otherwise.
+  sets, `dp`, `qual`, `sv_type` and `copy_number` are kept when every row agrees and null otherwise.
+- The per-ALT columns, `cipos`, `ciend` (two values per ALT) and `alt_copy_numbers` (one), are each
+  row's values concatenated in the joined `alts` order; null when a row does not state them for each
+  of its ALTs, or two rows giving one ALT disagree.
 - Withheld: `gl`, `gp`, `ad`, `gq`, `dosage`, `source_alleles` (split rows hold REF against one ALT,
   and the full vectors would need the reads, which is calling genotypes), and `source_gt` (no file
   wrote the joined text).
@@ -1352,7 +1355,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   changed in `liftover`: a swapped row's `alt_copy_numbers` are null, as its `dosage` is
   (`LIFT_VERSION` 3). `normalize` gets a new `facet_id` (`NORMALIZE_VERSION` 6) for RM282's rule,
   which changed its output without a bump: per-ALT SV columns split with their ALT, a moved row's
-  intervals cleared.
+  intervals cleared. Rule changed in `rejoin_split`: a joined site keeps `sv_type` and `copy_number`
+  where its rows agree and concatenates `cipos`, `ciend` and `alt_copy_numbers` in its `alts` order,
+  where it wrote them null (`REJOIN_VERSION` 2).
 
 - **One facet column, landed in 0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every

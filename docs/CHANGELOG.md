@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `rejoin_split` keeps the SV columns RM282 added, which it wrote null: `sv_type` and `copy_number`
+  where the split rows agree, and `cipos`, `ciend` and `alt_copy_numbers` concatenated in the joined
+  `alts` order (null when a row does not state them per ALT, or two rows disagree on one ALT).
+  `REJOIN_VERSION` 2: re-joined facets get new `facet_id`s.
+
 - `liftover` withholds a swapped row's `alt_copy_numbers` (INFO CN, one per ALT), as it withholds its
   `dosage`: the swapped ALT's slot holds the old REF, whose copy number the source did not state; a
   warning counts them. `LIFT_VERSION` 3. `NORMALIZE_VERSION` 6, for RM282's change to what `normalize`

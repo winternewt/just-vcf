@@ -64,6 +64,14 @@ their files on Krypton), all pairs through `pairwise_relatedness` with the packa
 | either | `unknown`, `assembly_mismatch` | 20 | | | | |
 | one participant's | `unknown`, `no_heterozygous_sites` | 1 | | | | 531 |
 
+The table was measured before `variant_sites_only` existed and has not been re-run. Counted after
+(2026-10-23, per facet, the five participants' facets that are not array exports): only two facets
+have no homozygous-reference genotype at any panel site, the Genos exome (7,003 sites) and the
+VarScan2 part of hu832966's merge (270 sites, `too_few_sites` already). Arrays write every letter
+pair, so they always carry hom-ref. The rule therefore moves the exome's pairs alone: those with its
+own participant's facets from `same_person`, those with other participants' from `between_bands`,
+both to `unknown`, `variant_sites_only`, with `same_person` unchanged.
+
 What the table says:
 
 - **Every pair of one participant's facets that could be compared read `same_person`**, and none of

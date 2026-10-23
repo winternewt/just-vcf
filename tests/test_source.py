@@ -392,6 +392,50 @@ def test_a_crossmap_lift_is_a_step_and_explains_a_second_reference() -> None:
     assert len(unexplained.warnings) == 1 and "no liftover step is recorded" in unexplained.warnings[0]
 
 
+def test_a_tool_or_version_written_as_a_path_is_withheld_like_an_option() -> None:
+    """A path names a home directory; the frame never holds it, in a step's tool or version either."""
+    meta = [
+        "##liftOverProgram=</home/plantedname/bin/CrossMap,version=0.6.3>",
+        "##bcftools_normVersion=/home/plantedname/opt/bcftools-1.9",
+        "##bcftools_normCommand=norm -m -both -Oz -o /work/out.vcf.gz /work/in.vcf.gz; Date=Tue Mar 19 03:39:45 2024",
+    ]
+    steps = detect_source(meta).steps
+    assert [(s.tool, s.version, s.role) for s in steps] == [("<path>", "0.6.3", "lift"), ("bcftools norm", "<path>", "normalize")]
+    assert not any("plantedname" in str(value) for step in steps for value in step.as_row().values())
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["hg38.fa", "hg19.fa", "ucsc.hg19.fasta", "hs37d5.fa.gz", "hs38DH.fa", "human_g1k_v37_decoy.fasta", "G1K.37.nt.fasta",
+     "Homo_sapiens_assembly38.fasta", "Homo_sapiens.GRCh37.75.dna.toplevel.fa", "GRCh38.p13.genome.fa",
+     "GCA_000001405.15_GRCh38_no_alt_analysis_set.fna", "GRCh38_full_analysis_set_plus_decoy_hla.fa",
+     "GCA_009914755.4_T2T-CHM13v2.0_genomic.fna", "chm13v2.0.fa", "hs1.fa.gz", "b37.fasta", "build37.fa.bz2",
+     "hg38_alt_aware", "hg38-alt_masked.cnv.graph.hla.rna-8-r2.0-1", "GRCh38_to_GRCh37.chain.gz", "hg19ToHg38.over.chain.gz"],
+)  # fmt: skip
+def test_a_known_reference_file_keeps_its_base_name(name: str) -> None:
+    source = detect_source([f"##reference=file:///refs/{name}", f'##commandline="/opt/bin/freebayes -f /refs/{name} /work/x.bam"'])
+    assert source.reference == name and source.steps[0].options == (f"-f {name}",)
+
+
+def test_any_other_reference_or_chain_file_name_is_withheld() -> None:
+    """A base name can carry a person's name: only a name made of known reference words is kept."""
+    meta = [
+        "##reference=file:///refs/PLANTEDSMITH-hg38.fa",
+        '##commandline="/opt/bin/freebayes -f /refs/hg38_PlantedJones.fa /work/x.bam"',
+        "##liftOverProgram=<CrossMap,version=0.6.3>",
+        "##liftOverChainFile=/chains/planted_doe_to_hg19.chain.gz",
+        "##targetRefGenome=/refs/ref.fa",
+        '##DRAGENCommandLine=<ID=dragen,Version="SW: 07.021.624.3.10.4",CommandLineOptions="--ref-dir /staging/PlantedRoe_hg38 --enable-variant-caller true">',
+    ]
+    source = detect_source(meta)
+    row = [step.as_row() for step in source.steps]
+    assert source.reference == "<file>"
+    assert not any(planted in str(row) for planted in ("PLANTED", "Planted", "planted"))
+    assert ("freeBayes", ("-f <file>",)) in [(s.tool, s.options) for s in source.steps]
+    assert ("CrossMap", ("liftOverChainFile=<file>", "targetRefGenome=<file>")) in [(s.tool, s.options) for s in source.steps]
+    assert ("DRAGEN", ("--ref-dir <file>", "--enable-variant-caller true")) in [(s.tool, s.options) for s in source.steps]
+
+
 def test_reference_falls_back_to_the_caller_and_two_references_leave_it_null() -> None:
     assert detect_source(CLAIR3).reference == "hg38.fa"
     two = detect_source(["##reference=/ref/hg19.fa", "##reference=/ref/hs37d5.fa"])

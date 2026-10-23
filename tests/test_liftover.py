@@ -377,6 +377,25 @@ def test_the_derived_facet(tmp_path: Path, setup) -> None:
     assert any("not lifted" in w and "[multiple_targets]" in w for w in lifted.loaded.warnings)
 
 
+def test_a_lifted_facet_names_no_reference_and_keeps_the_aligner(tmp_path: Path, setup) -> None:
+    """The parent's `reference` named the source assembly's file; the lifted rows are against the
+    target, which `ref_seqcol_digest` names. The reads were still aligned by the parent's aligner."""
+    store, _, _, chain = setup
+    dragen = (
+        '##DRAGENCommandLine=<ID=dragen,Version="SW: 07.021.624.3.10.4, HW: 07.021.624",Date="Wed Apr 01 09:02:15 UTC 2020",'
+        'CommandLineOptions="--ref-dir /staging/ref/hg19 --enable-map-align true --enable-variant-caller true">'
+    )
+    vcf = tmp_path / "source.vcf"
+    vcf.write_text("\n".join([*HEADER[:1], "##reference=file:///staging/ref/hg19/reference.bin", dragen, *HEADER[1:], CASES["plus_snv"]]) + "\n")
+    resolved = resolve_ref(load(vcf), store)
+    parent = resolved.facets.collect().row(0, named=True)
+    facet = liftover(resolved, chain, store).loaded.facets.collect().row(0, named=True)
+    assert parent["reference"] == "hg19" and parent["aligner"] == "DRAGEN"
+    assert facet["reference"] is None
+    for name in ("aligner", "aligner_version", "method_steps"):
+        assert facet[name] == parent[name], name
+
+
 def test_lifted_rows_mint_on_the_target(tmp_path: Path, setup) -> None:
     store, _, _, chain = setup
     _, lifted = lifted_from_cases(tmp_path, store, chain)

@@ -210,6 +210,8 @@ PLANTED = {
     "##center=/srv/Quill_Center/sequencing": "Quill_Center",
     "##eagleVersion=~/Quill_Eagle": "Quill_Eagle",
 }
+WITHHELD = {"Quill_Eagle"}
+"""Planted names the library itself withholds: a method step's version written as a path is `<path>`."""
 CONFLICTING = {
     # The same fields stated twice: the library's warnings quote both values.
     "##DeepVariant_version=/home/Quill_Version_A/dv": "Quill_Version_A",
@@ -228,7 +230,9 @@ def test_header_text_reaches_no_output_with_a_name_in_it(tmp_path: Path, fasta: 
     text = " ".join(str(shown[name]) for name in ("vendor", "caller_version", "phasing_method")) + " ".join(loaded.warnings)
     names = list(planted.values())
     reached = [name for name in names if name in text] + [n for n in names if n == "Quill_Reference" and n in (sniff(path).build_evidence or "")]
-    assert sorted(reached) == sorted(names), "each planted name reaches the library's fields or warnings, so the CLI must redact it"
+    assert sorted(reached) == sorted(set(names) - WITHHELD), "each planted name reaches the library's fields or warnings, so the CLI must redact it"
+    if "Quill_Eagle" in names:
+        assert shown["phasing_method"] == "Eagle <path>"
     runs = [
         run("sniff", path), run("sniff", path, "--json"),
         run("load", path), run("load", path, "--json"),

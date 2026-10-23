@@ -21,7 +21,8 @@ from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck, cano
 
 REJOIN_VERSION = 3
 """Part of the derived `facet_id`: bumped whenever the join rule changes what it emits (2: the SV
-columns kept, RM282)."""
+columns kept, RM282; 3: schema 0.0.15's `phase_set_ordinals` and `phase_set_qualities` kept where
+the split rows agree)."""
 
 RELATION = SPLIT_REJOINED
 """The derived facet's `relation`."""

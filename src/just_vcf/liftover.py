@@ -60,8 +60,11 @@ from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceM
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 5
-"""Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits."""
+LIFT_VERSION = 6
+"""Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
+row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
+`phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
+6: the lifted facet's `reference` is null, since it named the source's file)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -330,6 +333,9 @@ def liftover(
         pl.lit(None, dtype=pl.String).alias("seqcol_digest"),
         pl.lit(None, dtype=pl.String).alias("sorted_name_length_pairs_digest"),
         pl.lit(target_digest).alias("ref_seqcol_digest"),
+        # The parent's header named the source assembly's file; the target is `ref_seqcol_digest`. The
+        # aligner stays: the reads were aligned to the source, and that is still what happened.
+        pl.lit(None, dtype=FACETS["reference"]).alias("reference"),
         pl.lit(AbsenceMeans.UNKNOWN.value, dtype=FACETS["absence_means"]).alias("absence_means"),
         pl.lit(None, dtype=FACETS["header_contigs"]).alias("header_contigs"),
         pl.lit(

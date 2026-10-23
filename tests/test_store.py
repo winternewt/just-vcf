@@ -95,6 +95,27 @@ def test_the_manifest_records_versions_subject_and_utc_times(tmp_path: Path) -> 
     assert tuple(raw["facets"][0]["warnings"]) == loaded.warnings
 
 
+def test_the_manifest_keeps_the_warnings_redacted_as_query_returns_them(tmp_path: Path) -> None:
+    """The manifest is plain text beside the parquet: a warning quoting the sample, the file or a path
+    is written as `query` would return it."""
+    folder = tmp_path / "PlantedOwner"
+    folder.mkdir()
+    text = vcf_text(["1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/1"], samples=("PlantedSample",))
+    loaded = load(write_vcf_text(folder, text, "PlantedFile.vcf"), subject=SUBJECT)
+    quoting = loaded.model_copy(update={"warnings": (
+        *loaded.warnings,
+        "2 row(s) of PlantedSample left out",
+        "PlantedFile.vcf: read through /home/PlantedOwner/cache/copy.vcf",
+    )})  # fmt: skip
+    store = Store.open(tmp_path / "store", subject=SUBJECT)
+    store.add(quoting)
+    raw = (tmp_path / "store" / "manifest.json").read_text()
+    assert "Planted" not in raw
+    stored = json.loads(raw)["facets"][0]["warnings"]
+    assert stored[-2:] == ["2 row(s) of <sample> left out", "<file name>: read through <path>"]
+    assert store.loaded().warnings[-2:] == tuple(stored[-2:])
+
+
 def test_adding_a_facet_already_held_is_a_no_op(tmp_path: Path) -> None:
     store = Store.open(tmp_path / "store", subject=SUBJECT)
     loaded = _gvcf(tmp_path)

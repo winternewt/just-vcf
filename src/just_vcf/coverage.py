@@ -169,7 +169,10 @@ class Coverage(BaseModel):
 
 
 class UnsupportedCoverageError(ValueError):
-    """The file is not a coverage output this module reads, or reading it would mean guessing."""
+    """The file is not a coverage output this module reads, or reading it would mean guessing.
+
+    The message names the kind of input, never its path: a path is a label and can carry a person's
+    name (as `DamagedBgzfError`)."""
 
 
 # --- Reading depth tools' outputs --------------------------------------------------------------
@@ -276,7 +279,7 @@ def _head_lines(path: Path, count: int = 50) -> list[str]:
             if len(lines) >= count:
                 break
     if not lines:
-        raise UnsupportedCoverageError(f"{path.name}: empty file")
+        raise UnsupportedCoverageError("the coverage input is an empty file")
     return lines
 
 
@@ -586,7 +589,7 @@ def alignment_coverage(
     header = {key: value for key, value in pb.get_metadata(scan).get("header", {}).items() if not key.startswith("_")}
     references = json.loads(header.get("reference_sequences") or "[]")
     if not references:
-        raise UnsupportedCoverageError(f"{path.name}: the header lists no reference sequence, so no window can be placed")
+        raise UnsupportedCoverageError(f"the {kind.upper()} header lists no reference sequence, so no window can be placed")
     lengths = [{"source": ref["name"], "chrom": canonical_chrom(ref["name"]), "length": int(ref["length"])} for ref in references]
     index = _index_sha256(path)
     options = {"filter_flag": filter_flag, "min_mapping_quality": min_mapping_quality}
@@ -654,7 +657,7 @@ def _alignment_kind(path: Path) -> str:
         with gzip.open(path, "rb") as payload:
             if payload.read(4) == b"BAM\x01":
                 return "bam"
-    raise UnsupportedCoverageError(f"{path.name}: not a BAM or CRAM by its magic bytes")
+    raise UnsupportedCoverageError("the alignment input is not a BAM or CRAM by its magic bytes")
 
 
 def _index_sha256(path: Path) -> str | None:

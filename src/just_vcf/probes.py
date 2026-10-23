@@ -55,6 +55,7 @@ from pydantic import BaseModel, ConfigDict
 
 from just_vcf.cache import cache_dir, file_sha256
 from just_vcf.chip import ILLUMINA_PREFIX
+from just_vcf.formats.spec import Family
 from just_vcf.loading import Loaded, load
 from just_vcf.schema import canonical_chrom
 
@@ -550,13 +551,16 @@ def chip_absence(loaded: Loaded, sites: pl.DataFrame) -> ChipAbsence:
     else `no_call` where the facet's chip has a probe there and `not_on_chip` where it has none. With
     no probe set (chip or assembly unknown, nothing configured or learned) the sites the export has no
     row at get null, with the reason; a written no-call is `no_call` all the same, since the row
-    itself shows the chip probed there. Null for every site when the facet is not an array. Either
+    itself shows the chip probed there. Null for every site when the facet is not an array: an array
+    is a genotype table (`family`) whose callset type is `array` or unknown, so a VCF, a site table
+    (CASAVA, SOAPsnp), an annotation export (Nirvana, Color, GET-Evidence) and a CGI callset are
+    refused, though they too state no VCF version and may have no callset type. Either
     absence is an unknown genotype (Decision 4); the cause says why it is unknown.
     `loaded` holds one facet; a load of several (an appended export) is refused with `ValueError`.
     """
     facet = _one_facet(loaded, "chip_absence")
     asked = sites.select(pl.col("chrom").cast(pl.String), pl.col("pos").cast(pl.Int64)).unique(maintain_order=True)
-    if facet["vcf_version"] is not None or facet["callset_type"] not in (None, "array"):
+    if facet["family"] != Family.GENOTYPE_TABLE.value or facet["vcf_version"] is not None or facet["callset_type"] not in (None, "array"):
         return ChipAbsence(sites=asked.with_columns(pl.lit(None, dtype=pl.String).alias("absence_cause")), probe_set=None,
                            reason="the facet is not an array export")  # fmt: skip
     found = probe_set(facet["chip"], facet["assembly_label"])

@@ -150,6 +150,27 @@ def test_an_alignment_is_told_by_its_magic_bytes(tmp_path: Path) -> None:
         alignment_coverage(fake)
 
 
+def test_a_refusal_names_the_kind_of_input_never_its_file(tmp_path: Path) -> None:
+    """A path is a label and can carry a person's name: the message says what the input is instead."""
+    planted = tmp_path / "PlantedPerson"
+    planted.mkdir()
+    (planted / "PlantedPerson.bam").write_bytes(b"not a bam at all")
+    (planted / "PlantedPerson.bed").write_bytes(b"")
+    headerless = write_bam(planted / "PlantedPerson-noref.bam", [])
+    pysam = pytest.importorskip("pysam")
+    with pysam.AlignmentFile(str(headerless), "wb", header={"HD": {"VN": "1.6"}}):
+        pass
+    cases = [
+        (lambda: alignment_coverage(planted / "PlantedPerson.bam"), "the alignment input is not a BAM or CRAM by its magic bytes"),
+        (lambda: read_coverage(planted / "PlantedPerson.bed"), "the coverage input is an empty file"),
+        (lambda: alignment_coverage(headerless), "the BAM header lists no reference sequence, so no window can be placed"),
+    ]
+    for call, message in cases:
+        with pytest.raises(UnsupportedCoverageError) as caught:
+            call()
+        assert str(caught.value) == message and "Planted" not in str(caught.value)
+
+
 # --- Depth tools' outputs -----------------------------------------------------------------------
 
 

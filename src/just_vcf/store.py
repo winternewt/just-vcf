@@ -5,7 +5,7 @@ there; `store.add(loaded)` adds every facet of a `Loaded`; `store.loaded()` and 
 everything in it back, lazily. The layout (docs/SCHEMA.md, "The durable store"):
 
     <path>/manifest.json                 store layout, schema version, subject, created; per facet its
-                                         added time and the warnings its load gave
+                                         added time and the warnings its load gave, redacted
     <path>/facets/<facet_id>/facets.parquet, calls.parquet, blocks.parquet, links.parquet
     <path>/.lock                         the OS file lock every add holds
 
@@ -32,7 +32,9 @@ The rules, each from the charter or the item:
   release. The manifest carries times and differs.
 
 The store is written only where the caller says; nothing here writes into the cache or the repo, and
-nothing logs the subject or a path.
+nothing logs the subject or a path. The warnings the manifest keeps are redacted as `query` returns
+them (`query.FacetRedactor`: the facets' sample, source path and member, and anything shaped like a
+path), so the one plain-text file of a store quotes no name.
 """
 
 import logging
@@ -48,6 +50,7 @@ from just_vcf.cache import _acquire, _release
 from just_vcf.links import LINEAGE_RELATIONS, canonical_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded
 from just_vcf.person import Person, SameSubjectCheck, SubjectError
+from just_vcf.query import FacetRedactor
 from just_vcf.schema import BLOCKS, CALLS, FACETS, LINKS, SCHEMA_VERSION, empty
 
 logger = logging.getLogger(__name__)
@@ -81,7 +84,7 @@ class StoredFacet(BaseModel):
     added: datetime
     """When the facet was committed, ISO-8601 UTC."""
     warnings: tuple[str, ...] = ()
-    """The warnings of the `Loaded` the facet was added from, as it gave them."""
+    """The warnings of the `Loaded` the facet was added from, redacted as `query` returns them."""
 
 
 class StoreManifest(BaseModel):
@@ -195,6 +198,8 @@ class Store:
         if other:
             raise SubjectError(f"facet(s) {', '.join(other)} carry another subject than the store's")
 
+        redact = FacetRedactor(facets.iter_rows(named=True))
+        warnings = tuple(redact(line) for line in loaded.warnings)
         added: list[str] = []
         present: list[str] = []
         with _locked(self.path):
@@ -210,7 +215,7 @@ class Store:
                     present.append(facet_id)
                     continue
                 self._write_facet(loaded, facet_id, _links_of(links, facet_id))
-                entry = StoredFacet(facet_id=facet_id, added=_now(), warnings=loaded.warnings)
+                entry = StoredFacet(facet_id=facet_id, added=_now(), warnings=warnings)
                 manifest = manifest.model_copy(
                     update={"facets": tuple(sorted((*manifest.facets, entry), key=lambda stored: stored.facet_id))}
                 )
@@ -243,8 +248,8 @@ class Store:
 
     def person(self, check: SameSubjectCheck | None = None) -> Person:
         """`Person.of` over every facet in the store, with `check` as the relatedness test. Its frames
-        are the store's lazy scans. The links are on `loaded()`; `Person` does not carry them. An empty
-        store has no person yet: `StoreError`."""
+        are the store's lazy scans, and its `links` those `loaded()` reads back. An empty store has no
+        person yet: `StoreError`."""
         if not self.facet_ids:
             raise StoreError("the store holds no facets yet")
         return Person.of(self.loaded(), check=check)

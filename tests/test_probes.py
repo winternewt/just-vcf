@@ -10,6 +10,7 @@ import pytest
 
 from just_vcf import ReferenceStore, load, normalize, resolve_ref
 from just_vcf.cache import cache_dir
+from just_vcf.formats import get_spec
 from just_vcf.probes import (
     IndelSite,
     ProbeSet,
@@ -389,6 +390,25 @@ def test_a_written_no_call_is_a_no_call_not_a_site_in_the_export(tmp_path: Path)
     answer = chip_absence(load(twentythree), pl.DataFrame({"chrom": ["1", "1", "1"], "pos": [100, 200, 300]}))
     assert answer.probe_set is None
     assert answer.sites["absence_cause"].to_list() == ["in_export", "no_call", None]
+
+
+@pytest.mark.parametrize(
+    "format_id",
+    ["vcf_no_meta", "casava_snp_table", "casava_indel_table", "soapsnp_cns",
+     "nirvana_json", "color_variant_set", "get_evidence_gff", "cgi_var", "cgi_master_var"],
+)  # fmt: skip
+def test_a_sequencing_facet_that_states_no_vcf_version_is_not_an_array(tmp_path: Path, format_id: str) -> None:
+    """These formats state no VCF version and load with no callset type, as an array export can; only
+    a genotype table is one. A site such a file has no row at is not a chip's no-call."""
+    path = tmp_path / f"{format_id}.txt"
+    path.write_text(get_spec(format_id).example)
+    loaded = load(path)
+    facet = loaded.facets.collect().row(0, named=True)
+    assert facet["format_id"] == format_id and facet["vcf_version"] is None and facet["callset_type"] is None
+    first = loaded.calls.select("chrom", pl.col("pos").cast(pl.Int64)).head(1).collect()
+    answer = chip_absence(loaded, pl.concat([first, pl.DataFrame({"chrom": ["1"], "pos": [1]})]))
+    assert answer.reason == "the facet is not an array export" and answer.probe_set is None
+    assert answer.sites["absence_cause"].null_count() == answer.sites.height == 2
 
 
 def test_a_site_with_a_genotype_in_any_of_its_rows_is_in_the_export(tmp_path: Path) -> None:

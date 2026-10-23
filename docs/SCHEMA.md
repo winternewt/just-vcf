@@ -511,8 +511,10 @@ no genotype: a no-call it wrote, `--` or AncestryDNA's `0 0`, every allele null;
 set, a site the export has no row at, a no-call it dropped or a probe left out of this release) or
 `not_on_chip` (no probe there). A written no-call is `no_call` with or without a probe set, since the
 row shows the chip looked. The sites with no row get null when there is no probe set (chip or
-assembly unknown, or nothing configured or learned), and every site when the facet is not an array;
-the answer carries the reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
+assembly unknown, or nothing configured or learned), and every site when the facet is not an array
+(an array is a `genotype_table` facet whose `callset_type` is `array` or null: a VCF, a site table, an
+annotation export and a CGI callset are not, though they state no VCF version either); the answer
+carries the reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
 (`ProbeSetKind`): `manifest`, the chip's own Illumina manifest when a Final Report names it
 (`illumina:<manifest>`) and it is configured (`JUST_VCF_MANIFESTS_DIR`), its probes on that build
 (`Chr 0` probes are unplaced and left out); or `learned`, the positions at least half of the exports
@@ -583,9 +585,9 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | the tool and version of the one `phase` step in `method_steps` (`Eagle 2.3.5+htslib-1.4`, `DRAGEN 05.021.408.3.4.11`, `WhatsHap 1.7`). Null when the header records no phasing step, or more than one (with a warning). A caller counts as phasing its own calls only where the header declares FORMAT `PS` in that caller's own words (`method_steps`, below) |
-| `reference` | the reference the header says the rows are against: the base name of `##reference=` (`hg38.fa`, `human_g1k_v37.fasta`; DRAGEN's `…/<dir>/reference.bin` gives `<dir>`), or, with no such line, the one reference the call steps' command lines name (`--reference`, `reference_sequence=`, `--ref-dir`, freeBayes `-f`). Two references leave it null with a warning. A `##reference=` that differs from the caller's command line is kept, with a warning unless a `lift` step is recorded: a lift the header does not name (Picard LiftoverVcf writes no line) shows up this way. A label, never identity: `seqcol_digest` is that. just-vcf's own |
+| `reference` | the reference the header says the rows are against: the base name of `##reference=` (`hg38.fa`, `human_g1k_v37.fasta`; DRAGEN's `…/<dir>/reference.bin` gives `<dir>`), written `<file>` unless every word of it is a known reference's (`source._known_reference`: an assembly word such as `hg38`, `GRCh37`, `hs37d5`, `GCA_000001405`, `chm13`, beside the bundles' descriptors and extensions), since a base name can carry a person's or a lab's name (`ALICESMITH-hg38.fa`); or, with no such line, the one reference the call steps' command lines name (`--reference`, `reference_sequence=`, `--ref-dir`, freeBayes `-f`). Two references leave it null with a warning. A `##reference=` that differs from the caller's command line is kept, with a warning unless a `lift` step is recorded: a lift the header does not name (Picard LiftoverVcf writes no line) shows up this way. A label, never identity: `seqcol_digest` is that. just-vcf's own |
 | `aligner`, `aligner_version` | the tool of the one `align` step: today only DRAGEN, where its command line says `--enable-map-align true`. Null when no header line records an alignment, which is most files: the callers that read a BAM do not copy its `@PG` lines |
-| `method_steps` | `list[struct{tool, version, role, options, line}]`: every step the header records, in the order the steps ran (charter 6). `role` is one of `align`, `call`, `filter`, `normalize`, `merge`, `lift`, `annotate`, `phase`, `other` (`schema.STEP_ROLES`, an open vocabulary, so a string). `options` are the step's key options as written (`-m -both`, `selectTypeToInclude=[SNP]`, `mode=SNP`), from a list kept per tool: inputs, outputs, sample names and defaults are not kept, a path or file name is written `<path>`, a reference or chain keeps its base name. `line` is the meta key it came from. One call step per caller name; command lines of the same caller add their options to it. Order is header order, except that steps whose line states a run date (GATK, DRAGEN, bcftools) are sorted by it among the places they hold, since htsjdk writes meta lines sorted by text. These are the steps the header records: a facet just-vcf derived (`normalize`, `liftover`, `rejoin_split`) keeps its parent's list, and what just-vcf did is in `links.provenance` (Decision 12). Each facet of a caller split (Decision 8) carries the whole file's chain, both call steps and the merge; `caller` says which half it is. `[]` = a VCF header that records no step; null = not a VCF. just-vcf's own shape (charter 2) |
+| `method_steps` | `list[struct{tool, version, role, options, line}]`: every step the header records, in the order the steps ran (charter 6). `role` is one of `align`, `call`, `filter`, `normalize`, `merge`, `lift`, `annotate`, `phase`, `other` (`schema.STEP_ROLES`, an open vocabulary, so a string). `options` are the step's key options as written (`-m -both`, `selectTypeToInclude=[SNP]`, `mode=SNP`), from a list kept per tool: inputs, outputs, sample names and defaults are not kept, a path or file name is written `<path>`, a reference or chain keeps its base name where it is a known reference's, as `reference` does, else `<file>`. A `tool` or `version` written as a path (`/home/<name>/bin/CrossMap`) is `<path>` too. `line` is the meta key it came from. One call step per caller name; command lines of the same caller add their options to it. Order is header order, except that steps whose line states a run date (GATK, DRAGEN, bcftools) are sorted by it among the places they hold, since htsjdk writes meta lines sorted by text. These are the steps the header records: a facet just-vcf derived (`normalize`, `liftover`, `rejoin_split`) keeps its parent's list, and what just-vcf did is in `links.provenance` (Decision 12). Each facet of a caller split (Decision 8) carries the whole file's chain, both call steps and the merge; `caller` says which half it is. `[]` = a VCF header that records no step; null = not a VCF. just-vcf's own shape (charter 2) |
 | `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`, `appended_export`). `appended_export`, like `caller_split`, has no parent: a second export appended to a file after the first, in another layout (F3), loaded as its own facet beside the first's; `derived_from` stays null, since neither export was made from the other, and the two share `source_sha256` and `member` (below, "Two exports in one file"). A facet with several parents (`merge`) has `derived_from` null and its parents in `links` (Decision 12), which also links a caller split's facets and an appended export to the first; Decision 12 states how the two agree |
 | `contig_map` | `list[struct{source, chrom}]`: how this file's contig names were mapped (Decision 7) |
 | `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
@@ -852,7 +854,10 @@ holding that collection and the target.
 5. **The derived facet.** `ref_seqcol_digest` is the target collection; `assembly_label` is the
    target's label, basis `inferred` (from the collection's lengths, which the chain's target side
    matched); `seqcol_digest`, `sorted_name_length_pairs_digest` and `header_contigs` are null (they were
-   the parent's header); `contig_map` maps the target collection's names of the contigs the rows use;
+   the parent's header); `reference` is null too, since it named the source assembly's file (the
+   target is `ref_seqcol_digest`), while `aligner`, `aligner_version` and `method_steps` stay the
+   parent's: the reads were aligned to the source, and what just-vcf did is in `links.provenance`;
+   `contig_map` maps the target collection's names of the contigs the rows use;
    `derivation_inputs` names the chain; `absence_means` is `unknown`, because the rows the lift dropped
    and the regions no chain covers are absent from it without being reference (the XYY stress case
    below).
@@ -1386,7 +1391,7 @@ never `False` from the calls, because depth at called sites cannot show a Y abse
 read below the present band, close to the two-X range).
 
 `sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM278) of the same person and
-build, paired by the caller. Its `coverage` field (`CoverageRatios`) holds the length-weighted median
+build, paired by the caller. Its `coverage` field (`just_vcf.karyotype.CoverageRatios`, module-level like the result's other nested models) holds the length-weighted median
 read depth over non-PAR X, over the X-degenerate Y and over chr20 (zero-depth intervals left out on
 chr20 and X, where they are assembly gaps; kept on the Y, where zero is the signal), from intervals
 wholly inside each region and described at every base, and the two ratios. It is a third X line,
@@ -1634,6 +1639,10 @@ layout (charter 2): GA4GH defines no on-disk store for a person's callsets.
 <dir>/.lock                            the OS file lock every add holds (just_vcf.cache's)
 ```
 
+The manifest's warnings are redacted as `query` returns them (`FacetRedactor`: the facets' sample,
+source path and member, and anything shaped like a path): it is the store's one plain-text file, and
+a load warning may quote a sample or a file name.
+
 - **Where.** `Store.open(path, subject=...)` creates the store in the directory the caller names,
   absent or empty, and never anywhere else: a store holds whole genomes. Opening an existing one
   with `subject` given checks it is the store's.
@@ -1680,7 +1689,9 @@ beside it and renamed into place.
   span), `variant_allele` (REF then ALTs), `variant_id` with `variant_id_mask`, `variant_quality`,
   `filter_id` (`PASS` first, then the others sorted) and `variant_filter`; `sample_id`,
   `call_genotype` and `call_genotype_phased` (true where every separator after the first slot is
-  `|`, as `write_vcf` writes GT); and, where any row has them, `call_GQ`, `call_DP`, `call_AD`,
+  `|`, as `write_vcf` writes GT; false, counted in a warning, on a row phased by a CGI hapLink or with
+  a slot in a VCF 4.5 PSL set: the spec has one phase flag per call, read as PS's set or the
+  chromosome's implicit one, and no field for either, so `true` would put the row in the wrong set); and, where any row has them, `call_GQ`, `call_DP`, `call_AD`,
   `call_GL`, `call_GP`, `call_DS`, `call_PS` (PS-kind sets as integers), `call_FT`, `call_CN`,
   `variant_SVTYPE` and `variant_JUST_VCF_SPLIT`. AD, GL and GP are written only where they are
   indexed over the written REF and ALTs. `cipos`, `ciend` and `alt_copy_numbers` are not written yet,
@@ -1689,7 +1700,8 @@ beside it and renamed into place.
   `0x7F800002` for floats, `"."` and `""` for strings. The last chunk is padded whole, as Zarr v2
   stores it. polars-bio hands the integer sentinels back as they are.
 - **The root's attributes** name the facet (`facet_id`, `source_sha256`, `format_id`,
-  `derived_from`, the schema version), never its `source_path`.
+  `derived_from`, the schema version), never its `source_path`. `vcf_meta_information` gives the
+  `fileformat` `write_vcf` would write for the facet: VCF 4.5 where a row holds a PSL set, else 4.3.
 - **Written with the standard library alone**: JSON metadata, `vlen-utf8` strings, `gzip` chunks
   with no timestamp. So it needs no extra, and two writes of one frame give the same bytes (charter
   12). polars-bio's reader takes `gzip` or no compressor and refuses `zlib` (checked 2026-10-23).
@@ -1901,13 +1913,20 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
-- **A facet column, version bump pending** (2026-10-24, the lead's decision on GL and PL): `facets.gl_source` (`schema.GlSource`: `gl`, `pl`, `gl_over_pl`) names the FORMAT key `gl` is read from (Decision 5). Adding a column changes the `facets` schema; `SCHEMA_VERSION` was deliberately left as it is on this builder branch, and the lead bumps it at merge. No rule changes: `gl` loads as before.
+- **A facet column, landed in 0.0.18** (2026-10-23, the lead's decision on GL and PL): `facets.gl_source` (`schema.GlSource`: `gl`, `pl`, `gl_over_pl`) names the FORMAT key `gl` is read from (Decision 5). Adding a column changes the `facets` schema; `SCHEMA_VERSION` was deliberately left as it is on this builder branch, and the lead bumps it at merge. No rule changes: `gl` loads as before.
 
-- **An enum member, version bump pending** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
+- **No version change** (2026-10-23, the audit of 5b6ec3b..01fca0b): no column changes. Rules
+  changed: a lifted facet's `reference` is null ("Lifting", step 5; `LIFT_VERSION` 6); `reference`
+  and a method step's reference and chain options keep a base name only when it is a known
+  reference's, else `<file>`, and a step's `tool` or `version` written as a path is `<path>`
+  (Decision 5); `chip_absence` reads only a `genotype_table` facet as an array; `write_vcf_zarr`
+  writes a PSL-phased row unphased and names the `fileformat` `write_vcf` would. Values change on
+  facets these reach.
+
+- **An enum member, landed in 0.0.17** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
   (`cgi_haplink`), CGI's `hapLink` as a phase set, just-vcf's own term. Adding a member changes the
   `pl.Enum` dtype of `calls.phase_set_kinds` and of `cis_phased_blocks`' `phase_set_kind`, which is a
-  schema change; `SCHEMA_VERSION` was deliberately left as it is on this builder branch, and the lead
-  bumps it at merge. Rule changes (Decision 2): CGI's native rows fill `phased`, `phase_sets` and
+  schema change, which landed in 0.0.17. Rule changes (Decision 2): CGI's native rows fill `phased`, `phase_sets` and
   `phase_set_kinds` from `hapLink`, where they were null, and `hapLink` leaves `dropped_fields`;
   `cis_phased_blocks` gives one block per hapLink and chromosome; `write_vcf` writes a haplotype
   phased by a hapLink `/`, with no PS (VCF has no field for a hapLink, and `|` without its set would
@@ -1926,13 +1945,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   where its rows agree and concatenates `cipos`, `ciend` and `alt_copy_numbers` in its `alts` order,
   where it wrote them null (`REJOIN_VERSION` 2).
 
-- **One facet column, landed in 0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's
-
-- **Additive, version not bumped in this change** (2026-10-23, PSL/PSO/PSQ phase sets, layer 8): two
+- **Additive, landed in 0.0.15** (2026-10-23, PSL/PSO/PSQ phase sets, layer 8): two
   nullable `calls` columns, `phase_set_ordinals` and `phase_set_qualities` (Decision 2, "How the VCF
   loader reads PSL"), and three columns of the computed `cis_phased_blocks` frame, `withheld_chrom`,
-  `withheld_pos` and `withheld_allele`. A new nullable column is a minor bump by the rule above;
-  `SCHEMA_VERSION` is left as it is on this builder branch for the lead to bump at merge. Values change
+  `withheld_pos` and `withheld_allele`. A new nullable column is a minor bump by the rule above,
+  0.0.15; `liftover` and `rejoin_split` carry the two columns (`LIFT_VERSION` 5, `REJOIN_VERSION` 3). Values change
   on VCF 4.4+ files that declare PSL: they loaded with PSL dropped (or not at all, Number=P, P10), and
   now carry its sets, and `phased[0]` where PSL names the first slot's set.
 
@@ -1940,11 +1957,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   Added outside the three frames: `RELATEDNESS_FRAME` and the two pedigree frames ("Relatedness and
   pedigrees" above). `Person.of`'s default check is now `same_person`.
 
-- **Four facet columns, version not bumped in this change** (2026-10-23, layer 2, the method chain):
+- **Four facet columns, landed in 0.0.16** (2026-10-23, layer 2, the method chain):
   `reference`, `aligner`, `aligner_version` and `method_steps` (Decision 5), all nullable and additive,
   and `phasing_method` now filled from the chain's one `phase` step. A new nullable column is a minor
-  bump by the rule above; `SCHEMA_VERSION` stays where it is on this builder branch and the lead bumps
-  it at merge with the round's other changes. `facet_id` digests none of them.
+  bump by the rule above, 0.0.16. `facet_id` digests none of them.
 
 - **No version change** (2026-10-23, RM281's written no-calls): no column changes, no enum member
   added. Rule changed (Decision 4): `chip_absence` gives a site the export writes as a no-call
@@ -1955,22 +1971,18 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   (Decision 2): `I`/`D` codes are resolved only on a chip `probes.ID_CALIBRATION` passes
   (`23andme_v5`, `ancestrydna_v2`); every other chip's code rows stay as loaded, counted
   `id_orientation_unverified`. Values change on `23andme_v3`, `23andme_v4`, `23andme_v1_v2`, Final
-  Report and unknown-chip facets when the manifests are configured. `RESOLVE_VERSION` 7.
+  Report and unknown-chip facets when the manifests are configured. `RESOLVE_VERSION` 8.
 
-- **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
+- **One facet column, landed in 0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every
   derived facet. Nullable and additive. `facet_id` does not digest the subject (Decision 5).
-
-- **A fourth frame, landed in 0.0.13** (2026-10-23, RM275, the `links` frame): `Loaded.links`
-  (Decision 12); no column of `facets`, `calls` or `blocks` changes. Rules added: every derived step adds a lineage link and
 
 - **No version change** (2026-10-23, RM276, the durable store): `Store` holds the four frames per
   facet as parquet with a manifest, and `write_vcf_zarr` exports one facet's calls ("The durable
   store"). No column of any frame changes; `SCHEMA_VERSION` is not bumped.
 
-- **No version change** (2026-10-23, RM275, the `links` frame): a fourth frame, `Loaded.links`
-  (Decision 12), and no column of `facets`, `calls` or `blocks` changes. `SCHEMA_VERSION` is not
-  bumped here: the lead bumps it when merging. Rules added: every derived step adds a lineage link and
+- **A fourth frame, landed in 0.0.13** (2026-10-23, RM275, the `links` frame): `Loaded.links`
+  (Decision 12), and no column of `facets`, `calls` or `blocks` changes. Rules added: every derived step adds a lineage link and
   carries its parent's; a load of several facets links them (`caller_split`, `appended_export`);
   `link_disagreements` states how `links` agrees with `derived_from` and `relation`.
 
@@ -1983,7 +1995,6 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 - **No version change** (2026-10-23, RM284): no column changes. A computed frame,
   `cis_phased_blocks`, exports the phase sets as VRS CisPhasedBlocks ("CisPhasedBlock export").
-  `SCHEMA_VERSION` was deliberately left as it is on this builder branch.
 
 - **No version change** (2026-10-23, RM281's allele pairs): no column changes. Rule changed (Decision
   2, "The strand of an array's genotypes"): in a `strand_check = mixed` facet, a withheld row whose
@@ -2039,11 +2050,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   no `source_ref` (an array row, a split Living DNA genotype) is aligned and trimmed, where it passed
   through as unchecked. Normalized facets get a new `facet_id` (`NORMALIZE_VERSION` 4).
 
-- **An enum member, version bump pending** (2026-10-23, RM2's CGI question): `AbsenceMeans.REFERENCE`
+- **An enum member, landed in 0.0.11** (2026-10-23, RM2's CGI question): `AbsenceMeans.REFERENCE`
   (`reference`), "every position the file omits was called reference by its producer", just-vcf's own
   term. Adding a member changes the `pl.Enum` dtype of `facets.absence_means`, which is a schema
-  change; `SCHEMA_VERSION` was deliberately left at 0.0.10 on this builder branch, and the lead bumps it
-  at merge. Rule change: a CGAPipeline VCF typed `wgs` gets `reference` where it got `blocks`, and
+  change, which landed in 0.0.11. Rule change: a CGAPipeline VCF typed `wgs` gets `reference` where it got `blocks`, and
   `absence_is_reference` answers True for it (Decision 4). Values change on files that already load.
 
 - **No version change** (2026-10-23, `dropped_fields`): no column changes. Rule stated: `[]` means the
@@ -2086,16 +2096,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 - **No version change** (2026-10-22, RM6's gVCF output): no column changes. Rule added: writing
   blocks back out (Decision 4).
 
-- **Three facet columns, version bump pending** (2026-10-22, RM4's chip detection and F13):
+- **Three facet columns, landed in 0.0.10** (2026-10-22, RM4's chip detection and F13):
   `facets.chip`, `facets.chip_basis` and `facets.strand_check`, all nullable and additive, which by
-  the rule above is a minor bump. `SCHEMA_VERSION` was deliberately left at 0.0.9 on this branch,
-  which runs beside other builders' branches; the lead bumps it at merge. Rule change in `resolve_ref`:
+  the rule above is a minor bump, 0.0.10. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
 
 - **0.0.18** (2026-10-23, the PL/GL source): `facets.gl_source` (`gl`, `pl`, `gl_over_pl` or null). Additive.
 
-- **0.0.17** (2026-10-24, the CGI leftovers): `PhaseSetKind.CGI_HAPLINK` (the `phase_set_kinds` dtype gains a
+- **0.0.17** (2026-10-23, the CGI leftovers): `PhaseSetKind.CGI_HAPLINK` (the `phase_set_kinds` dtype gains a
   member); CGI masterVarBeta fills `ad`; CGI `var` 1.x layouts tested.
 
 - **0.0.16** (2026-10-23, layer 2's method chain): `facets.method_steps`, `reference`, `aligner`,

@@ -29,7 +29,8 @@ What a `calls` row of a CGI locus holds (SCHEMA.md Decision 2):
   always counts what `referenceAlleleReadCount` does, and the two slots of a hom ALT count alike, so
   the counts are per allele, not per slot; the slots of a hom ALT add up past `totalReadCount`, being
   the same reads, so they are never summed. CGI counts a read for every allele it supports, so `ad`
-  can add up past `dp`. Withheld, with the reason counted (`AD_WITHHELD_REASONS`), where the file
+  can add up past `dp`. Withheld, with the reason counted (`AD_WITHHELD_REASONS`), where no haplotype
+  is called (an uncalled insertion point: all 346,474 in that file leave every count empty), the file
   leaves a count empty (a half-called reference: every count empty), an allele is only partly called
   (`?A`: a count of a half-known sequence), or the counts contradict that rule. `var` has no counts.
 - `hapLink` (`allele<n>HapLink` in masterVarBeta) is a phase set of kind `cgi_haplink`: the id on
@@ -110,6 +111,7 @@ _READ_COUNTS = ("allele1ReadCount", "allele2ReadCount", "referenceAlleleReadCoun
 
 AD_WITHHELD_REASONS: frozenset[str] = frozenset(
     {
+        "no haplotype called",
         "a partly called allele",
         "a read count the file leaves empty",
         "a reference haplotype whose count is not referenceAlleleReadCount",
@@ -401,6 +403,7 @@ def call_rows(haplotypes: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
             pl.struct("seq", "reads").filter(is_alt).unique().sort().alias("_alt_reads"),
             (called & pl.col("seq").str.contains(NO_CALL, literal=True)).any().alias("_partial"),
             (called & pl.col("reads").is_null()).any().alias("_empty_slot"),
+            called.any().alias("_any_called"),
             (called & ~is_alt & (pl.col("reads") != pl.col("ref_reads"))).fill_null(False).any().alias("_ref_slot_differs"),
         )
     )
@@ -408,6 +411,8 @@ def call_rows(haplotypes: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
     ad_withheld = (
         pl.when(~pl.col("_counted"))
         .then(None)
+        .when(~pl.col("_any_called"))
+        .then(pl.lit("no haplotype called"))
         .when(pl.col("_partial"))
         .then(pl.lit("a partly called allele"))
         .when(pl.col("_ref_reads").is_null() | pl.col("_empty_slot"))

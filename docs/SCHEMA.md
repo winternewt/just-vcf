@@ -380,7 +380,8 @@ CGI's native `masterVarBeta` states its counts per allele, not per slot, so it d
 slot carrying the reference always counts what `referenceAlleleReadCount` does and both slots of a
 hom ALT count alike; their sum passes `totalReadCount` (the same reads twice), so slots are never
 summed, and since CGI counts a read for every allele it supports, `ad` can add up past `dp`. A row
-whose counts are empty (a half-called reference), contradict that rule, or belong to a partly called
+that calls no haplotype (an uncalled insertion point, whose counts the file leaves empty), whose
+counts are empty (a half-called reference), contradict that rule, or belong to a partly called
 allele (`?A`) has `ad` and `source_alleles` null, counted in a warning by reason.
 
 A dosage (VCF `DS`, the expected count of the second allele) is one number. It cannot be turned into a

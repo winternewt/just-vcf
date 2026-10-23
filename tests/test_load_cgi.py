@@ -415,6 +415,7 @@ COUNTED = [
     Counted(600, 600, "het-ref", "", ("GG", ""), ("3", "10", "10"), [10, 3]),  # an insertion point
     Counted(700, 701, "het-ref", "T", ("", "T"), ("5", "6", "6"), [6, 5]),  # a deletion
     Counted(800, 801, "half", "G", ("G", "?"), ("", "", ""), None, "a read count the file leaves empty"),
+    Counted(850, 850, "no-call", "", ("?", "?"), ("", "", ""), None, "no haplotype called"),  # an uncalled insertion point
     Counted(900, 902, "half", "GA", ("?A", "GA"), ("2", "9", "9"), None, "a partly called allele"),
     Counted(1000, 1001, "hom", "G", ("T", "T"), ("12", "11", "0"), None, "two haplotypes of one allele with different counts"),
     Counted(1100, 1101, "het-ref", "G", ("A", "G"), ("7", "9", "8"), None, "a reference haplotype whose count is not referenceAlleleReadCount"),

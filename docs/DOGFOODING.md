@@ -55,14 +55,3 @@ probe tests GSA's allele. A learned probe set cannot settle it either: PGP-HMS h
 export, and learning its site alleles from the same person's WGS would make the array agree with that
 WGS by construction (a value filled from the source that checks it). Stays open until a second
 source of the Sirius chip's site alleles appears.
-
-
-## F22 — A haploid call against the same allele's diploid homozygous call counts as discordant
-
-Severity: medium · Found 2026-10-23 by RM279 on the PGP-HMS CGI against freeBayes pairs.
-
-Outside the PARs CGI writes a male's X call haploid (`1`) and freeBayes diploid (`1/1`). Every such
-pair is `ploidy_differs`, which the atlas counts in `discordant`: 72,462 and 64,818 SNVs, 65% and
-67% of the two pairs' discordant SNVs. Both say the person carries the allele on every copy of X
-they have; the difference is the writer's ploidy convention, not a method error, and it swamps the
-rate the atlas exists to give.

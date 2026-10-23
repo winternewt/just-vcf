@@ -264,8 +264,8 @@ def pool_counts(counts: Iterable[pl.DataFrame]) -> pl.DataFrame:
     if not frames:
         return pl.DataFrame(schema=ATLAS)
     pooled = pl.concat([frame.select(COUNTS.names()).cast(dict(COUNTS)) for frame in frames]).group_by(_KEYS).agg(pl.col(_SUMMED).sum())
-    called = pl.col("match") + pl.col("mismatch") + pl.col("ploidy_differs")
-    discordant = pl.col("mismatch") + pl.col("ploidy_differs")
+    called = pl.col("match") + pl.col("mismatch")
+    discordant = pl.col("mismatch")
     one_sided = pl.col("only_a") + pl.col("only_b")
     atlas = pooled.with_columns(
         called.alias("called_both"),
@@ -365,6 +365,7 @@ def _tally(sites: pl.DataFrame) -> pl.DataFrame:
     tallied = sites.group_by("variant_class").agg(
         pl.len().cast(pl.UInt64).alias("alleles"),
         *[_count(agreement == value.value).alias(value.value) for value in Agreement],
+        _count(pl.col("ploidy_differs") & agreement.is_in([Agreement.MATCH.value, Agreement.MISMATCH.value])).alias("ploidy_differs"),
         _count(one_sided_reference & agreement.is_in([Agreement.ONLY_A.value, Agreement.ONLY_B.value])).alias("one_sided_reference"),
         _count(gl).alias("graded_gl"),
         pl.col("p_same").filter(gl).sum().cast(pl.Float64).alias("p_same_gl_sum"),

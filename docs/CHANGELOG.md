@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **Breaking:** `concordance` reads a haploid call against the same allele's diploid homozygote (a
+  male's X outside the PARs, `1` against `1/1`) as `match`, with a new `sites.ploidy_differs` flag
+  (null on a one-sided allele) that `summary` groups by (F22). `Agreement.PLOIDY_DIFFERS` is removed:
+  a haploid call against a het is a `mismatch`. The atlas's `ploidy_differs` now counts the flagged
+  alleles of `called_both`, which is `match + mismatch`, and `discordant` is `mismatch`, so the
+  convention leaves the discordance rate. The graded comparison meets a haploid `k` with a diploid
+  `2k`.
+
 - `concordance` reads each side's genotype for the allele's change in its own row (F21). A complex
   multi-allelic row met by VRS id (freeBayes REF `CGCCC`, ALT `TGCCT,TGCCC`, GT `TGCCT/TGCCT` against
   `C>T` `T/T`) now reads two copies instead of zero, where the other ALT holds the same change; one

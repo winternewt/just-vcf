@@ -85,7 +85,7 @@ CASES = [
     ("1/1", "1/1", "PASS", "match"),
     ("0/1", "1/1", "PASS", "mismatch"),
     ("0/0", "0/1", "PASS", "mismatch"),  # carried by b only, both called
-    ("1", "1/1", "PASS", "ploidy_differs"),
+    ("1", "1/1", "PASS", "match"),  # haploid against the same homozygote: a match, its ploidy apart
     ("1/.", "1/1", "PASS", "uncalled"),
     ("0/1", None, "PASS", "only_a"),
     (None, "0/1", "PASS", "only_b"),
@@ -93,6 +93,7 @@ CASES = [
     ("0/0", None, "PASS", "not_carried"),  # a stated allele no genotype holds: not a method's error
     ("./.", "./.", "PASS", "not_carried"),
     ("0/1", "1/1", "LowQual", "mismatch"),
+    ("1", "0/1", "PASS", "mismatch"),  # haploid against a het: a disagreement, its ploidy apart too
 ]
 POSITIONS = [40 + 60 * i for i in range(len(CASES))]
 REGIONS = {
@@ -128,7 +129,11 @@ def expected(label: str, scope: str) -> dict[str, int]:
         held = label == ALL or any(c in ("1", "chr1") and s <= pos <= e for c, s, e in frame.iter_rows())
         if held and case[3] != "not_carried" and (scope == "carried" or case[2] == "PASS"):
             inside.append(case[3])
-    return {kind: inside.count(kind) for kind in ("match", "mismatch", "ploidy_differs", "uncalled", "only_a", "only_b")} | {"alleles": len(inside)}
+            if case[3] in ("match", "mismatch") and len(case[0].split("/")) != len(case[1].split("/")):
+                inside.append("ploidy_differs")
+    counted = [kind for kind in inside if kind != "ploidy_differs"]
+    kinds = {kind: inside.count(kind) for kind in ("match", "mismatch", "ploidy_differs", "uncalled", "only_a", "only_b")}
+    return kinds | {"alleles": len(counted)}
 
 
 def test_counts_follow_the_cases_per_region_and_scope(pair: tuple[Loaded, Loaded]) -> None:
@@ -141,8 +146,8 @@ def test_counts_follow_the_cases_per_region_and_scope(pair: tuple[Loaded, Loaded
     for row in snv.iter_rows(named=True):
         want = expected(row["region_class"], row["scope"])
         assert {kind: row[kind] for kind in want} == want, (row["region_class"], row["scope"])
-        assert row["discordant"] == want["mismatch"] + want["ploidy_differs"]
-        assert row["called_both"] == want["match"] + want["mismatch"] + want["ploidy_differs"]
+        assert row["discordant"] == want["mismatch"]
+        assert row["called_both"] == want["match"] + want["mismatch"]
     # The other classes have no allele: their rates are unknown, never zero.
     others = atlas.filter(pl.col("variant_class") != "snv")
     assert others["alleles"].sum() == 0

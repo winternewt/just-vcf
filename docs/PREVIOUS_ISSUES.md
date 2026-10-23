@@ -3,6 +3,35 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F22 — A haploid call against the same allele's diploid homozygous call counts as discordant
+
+Severity: medium · Found 2026-10-23 by RM279 on the PGP-HMS CGI against freeBayes pairs.
+
+Outside the PARs CGI writes a male's X call haploid (`1`) and freeBayes diploid (`1/1`). Every such
+pair is `ploidy_differs`, which the atlas counts in `discordant`: 72,462 and 64,818 SNVs, 65% and
+67% of the two pairs' discordant SNVs. Both say the person carries the allele on every copy of X
+they have; the difference is the writer's ploidy convention, not a method error, and it swamps the
+rate the atlas exists to give.
+
+Resolved 2026-10-23 by the lead's rule: a haploid call against the same allele's diploid homozygote
+is a `match`, and the ploidy is a flag of its own, `sites.ploidy_differs` (True, False, or null on a
+one-sided allele), counted apart in `summary` (a group key) and in the atlas (`ploidy_differs`, the
+flagged alleles of `called_both`). Of two ploidies the genotypes agree when each holds the allele on
+every haplotype or each on none; a haploid `1` against `0/1` stays a `mismatch`, and with a null
+haplotype a pair is decided only where every completion agrees (`1` against `1/.` is `uncalled`,
+against `0/.` a `mismatch`). The atlas's `called_both` is `match + mismatch` and `discordant` is
+`mismatch`, so the convention leaves the discordance rate. The graded comparison compares copies as a
+share of the ploidy (haploid `k` against diploid `2k`), as the hard one does. `Agreement` loses
+`ploidy_differs`.
+
+Rejected: keeping `ploidy_differs` as an agreement value and leaving it out of the rate (a haploid
+call against a het is a real disagreement, and the value hid it among the convention's matches);
+rewriting the haploid call as `1/1` (the source wrote one allele, Decision 2: list length is never
+corrected). Code: `concordance._agreement`, `_ploidy_differs`, `_distribution` (`_dose`),
+`atlas._tally`, `pool_counts`; tests `test_genotypes_compare_as_copies_of_the_allele`,
+`test_a_haploid_call_is_graded_against_a_diploid_one_by_the_share_of_copies`
+(tests/test_concordance.py), `test_counts_follow_the_cases_per_region_and_scope` (tests/test_atlas.py).
+
 ## F21 — A VRS-met allele is read as zero copies in a complex multi-allelic row
 
 Severity: medium · Found 2026-10-23 by RM279 rebuilding the PGP-HMS CGI against freeBayes pairs with

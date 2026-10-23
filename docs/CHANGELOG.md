@@ -4,6 +4,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `genotype_evidence` and `genotype_evidence_at` gain `gl_source`: on a row graded `gl`, the key its likelihoods were read from (`gl`, `pl`, `gl_over_pl`), from `facets.gl_source`; null on every other basis. `grade_basis` is unchanged: GL and PL stay one basis, `gl`.
+
 - `facets.gl_source` names the FORMAT key a VCF facet's `gl` is read from: `gl`, `pl`, or `gl_over_pl` where the header declares both (GL per row, PL where a row's GL is missing). Null where the facet carries no likelihoods. A new `facets` column; `SCHEMA_VERSION` is bumped at merge.
 
 - Schema 0.0.17: `phase_set_kinds` gains `cgi_haplink`; CGI hapLinks load as phase sets, and masterVarBeta read

@@ -1484,6 +1484,7 @@ reading) into every cache spill and need a version bump each time they move.
 | Column | Meaning |
 |---|---|
 | `grade_basis` | which quantity the value rests on (below). Never null |
+| `gl_source` | on a row graded `gl`, the facet's `gl_source`: `gl`, `pl`, or `gl_over_pl` where the header declares both (the row took its GL, else its PL, and the frame does not keep which). Null on every row of another basis, which rests on neither key |
 | `confidence_kind` | `quantified` (a number), `asserted` (a genotype stated without a quantity) or `unknown` (none stated). It follows from the basis, and is a column so that a null `confidence` is never read as a low one |
 | `genotype_alleles` | the alleles `genotype_probabilities` and `genotype_index` index: `source_alleles` for a vector (Decision 2: never reordered; for a VCF row that is `[source_ref] + alts`), `[source_ref or ref] + alts` for a genotype, which is what `gt` indexes, and `[null, "<*>"]` for a block, whose REF base the frame does not keep |
 | `genotype_probabilities` | `list[f64]`, one probability per genotype in VCF genotype order at the row's ploidy; null where the source supports no vector |
@@ -1494,9 +1495,11 @@ reading) into every cache spill and need a version bump each time they move.
 **The bases**, the first that applies to a row:
 
 - `gp`: a usable GP vector, as written.
-- `gl`: a usable likelihood vector, normalized under a flat prior. GL and PL load into one `gl` column
-  that does not record which key was written (Decision 3 makes them load equal), so there is one basis
-  for both; telling them apart would take a stored column.
+- `gl`: a usable likelihood vector, normalized under a flat prior. GL and PL are one quantity on two
+  scales and load into one `gl` column (Decision 3), so there is one basis for both; the row's
+  `gl_source` says which key the facet read (`facets.gl_source`). Rejected: a `pl` basis beside `gl`,
+  which would split one quantity in two, change what `gl` means to a consumer already filtering on it,
+  and have no answer for a facet declaring both keys, whose rows do not keep which key each took.
 - `gq`: a fully called genotype carrying an ALT, with a GQ. VCF defines GQ as conditional on the site
   being variant ("Other VCF 4.5 points" above), so by default GQ grades no reference genotype and no
   reference block; `gq_on_reference=True` lets it, as single-sample callers compute it. The called

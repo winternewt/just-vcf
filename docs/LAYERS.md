@@ -12,7 +12,7 @@ usable for one person's facets, and say what they rest on.
 | 2 | Provenance per facet | 90% | caller and version, vendor, callset type, chip, content filter, ploidy lines, subject, derivation inputs, reference, aligner, the method chain (`method_steps`), coverage facets |
 | 3 | Identity (comparing facets) | 92% | REF, VRS, assembly inference incl. GRCh36/CHM13, scaffold aliases (F19: a PGP GRCh38 VCF reads 100%); `_fix` patches need a patch store |
 | 4 | A person | 85% | subject; Person with links and relatedness as its default check (KING-robust, 210 PGP pairs, no false call); the durable store; pedigree as data; somalier blocked (below) |
-| 5 | Agreement measured | 45% | `concordance` (graded where both facets carry likelihoods); the method atlas (RM279) building; posterior after it |
+| 5 | Agreement measured | 75% | `concordance`; the method-error atlas (RM279: discordance by caller and version, GIAB region class and variant class, Wilson intervals, aggregates only); the consensus posterior building |
 | 6 | Facet graph and liftover | 90% | links frame, liftover, normalize, rejoin_split |
 | 7 | Graded evidence across sources | 65% | `genotype_evidence`: a probability vector and a phred-like confidence per row from GP, GL/PL, GQ, dosage, GT-only, blocks and absence, never a yes/no call; the PL/GL source being recorded; calibration by method waits for the atlas; three choices on the desk (#94–#96) |
 | 8 | Export | 92% | VCF/gVCF with tabix, VCF 4.5 PSL/PSO/PSQ, CisPhasedBlock export naming what withheld it, VCF Zarr |
@@ -26,8 +26,10 @@ meanwhile. The desk carries the ones filed there.
   Meanwhile they are refused with an error that says why.
 - **Layer 1, F17:** Living DNA indel REF needs the Sirius chip's site alleles, and no manifest is public
   or on disk. Needs a source the person may have, or stays withheld.
-- **Layer 4, desk #72:** who is who in felis, ksuhaster and newton. Meanwhile those folders are never
-  treated as one person's facets.
+- **Layer 4, desk #72:** who is who in felis, ksuhaster and newton. Meanwhile no file in those folders is
+  assumed to be another's person; the atlas pairs only files that share one alignment chain (felis's
+  three callers on one BAM) or one folder's caller versions (newton's DeepVariant releases), each checked
+  by `same_person` (the lead's call: the four open facts concern other pairings).
 - **Layer 5/7, desk #80:** merge duplicate rows that differ only in record id. Meanwhile both stay.
 - **Layer 3, desk #89:** mint SVs as VRS 2 CopyNumber/Adjacency objects, or keep withholding (RM282).
   Meanwhile withheld (`sv_no_vrs_model`).

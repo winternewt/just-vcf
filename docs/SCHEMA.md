@@ -1913,6 +1913,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **No version change** (2026-10-23, the lead's three follow-ups to that audit): no column changes.
+  Rules changed: `reference`'s two conflict checks compare base names as written, before either is
+  `<file>`, and their warnings name no file; a `caller_version` written as a path is `<path>`, as a
+  step's version is, compared as written first (Decision 5); `ftdna_bigy`'s `family` is
+  `variant_calls`, so `chip_absence` refuses a Big Y facet as not an array. Values change on facets
+  these reach.
+
 - **A facet column, landed in 0.0.18** (2026-10-23, the lead's decision on GL and PL): `facets.gl_source` (`schema.GlSource`: `gl`, `pl`, `gl_over_pl`) names the FORMAT key `gl` is read from (Decision 5). Adding a column changes the `facets` schema; `SCHEMA_VERSION` was deliberately left as it is on this builder branch, and the lead bumps it at merge. No rule changes: `gl` loads as before.
 
 - **No version change** (2026-10-23, the audit of 5b6ec3b..01fca0b): no column changes. Rules

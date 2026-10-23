@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `cis_phased_blocks(loaded)` exports the phase sets as VRS 2.x CisPhasedBlocks on demand (RM284):
+  one row per haplotype of each PS set (per GT slot) and per PSL set, the member Allele ids and the
+  block's `ga4gh:CPB.` id, equal to vrs-python's on synthetic facets and on a phased Genes for Good
+  upload from PGP-HMS. Members are the non-reference alleles unless `reference_alleles=True`. A
+  block that cannot be stated whole is withheld with a reason (`phase_unknown`, `uncalled`, the
+  member allele's `vrs_withheld` reason, `too_few_members`), never shortened. No column changes.
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

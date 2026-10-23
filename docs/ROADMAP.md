@@ -67,9 +67,13 @@ Severity: medium · Status: open (decided by the person in the Part 2 interview,
 The person chose a helper beside `load` (E12): an API that answers counts, shares and presence questions and never returns rows, for agents and apps; `load` stays for code that may read rows.
 
 ## RM284 — Phasing as CisPhasedBlock
-Severity: low · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: low · Status: built 2026-10-23 on a builder branch, awaiting the lead's merge · Owner: lead
 
 The person chose columns with an export on demand (E5): phase sets stay columns; VRS CisPhasedBlock objects are minted only when asked.
+
+**Built:** `cis_phased_blocks` (docs/SCHEMA.md, "CisPhasedBlock export"). Left open: no loader reads
+PSL yet, so PSL sets are tested on a rewritten frame only; in a VCF 4.4+ file every slot-0 block with an ALT is
+`phase_unknown` until polars-bio keeps the leading phase indicator (P4).
 
 ## RM285 — The format registry as a spec
 Severity: low · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead

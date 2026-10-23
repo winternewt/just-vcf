@@ -17,7 +17,7 @@ Severity: high · Status: in progress (subject and Person shipped 2026-10-23; th
 The person chose "Both: supplied, checked" (E1): the caller supplies a subject id when loading; nothing is inferred and facets are never regrouped by the library. The library checks the claim with relatedness (RM274) and warns on a mismatch. Most of the extended shape sits on this: RM275, RM276, RM277, RM280.
 
 ## RM274 — Relatedness and families
-Severity: medium · Status: in progress (KING-robust relatedness, `same_person` as RM273's default check, the somalier wrapper and GA4GH Pedigree reading shipped 2026-10-23; a pedigree checked against measured bands (`expected_kinship`, `check_pedigree`, `people(..., pedigree=...)`) built 2026-10-23, awaiting merge; left: somalier run for real once docs/TRUST.md has its row, a first-degree split by IBS0, a pedigree measured on real relatives) · Owner: lead
+Severity: medium · Status: in progress (KING-robust relatedness, `same_person` as RM273's default check, the somalier wrapper and GA4GH Pedigree reading shipped 2026-10-23; a pedigree checked against measured bands (`expected_kinship`, `check_pedigree`, `people(..., pedigree=...)`) built 2026-10-23, awaiting merge; the Genos exome's offset settled as site selection (`variant_sites_only`); left: somalier run for real once docs/TRUST.md has its row, a first-degree split by IBS0, a pedigree measured on real relatives) · Owner: lead
 
 The person chose both (E6): somalier (MIT) as an optional subprocess, skipped cleanly when absent, and just-vcf's own relatedness on the frames (IBS/KING-style over a validated site panel, so arrays work too). Pedigrees as supplied GA4GH Pedigree data. Feeds RM273's check.
 

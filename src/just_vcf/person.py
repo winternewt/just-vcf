@@ -191,7 +191,8 @@ def _measured_bands(kinship: float, se: float | None) -> set[RelationBand]:
 def _agreement(expected: dict, measured: dict) -> tuple[PedigreeAgreement, str | None]:
     if expected["expected_reason"] is not None:
         return PedigreeAgreement.CANNOT_TELL, expected["expected_reason"]
-    if measured["kinship"] is None:
+    # A kinship kept beside a reason other than its interval's (`variant_sites_only`) names no band.
+    if measured["kinship"] is None or measured["reason"] not in (None, BETWEEN_BANDS):
         return PedigreeAgreement.CANNOT_TELL, measured["reason"]
     allowed = {RelationBand(value) for value in expected["expected_bands"]}
     reached = _measured_bands(measured["kinship"], measured["kinship_se"])

@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Relatedness names no band when a facet is homozygous reference at none of the shared sites
+  (`variant_sites_only`): its own genotype chose them. This is the Genos exome's offset from RM274's
+  note (a gVCF of no-call blocks only), measured: the participant's array cut to the exome's sites
+  reproduces it. Kinship and SE are kept, `same_person` still reads them, and the pedigree check reads
+  such a pair `cannot_tell`. Values change: those pairs read `unknown` where they read a band.
+
 - A supplied GA4GH Pedigree is checked against measured relatedness (RM274, layer 4).
   `expected_kinship(pedigree)` gives each pair of individuals its expected kinship and bands, through
   parent links, stated KIN degrees, or the founders-unrelated assumption, each row saying which.

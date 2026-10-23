@@ -1278,7 +1278,7 @@ supplies, read into frames of its own. docs/RELATEDNESS.md has the method.
   row): `facet_a`, `facet_b`, `method` (`king_robust` or `somalier`, an open vocabulary), `band` (a
   `pl.Enum`: `same_person`, `first_degree`, `second_degree`, `third_degree`, `unrelated`, `unknown`),
   `reason` (why `unknown`: `assembly_unknown`, `assembly_mismatch`, `no_panel`, `too_few_sites`,
-  `no_heterozygous_sites`, `between_bands`; an open vocabulary), `assembly_label`, `panel`, `kinship`
+  `no_heterozygous_sites`, `between_bands`, `variant_sites_only`; an open vocabulary), `assembly_label`, `panel`, `kinship`
   and `kinship_se` (KING's scale, one person 0.5), `ibs0` and `ibs2` (shares of the shared sites), the
   counts `n_sites`, `n_het_a`, `n_het_b`, `n_het_both`, `n_ibs0`, `n_ibs2`, `n_vrs_compared`,
   `n_vrs_differ`, and `somalier_relatedness` (somalier's own value, verbatim). A pair not compared at

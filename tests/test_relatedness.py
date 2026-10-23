@@ -29,6 +29,7 @@ from just_vcf.relatedness import (
     RELATEDNESS_FRAME,
     THIRD_DEGREE_FLOOR,
     TOO_FEW_SITES,
+    VARIANT_SITES_ONLY,
     Relatedness,
     RelationBand,
     SitePanel,
@@ -224,6 +225,40 @@ def test_an_array_absence_is_not_reference(family, tmp_path: Path) -> None:
     unknown = load(tmp_path / "a.vcf")
     assert unknown.facets.select("absence_means").collect().item() == "unknown"
     assert relatedness(unknown, vcf, panel).n_sites == sum(pair != (0, 0) for pair in people["a"])
+
+
+def test_a_facet_known_only_where_it_carries_the_alt_is_not_banded(family, tmp_path: Path) -> None:
+    """A variant-only VCF whose silence says nothing (an exome gVCF with only no-call blocks reads the
+    same): its genotype chose the shared sites, which moves the kinship (on PGP's Genos exome, up;
+    here, with no direction to it), so no band is named."""
+    panel, _, people = family
+    variants = load(write_vcf(tmp_path / "a.vcf", panel, people["a"]))  # absence_means unknown
+    whole = wgs(write_vcf(tmp_path / "w.vcf", panel, people["a"]))
+    stranger = wgs(write_vcf(tmp_path / "u.vcf", panel, people["u"]))
+    chosen = relatedness(variants, stranger, panel)
+    fair = relatedness(whole, stranger, panel)
+    assert (chosen.band, chosen.reason) == (RelationBand.UNKNOWN, VARIANT_SITES_ONLY)
+    assert chosen.kinship is not None and chosen.kinship_se is not None
+    assert chosen.n_sites == sum(pair != (0, 0) for pair in people["a"])
+    # The same person's whole genome on the same sites reads the same: the sites, not the genotypes.
+    on_chosen = SitePanel(assembly_label="GRCh37", sites=panel.sites.filter(pl.Series([p != (0, 0) for p in people["a"]])), source="chosen")
+    assert relatedness(whole, stranger, on_chosen).kinship == pytest.approx(chosen.kinship)
+    assert chosen.kinship != fair.kinship and (fair.band, fair.reason) == (RelationBand.UNRELATED, None)
+    # One person still reads as one: the offset is far below the same-person floor.
+    assert relatedness(variants, whole, panel).reason == VARIANT_SITES_ONLY
+    assert same_person(variants, whole, panel) is True
+
+
+def test_a_pedigree_pair_read_on_variant_sites_only_cannot_tell(family_on_panel, tmp_path: Path) -> None:
+    panel, people = family_on_panel
+    pedigree = _family_pedigree([("a", KIN_MOTHER, "c")], "acu")
+    child = load(write_vcf(tmp_path / "c.vcf", panel, people["c"]), subject="subject-c")  # variant rows only
+    others = [wgs(write_vcf(tmp_path / f"{x}.vcf", panel, people[x]), subject=f"subject-{x}") for x in "au"]
+    rows = {frozenset((r["individual_id"][-1], r["relative_id"][-1])): r for r in check_pedigree(pedigree, child, *others).iter_rows(named=True)}
+    for pair in ("ac", "cu"):
+        row = rows[frozenset(pair)]
+        assert row["kinship"] is not None and (row["agreement"], row["reason"]) == ("cannot_tell", VARIANT_SITES_ONLY)
+    assert rows[frozenset("au")]["agreement"] == "agrees"
 
 
 def test_unknown_reasons(family, tmp_path: Path) -> None:

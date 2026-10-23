@@ -466,7 +466,7 @@ def _codes(frame: pl.DataFrame, alleles: str, ref: str, alt: str) -> pl.Series:
     long = (
         work.filter(pl.col("_h").list.len() > 0)
         .with_columns(pl.int_ranges(pl.col("_h").list.len(), dtype=pl.UInt32).alias("_s"))
-        .explode(["_h", "_s"])
+        .explode(["_h", "_s"], empty_as_null=True)
         .with_columns(pl.col("_h").str.to_uppercase())
         .with_columns(
             pl.when(pl.col("_h") == pl.col("_x"))

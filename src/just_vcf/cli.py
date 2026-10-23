@@ -97,18 +97,20 @@ class _Redactor:
         self.secrets: set[str] = set()
 
     def add(self, value: str | None) -> None:
-        if value:
+        # Shorter than three characters, a label ("1", "S") would also be a count or a contig.
+        if value and len(value) >= 3:
             self.secrets.add(value)
 
-    def add_path(self, path: Path) -> None:
+    def add_path(self, path: Path, stem: bool = True) -> None:
         self.add(str(path))
         self.add(str(path.absolute()))
         self.add(str(path.resolve()))
         self.add(path.name)
-        stem = path.name.split(".", 1)[0]
-        # A short stem ("a", "in") would cut ordinary words out of a warning; a name is longer.
-        if len(stem) >= 3:
-            self.add(stem)
+        bare = path.name.split(".", 1)[0]
+        # The stem alone is redacted only where it reads as a label (`Jane_Roe`, `genome_v5`), not as
+        # a word a warning uses (`export`, `genome`, `out`).
+        if stem and not re.fullmatch(r"[a-z]+", bare):
+            self.add(bare)
 
     def add_member(self, member: str | None) -> None:
         if member:
@@ -118,9 +120,12 @@ class _Redactor:
                     self.add_path(Path(part))
 
     def __call__(self, text: str) -> str:
-        for secret in sorted(self.secrets, key=len, reverse=True):
-            text = text.replace(secret, REDACTED)
-        return text
+        """`text` with every label replaced where it stands as a whole token, longest first, so a
+        label inside a longer word or name (`SAMPLE_7` in `SAMPLE_70`) is left alone."""
+        if not self.secrets:
+            return text
+        alternatives = "|".join(re.escape(secret) for secret in sorted(self.secrets, key=len, reverse=True))
+        return re.sub(rf"(?<![\w.-])(?:{alternatives})(?![\w.-])", REDACTED, text)
 
 
 class _Refusal(Exception):
@@ -231,7 +236,7 @@ def convert_command(
     if target_reference is not None and lift is None:
         raise typer.BadParameter("--target-reference names the lift's target; it needs --lift", param_hint="--target-reference")
     redact = _redactor(file, sample)
-    redact.add_path(out)
+    redact.add_path(out, stem=False)
     with _guarded(ctx, redact, sample):
         needs_ref = reference is not None or normalize_rows or lift is not None or vrs or gvcf
         store, collection = _reference(reference) if needs_ref else (None, None)

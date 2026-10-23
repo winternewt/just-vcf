@@ -174,6 +174,7 @@ def test_refusals_have_their_own_exit_codes(tmp_path: Path) -> None:
     assert_private(result, PERSON, str(tmp_path))
 
     assert run("load", tmp_path / "absent.vcf").exit_code == ExitCode.USAGE
+    assert logging.root.manager.disable == logging.NOTSET
 
 
 def test_a_crash_is_told_from_a_refusal_and_its_message_withheld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -202,12 +203,37 @@ def test_library_logging_is_off_while_a_command_runs(tmp_path: Path, caplog: pyt
     assert logging.root.manager.disable == logging.NOTSET
 
 
+def test_redaction_leaves_ordinary_words_alone(tmp_path: Path) -> None:
+    """A file named `export.txt` written to `out.vcf` must not cut "export" or "out" out of a warning."""
+    text, _, _ = _two_exports()
+    path = tmp_path / "export.txt"
+    path.write_text(text)
+    written = report(run("convert", path, tmp_path / "out.vcf", "--facet", "0", "--resolved-only", "--json"))
+    expected = [w for w in load(path).warnings]
+    assert all(warning in written["warnings"] for warning in expected)
+    assert cli.REDACTED not in json.dumps(written)
+
+
 def test_a_library_warning_that_names_a_label_is_redacted() -> None:
     redact = cli._Redactor()
     redact.add_path(Path(f"/data/genomes/{PERSON}.vcf.gz"))
     redact.add("SAMPLE_7")
-    warnings = (f"/data/genomes/{PERSON}.vcf.gz: 3 rows dropped", "SAMPLE_7 has no GT", "SAMPLE_7 has no GT", "2 rows past the end")
-    assert cli._warnings(warnings, redact) == [f"{cli.REDACTED}: 3 rows dropped", f"{cli.REDACTED} has no GT (x2)", "2 rows past the end"]
+    redact.add("1")
+    warnings = (
+        f"/data/genomes/{PERSON}.vcf.gz: 3 rows dropped",
+        f"{PERSON} and {PERSON}.vcf.gz named",
+        "SAMPLE_7 has no GT",
+        "SAMPLE_7 has no GT",
+        "2 rows past the end of SAMPLE_70",
+        "1 row on contig 1",
+    )
+    assert cli._warnings(warnings, redact) == [
+        f"{cli.REDACTED}: 3 rows dropped",
+        f"{cli.REDACTED} and {cli.REDACTED} named",
+        f"{cli.REDACTED} has no GT (x2)",
+        "2 rows past the end of SAMPLE_70",
+        "1 row on contig 1",
+    ]
 
 
 # --- check --------------------------------------------------------------------------------------------

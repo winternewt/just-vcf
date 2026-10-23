@@ -25,9 +25,12 @@ _VCF_BUILD_HINTS: tuple[BuildHint, ...] = (
     ),
     BuildHint(r"^###?reference=.*(?i:grch38|hg38|hs38|GCA_000001405\.15|ncbi ?38|build ?38)", "GRCh38"),
     BuildHint(r"^###?reference=.*(?i:grch36|hg18|ncbi ?36|build ?36)", "GRCh36"),
+    # `hs1` is UCSC's name for T2T-CHM13v2.0; bounded so `hs1` inside `hs37d5` or `hs38` cannot match.
+    BuildHint(r"^###?reference=.*(?i:chm13|t2t|(?<![a-z0-9])hs1(?![0-9])|GCA_009914755|GCF_009914755)", "T2T-CHM13"),
     BuildHint(r"^###?contig=<[^>\n]*assembly=(?i:b37|hg19|grch37)[,>]", "GRCh37"),
     BuildHint(r"^###?contig=<[^>\n]*assembly=(?i:b38|hg38|grch38)[,>]", "GRCh38"),
     BuildHint(r"^###?contig=<[^>\n]*assembly=(?i:b36|hg18|ncbi36|grch36)[,>]", "GRCh36"),
+    BuildHint(r"^###?contig=<[^>\n]*assembly=(?i:hs1|chm13[^,>\s]*|t2t[^,>\s]*)[,>]", "T2T-CHM13"),
     BuildHint(r"^##source_GENOME_REFERENCE=NCBI build 37$", "GRCh37"),
     BuildHint(r"^##source_GENOME_REFERENCE=NCBI build 36$", "GRCh36"),
     BuildHint(r"^##genomemap=.*(?i:ncbi ?37)", "GRCh37"),

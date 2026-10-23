@@ -278,6 +278,21 @@ CONTIG_ALIASES: dict[str, str] = {
 }
 """Source spelling → canonical `chrom`. A name not listed keeps its source spelling."""
 
+CHM13_ACCESSIONS: dict[str, str] = {
+    # GenBank, GCA_009914755.4: chr1 is CP068277.2 counting down to chr22 CP068256.2 and chrX CP068255.2.
+    **{f"CP0682{77 - index:02d}.2": name for index, name in enumerate([*_PRIMARY[:22], "X"])},
+    "CP086569.2": "Y",
+    "CP068254.1": "MT",
+    # RefSeq, GCF_009914755.1: NC_060925.1 (chr1) to NC_060948.1 (chrY). RefSeq has no mitochondrion.
+    **{f"NC_0609{25 + index}.1": name for index, name in enumerate(_PRIMARY)},
+}
+"""T2T-CHM13v2.0's sequence accessions → canonical `chrom`, versions verbatim, from NCBI's assembly
+report for GCA_009914755.4 (docs/PROVENANCE.md). An accession names one sequence of one assembly, so
+mapping it is safe in a way a bare `chr` strip is not. GRCh37's and GRCh38's accessions are not
+listed yet (docs/ROADMAP.md, RM286)."""
+
+CONTIG_ALIASES.update(CHM13_ACCESSIONS)
+
 CONTIG_RANK: dict[str, int] = {name: rank for rank, name in enumerate([*_PRIMARY, "MT", "XY"])}
 """Sort rank of the canonical names; any other contig sorts after them, by name."""
 

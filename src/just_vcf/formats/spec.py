@@ -95,7 +95,7 @@ class BuildHint:
 
     pattern: str
     build: str
-    """`GRCh36`, `GRCh37` or `GRCh38`."""
+    """`GRCh36`, `GRCh37`, `GRCh38` or `T2T-CHM13`."""
 
 
 @dataclass(frozen=True)

@@ -56,3 +56,27 @@ export, and learning its site alleles from the same person's WGS would make the 
 WGS by construction (a value filled from the source that checks it). Stays open until a second
 source of the Sirius chip's site alleles appears.
 
+
+## F21 — A VRS-met allele is read as zero copies in a complex multi-allelic row
+
+Severity: medium · Found 2026-10-23 by RM279 rebuilding the PGP-HMS CGI against freeBayes pairs with
+alleles met by VRS id.
+
+freeBayes writes a haplotype as one multi-allelic row: REF `CGCCC`, ALT `TGCCT,TGCCC`, GT
+`TGCCT/TGCCT`. Its ALT `TGCCC` trims to `C>T`, so its VRS id is CGI's `C>T` (GT `T/T`) and the two
+meet (`key = vrs`). `concordance` then counts the copies of the spelling `TGCCC` in the freeBayes
+genotype, zero, although each `TGCCT` haplotype carries the same `C>T`: a `mismatch` that is only
+representation. 20,434 to 23,014 SNV mismatches on the CGA 2.5.0.44 pair, 2,601 to 2,950 on the
+2.5.0.24 one, up to 5,982 and 4,627 indels (docs/METHOD_ATLAS.md). The `site` path guards the same
+case by reading only a row over the same REF span; the `vrs` path has no guard. The graded
+comparison has the same fault: its distribution counts the copies of the spelling too.
+
+## F22 — A haploid call against the same allele's diploid homozygous call counts as discordant
+
+Severity: medium · Found 2026-10-23 by RM279 on the PGP-HMS CGI against freeBayes pairs.
+
+Outside the PARs CGI writes a male's X call haploid (`1`) and freeBayes diploid (`1/1`). Every such
+pair is `ploidy_differs`, which the atlas counts in `discordant`: 72,462 and 64,818 SNVs, 65% and
+67% of the two pairs' discordant SNVs. Both say the person carries the allele on every copy of X
+they have; the difference is the writer's ploidy convention, not a method error, and it swamps the
+rate the atlas exists to give.

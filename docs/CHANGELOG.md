@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- CGI `var` files of format 1.6 and 1.7 (CGA 1.11, 1.12: one `totalScore`, no filter column) are
+  tested: they load as 2.5 does, with `sample_filters` null and `totalScore` in `dropped_fields`
+  (RM2). No code change; the loader already read columns by name.
+
 - CGI's `hapLink` is read as phase sets (RM2): a new `PhaseSetKind.CGI_HAPLINK` (`cgi_haplink`); a
   linked haplotype of a `var` or `masterVarBeta` row has `phased` true and the id in `phase_sets`,
   and `cis_phased_blocks` gives one VRS CisPhasedBlock per id and chromosome, the same from both

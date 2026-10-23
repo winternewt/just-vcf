@@ -35,13 +35,13 @@ MASTER_COLUMNS = (
 )
 
 
-def meta(kind: str, version: str = "2.5", title: bool = True) -> str:
+def meta(kind: str, version: str = "2.5", title: bool = True, software: str = "2.5.0.48") -> str:
     lines = [
         *(["#TITLE\tWhole Human Genome Sequencing"] if title else []),
         "#ASSEMBLY_ID\tGS000000001-ASM",
         "#GENERATED_BY\tcgatools",
         "#GENOME_REFERENCE\tNCBI build 37",
-        "#SOFTWARE_VERSION\t2.5.0.48",
+        f"#SOFTWARE_VERSION\t{software}",
         f"#FORMAT_VERSION\t{version}",
         "#GENERATED_BY\tdbsnptool",
         f"#TYPE\t{kind}",
@@ -131,6 +131,8 @@ def var_text(loci: list[Locus], version: str = "2.5", title: bool = True) -> str
     columns = list(VAR_COLUMNS)
     if version == "2.0":
         columns = [*columns[:11], "varQuality", "hapLink", "xRef"]
+    elif version.startswith("1."):
+        columns = [*columns[:9], "totalScore", "hapLink", "xRef"]
     lines = [">" + "\t".join(columns)]
     for number, locus in enumerate(loci, 1):
         if locus.uniform:
@@ -142,10 +144,12 @@ def var_text(loci: list[Locus], version: str = "2.5", title: bool = True) -> str
             for seg in segments:
                 score = "" if seg.seq == "?" else "99"
                 filt = seg.filter if version == "2.5" else ("VQHIGH" if seg.filter == "PASS" else seg.filter)
-                row = [str(number), str(locus.ploidy), str(allele), locus.chrom, str(seg.begin), str(seg.end), seg.var_type,
-                       seg.reference, seg.seq, score, score, filt, seg.link, seg.xref]
+                head = [str(number), str(locus.ploidy), str(allele), locus.chrom, str(seg.begin), str(seg.end), seg.var_type, seg.reference, seg.seq]
+                # 1.x: one totalScore, no filter column.
+                row = [*head, score, seg.link, seg.xref] if version.startswith("1.") else [*head, score, score, filt, seg.link, seg.xref]
                 lines.append("\t".join(row + [""] * (len(columns) - len(row))))
-    return meta("VAR-ANNOTATION", version, title) + "\n".join(lines) + "\n"
+    software = "1.11.0.16" if version.startswith("1.") else "2.5.0.48"
+    return meta("VAR-ANNOTATION", version, title, software) + "\n".join(lines) + "\n"
 
 
 def joined(segments: tuple[Seg, ...]) -> str:
@@ -356,6 +360,29 @@ def test_format_2_0_and_no_title(tmp_path: Path) -> None:
     assert facet["absence_means"] == "blocks"
     assert by_pos(calls)[("1", 752566)]["sample_filters"] == ["VQHIGH"], "varQuality's vocabulary is kept, not mapped"
     assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF"]
+
+
+def test_format_1_x_reads_as_2_5_does_less_the_filters(tmp_path: Path, var) -> None:
+    """Format 1.6/1.7 (CGA 1.11, 1.12): twelve columns, one `totalScore` where 2.x has two scores and a
+    filter, and xRef may name COSMIC beside dbSNP. The same loci give the same sites, blocks, alleles,
+    rs ids and phase sets; `sample_filters` is null, since the file has no filter to say anything."""
+    _, _, v25_calls, v25_blocks = var
+    cosmic = [
+        Locus(lo.chrom, lo.begin, lo.end, lo.ploidy, lo.uniform, tuple(tuple(Seg(**{**s.__dict__, "xref": f"COSMIC:ncv_id:1;{s.xref}" if s.xref else ""}) for s in h) for h in lo.haps), lo.total_reads)
+        for lo in LOCI
+    ]
+    path = write(tmp_path, var_text(cosmic, version="1.6", title=False), "var-GS000000006-ASM.tsv.bz2")
+    assert sniff(path).format == "cgi_var"
+    loaded, facet, calls, blocks = frames(path)
+    assert (facet["caller_version"], facet["dropped_fields"]) == ("1.11.0.16", ["totalScore"])
+    assert facet["callset_type"] is None, "no #TITLE, and too few sites for the rows to say"
+    assert blocks.drop("facet_id").equals(v25_blocks.drop("facet_id")), "no-call-rc and no-call-ri are no calls, as in 2.5"
+    columns = ["chrom", "pos", "end_pos", "source_ref", "alts", "gt", "gt_alleles", "ids", "phased"]
+    assert calls.select(columns).equals(v25_calls.select(columns))
+    assert calls["sample_filters"].null_count() == calls.height
+    assert not [w for w in loaded.warnings if "dropped" in w]
+    linked = frames(write(tmp_path, var_text(LINKED, version="1.7"), "var-GS000000007-ASM.tsv.bz2"))[2]
+    assert {(r["chrom"], r["pos"], a, ps) for r in linked.iter_rows(named=True) if r["phase_sets"] for a, ps in zip(r["gt_alleles"], r["phase_sets"]) if ps} == linked_slots(LINKED)
 
 
 # --- masterVarBeta's read counts as `ad` -------------------------------------------------------------
@@ -723,3 +750,44 @@ def test_real_hap_links_are_the_molecules_of_vcf_beta_phase_sets(real_assembly: 
         assert matched > 0.99 * total, (name, matched, total)
         assert n_links > 0 and split_links == 0, (name, split_links, n_links)
         assert merged_molecules == 0 and n_molecules == n_links, (name, merged_molecules, n_molecules, n_links)
+
+
+def _format_version(path: Path) -> str | None:
+    """A CGI file's `#FORMAT_VERSION`, read from its head; None where the head names none."""
+    with bz2.open(path, "rt", errors="replace") as text:
+        for _, line in zip(range(40), text):
+            if line.startswith("#FORMAT_VERSION\t"):
+                return line.split("\t", 1)[1].strip()
+            if line.startswith(">"):
+                break
+    return None
+
+
+def test_a_real_format_1_x_var_loads(pgp_participants: Path) -> None:
+    """Counts only. The PGP-HMS census (2026-10-23) has two 1.x `var` files, formats 1.6 and 1.7 (CGA
+    1.11, 1.12), both in GET-Evidence collections; the first in path order is loaded whole. It reads
+    as a genome: whole-genome classes, blocks of both kinds, rs ids and hapLink sets, nothing dropped."""
+    found = next(
+        (path for path in sorted(pgp_participants.glob("*/evidence-*/*.tsv.bz2")) if (_format_version(path) or "").startswith("1.")),
+        None,
+    )
+    if found is None:
+        pytest.skip("no CGI format 1.x var file on disk")
+    loaded = load(found)
+    facet = loaded.facets.collect().row(0, named=True)
+    assert facet["format_id"] == "cgi_var" and facet["caller_version"].startswith("1.")
+    assert facet["dropped_fields"] == ["totalScore"]
+    assert facet["absence_means"] == "blocks" and facet["callset_type"] == "wgs"
+    classes = {entry["variant_class"]: entry["alleles"] for entry in facet["variant_classes"]}
+    assert classes["snv"] > 1_000_000 and classes["indel"] >= 0.05 * sum(classes.values())
+    counts = loaded.calls.select(
+        pl.len().alias("rows"),
+        pl.col("sample_filters").is_not_null().sum().alias("filtered"),
+        pl.col("ids").is_not_null().sum().alias("with_ids"),
+        pl.col("phase_sets").is_not_null().sum().alias("linked"),
+    ).collect().row(0, named=True)
+    assert counts["filtered"] == 0, "1.x has no filter column"
+    assert counts["with_ids"] > 0.3 * counts["rows"] and counts["linked"] > 0, counts
+    kinds = dict(loaded.blocks.group_by("kind").len().collect().iter_rows())
+    assert kinds.get("ref", 0) > 0 and kinds.get("no_call", 0) > 0
+    assert not [w for w in loaded.warnings if "dropped" in w], loaded.warnings

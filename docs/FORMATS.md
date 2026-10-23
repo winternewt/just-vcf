@@ -100,8 +100,10 @@ entry says how.
 - **Columns differ by format version.** A spec declares one layout (CGI declares 2.5). Earlier
   versions drop, add or rename columns; CGI 1.x has `totalScore` where 2.x has three score columns.
   The loader should read names from the file's header and look dtypes up by name. *Closed for CGI:*
-  the loader reads the `>` line and takes columns by name; the ones on disk are format 2.0 (3 `var`, 1
-  `masterVarBeta`) and 2.5.
+  the loader reads the `>` line and takes columns by name. The PGP-HMS census (2026-10-23) holds
+  `var` in formats 1.6 and 1.7 (one each, CGA 1.11 and 1.12: twelve columns, `totalScore`, no filter
+  column), 2.0 (199), 2.2 (1) and 2.5 (178, one with `intervalId`/`intervalAllele`), and
+  `masterVarBeta` in 2.0 (2) and 2.5 (123); all load. A 1.x row has `sample_filters` null.
 - **An alias can hide a vocabulary change.** CGI `varQuality` (VQHIGH/VQLOW, ≤2.2) is aliased to
   `varFilter` (PASS/VQLOW/AMBIGUOUS, 2.5); the values need mapping, not just the name. *Kept, not
   mapped:* `sample_filters` holds VQHIGH as written; no CGI document read here equates it with PASS.

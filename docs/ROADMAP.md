@@ -334,8 +334,11 @@ own (SCHEMA Decision 4); the native files keep `blocks`. Builder's choices, each
   counts contradict that. Rejected: summing a hom ALT's two slots, which counts the same reads twice
   (the sum passes `totalReadCount`); `ad` per slot, which is CGI's VCF AD and not VCF's.
 
-**Left for CGI:** the 1.x layouts
-(`totalScore`, no file on disk); memory (a whole `var` peaks at 8.9 GB, the haplotype sort);
+The 1.x layout (formats 1.6 and 1.7: `totalScore`, no filter column) loads as it is, since the loader
+takes columns by name; two PGP-HMS files have it (GET-Evidence collections), and a whole 1.6 file
+loads as a `wgs` genome with no row dropped (tested, opt-in).
+
+**Left for CGI:** memory (a whole `var` peaks at 8.9 GB, the haplotype sort);
 GET-Evidence copies named `<assembly>.tsv.bz2`, not checked.
 
 **Answered 2026-10-22: the HumanOmni2.5 Final Report that RM4's chip sweep could not load.** Its

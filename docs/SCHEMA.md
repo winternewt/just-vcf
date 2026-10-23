@@ -1496,6 +1496,27 @@ CGI `reference` silence and a `weak_reference` one stay apart. `coverage=` with 
 `callable`, `callable_reason` and the depths of `callable_sites` beside the answer; they change no
 basis, because reads reaching a base are not a call (coverage facets, above).
 
+Measured 2026-10-23 on PGP-HMS facets, each asked at the packaged relatedness panel's 15,289 SNVs:
+
+| Facet | Bases of its rows | Panel sites |
+|---|---|---|
+| 23andMe, AncestryDNA, Living DNA, Genes for Good (array and its 23andMe-layout imputed export, which writes no probabilities) | `gt_only`, `no_call` 0.0–1.9% | 26–51% `gt_only`, rest `absent_unknown` |
+| Genos exome VCF (GATK, gVCF-banded) | `gl` 44,784 (confidence p10/p50/p90 102/581/2,473), `no_call` blocks 259,070 | 46% `gl`, 25% `no_call` block, 29% `absent_unknown` |
+| CGI `var` (whole genome) | `gt_only` 4.2M, `block` 7.7M, `no_call` 3.1M blocks and 356k calls | 60% `gt_only`, 38% `block`, 2% `no_call`; none absent |
+| CGI VCF of the same genome | `gl` 4.16M (3/357/1,022 at p1/p50/p90), `gt_only` 48,655, `no_call` blocks | 60% `gl`, **5,763 `absent_reference`: the same 5,763 sites its `var` file calls with a `ref` block** |
+| DRAGEN `.snp.` half (GP) | `gp` 3.86M (41/48/175) | 62% `gp`, 38% `absent_unknown` (its `content_filter` holds absence back unless `force`) |
+| DRAGEN `.indel.` half | `gp` 956,057 | all `absent_unknown`: an SNV question, an indel-only cut |
+| Isaac/Starling GRCh38 VCF | `gq` 4.63M (45/137/235) | 62% `gq`, 38% `absent_reference` |
+| PGP freeBayes + VarScan2, the two caller facets | freeBayes `gl` 4.85M (42/97/97), `gt_only` 114,598; VarScan2 `gq` 340,150 (16/42/141) | freeBayes 59% `gl`, 40% `absent_reference`; VarScan2 2% `gq`, rest `absent_unknown` |
+
+No PGP facet carried both GQ and likelihoods on a reference genotype, so the GQ reading was checked on
+a local DeepVariant gVCF (aggregates only): on 1.32M hom-ref calls GQ is within 1.5 of the confidence
+their PL gives (capped at 99, as DeepVariant caps GQ) for 96.6%, which is what `gq_on_reference=True`
+assumes. On its 13.6M reference blocks only 26.9% agree, median difference 49: a block's GQ is the
+band's floor, its PL is not, so a block graded by its likelihoods (median 291) states more than its
+weakest base supports. Which of the two should grade a block is the person's call; until then a
+block is graded by its likelihoods, as written.
+
 ## The cache under the lazy frames (RM268)
 
 The frames `load` and the derived steps return are lazy scans over files in `cache_dir()`

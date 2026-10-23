@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Relatedness between facets (RM274): `relatedness(a, b)` gives KING-robust kinship (between-family
+  form), IBS0, IBS2, the shared site counts, a jackknife standard error and a band (`same_person`,
+  `first_degree`, `second_degree`, `third_degree`, `unrelated`, or `unknown` with a reason);
+  `pairwise_relatedness` does every pair of facets across several `Loaded` as a frame, and
+  `same_person(a, b)` answers True, False or None. Sites come from a panel of 15,289 autosomal,
+  strand-unambiguous SNVs per build (GRCh37, GRCh38) derived from somalier's site VCFs and shipped in
+  the package (`relatedness_sites.json`); genotypes are read as ancestry reads them, now from the core
+  module `just_vcf.site_genotypes`, so arrays and whole genomes compare alike. New API, no column
+  changes.
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

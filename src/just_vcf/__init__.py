@@ -21,6 +21,7 @@ from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
+from just_vcf.relatedness import Relatedness, RelationBand, SitePanel, pairwise_relatedness, relatedness, same_person
 from just_vcf.schema import (
     BLOCKS,
     CALLS,
@@ -75,7 +76,10 @@ __all__ = [
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
+    "Relatedness",
+    "RelationBand",
     "SexChromosomeEvidence",
+    "SitePanel",
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
@@ -95,10 +99,13 @@ __all__ = [
     "mint_vrs_ids",
     "normalize",
     "open_payload",
+    "pairwise_relatedness",
     "read_chain",
     "reference_dir",
     "rejoin_split",
+    "relatedness",
     "resolve_ref",
+    "same_person",
     "sex_chromosome_evidence",
     "sniff",
     "table_samples",

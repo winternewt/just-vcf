@@ -3,6 +3,11 @@
 `just_vcf.sniff(path)` recognises a file from its content. Labels, extensions and upload types are
 never trusted: PGP-HMS shows them wrong in both directions (PGP_HMS.md).
 
+This file is the design note. The per-format spec, every declared format with its detection rules,
+columns, coordinates, genotype encoding, build statements and a synthetic example, plus the broken
+shapes met in real files, is [FORMAT_REGISTRY.md](FORMAT_REGISTRY.md), generated from the specs by
+`scripts/format_registry.py`. Regenerate it after changing a spec; a test fails until you do.
+
 ## How sniffing works
 
 1. **Layers.** Compression and archives are peeled by magic bytes: gzip and BGZF (told apart by the

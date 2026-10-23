@@ -150,7 +150,8 @@ pair it falls from 3.07% to 1.02%, which equals the old mismatch share only by c
 mismatches, hidden inside `ploidy_differs` before, are now counted. Carried MNVs rise by a quarter
 (264,478 to 332,824 in the CGA 2.5.0.44 pair): the atlas now counts an allele as carried where
 `concordance` read a copy of it under another spelling, which a VRS-met MNV whose CGI row holds it
-only inside another ALT was not before. One-sided rates do not move.
+only inside another ALT was not before. SNV and indel one-sided rates do not move; the MNV one falls
+with the larger carried count (71.0% to 66.9% in the CGA 2.5.0.44 pair).
 
 Pairing by VRS id is what the indels needed. The two spellings of one indel used to count as two
 one-sided alleles: in the CGA 2.5.0.44 pair carried indels fall by a third (1.44 million to 0.99

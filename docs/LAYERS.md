@@ -14,7 +14,7 @@ usable for one person's facets, and say what they rest on.
 | 4 | A person | 90% | subject; Person with links and relatedness as its default check; a supplied GA4GH pedigree checked against measured bands (agrees/disagrees/cannot_tell, never corrected); exome variant-only sites read as unknown; the durable store; somalier waits on desk #88 |
 | 5 | Agreement measured | 90% | `concordance` (span-guarded VRS pairing, haploid vs a/a a match with ploidy flagged); the method-error atlas incl. the CGI pairs by VRS id and by each side's confidence band; the consensus posterior (RM280) |
 | 6 | Facet graph and liftover | 90% | links frame, liftover, normalize, rejoin_split |
-| 7 | Graded evidence across sources | 82% | `genotype_evidence` with the PL/GL source; the consensus posterior weighs each row by its confidence band's measured rate (held-out SNVs: 1.15x predicted against observed, from 1.9x; the 60+ band still 2x overconfident); three choices on the desk (#94–#96) |
+| 7 | Graded evidence across sources | 86% | `genotype_evidence` with the PL/GL source; the consensus posterior weighs each row by its confidence band's measured rate (held-out SNVs: 1.15x predicted against observed, from 1.9x; the 60+ band still 2x overconfident); three choices on the desk (#94–#96) |
 | 8 | Export | 92% | VCF/gVCF with tabix, VCF 4.5 PSL/PSO/PSQ, CisPhasedBlock export naming what withheld it, VCF Zarr |
 
 ## Blockers waiting for the person
@@ -52,11 +52,15 @@ meanwhile. The desk carries the ones filed there.
 - **Layer 4, for the person in chat (not filed: the question itself is derived from a genome):** whether
   one alias's two files are one person. Meanwhile that pair is left out of the atlas.
 - **Layer 7, desk #94:** grade a gVCF reference block by the lower of its GQ floor and its likelihoods
-  (recommended), by its likelihoods (now), or by GQ. Meanwhile likelihoods.
+  (recommended), by its likelihoods (now), or by GQ. All three are built (`block_grade=`, `BlockGrade`);
+  the answer is a one-line default change. Meanwhile likelihoods. Open beside it: whether `gq_on_reference`
+  keeps covering calls only (today `genotype_evidence` grades a GQ-only block by GQ under it, the consensus does not).
 - **Layer 7, desk #95:** use GQ as the confidence of reference calls by default for single-sample callers
-  (96.6% agreement measured). Meanwhile off, with the option built.
-- **Layer 7, desk #96:** a population prior from a public frequency catalogue. Meanwhile the flat prior,
-  named on every row.
+  (96.6% agreement measured). Meanwhile off, with the option built and tested through `consensus`.
+- **Layer 7, desk #96:** a population prior from a public frequency catalogue. The machinery is built
+  (`AlleleFrequencyPrior`: a caller's table, Hardy-Weinberg priors, the prior named per row in
+  `support.prior`); which catalogue, and whether frequencies of exactly 0 or 1 are allowed, are the
+  person's. Meanwhile the flat prior, named on every row.
 - **Layer 5, the lead's calls on RM280 (built as recommended, listed for veto):** a pair's rate split by
   triangulation where three methods were compared, else half; a GP row read as its call; an unmeasured
   method gets the worst measured rate in its class; support counts in a sidecar frame; facets from the same

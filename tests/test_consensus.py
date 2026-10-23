@@ -86,17 +86,20 @@ def snv(chrom: str, pos: int, gt: str, filt: str = "PASS", alt: int = 0, **extra
 
 
 def atlas_row(a: tuple[str, str | None], b: tuple[str, str | None], *, d: float, region: str = "all", vc: str = "snv",
-              only_a: int = 0, only_b: int = 0, n: int = N) -> dict:  # fmt: skip
-    """An atlas row of scope `carried_pass` whose discordance is `d` over `n` alleles both called."""
+              only_a: int = 0, only_b: int = 0, n: int = N, ploidy: int = 0) -> dict:  # fmt: skip
+    """An atlas row of scope `carried_pass` whose genotype mismatch is `d` over `n` alleles both called
+    at one ploidy, beside `ploidy` alleles called at two."""
     return {
         "scope": "carried_pass", "a_caller": a[0], "a_caller_version": a[1], "b_caller": b[0], "b_caller_version": b[1],
-        "region_class": region, "variant_class": vc, "called_both": n, "discordant": round(d * n),
-        "alleles": n + only_a + only_b, "only_a": only_a, "only_b": only_b,
+        "region_class": region, "variant_class": vc, "match": n - round(d * n), "mismatch": round(d * n),
+        "ploidy_differs": ploidy, "called_both": n + ploidy, "discordant": round(d * n) + ploidy,
+        "alleles": n + ploidy + only_a + only_b, "only_a": only_a, "only_b": only_b,
     }  # fmt: skip
 
 
 def atlas(*rows: dict) -> pl.DataFrame:
-    return pl.DataFrame(list(rows)).with_columns(pl.col(name).cast(pl.UInt64) for name in ("called_both", "discordant", "alleles", "only_a", "only_b"))
+    counts = ("match", "mismatch", "ploidy_differs", "called_both", "discordant", "alleles", "only_a", "only_b")
+    return pl.DataFrame(list(rows)).with_columns(pl.col(name).cast(pl.UInt64) for name in counts)
 
 
 def floor(n: int) -> float:
@@ -184,6 +187,16 @@ def test_rates_by_caller_pool_versions_and_drop_self_pairs() -> None:
     assert set(by_caller) == {"X", "Y"}
     assert by_caller["X"]["caller_version"] is None
     assert by_caller["X"]["genotype_error"] == pytest.approx(0.03 / 2, rel=1e-6)
+
+
+def test_a_ploidy_difference_is_no_genotype_error() -> None:
+    # A male X: half the alleles both called differ only in ploidy. The atlas's discordance counts
+    # them; the genotype rate does not.
+    rows = atlas(atlas_row(X, Y, d=0.01, ploidy=N))
+    assert rows["discordant"][0] / rows["called_both"][0] > 0.5
+    rates = {r["caller"]: r for r in method_error_rates(rows).iter_rows(named=True)}
+    assert rates["X"]["genotype_error"] == pytest.approx(0.005, rel=1e-6)
+    assert rates["X"]["compared"] == N
 
 
 def test_rates_keep_only_the_asked_scope() -> None:

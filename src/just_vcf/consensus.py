@@ -102,11 +102,12 @@ METHOD_RATES = pl.Schema(
         "genotype_attribution": pl.String,
         "silence_error": pl.Float64,
         "partners": pl.UInt32,
-        "called_both": pl.UInt64,
+        "compared": pl.UInt64,
     }
 )
 """What `method_error_rates` returns: one method's error rates per region class and variant class.
-`caller_version` is null for rates pooled over a caller's versions (`by="caller"`)."""
+`caller_version` is null for rates pooled over a caller's versions (`by="caller"`). `partners` is how
+many methods its genotype rate rests on, `compared` the fewest alleles one of those pairs compared."""
 
 FACET_RATES = pl.Schema(
     {
@@ -172,7 +173,10 @@ def method_error_rates(atlas: pl.DataFrame, *, scope: str = "carried_pass", by: 
     """Per method, its error rates by region class and variant class, from an atlas's pair rates.
 
     The atlas states how often two methods disagree, not which one erred. With independent rare
-    errors a pair's discordance is about the sum of the two methods' error rates, so:
+    errors a pair's genotype disagreement `d = mismatch / (match + mismatch)` is about the sum of the
+    two methods' error rates. A `ploidy_differs` allele is left out of both: a haploid call against a
+    diploid one on a male X is two conventions, not a wrong genotype, and the consensus does not
+    combine readings of two ploidies anyway. So:
 
     - **`genotype_error`**, the rate at which a method's stated genotype is wrong: where the method
       forms a triangle with two partners that were also compared with each other, `(d_xy + d_xz -
@@ -204,16 +208,17 @@ def method_error_rates(atlas: pl.DataFrame, *, scope: str = "carried_pass", by: 
     pooled = (
         rows.with_columns(key_a.alias("_a"), key_b.alias("_b"), pl.col("variant_class").cast(pl.String))
         .group_by("_a", "_b", "region_class", "variant_class")
-        .agg(pl.col("called_both", "discordant", "alleles", "only_a", "only_b").sum())
-        .with_columns(pl.when(pl.col("called_both") > 0).then(pl.col("discordant") / pl.col("called_both")).alias("_d"))
+        .agg(pl.col("match", "mismatch", "alleles", "only_a", "only_b").sum())
+        .with_columns((pl.col("match") + pl.col("mismatch")).alias("_compared"))
+        .with_columns(pl.when(pl.col("_compared") > 0).then(pl.col("mismatch") / pl.col("_compared")).alias("_d"))
     )
     cls = ["region_class", "variant_class"]
     forward = pooled.select(
-        pl.col("_a").alias("_x"), pl.col("_b").alias("_y"), *cls, "_d", pl.col("called_both").alias("_n"),
+        pl.col("_a").alias("_x"), pl.col("_b").alias("_y"), *cls, "_d", pl.col("_compared").alias("_n"),
         pl.col("only_b").alias("_silent"), (pl.col("alleles") - pl.col("only_a")).alias("_carried"),
     )  # fmt: skip
     backward = pooled.select(
-        pl.col("_b").alias("_x"), pl.col("_a").alias("_y"), *cls, "_d", pl.col("called_both").alias("_n"),
+        pl.col("_b").alias("_x"), pl.col("_a").alias("_y"), *cls, "_d", pl.col("_compared").alias("_n"),
         pl.col("only_a").alias("_silent"), (pl.col("alleles") - pl.col("only_b")).alias("_carried"),
     )  # fmt: skip
     edges = pl.concat([forward, backward]).filter(pl.col("_x") != pl.col("_y"))
@@ -222,7 +227,7 @@ def method_error_rates(atlas: pl.DataFrame, *, scope: str = "carried_pass", by: 
         pl.max_horizontal(pl.col("_d") / 2, _floor(pl.col("_n"))).mean().alias("_half"),
         pl.col("_d").min().alias("_bound"),
         pl.len().cast(pl.UInt32).alias("partners"),
-        pl.col("_n").min().cast(pl.UInt64).alias("called_both"),
+        pl.col("_n").min().cast(pl.UInt64).alias("compared"),
     )
     second = measured.select(pl.col("_x"), pl.col("_y").alias("_z"), *cls, pl.col("_d").alias("_d_xz"), pl.col("_n").alias("_n_xz"))
     opposite = measured.select(pl.col("_x").alias("_y"), pl.col("_y").alias("_z"), *cls, pl.col("_d").alias("_d_yz"), pl.col("_n").alias("_n_yz"))
@@ -255,7 +260,7 @@ def method_error_rates(atlas: pl.DataFrame, *, scope: str = "carried_pass", by: 
         )
         .unnest("_m")
         .with_columns(pl.when(pl.col("_version") != unknown).then(pl.col("_version")).alias("caller_version"))
-        .with_columns(pl.col("partners").fill_null(0), pl.col("called_both").fill_null(0))
+        .with_columns(pl.col("partners").fill_null(0), pl.col("compared").fill_null(0))
     )
     order = {label: rank for rank, label in enumerate([ALL, *sorted(set(rates["region_class"].to_list()) - {ALL})])}
     return (

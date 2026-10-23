@@ -6,9 +6,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 - The first consensus check (RM280, docs/CONSENSUS.md): PGP-HMS hu1B2689's CGI, freeBayes, VarScan2 and
   23andMe facets on the autosomes, rates held out from this person's atlas pair. The consensus's top SNV
-  genotype agrees with CGI on 99.88%, the array 99.86%, VarScan2 98.57%, freeBayes 98.26%; against
-  freeBayes held out it is calibrated below 10 phred and about seven times underconfident above.
+  genotype agrees with CGI on 99.88%, the array 99.85%, VarScan2 98.58%, freeBayes 98.27%; against
+  freeBayes held out it is calibrated below 10 phred and two to three times underconfident above.
   `scripts/consensus_check.py` runs it from a plan, aggregates only.
+- `method_error_rates` takes a pair's genotype disagreement as `mismatch / (match + mismatch)`, leaving
+  `ploidy_differs` out: 69 to 82% of the PGP pairs' SNV `discordant` is a male X written haploid by CGI
+  and diploid by freeBayes, a convention and not a genotype error. With it in, the consensus check
+  was about seven times underconfident. `METHOD_RATES.called_both` is now `compared`.
 - `consensus(person, atlas=...)` (RM280, `just_vcf.consensus`): a derived facet (`relation = consensus`, a
   link from every parent) with one row per ALT allele the parents state on one assembly, its `gp` the
   posterior over the copies of it. Each parent's reading (its row, its vector tempered by its rate, a

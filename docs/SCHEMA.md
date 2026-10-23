@@ -1939,8 +1939,11 @@ this span), `no_call_block`, `unknown` (silence that says nothing: an array, a c
 class the facet did not call), `ploidy_differs` (below).
 
 **Error rates** (`method_error_rates(atlas)`). The atlas states how often two methods disagree, not
-which erred. With independent rare errors a pair's discordance is about the sum of its two methods'
-rates, so a method's `genotype_error` is `(d_xy + d_xz − d_yz) / 2` where it forms a triangle with two
+which erred. With independent rare errors a pair's genotype disagreement `d = mismatch / (match +
+mismatch)` is about the sum of its two methods' rates. `ploidy_differs` is left out of both: a haploid
+call against a diploid one on a male X is two conventions, not a wrong genotype (it is 69 to 82% of
+the PGP pairs' SNV `discordant`), and the consensus never combines two ploidies. A method's
+`genotype_error` is `(d_xy + d_xz − d_yz) / 2` where it forms a triangle with two
 partners also compared with each other (the same-reads set), averaged over its triangles and kept at
 or below its lowest pair discordance (`triangle`); otherwise half of each pair's discordance, averaged
 over its partners (`half_pair`). Its `silence_error` is the share of the alleles a partner carries

@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
+  probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
+  (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or
+  `C/G`; a row whose alleles are the pair's complement is a minus-strand row, and its `gt_alleles` are
+  complemented (`source_gt` keeps the text). Homozygous rows of such probes, withheld until now, get
+  `alts` and `gt`. Forward facets are unchanged. One warning counts every outcome.
+
 - An array's absence gets a cause (RM281): `chip_absence(loaded, sites)` says per site whether the
   export has a row there (`in_export`), the chip has a probe there and the export reports nothing
   (`no_call`), or the chip has no probe there (`not_on_chip`); null with a reason when the facet has no

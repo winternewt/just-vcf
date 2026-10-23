@@ -261,6 +261,41 @@ def indel_catalog(assembly_label: str) -> tuple[pl.DataFrame, list[Manifest]]:
     return catalog, used
 
 
+_BASE_COMPLEMENT = {"A": "T", "C": "G", "G": "C", "T": "A"}
+
+
+def snv_catalog() -> tuple[pl.DataFrame, list[Manifest]]:
+    """The two alleles of every configured manifest's rsid-named SNV probe on the plus strand, and the
+    manifests read. Columns: `rsid`, `chrom`, `plus` (the pair, sorted).
+
+    The `SNP` column gives a probe's alleles on its design strand; `RefStrand` says whether that strand
+    is the reference's plus strand (`+`, the pair as written) or not (`-`, its complement). Checked on
+    20,000 sampled SNV probes of each manifest against GRCh37: the base at `MapInfo` is in the pair so
+    derived for all but 2 of GSA-24v3-0 A1's and 2 of OmniExpress-24 v1.2 A1's. A pair is a property of
+    the variant, not of the build, so it is kept whatever build the manifest maps to; the reader checks
+    it against its own reference base. An rsid whose probes give two different pairs is left out.
+    """
+    parts, used = [], []
+    for manifest in available_manifests():
+        probes = probe_table(manifest).filter(
+            (pl.col("kind") == "snv") & pl.col("rsid").is_not_null() & pl.col("chrom").is_not_null() & pl.col("ref_strand").is_in(["+", "-"])
+        )
+        if probes.is_empty():
+            continue
+        used.append(manifest)
+        plus = (
+            pl.when(pl.col("ref_strand") == "+")
+            .then(pl.col("alleles"))
+            .otherwise(pl.col("alleles").list.eval(pl.element().replace_strict(_BASE_COMPLEMENT, default=None)))
+        )
+        parts.append(probes.select("rsid", "chrom", plus.list.sort().alias("plus")))
+    if not parts:
+        return pl.DataFrame(schema={"rsid": pl.String, "chrom": pl.String, "plus": pl.List(pl.String)}), used
+    pairs = pl.concat(parts).unique()
+    single = pairs.group_by("rsid", "chrom").len().filter(pl.col("len") == 1).drop("len")
+    return pairs.join(single, on=["rsid", "chrom"], how="semi").sort("chrom", "rsid"), used
+
+
 def catalog_digest(manifests: list[Manifest]) -> str:
     """What a result computed with these manifests depends on: their bytes and this module's version."""
     text = ",".join(sorted(manifest.sha256 for manifest in manifests)) + f";{PROBES_VERSION}"

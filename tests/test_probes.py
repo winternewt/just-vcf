@@ -1,6 +1,7 @@
 """Chip manifests (RM281): reading a manifest, locating its indel probes, resolving an array's I/D codes."""
 
 import io
+import random
 import zipfile
 from pathlib import Path
 
@@ -352,3 +353,74 @@ def test_a_platform_family_has_no_probe_set() -> None:
     reason = probe_set("illumina_omniexpress", "GRCh37")
     assert isinstance(reason, str) and "platform family" in reason
     assert probe_set(None, "GRCh37") == "the facet's chip is unknown"
+
+
+# --- a mixed-strand export read by its probes' allele pairs ---------------------------------------
+
+STRAND_COMPLEMENT = {"A": "T", "C": "G", "G": "C", "T": "A"}
+
+
+def probed_rows(seed: int = 5, per_contig: int = 700) -> tuple[list[tuple[str, str, int, str]], dict[str, list[str]]]:
+    """Array rows drawn around the synthetic reference, forward strand, and each probe's plus-strand pair.
+
+    One probe in ten is an A/T or C/G probe, which reads alike on both strands."""
+    rng = random.Random(seed)
+    rows, pairs = [], {}
+    for chrom in ("1", "2"):
+        for pos in range(1, per_contig + 1):
+            ref = SEQ[chrom][pos - 1]
+            palindromic = rng.random() < 0.1
+            alt = STRAND_COMPLEMENT[ref] if palindromic else rng.choice([b for b in "ACGT" if b not in (ref, STRAND_COMPLEMENT[ref])])
+            kind = rng.random()
+            gt = ref * 2 if kind < 0.5 else ref + alt if kind < 0.8 else alt * 2
+            rsid = f"rs{chrom}{pos}"
+            rows.append((rsid, chrom, pos, gt))
+            pairs[rsid] = sorted([ref, alt])
+    return rows, pairs
+
+
+def complemented_every(rows: list[tuple[str, str, int, str]], every: int = 6) -> list[tuple[str, str, int, str]]:
+    """`rows` with every `every`-th genotype written as a minus-strand probe writes it: complemented."""
+    return [(r, c, p, "".join(STRAND_COMPLEMENT[b] for b in gt) if n % every == 0 else gt) for n, (r, c, p, gt) in enumerate(rows)]
+
+
+def test_a_mixed_strand_export_is_read_by_its_probes_allele_pairs(tmp_path: Path, grch37_store: ReferenceStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    truth, pairs = probed_rows()
+    rows = complemented_every(truth)
+    manifest_rows = []
+    for n, (rsid, chrom, pos, _) in enumerate(truth):
+        # Half the probes are designed on the minus strand: the manifest writes their pair complemented.
+        design = pairs[rsid] if n % 2 else [STRAND_COMPLEMENT[b] for b in pairs[rsid]]
+        manifest_rows.append(probe_row(rsid, f"[{design[0]}/{design[1]}]", chrom, pos, "TOP", "ACGT[A/G]TTGA", ref_strand="+" if n % 2 else "-"))
+    write_manifest(tmp_path / "manifests", manifest_rows)
+    monkeypatch.setenv("JUST_VCF_MANIFESTS_DIR", str(tmp_path / "manifests"))
+
+    resolved = resolve_ref(load(export(tmp_path, rows)), grch37_store)
+    facets, calls = resolved.facets.collect(), resolved.calls.collect()
+    assert facets["strand_check"].cast(pl.String).to_list() == ["mixed"]
+    by_id = {row["ids"][0]: row for row in calls.iter_rows(named=True)}
+    written = {rsid: gt for rsid, _, _, gt in rows}
+    read = flipped_back = 0
+    for rsid, _, _, gt in truth:
+        row, ref = by_id[rsid], by_id[rsid]["ref"]
+        if pairs[rsid] in (["A", "T"], ["C", "G"]):
+            safe = len(set(written[rsid])) == 2 and ref in written[rsid]
+            assert (row["alts"] is not None) == safe, rsid  # only strand-safe hets are read on such a probe
+            continue
+        assert row["alts"] == sorted(set(gt) - {ref}), rsid
+        assert row["gt_alleles"] == list(gt), "a minus-strand row is complemented back to the forward strand"
+        assert row["source_gt"] == written[rsid], "the export's text is kept"
+        read += 1
+        flipped_back += written[rsid] != gt
+    assert read and flipped_back
+    assert_gt_indexes_ref(calls)
+    line = next(w for w in resolved.warnings if "read by their probe's two alleles on the plus strand" in w)
+    assert "still withheld: " in line and " on A/T or C/G probes" in line
+
+
+def test_a_mixed_strand_export_without_manifests_withholds_as_before(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    resolved = resolve_ref(load(export(tmp_path, complemented_every(probed_rows()[0]))), grch37_store)
+    calls = resolved.calls.collect()
+    homozygous = calls.filter(pl.col("gt_alleles").list.n_unique() == 1)
+    assert homozygous["alts"].null_count() == homozygous.height, "a homozygous row cannot be read without the probe's pair"
+    assert "strand of withheld rows not read by probe: no manifest is configured (JUST_VCF_MANIFESTS_DIR)" in resolved.warnings

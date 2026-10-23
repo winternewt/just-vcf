@@ -167,9 +167,23 @@ checked), the alleles are derived as before, and a warning says so. A VCF is not
 the source's own. In a `mixed` facet every array row keeps `ref`, and the rows that are not
 strand-safe (homozygous calls, half-calls, and hets without the reference base) get `alts` and `gt`
 null, each reason counted in the warnings: `AA` at a reference `A` is a forward hom-ref call or a
-minus-strand hom-alt call of an A/T probe, and the rows cannot say which. No genotype is complemented,
-not even on a het that proves its probe minus: complementing exactly the minus probes needs the
-vendor's own strand table.
+minus-strand hom-alt call of an A/T probe, and the rows cannot say which. No genotype is complemented
+by the facet's rows alone, not even on a het that proves its probe minus: complementing exactly the
+minus probes needs to know each probe's alleles.
+
+A probe's own alleles decide it where a configured Illumina manifest gives them (RM281,
+`just_vcf.probes.snv_catalog`): a withheld row of a `mixed` facet is matched with a manifest SNV probe
+by an rsid among its `ids`, on the same contig, and the probe's two alleles are put on the plus strand
+(the `SNP` column as written where `RefStrand` is `+`, complemented where it is `-`). The row is read
+only when that pair holds the row's reference base (so the pair is on the facet's own plus strand,
+whatever build the manifest maps to) and is not its own complement (`A/T`, `C/G`). Called alleles all
+in the pair: forward, derived as written. All in the pair's complement: minus, `gt_alleles`
+complemented, then derived; `source_gt` keeps what the export wrote. Otherwise, or with no probe (or
+an rsid whose probes give two pairs), withheld as before; each outcome is counted in one warning.
+`TT` at a probe whose plus pair is `A/G` is a minus-strand `AA` whichever column the vendor flipped
+by, so this reads what F13's strand columns could not. Forward facets are not touched: reading them
+by the pairs would rewrite rows of every export whose rsids a manifest shares, on evidence the strand
+check already found sound.
 
 A primary contig (1–22, X, Y) whose stated length or md5 differs refuses the whole facet
 (`ReferenceMismatchError`): it is another assembly. Any other contig that does not match (hg19's chrM
@@ -1121,6 +1135,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, RM281's allele pairs): no column changes. Rule changed (Decision
+  2, "The strand of an array's genotypes"): in a `strand_check = mixed` facet, a withheld row whose
+  rsid names a configured manifest's SNV probe, with a pair that holds the reference base and is not
+  `A/T` or `C/G`, is read by that pair: forward as written, or minus with `gt_alleles` complemented.
+  Values change on mixed facets when the manifests are configured. `RESOLVE_VERSION` 6.
 
 - **No version change** (2026-10-23, RM281's chip manifests): no column changes. Rule added (Decision
   2): `resolve_ref` resolves an array's `I`/`D` rows against the indel probes of the Illumina manifests

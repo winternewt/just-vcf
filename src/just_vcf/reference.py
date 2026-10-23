@@ -39,13 +39,13 @@ from gtars.refget import RefgetStore
 from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_snv_rows
 from just_vcf import cache
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
-from just_vcf.probes import IndelSite, Manifest, catalog_digest, indel_catalog, locate_indel, place_indel, window_for
+from just_vcf.probes import IndelSite, Manifest, catalog_digest, indel_catalog, locate_indel, place_indel, snv_catalog, window_for
 from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, StrandCheck, canonical_chrom, canonical_order, empty
-from just_vcf.strand import StrandResult, check_strand, withheld_reason
+from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_reason
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 5
+RESOLVE_VERSION = 6
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes."""
 
 CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
@@ -305,6 +305,7 @@ def resolve_ref(
     withhold = strand is not None and strand.check is StrandCheck.MIXED
     concatenated = facet["format_id"] in CONCATENATED_ALLELES
     codes = _code_catalog(loaded, facet, plan.label)
+    pairs = _pair_catalog() if withhold else None
     entry = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
     with cache.spilling(entry, cache.RESOLVE_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])) as spill:
         # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each contig
@@ -312,7 +313,7 @@ def resolve_ref(
         # bytes also key the result: a run on the same input reuses what an earlier one wrote.
         staged = spill.stage / "input.parquet"
         loaded.calls.sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
-        key = cache.content_key([staged], {**facet, "probe_catalog": codes.digest})
+        key = cache.content_key([staged], {**facet, "probe_catalog": codes.digest, "pair_catalog": pairs.digest if pairs else None})
         done = spill.find(key)
         if done is None:
             counts: Counter[str] = Counter()
@@ -321,12 +322,12 @@ def resolve_ref(
             for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
                 rows = source.filter(pl.col("chrom") == chrom).collect()
                 contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
-                resolved = _resolve_rows(rows, store, contig, counts, withhold, concatenated, codes) if contig is not None else rows
+                resolved = _resolve_rows(rows, store, contig, counts, withhold, concatenated, codes, pairs) if contig is not None else rows
                 part = spill.stage / f"calls-{index:05d}.parquet"
                 canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
                 parts.append(part)
             staged.unlink()
-            done = spill.commit(key, {"calls": parts}, _row_warnings(counts, plan.digest, codes))
+            done = spill.commit(key, {"calls": parts}, _row_warnings(counts, plan.digest, codes, pairs))
     warnings += done.warnings
     parts = done.files("calls")
     for warning in warnings:
@@ -542,11 +543,13 @@ def _resolve_rows(
     withhold: bool = False,
     concatenated: bool = False,
     codes: "_Codes | None" = None,
+    pairs: "_Codes | None" = None,
 ) -> pl.DataFrame:
     """One contig's rows with REF read; `counts` gathers the outcome per reason. `withhold`: the facet's
     strand is mixed (F13), so array rows whose genotype is not strand-safe get no `alts` or `gt`.
     `concatenated`: the format writes an indel genotype as its two allele sequences back to back (F4).
-    `codes`: the manifests' indel probes an `I`/`D` row is resolved against (RM281)."""
+    `codes`: the manifests' indel probes an `I`/`D` row is resolved against (RM281). `pairs`: the
+    manifests' SNV allele pairs a mixed facet's withheld rows are read against (RM281)."""
     if rows.is_empty():
         return rows
     is_vcf = pl.col("source_ref").is_not_null()
@@ -578,7 +581,7 @@ def _resolve_rows(
         .cast(CALLS["ref_check"])
         .alias("ref_check"),
     )
-    work = _derive_array_alleles(work, counts, withhold)
+    work = _derive_array_alleles(work, counts, withhold, pairs)
     split = pl.col("_split_ref").is_not_null()
     work = work.with_columns(
         *[pl.when(split).then(pl.col(f"_split_{name}")).otherwise(pl.col(name)).alias(name) for name in ("alts", "gt", "end_pos")]
@@ -690,6 +693,79 @@ def _code_catalog(loaded: Loaded, facet: dict, label: str | None) -> _Codes:
     if not manifests:
         return _Codes(None, (), f"no manifest with indel probes on {label} is configured (JUST_VCF_MANIFESTS_DIR)")
     return _Codes(catalog, tuple(manifests), None)
+
+
+def _pair_catalog() -> _Codes:
+    """The configured manifests' SNV allele pairs on the plus strand, for a mixed-strand facet (RM281)."""
+    catalog, manifests = snv_catalog()
+    if not manifests:
+        return _Codes(None, (), "no manifest is configured (JUST_VCF_MANIFESTS_DIR)")
+    return _Codes(catalog, tuple(manifests), None)
+
+
+_PALINDROMIC = [["A", "T"], ["C", "G"]]
+
+
+def _read_by_pair(work: pl.DataFrame, catalog: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
+    """A mixed facet's withheld rows read by their probe's two alleles on the plus strand (RM281).
+
+    A row is matched with a manifest SNV probe by an rsid among its `ids`, on the same contig, and read
+    only when the probe's pair holds the row's reference base (so the pair is on the facet's own plus
+    strand) and is not its own complement (`A/T`, `C/G`, which read alike on both strands). Called
+    alleles all in the pair: the row is on the forward strand, and its alleles are derived as written.
+    All in the pair's complement: it is on the minus strand, and `gt_alleles` is complemented before
+    they are derived; `source_gt` keeps what the export wrote. Anything else stays withheld, counted.
+    Returns `work` with `_withheld` cleared on the rows read.
+    """
+    rows = work.filter(pl.col("_withheld").is_not_null()).select("_row", "chrom", "ids", "gt_alleles", "ref")
+    if rows.is_empty():
+        return work
+    pairs = catalog.filter(pl.col("chrom") == rows["chrom"][0]).select("rsid", "plus")
+    matched = (
+        rows.select("_row", pl.col("ids").list.unique().alias("rsid")).explode("rsid", empty_as_null=False)
+        .join(pairs, on="rsid", how="inner")
+        .group_by("_row").agg(pl.col("plus").unique())
+        .filter(pl.col("plus").list.len() == 1)
+        .with_columns(pl.col("plus").list.first())
+    )  # fmt: skip
+    called = pl.col("gt_alleles").list.drop_nulls()
+    complement = pl.col("plus").list.eval(pl.element().replace_strict(COMPLEMENT, default=None))
+    decision = (
+        pl.when(pl.col("plus").is_null()).then(pl.lit("no_probe"))
+        .when(pl.col("plus").is_in(_PALINDROMIC)).then(pl.lit("palindromic"))
+        .when(~pl.col("plus").list.contains(pl.col("ref"))).then(pl.lit("ref_outside"))
+        .when(called.list.set_difference(pl.col("plus")).list.len() == 0).then(pl.lit("forward"))
+        .when(called.list.set_difference(complement).list.len() == 0).then(pl.lit("minus"))
+        .otherwise(pl.lit("neither"))
+    )  # fmt: skip
+    decided = rows.join(matched, on="_row", how="left").select("_row", decision.alias("_pair"))
+    for name, count in decided.group_by("_pair").len().iter_rows():
+        counts[f"pair_{name}"] += count
+    flipped = pl.col("gt_alleles").list.eval(pl.element().replace_strict(COMPLEMENT, default=None))
+    work = work.join(decided, on="_row", how="left", maintain_order="left")
+    return work.with_columns(
+        pl.when(pl.col("_pair") == "minus").then(flipped).otherwise(pl.col("gt_alleles")).alias("gt_alleles"),
+        pl.when(pl.col("_pair").is_in(["forward", "minus"])).then(None).otherwise(pl.col("_withheld")).alias("_withheld"),
+    ).drop("_pair")
+
+
+def _pair_warnings(counts: Counter[str], pairs: _Codes | None) -> list[str]:
+    """What the manifests' allele pairs read of a mixed facet's withheld rows."""
+    if pairs is None:
+        return []
+    asked = sum(counts[f"pair_{name}"] for name in ("forward", "minus", "palindromic", "ref_outside", "neither", "no_probe"))
+    if not pairs.manifests:
+        return [f"strand of withheld rows not read by probe: {pairs.absent}"]
+    if not asked:
+        return []
+    used = ", ".join(manifest.descriptor for manifest in pairs.manifests)
+    return [
+        f"of {asked} array row(s) withheld for the facet's mixed strand, {counts['pair_forward'] + counts['pair_minus']} read by their "
+        f"probe's two alleles on the plus strand ({used}, matched by rsid): {counts['pair_forward']} on the forward strand, "
+        f"{counts['pair_minus']} on the minus strand and complemented; still withheld: {counts['pair_palindromic']} on A/T or C/G "
+        f"probes, {counts['pair_ref_outside']} whose reference base is not one of the probe's alleles, {counts['pair_neither']} "
+        f"carrying neither the pair nor its complement, {counts['pair_no_probe']} with no probe (or an rsid with two pairs)"
+    ]
 
 
 def _resolve_codes(work: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], codes: _Codes | None) -> pl.DataFrame:
@@ -809,16 +885,19 @@ def _count_array_unreadable(rows: pl.DataFrame, counts: Counter[str]) -> None:
     counts["array_unreadable"] += int(rest["gt_alleles"].is_null().sum())
 
 
-def _derive_array_alleles(work: pl.DataFrame, counts: Counter[str], withhold: bool = False) -> pl.DataFrame:
+def _derive_array_alleles(work: pl.DataFrame, counts: Counter[str], withhold: bool = False, pairs: "_Codes | None" = None) -> pl.DataFrame:
     """For array rows whose base was read: `alts` the observed non-REF alleles, sorted; `gt` into `[ref] + alts`.
 
     With `withhold` (a mixed-strand facet, F13) a row whose genotype is not strand-safe keeps `ref` and
-    gets neither, each reason counted.
+    gets neither, each reason counted, unless a manifest's allele pair for its probe decides its strand
+    (`pairs`, `_read_by_pair`).
     """
     target = pl.col("_array") & pl.col("ref").is_not_null()
     if withhold:
         reason = withheld_reason(pl.col("gt_alleles"), pl.col("ref"))
         work = work.with_columns(pl.when(target).then(reason).otherwise(None).alias("_withheld"))
+        if pairs is not None and pairs.catalog is not None:
+            work = _read_by_pair(work, pairs.catalog, counts)
         for name, count in work.filter(pl.col("_withheld").is_not_null()).group_by("_withheld").len().iter_rows():
             counts[f"strand_{name}"] += count
         target = target & pl.col("_withheld").is_null()
@@ -883,7 +962,7 @@ def _code_warnings(counts: Counter[str], codes: _Codes | None) -> list[str]:
     return lines
 
 
-def _row_warnings(counts: Counter[str], digest: str, codes: _Codes | None = None) -> list[str]:
+def _row_warnings(counts: Counter[str], digest: str, codes: _Codes | None = None, pairs: _Codes | None = None) -> list[str]:
     lines = []
     if counts["vcf_rows"]:
         line = (
@@ -910,6 +989,7 @@ def _row_warnings(counts: Counter[str], digest: str, codes: _Codes | None = None
         if counts[key]:
             lines.append(f"{counts[key]} array row(s) {reason}: REF left unread")
     lines += _code_warnings(counts, codes)
+    lines += _pair_warnings(counts, pairs)
     split =counts["concat_resolved"] + counts["concat_homozygous"] + counts["concat_repeat"]
     if split:
         lines.append(

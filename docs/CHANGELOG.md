@@ -4,10 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The facet gate (`tests/test_facet_gate.py`, default suite): every loadable format's spec `example`
+  is loaded, and a `facets` column left null needs a recorded reason, while a reason for a column
+  now filled fails as stale. It guards the gap parallel builders leave when a check reaches one
+  loader and not the others; on its first run it found the BCF build gap above.
+
 - A BCF facet now takes the build its header states (`##reference=…hs37d5.fa` gives GRCh37, basis
   `stated`), as the same header in a text VCF always did. `sniff` stops at a BCF's magic bytes, so the
   loader reads the header's build lines itself, by the VCF spec's hints. Before, a BCF's
-  `assembly_label` came only from its contig lengths. Found by the facet gate below.
+  `assembly_label` came only from its contig lengths. Found by the facet gate above.
 
 - The CGI convergence tests (opt-in, PGP-HMS): one assembly's `var` and `masterVarBeta` give the same
   blocks and sites, and its `var` and `vcfBeta` agree on 4,138,184 sites, with 27,505 partial calls

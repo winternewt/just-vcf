@@ -358,6 +358,10 @@ These were learned the expensive way in the sibling repos. Each is a prohibition
 - **A test that means "no credential" must say so** — neutralize in an autouse fixture with
   `setenv(VAR, "")`, not `delenv`.
 - **Suspect ordering whenever a test passes alone and fails in the suite.**
+- **The facet gate (`tests/test_facet_gate.py`) loads every loadable format's `example`** and fails
+  on any `facets` column left null without a reason in its `NULL_REASONS`, and on a reason that no
+  longer holds. Each loader builds its own facet row, so a column added or filled in one loader must
+  be decided there for all of them. Update the table in the same commit; never loosen it to pass.
 
 ---
 

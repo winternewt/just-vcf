@@ -364,7 +364,7 @@ FTDNA_BIGY_COLUMNS: tuple[ColumnSpec, ...] = (
 
 FTDNA_BIGY = FormatSpec(
     id="ftdna_bigy",
-    family=Family.GENOTYPE_TABLE,
+    family=Family.VARIANT_CALLS,
     vendor="FamilyTreeDNA",
     description="FamilyTreeDNA Big Y results CSV: chrY sites with reference and observed base.",
     detection=Detection(
@@ -377,6 +377,9 @@ FTDNA_BIGY = FormatSpec(
     genotype_encoding="one base per site (chrY is haploid); `?` where the site was not called",
     no_call=("?",),
     notes=(
+        "Big Y is targeted sequencing of chrY, not a genotyping array: its rows are sequencing calls with the "
+        "reference base stated, as CASAVA's and SOAPsnp's are, so the family is `variant_calls` and "
+        "`chip_absence` refuses it as not an array export.",
         "There is no chromosome column: every row is chrY, a structural fact of the product.",
         "Known SNP rows have no position; they are placed only through a Y-SNP name table. Novel Variant "
         "rows have a position and mostly a genotype equal to the reference.",

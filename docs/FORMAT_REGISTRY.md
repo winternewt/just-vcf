@@ -111,7 +111,7 @@ Format ids are lowercase snake_case and form an open set: ids are added, never r
 | 11 | [`illumina_final_report_headerless`](#illumina_final_report_headerless) | `genotype_table` | Illumina | signature | no |
 | 12 | [`get_evidence_gff`](#get_evidence_gff) | `annotated_variants` | PGP GET-Evidence | signature | yes |
 | 13 | [`color_variant_set`](#color_variant_set) | `annotated_variants` | Color | signature | yes |
-| 14 | [`ftdna_bigy`](#ftdna_bigy) | `genotype_table` | FamilyTreeDNA | signature | yes |
+| 14 | [`ftdna_bigy`](#ftdna_bigy) | `variant_calls` | FamilyTreeDNA | signature | yes |
 | 15 | [`casava_snp_table`](#casava_snp_table) | `variant_calls` | Illumina | signature | yes |
 | 16 | [`casava_indel_table`](#casava_indel_table) | `variant_calls` | Illumina | signature | yes |
 | 17 | [`ancestrydna`](#ancestrydna) | `genotype_table` | AncestryDNA | signature | yes |
@@ -961,7 +961,7 @@ S1,1,55524237,G,A,PCSK9,SNV,c.1420G>A,p.Val474Ile,ENST00000302118,,Heterozygous,
 
 FamilyTreeDNA Big Y results CSV: chrY sites with reference and observed base.
 
-- **Family:** `genotype_table`
+- **Family:** `variant_calls`
 - **Vendor:** FamilyTreeDNA
 - **Registry position:** 14 of 39, a signature (`just_vcf.formats.other_tables`)
 - **Loads:** yes, through `just_vcf.loaders.site_tables`
@@ -992,6 +992,7 @@ FamilyTreeDNA Big Y results CSV: chrY sites with reference and observed base.
 
 **From real files**
 
+- Big Y is targeted sequencing of chrY, not a genotyping array: its rows are sequencing calls with the reference base stated, as CASAVA's and SOAPsnp's are, so the family is `variant_calls` and `chip_absence` refuses it as not an array export.
 - There is no chromosome column: every row is chrY, a structural fact of the product.
 - Known SNP rows have no position; they are placed only through a Y-SNP name table. Novel Variant rows have a position and mostly a genotype equal to the reference.
 - Neither build nor coordinate convention is stated; Big Y moved from hg19 to hg38 over its lifetime, so the build stays unknown.

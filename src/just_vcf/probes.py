@@ -553,7 +553,7 @@ def chip_absence(loaded: Loaded, sites: pl.DataFrame) -> ChipAbsence:
     row at get null, with the reason; a written no-call is `no_call` all the same, since the row
     itself shows the chip probed there. Null for every site when the facet is not an array: an array
     is a genotype table (`family`) whose callset type is `array` or unknown, so a VCF, a site table
-    (CASAVA, SOAPsnp), an annotation export (Nirvana, Color, GET-Evidence) and a CGI callset are
+    (CASAVA, SOAPsnp, Big Y's targeted chrY sequencing), an annotation export (Nirvana, Color, GET-Evidence) and a CGI callset are
     refused, though they too state no VCF version and may have no callset type. Either
     absence is an unknown genotype (Decision 4); the cause says why it is unknown.
     `loaded` holds one facet; a load of several (an appended export) is refused with `ValueError`.

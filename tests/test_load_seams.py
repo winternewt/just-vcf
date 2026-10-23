@@ -125,10 +125,10 @@ NULL_REASONS: dict[tuple[str, str], str] = {
         "The file states no build; its positions were measured against the reference stores, but a measured build is "
         "not a stated one (docs/LAYERS.md, layer 3 blocker)."
     )),
-    **_each(("color_variant_set", "get_evidence_gff", "nirvana_json", "ftdna_bigy"), ("callset_type",), _TOO_FEW_SITES),
+    **_each(("color_variant_set", "get_evidence_gff", "nirvana_json"), ("callset_type",), _TOO_FEW_SITES),
     **_each(("color_variant_set", "get_evidence_gff", "nirvana_json"), ("content_filter", "content_filter_basis"), _CONTENT_FILTER),
     **_each(("color_variant_set", "get_evidence_gff", "nirvana_json"), ("sorted_name_length_pairs_digest",), "The format carries no contig lengths."),
-    **_each(("color_variant_set", "get_evidence_gff", "nirvana_json", "ftdna_bigy"), ("chip", "chip_basis"), _NO_CHIP_RULE),
+    **_each(("color_variant_set", "get_evidence_gff", "nirvana_json"), ("chip", "chip_basis"), _NO_CHIP_RULE),
     ("rsid_table_headerless/appended_export", "variant_classes"): "Not counted: a genotype table writes no REF or ALT (SCHEMA Decision 5).",
     ("*", "aligner"): "Only a header that records its aligner states one (DRAGEN with `--enable-map-align true`); no example does (SCHEMA Decision 5).",
     ("*", "aligner_version"): "Null with `aligner`: only a recorded aligner has a version.",
@@ -227,7 +227,7 @@ NULL_REASONS: dict[tuple[str, str], str] = {
     **_each(FB_KEYVALUE, ("assembly_label", "assembly_label_basis"), "The key=value table has no header to state a build (the spec has no build hint)."),
     **_each(FB_KEYVALUE, ("ploidy_statements", "header_contigs", "vcf_version", "sample_meta"), _NOT_A_VCF),
     # Where `gl` comes from (`loaders.vcf.gl_source`): only a VCF's FORMAT GL or PL fills it.
-    **_each((GT, CN, "annotated_variants", "casava_snp_table", "casava_indel_table", "soapsnp_cns", *FB_KEYVALUE), ("gl_source",), _NO_LIKELIHOODS),
+    **_each((GT, CN, "annotated_variants", "casava_snp_table", "casava_indel_table", "soapsnp_cns", "ftdna_bigy", *FB_KEYVALUE), ("gl_source",), _NO_LIKELIHOODS),
     **_each(("vcf", "vcf_cgi", "vcf_no_meta", "bcf", *FB_VCF), ("gl_source",), (
         "The example's header declares neither GL nor PL with a genotype count, and its rows use neither, so `gl` is "
         "null on every row."

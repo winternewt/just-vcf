@@ -12,6 +12,21 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   unchanged. `concordance` across two collections and `liftover` keep their own rule, which refuses on
   a differing X or Y too.
 
+- The reference conflict warnings fire again for files whose names are withheld: `##reference=` and the call
+  steps' reference options are compared by their base names as written, and only the stored `reference` is
+  written `<file>`. Before, two different unknown names both became `<file>` first and agreed, so neither
+  "more than one `##reference`" nor "differs from the caller's" fired. The three warnings now name no file
+  ("the header names 2 different ##reference files"), known reference names included.
+
+- `facets.caller_version` written as a path or a file name (`##DeepVariant_version=/home/<name>/…`) is
+  `<path>`, as a method step's version already was, so the frame never holds the path; a caller split's
+  facets get the same. Two versions are still compared as written, so two different paths stay a conflict,
+  and the warning quotes each as `<path>`.
+
+- `ftdna_bigy` is in the `variant_calls` family, not `genotype_table`: Big Y is targeted chrY sequencing
+  with the reference base stated, as CASAVA's and SOAPsnp's tables are, so `chip_absence` now refuses it as
+  not an array export instead of reading its absent sites against a chip. A Big Y facet's `family` changes.
+
 - Schema 0.0.18: `facets.gl_source` says whether `gl` was read from PL or GL; `genotype_evidence` reports it
   on rows graded `gl`.
 

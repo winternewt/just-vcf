@@ -394,7 +394,7 @@ def test_a_written_no_call_is_a_no_call_not_a_site_in_the_export(tmp_path: Path)
 
 @pytest.mark.parametrize(
     "format_id",
-    ["vcf_no_meta", "casava_snp_table", "casava_indel_table", "soapsnp_cns",
+    ["vcf_no_meta", "casava_snp_table", "casava_indel_table", "soapsnp_cns", "ftdna_bigy",
      "nirvana_json", "color_variant_set", "get_evidence_gff", "cgi_var", "cgi_master_var"],
 )  # fmt: skip
 def test_a_sequencing_facet_that_states_no_vcf_version_is_not_an_array(tmp_path: Path, format_id: str) -> None:

@@ -3,6 +3,42 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F19 — UCSC scaffold names do not meet Ensembl's
+
+Severity: medium · Found twice on 2026-10-22/23: by RM3 (`resolve_ref` on PGP-HMS GRCh38 VCFs) and by
+RM286 (lifting GIAB HG002 Q100 from CHM13 to GRCh38 with UCSC's chain).
+
+UCSC names GRCh38's unplaced, unlocalised and patch scaffolds `chr1_KI270706v1_random`, `chrUn_…`,
+`…_fix`, `…_alt`; Ensembl's FASTA (the reference store) names the same sequences by accession
+(`KI270706.1`). `canonical_chrom` maps the primary chromosomes and M/MT, not these. So 44,594 rows (1%)
+of a PGP GRCh38 VCF stay unread by `resolve_ref`, and 75,001 lifted HG002 rows land as
+`target_contig_unmatched`. Not fixed: the repair is an alias table from the GRCh38 assembly report
+(UCSC name ↔ GenBank/RefSeq accession, the same source RM286 used for CHM13), checked by length, never a
+name-pattern guess.
+
+Resolved 2026-10-23 by the alias table F19 asked for. NCBI's GRCh37.p13 and GRCh38.p14 assembly
+reports are carried in `assets/` and derived into the package table `contig_names.tsv`
+(`just_vcf.contig_names`). A reference contig that a report lists as a scaffold, at the report's
+length, is also served under that scaffold's other report names, unless the collection holds a
+contig of that name itself; the stated length or the chain's size is then checked against it as
+before. The row keeps its source name in `chrom`. Measured with the library on the same files:
+
+- the PGP-HMS GRCh38 VCF against the Ensembl store: 44,594 rows unread before, 0 after; all
+  4,651,432 rows read, every one matching its source REF, 145 scaffolds read under their accession;
+- GIAB HG002 Q100 lifted CHM13 → GRCh38 through `hs1ToHg38` onto store-chm13:
+  `target_contig_unmatched` 75,001 before, 40,099 after; 33,088 more rows lifted (28,690 onto
+  `_random` scaffolds, 4,398 onto `chrUn_`), 1,814 more `ref_mismatch_after_lift`. Every chain block
+  onto a `_random` or `chrUn_` scaffold (22,760 of 34,178) now meets the store; the 11,418 onto `_fix`
+  patches do not, and the 40,099 are theirs: the Ensembl primary assembly holds no patch, so that is
+  the store, not a naming gap.
+
+Rejected: putting the GenBank accession in `chrom` for a scaffold (Decision 7 keeps the source's
+spelling for every non-primary contig, and it would change the rows of every UCSC-named file on load);
+reading the accession out of the UCSC name (`chr1_KI270706v1_random` → `KI270706.1`), a name pattern
+that GRCh37's lower-case names (`chr4_gl000194_random`) and its haplotypes (`chr6_apd_hap1`) already
+break. Code: `contig_names.scaffold_names`, `ReferenceStore.contigs_by_chrom`; tests in
+`tests/test_contig_names.py`.
+
 ## F18 — A Canvas CNV file loads its copy-neutral segments as reference blocks
 
 Severity: medium · Found 2026-10-23 loading the PGP-HMS SV and CNV files for RM282.

@@ -45,17 +45,3 @@ repair from the text alone is wrong:
 - *Take the shortest allele as REF on a het:* it calls every ambiguous het an insertion.
 - *Split a repeat at the anchored point nearest the middle:* it chooses among splits the reference
   fits equally.
-
-## F19 — UCSC scaffold names do not meet Ensembl's
-
-Severity: medium · Found twice on 2026-10-22/23: by RM3 (`resolve_ref` on PGP-HMS GRCh38 VCFs) and by
-RM286 (lifting GIAB HG002 Q100 from CHM13 to GRCh38 with UCSC's chain).
-
-UCSC names GRCh38's unplaced, unlocalised and patch scaffolds `chr1_KI270706v1_random`, `chrUn_…`,
-`…_fix`, `…_alt`; Ensembl's FASTA (the reference store) names the same sequences by accession
-(`KI270706.1`). `canonical_chrom` maps the primary chromosomes and M/MT, not these. So 44,594 rows (1%)
-of a PGP GRCh38 VCF stay unread by `resolve_ref`, and 75,001 lifted HG002 rows land as
-`target_contig_unmatched`. Not fixed: the repair is an alias table from the GRCh38 assembly report
-(UCSC name ↔ GenBank/RefSeq accession, the same source RM286 used for CHM13), checked by length, never a
-name-pattern guess.
-

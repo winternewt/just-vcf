@@ -38,13 +38,14 @@ from gtars.refget import RefgetStore
 
 from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_snv_rows
 from just_vcf import cache
+from just_vcf.contig_names import scaffold_names
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, StrandCheck, canonical_chrom, canonical_order, empty
 from just_vcf.strand import StrandResult, check_strand, withheld_reason
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 4
+RESOLVE_VERSION = 5
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes."""
 
 CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
@@ -212,10 +213,23 @@ class ReferenceStore:
 
         A canonical name served by more than one sequence (`1` and `chr1`) lists them all; a caller
         reads none of them. `XY` (array code 25) is served by X (`_REF_SPAN_FOR`).
+
+        A GRCh37 or GRCh38 scaffold is also listed under the other names NCBI's assembly reports give
+        it (F19, `contig_names.scaffold_names`): Ensembl's `KI270706.1` under UCSC's
+        `chr1_KI270706v1_random` and RefSeq's `NT_187361.1`, and the other way round. Only where the
+        sequence's length is the report's for that name, and only under a name the collection does not
+        hold a sequence of its own by: a name is never taken from a pattern, and never over a contig the
+        collection itself calls so.
         """
         by_canonical: dict[str, list[Contig]] = {}
-        for contig in self.contigs(digest):
+        contigs = self.contigs(digest)
+        for contig in contigs:
             by_canonical.setdefault(canonical_chrom(contig.name), []).append(contig)
+        aliased: dict[str, list[Contig]] = {}
+        for contig in contigs:
+            for name in sorted(scaffold_names(contig.name, contig.length) - set(by_canonical)):
+                aliased.setdefault(name, []).append(contig)
+        by_canonical.update(aliased)
         for chrom, served_by in _REF_SPAN_FOR.items():
             by_canonical[chrom] = by_canonical.get(served_by, [])
         return by_canonical
@@ -500,7 +514,8 @@ def _choose(plans: list[_Plan], facet_id: str, explicit: bool) -> _Plan:
 
 
 def _contig_warnings(plan: _Plan, rows_per_chrom: dict[str, int]) -> list[str]:
-    """One line per kind of contig that will not be read, with its rows and contig names."""
+    """One line per kind of contig that will not be read, with its rows and contig names, and one for the
+    scaffolds read under the reference's other name for them (F19)."""
     grouped: dict[ContigCheck, list[str]] = {}
     for chrom, check in plan.checks.items():
         if check not in _READABLE:
@@ -522,6 +537,16 @@ def _contig_warnings(plan: _Plan, rows_per_chrom: dict[str, int]) -> list[str]:
         shown = ", ".join(f"{name} ({plan.detail[name]})" if name in plan.detail else name for name in names[:10])
         more = f" and {len(names) - 10} more" if len(names) > 10 else ""
         lines.append(f"{rows} row(s) left with REF unread, on {explain[check]}: {shown}{more}")
+    aliased = sorted(
+        (chrom, contig.name)
+        for chrom, contig in plan.contigs.items()
+        if plan.checks.get(chrom) in _READABLE and chrom not in _REF_SPAN_FOR and canonical_chrom(contig.name) != chrom
+    )
+    if aliased:
+        rows = sum(rows_per_chrom[chrom] for chrom, _ in aliased)
+        shown = ", ".join(f"{chrom} as {name}" for chrom, name in aliased[:10])
+        more = f" and {len(aliased) - 10} more" if len(aliased) > 10 else ""
+        lines.append(f"{rows} row(s) read on scaffold(s) the reference names otherwise, as NCBI's assembly report pairs them: {shown}{more}")
     return lines
 
 

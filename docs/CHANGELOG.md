@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `Person.of(*loaded, check=...)` and `people(*loaded, check=...)` group facets by the subject the
+  caller supplied, with their calls and blocks, and check the claim with a pluggable relatedness test
+  (RM273). `Person.checks` keeps each pair's answer (`same`, `different`, `could_not_tell`, `not_run`)
+  and `Person.one_person` their Kleene AND; a `different` pair is a warning naming both facets, and the
+  facets stay where the caller put them. A file loaded under two subjects is allowed and warned. No
+  check is wired by default yet: RM274's relatedness takes that place.
+
 - `load(..., subject=...)` labels a file's facets with the person they belong to, in a new nullable
   `facets.subject` column (RM273). The label is the caller's: nothing fills it from the sample name or
   the file, and `facet_id` does not digest it. Every derived step (`resolve_ref`, `normalize`,

@@ -8,6 +8,7 @@ import pytest
 from just_vcf import load, rejoin_split
 from just_vcf.formats import get_spec
 from just_vcf.loading import Loaded
+from just_vcf.person import SUBJECT_CHECKS, Person, SubjectError, people
 from just_vcf.schema import FACETS
 
 VCF_HEADER = [
@@ -97,3 +98,170 @@ def test_a_derived_facet_inherits_the_subject(tmp_path: Path) -> None:
     child = derived.facets.collect().row(0, named=True)
     assert child["derived_from"] == parent.facets.collect()["facet_id"].item()
     assert child["subject"] == "person-a"
+
+
+# --- grouping and the check ----------------------------------------------------------------------
+
+
+class Recorder:
+    """A relatedness check that answers from a table keyed by the pair of facet ids, and records calls."""
+
+    def __init__(self, answers: dict[frozenset[str], bool | None] | None = None, default: bool | None = True) -> None:
+        self.answers = answers or {}
+        self.default = default
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, a: Loaded, b: Loaded) -> bool | None:
+        ids = []
+        for one in (a, b):
+            facets = one.facets.collect()
+            assert facets.height == 1, "the check is handed one facet at a time"
+            assert one.calls.collect()["facet_id"].unique().to_list() == facets["facet_id"].to_list()
+            ids.append(facets["facet_id"].item())
+        self.calls.append((ids[0], ids[1]))
+        return self.answers.get(frozenset(ids), self.default)
+
+
+def _facet_id(loaded: Loaded) -> str:
+    return loaded.facets.collect()["facet_id"].item()
+
+
+def _two_sources(tmp_path: Path, subject: str = "person-a") -> tuple[Loaded, Loaded]:
+    return load(_array_file(tmp_path), subject=subject), load(_vcf_file(tmp_path, ["S1"]), subject=subject)
+
+
+def test_a_person_holds_its_facets_rows_in_facet_id_order(tmp_path: Path) -> None:
+    array, vcf = _two_sources(tmp_path)
+    person = Person.of(vcf, array)
+    facets = person.facets.collect()
+    assert person.subject == "person-a"
+    assert facets["facet_id"].to_list() == sorted([_facet_id(array), _facet_id(vcf)])
+    calls = person.calls.collect()
+    expected = pl.concat([array.calls.collect(), vcf.calls.collect()])
+    assert calls.height == expected.height
+    assert calls["facet_id"].to_list() == sorted(calls["facet_id"].to_list()), "facet_id is the first canonical key"
+    for one in (array, vcf):
+        own = calls.filter(pl.col("facet_id") == _facet_id(one))
+        assert own.equals(one.calls.collect()), "a facet's rows come through unchanged and in their order"
+
+
+def test_without_a_check_every_pair_is_not_run_and_nothing_passes(tmp_path: Path) -> None:
+    array, vcf = _two_sources(tmp_path)
+    person = Person.of(array, vcf)
+    assert person.checks.schema == SUBJECT_CHECKS
+    assert person.checks["outcome"].to_list() == ["not_run"]
+    assert person.one_person is None, "a check that did not run is not a check that passed"
+    assert person.warnings == ()
+
+
+@pytest.mark.parametrize(
+    ("answer", "outcome", "one_person"),
+    [(True, "same", True), (False, "different", False), (None, "could_not_tell", None)],
+)
+def test_the_check_answer_is_kept_kleene(tmp_path: Path, answer: bool | None, outcome: str, one_person: bool | None) -> None:
+    array, vcf = _two_sources(tmp_path)
+    check = Recorder(default=answer)
+    person = Person.of(array, vcf, check=check)
+    assert len(check.calls) == 1
+    assert person.checks["outcome"].to_list() == [outcome]
+    assert person.one_person is one_person
+    assert person.facets.collect().height == 2, "never refused, never regrouped, whatever the check says"
+    if answer is True:
+        assert person.warnings == ()
+    else:
+        (warning,) = person.warnings
+        assert _facet_id(array) in warning and _facet_id(vcf) in warning
+        assert "person-a" not in warning, "warnings name facet ids, never the subject"
+
+
+def test_one_different_pair_makes_the_person_false_and_one_unknown_cannot_make_it_true(tmp_path: Path) -> None:
+    array, vcf = _two_sources(tmp_path)
+    other = load(_array_file(tmp_path, "other.txt", "23andme_csv"), subject="person-a")
+    ids = [_facet_id(x) for x in (array, vcf, other)]
+    unknown = Person.of(array, vcf, other, check=Recorder({frozenset(ids[:2]): None}))
+    assert sorted(unknown.checks["outcome"].to_list()) == ["could_not_tell", "same", "same"]
+    assert unknown.one_person is None
+    different = Person.of(array, vcf, other, check=Recorder({frozenset(ids[:2]): None, frozenset(ids[1:]): False}))
+    assert different.one_person is False
+    assert len(different.warnings) == 2, "one line per reason"
+
+
+def test_facets_of_one_source_are_not_checked_against_each_other(tmp_path: Path) -> None:
+    """A parent and the facet derived from it are one person's data by construction."""
+    array, vcf = _two_sources(tmp_path)
+    derived = rejoin_split(array)
+    check = Recorder()
+    person = Person.of(array, derived, vcf, check=check)
+    assert person.facets.collect().height == 3
+    assert len(check.calls) == 1
+    assert {frozenset(pair) for pair in check.calls} == {frozenset({_facet_id(array), _facet_id(vcf)})}, (
+        "the source stands as its facet read from the file, not the derived one"
+    )
+    alone = Person.of(array, derived, check=check)
+    assert alone.checks.height == 0 and alone.one_person is None
+
+
+def test_samples_of_one_file_are_different_sources(tmp_path: Path) -> None:
+    """A trio VCF: one file, three people. Same bytes, different sample columns."""
+    path = _vcf_file(tmp_path, ["S1", "S2"])
+    first, second = (load(path, sample=s, subject="person-a") for s in ("S1", "S2"))
+    check = Recorder(default=False)
+    person = Person.of(first, second, check=check)
+    assert len(check.calls) == 1 and person.one_person is False
+
+
+def test_grouping_refuses_what_it_cannot_group(tmp_path: Path) -> None:
+    array, vcf = _two_sources(tmp_path)
+    unlabelled = load(_array_file(tmp_path, "other.txt", "23andme_csv"))
+    with pytest.raises(SubjectError, match=_facet_id(unlabelled)):
+        Person.of(array, unlabelled)
+    with pytest.raises(SubjectError, match=_facet_id(unlabelled)):
+        people(array, unlabelled)
+    elsewhere = load(_vcf_file(tmp_path, ["S1"], "b.vcf"), subject="person-b")
+    with pytest.raises(SubjectError, match="2 different subjects") as refused:
+        Person.of(array, elsewhere)
+    assert "person-a" not in str(refused.value) and "person-b" not in str(refused.value)
+    with pytest.raises(ValueError, match="more than once"):
+        Person.of(array, load(_array_file(tmp_path), subject="person-a"))
+    with pytest.raises(SubjectError):
+        Person.of()
+
+
+def test_people_groups_by_the_supplied_label_only(tmp_path: Path) -> None:
+    a_array, a_vcf = _two_sources(tmp_path, "person-a")
+    b = load(_array_file(tmp_path, "b.txt", "23andme_csv"), subject="person-b")
+    check = Recorder(default=False)
+    grouped = people(b, a_vcf, a_array, check=check)
+    assert list(grouped) == ["person-a", "person-b"]
+    assert set(grouped["person-a"].facets.collect()["facet_id"]) == {_facet_id(a_array), _facet_id(a_vcf)}
+    assert grouped["person-b"].facets.collect()["facet_id"].to_list() == [_facet_id(b)]
+    assert grouped["person-a"].one_person is False, "the check said two people, and the grouping stands"
+    assert {frozenset(pair) for pair in check.calls} == {frozenset({_facet_id(a_array), _facet_id(a_vcf)})}, (
+        "people never checks across subjects"
+    )
+
+
+def test_one_file_under_two_subjects_is_allowed_and_warned(tmp_path: Path) -> None:
+    path = _array_file(tmp_path)
+    as_a, as_b = load(path, subject="person-a"), load(path, subject="person-b")
+    unrelated = load(_vcf_file(tmp_path, ["S1"]), subject="person-c")
+    grouped = people(as_a, as_b, unrelated)
+    facet_id = _facet_id(as_a)
+    assert _facet_id(as_b) == facet_id
+    for subject in ("person-a", "person-b"):
+        (warning,) = grouped[subject].warnings
+        assert facet_id in warning and "1 other subject" in warning
+        assert "person-a" not in warning and "person-b" not in warning
+    assert grouped["person-c"].warnings == ()
+
+
+def test_two_samples_of_one_file_under_two_subjects_are_not_warned(tmp_path: Path) -> None:
+    path = _vcf_file(tmp_path, ["S1", "S2"])
+    grouped = people(load(path, sample="S1", subject="child"), load(path, sample="S2", subject="mother"))
+    assert all(person.warnings == () for person in grouped.values())
+
+
+def test_a_check_must_answer_kleene(tmp_path: Path) -> None:
+    array, vcf = _two_sources(tmp_path)
+    with pytest.raises(TypeError, match="True, False or None"):
+        Person.of(array, vcf, check=lambda a, b: 0.9)  # type: ignore[arg-type, return-value]

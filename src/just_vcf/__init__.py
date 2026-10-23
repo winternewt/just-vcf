@@ -19,6 +19,7 @@ from just_vcf.loading import (
 )
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
+from just_vcf.person import SUBJECT_CHECKS, Person, SameSubjectCheck, SubjectCheckOutcome, SubjectError, people
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
 from just_vcf.rejoin import rejoin_split
 from just_vcf.schema import (
@@ -52,6 +53,7 @@ __all__ = [
     "FACETS",
     "LOADABLE_FORMATS",
     "SCHEMA_VERSION",
+    "SUBJECT_CHECKS",
     "AbsenceMeans",
     "AssemblyLabelBasis",
     "BlockAllele",
@@ -72,14 +74,18 @@ __all__ = [
     "EvidenceBasis",
     "KaryotypicSex",
     "PhaseSetKind",
+    "Person",
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
+    "SameSubjectCheck",
     "SexChromosomeEvidence",
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
     "StrandCheck",
+    "SubjectCheckOutcome",
+    "SubjectError",
     "TableLayoutError",
     "UnsortedRowsError",
     "UnsupportedFormatError",
@@ -94,6 +100,7 @@ __all__ = [
     "load",
     "mint_vrs_ids",
     "normalize",
+    "people",
     "open_payload",
     "read_chain",
     "reference_dir",

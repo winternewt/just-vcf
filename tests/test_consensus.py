@@ -15,7 +15,17 @@ import pytest
 
 from just_vcf import ReferenceMismatchError, ReferenceStore, genotype_evidence, link_disagreements, load, normalize, resolve_ref
 from just_vcf.atlas import CI_Z, RegionSet
-from just_vcf.consensus import CONSENSUS_SUPPORT, FACET_RATES, METHOD_RATES, Consensus, GpReading, RateBasis, consensus, method_error_rates
+from just_vcf.consensus import (
+    CONSENSUS_SUPPORT,
+    FACET_RATES,
+    METHOD_RATES,
+    Consensus,
+    GpReading,
+    RateBasis,
+    _vector_copies,
+    consensus,
+    method_error_rates,
+)
 from just_vcf.links import CONSENSUS
 from just_vcf.loading import Loaded
 from just_vcf.person import Person
@@ -462,3 +472,22 @@ def test_a_row_over_another_span_says_nothing_about_this_allele(tmp_path: Path, 
     assert len(rows) == 2
     assert [(r["s_supported"], r["s_silent"]) for r in rows] == [(1, 1), (1, 1)]
     assert any("other_span 1" in line for line in result.warnings)
+
+
+def test_a_vector_becomes_copies_of_the_allele_haploid_and_multiallelic() -> None:
+    # Diploid over [R, A, B]: genotypes 0/0, 0/1, 1/1, 0/2, 1/2, 2/2 hold 0, 0, 0, 1, 1, 2 copies of B.
+    diploid = [0.05, 0.10, 0.15, 0.20, 0.25, 0.25]
+    frame = pl.DataFrame(
+        {
+            "_site": [0, 1, 2, 3],
+            "genotype_alleles": [["C", "A", "G"], ["C", "G"], ["C", "G"], ["C", "G", "G"]],
+            "alt": ["G", "G", "G", "G"],
+            "genotype_probabilities": [diploid, [0.2, 0.8], [0.1, 0.2, 0.3, 0.4], [0.2, 0.3, 0.5]],
+        },
+        schema_overrides={"_site": pl.UInt32},
+    )
+    got = {row["_site"]: row for row in _vector_copies(frame).iter_rows(named=True)}
+    assert (got[0]["_ploidy"], got[0]["_q0"], got[0]["_q1"], got[0]["_q2"]) == (2, pytest.approx(0.30), pytest.approx(0.45), pytest.approx(0.25))
+    assert (got[1]["_ploidy"], got[1]["_q0"], got[1]["_q1"], got[1]["_q2"]) == (1, pytest.approx(0.2), pytest.approx(0.8), None)
+    # A length that fits neither ploidy, and an allele listed twice, give nothing.
+    assert set(got) == {0, 1}

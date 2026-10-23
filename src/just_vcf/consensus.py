@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict
 
 from just_vcf.atlas import ALL, CI_Z, RegionSet
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
-from just_vcf.concordance import _covered, _declared_contigs, _distribution
+from just_vcf.concordance import _covered, _declared_contigs
 from just_vcf.evidence import GradeBasis, _calls_evidence
 from just_vcf.links import CONSENSUS, LINEAGE_RELATIONS, canonical_links, links_frame
 from just_vcf.loading import Loaded
@@ -445,30 +445,57 @@ def _fully_called(gt_alleles: str) -> pl.Expr:
 
 def _vector_copies(frame: pl.DataFrame) -> pl.DataFrame:
     """Per `_site`, the distribution over copies of `alt` from `genotype_probabilities` over
-    `genotype_alleles` (VCF genotype order, haploid or diploid), as `_q0`, `_q1`, `_q2` and `_ploidy`."""
+    `genotype_alleles` (VCF genotype order), as `_q0`, `_q1`, `_q2` and `_ploidy`.
+
+    Haploid when the vector has one entry per allele, diploid when it has `n(n+1)/2`; diploid genotype
+    `j/k` (j <= k) sits at index `k(k+1)/2 + j`. A vector of another length, an allele list that does
+    not hold `alt` exactly once, or a total of zero gives no row: the reading falls back to the
+    genotype."""
+    empty = pl.DataFrame(schema={"_site": pl.UInt32, "_q0": pl.Float64, "_q1": pl.Float64, "_q2": pl.Float64, "_ploidy": pl.Int8})
+    if frame.is_empty():
+        return empty
+    alleles, probabilities = pl.col("genotype_alleles"), pl.col("genotype_probabilities")
+    n = alleles.list.len().cast(pl.Int64)
+    length = probabilities.list.len().cast(pl.Int64)
     work = frame.select(
-        pl.col("_site").alias("_pair"),
-        pl.col("genotype_alleles").alias("x_source_alleles"),
-        pl.col("alt").alias("x_alt"),
-        pl.col("genotype_probabilities").alias("x_p"),
+        "_site",
+        probabilities.alias("_v"),
+        alleles.alias("_alleles"),
+        pl.col("alt"),
+        pl.when(length == n).then(1).when(length == n * (n + 1) // 2).then(2).cast(pl.Int8).alias("_ploidy"),
     )
-    dist = _distribution(work, "x", "p")
-    if dist.is_empty():
-        return pl.DataFrame(schema={"_site": pl.UInt32, "_q0": pl.Float64, "_q1": pl.Float64, "_q2": pl.Float64, "_ploidy": pl.Int8})
-    n = work.select("_pair", pl.col("x_source_alleles").list.len().alias("_n"), pl.col("x_p").list.len().alias("_len"))
-    wide = dist.pivot(on="_copies", index="_pair", values="_p", aggregate_function="sum")
+    hits = work.select("_site", "_alleles", "alt").explode("_alleles", empty_as_null=False).with_columns(
+        pl.int_range(pl.len(), dtype=pl.Int64).over("_site").alias("_j")
+    )
+    found = hits.filter(pl.col("_alleles") == pl.col("alt")).group_by("_site").agg(pl.len().alias("_hits"), pl.col("_j").first().alias("_i"))
+    work = work.join(found.filter(pl.col("_hits") == 1).select("_site", "_i"), on="_site", how="inner").filter(pl.col("_ploidy").is_not_null())
+    if work.is_empty():
+        return empty
+    g = pl.col("_g")
+    high = (((8 * g + 1).cast(pl.Float64).sqrt() - 1) / 2).floor().cast(pl.Int64)
+    long = (
+        work.with_columns(pl.int_ranges(pl.col("_v").list.len(), dtype=pl.Int64).alias("_g"))
+        .explode(["_v", "_g"], empty_as_null=False)
+        .with_columns(high.alias("_k"))
+        .with_columns((g - pl.col("_k") * (pl.col("_k") + 1) // 2).alias("_jj"))
+        .with_columns(
+            pl.when(pl.col("_ploidy") == 1).then((g == pl.col("_i")).cast(pl.Int8))
+            .otherwise(((pl.col("_jj") == pl.col("_i")).cast(pl.Int8) + (pl.col("_k") == pl.col("_i")).cast(pl.Int8)))
+            .alias("_copies")
+        )
+    )  # fmt: skip
+    total = long.group_by("_site").agg(pl.col("_v").sum().alias("_total")).filter(pl.col("_total") > 0)
+    by = long.group_by("_site", "_copies").agg(pl.col("_v").sum().alias("_p")).join(total, on="_site", how="inner")
+    wide = by.with_columns((pl.col("_p") / pl.col("_total")).alias("_p")).pivot(on="_copies", index="_site", values="_p", aggregate_function="sum")
     for k in range(3):
         if str(k) not in wide.columns:
             wide = wide.with_columns(pl.lit(None, dtype=pl.Float64).alias(str(k)))
-    return (
-        wide.join(n, on="_pair")
-        .select(
-            pl.col("_pair").alias("_site"),
-            pl.col("0").fill_null(0.0).alias("_q0"),
-            pl.col("1").fill_null(0.0).alias("_q1"),
-            pl.when(pl.col("_len") != pl.col("_n")).then(pl.col("2").fill_null(0.0)).alias("_q2"),
-            pl.when(pl.col("_len") == pl.col("_n")).then(1).otherwise(2).cast(pl.Int8).alias("_ploidy"),
-        )
+    return wide.join(work.select("_site", "_ploidy"), on="_site").select(
+        pl.col("_site").cast(pl.UInt32),
+        pl.col("0").fill_null(0.0).alias("_q0"),
+        pl.col("1").fill_null(0.0).alias("_q1"),
+        pl.when(pl.col("_ploidy") == 2).then(pl.col("2").fill_null(0.0)).alias("_q2"),
+        "_ploidy",
     )
 
 

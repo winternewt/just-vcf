@@ -143,3 +143,7 @@ default change; the rules are in docs/SCHEMA.md.
   defines GQ (conditional on the site being variant); on, a row that lists the allele and calls
   hom-ref with a GQ and no likelihoods is graded by that GQ. It reaches calls, not blocks, which
   `block_grade` grades.
+- **#96, a population prior** (`prior=AlleleFrequencyPrior(...)`): flat by default, as here. With a
+  caller's allele-frequency table, an allele it holds gets Hardy-Weinberg genotype priors from its
+  frequency and the support row names the table. Which catalogue, if any, is the person's choice;
+  none is downloaded or packaged.

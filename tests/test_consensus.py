@@ -16,9 +16,11 @@ import pytest
 from just_vcf import ReferenceMismatchError, ReferenceStore, genotype_evidence, link_disagreements, load, normalize, resolve_ref
 from just_vcf.atlas import CI_Z, RegionSet
 from just_vcf.consensus import (
+    ALLELE_FREQUENCIES,
     CONSENSUS_SUPPORT,
     FACET_RATES,
     METHOD_RATES,
+    AlleleFrequencyPrior,
     Consensus,
     GpReading,
     RateBasis,
@@ -137,6 +139,17 @@ def posterior(likelihoods: list[list[float]]) -> list[float]:
     top = max(logs)
     w = [math.exp(v - top) for v in logs]
     return [x / sum(w) for x in w]
+
+
+def with_prior(prior: list[float], likelihoods: list[list[float]]) -> list[float]:
+    """The textbook posterior: `prior(k) · ∏ L_f(k)`, normalized, in plain Python."""
+    joint = [prior[k] * math.prod(f[k] for f in likelihoods) for k in range(len(prior))]
+    return [x / sum(joint) for x in joint]
+
+
+def hardy_weinberg(f: float, ploidy: int = 2) -> list[float]:
+    """Genotype priors over copies of an ALT of frequency `f`: `(1-f)², 2f(1-f), f²`, or `1-f, f` haploid."""
+    return [(1 - f) ** 2, 2 * f * (1 - f), f**2] if ploidy == 2 else [1 - f, f]
 
 
 def hard(copies: int, e: float, ploidy: int = 2) -> list[float]:
@@ -446,6 +459,118 @@ def test_a_posterior_is_read_as_its_call_unless_asked(tmp_path: Path, store: Ref
     (row,) = rows_of(consensus([x, y], atlas=TRIANGLE, gp_as=GpReading.LIKELIHOOD))
     assert row["gp"] == pytest.approx(posterior([tempered(gp, E["X"]), hard(2, E["Y"])]), rel=1e-5)
     assert row["s_gp_as_likelihood"] == 1
+
+
+def frequencies(*rows: tuple[str, int, str, str, float]) -> pl.DataFrame:
+    return pl.DataFrame(rows, schema=["chrom", "pos", "ref", "alt", "alt_frequency"], orient="row")
+
+
+def test_an_allele_frequency_prior_is_hardy_weinberg_where_the_table_holds_the_allele(tmp_path: Path, store: ReferenceStore) -> None:
+    """Desk #96: the posterior under a caller's frequency table is `HWE(f) · ∏ L`, a multi-allelic
+    position takes each ALT's own frequency, and an allele the table does not hold keeps the flat prior."""
+    a0, a1 = other(base("1", 300)), other(base("1", 300), 1)
+    multi_x = ("1", 300, base("1", 300), f"{a0},{a1}", "1/2", "PASS", {})
+    multi_y = ("1", 300, base("1", 300), a0, "1/1", "PASS", {})
+    x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "1/1"), multi_x, snv("1", 500, "0/1")], store)
+    y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "0/1"), multi_y, snv("1", 500, "0/1")], store)
+    f100, f_a0, f_a1 = 0.1, 0.02, 0.6
+    # Lower case and a `chr` contig: the table is normalized as the frames are.
+    table = frequencies(
+        ("chr1", 100, base("1", 100).lower(), other(base("1", 100)).lower(), f100),
+        ("1", 300, base("1", 300), a0, f_a0),
+        ("1", 300, base("1", 300), a1, f_a1),
+        ("1", 900, "A", "C", 0.5),
+    )
+    prior = AlleleFrequencyPrior(name="test catalogue r1", assembly_label="GRCh38", frequencies=table)
+    assert prior.frequencies.schema == ALLELE_FREQUENCIES and prior.frequencies["chrom"].to_list() == ["1"] * 4
+    result = consensus([x, y], atlas=TRIANGLE, prior=prior)
+    assert result.support.collect().schema == CONSENSUS_SUPPORT
+    at = {(row["pos"], row["s_alt"]): row for row in rows_of(result)}
+    expected = with_prior(hardy_weinberg(f100), [hard(2, E["X"]), hard(1, E["Y"])])
+    row = at[(100, other(base("1", 100)))]
+    assert row["gp"] == pytest.approx(expected, rel=1e-5)
+    assert row["s_confidence"] == pytest.approx(-10 * math.log10(1 - max(expected)), rel=1e-6)
+    assert row["s_copies"] == max(range(3), key=lambda k: expected[k]) and row["s_prior"] == "test catalogue r1"
+    # The same evidence under the flat prior says hom-alt (X errs less than Y); a rarer allele's prior
+    # makes het the likelier.
+    assert max(range(3), key=lambda k: posterior([hard(2, E["X"]), hard(1, E["Y"])])[k]) == 2 != row["s_copies"]
+    assert at[(300, a0)]["gp"] == pytest.approx(with_prior(hardy_weinberg(f_a0), [hard(1, E["X"]), hard(2, E["Y"])]), rel=1e-5)
+    assert at[(300, a1)]["gp"] == pytest.approx(with_prior(hardy_weinberg(f_a1), [hard(1, E["X"]), hard(0, E["Y"])]), rel=1e-5)
+    uncovered = at[(500, other(base("1", 500)))]
+    assert uncovered["s_prior"] == "flat"
+    flat_result = {(r["pos"], r["s_alt"]): r for r in rows_of(consensus([x, y], atlas=TRIANGLE))}
+    assert uncovered["gp"] == flat_result[(500, other(base("1", 500)))]["gp"]
+    assert {r["s_prior"] for r in flat_result.values()} == {"flat"}
+    assert any("3 of 4 allele(s) found in its table" in line for line in result.warnings)
+
+
+def test_a_haploid_allele_takes_the_two_genotype_prior(tmp_path: Path, store: ReferenceStore) -> None:
+    x = facet(tmp_path, "x", "X", "1", [snv("2", 40, "1")], store)
+    y = facet(tmp_path, "y", "Y", "1", [snv("2", 40, "0")], store)
+    table = frequencies(("2", 40, base("2", 40), other(base("2", 40)), 0.3))
+    (row,) = rows_of(consensus([x, y], atlas=TRIANGLE, prior=AlleleFrequencyPrior(name="t", assembly_label="GRCh38", frequencies=table)))
+    assert row["s_ploidy"] == 1
+    assert row["gp"] == pytest.approx(with_prior(hardy_weinberg(0.3, 1), [hard(1, E["X"], 1), hard(0, E["Y"], 1)]), rel=1e-5)
+
+
+def test_a_frequency_of_zero_rules_the_alt_out_without_nan(tmp_path: Path, store: ReferenceStore) -> None:
+    x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "1/1")], store)
+    y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "1/1")], store)
+    table = frequencies(("1", 100, base("1", 100), other(base("1", 100)), 0.0))
+    (row,) = rows_of(consensus([x, y], atlas=TRIANGLE, prior=AlleleFrequencyPrior(name="t", assembly_label="GRCh38", frequencies=table)))
+    assert row["gp"] == [1.0, 0.0, 0.0] and row["s_copies"] == 0
+    assert row["s_confidence"] == math.inf and (row["s_supported"], row["s_contradicted"]) == (0, 2)
+
+
+def test_the_prior_is_in_the_facet_and_named_where_it_reaches(tmp_path: Path, store: ReferenceStore) -> None:
+    x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "0/1", GP="0.05,0.9,0.05")], store)
+    y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "0/1")], store)
+    table = frequencies(("1", 100, base("1", 100), other(base("1", 100)), 0.25))
+    prior = AlleleFrequencyPrior(name="t", assembly_label="GRCh38", frequencies=table)
+    flat_facet = consensus([x, y], atlas=TRIANGLE).facets.collect()
+    assert consensus([x, y], atlas=TRIANGLE, prior="flat").facets.collect().equals(flat_facet)
+    priored = consensus([x, y], atlas=TRIANGLE, prior=prior).facets.collect()
+    assert priored["facet_id"].item() != flat_facet["facet_id"].item()
+    inputs = priored["derivation_inputs"].item().to_list()
+    assert [i["role"] for i in inputs] == ["error_rates", "prior"]
+    assert inputs[1] == {"role": "prior", "name": "t", "sha256": prior.sha256}
+    other_table = AlleleFrequencyPrior(name="t", assembly_label="GRCh38", frequencies=table.with_columns(pl.lit(0.26).alias("alt_frequency")))
+    assert consensus([x, y], atlas=TRIANGLE, prior=other_table).facets.collect()["facet_id"].item() != priored["facet_id"].item()
+    assert flat_facet["derivation_inputs"].item().len() == 1
+    warned = consensus([x, y], atlas=TRIANGLE, prior=prior, gp_as=GpReading.LIKELIHOOD)
+    assert any("counts more than once" in line for line in warned.warnings)
+    nowhere = AlleleFrequencyPrior(name="t", assembly_label="GRCh38", frequencies=frequencies(("1", 700, "A", "C", 0.1)))
+    assert any("0 of 1 allele(s)" in line and "none matched" in line for line in consensus([x, y], atlas=TRIANGLE, prior=nowhere).warnings)
+
+
+def test_an_allele_frequency_table_is_validated_and_refused_not_patched(tmp_path: Path, store: ReferenceStore) -> None:
+    good = frequencies(("1", 100, "A", "C", 0.1))
+
+    def make(frame: pl.DataFrame = good, name: str = "t", label: str = "GRCh38") -> AlleleFrequencyPrior:
+        return AlleleFrequencyPrior(name=name, assembly_label=label, frequencies=frame)
+
+    for value in (1.5, -0.1, float("nan")):
+        with pytest.raises(ValueError, match="outside"):
+            make(good.with_columns(pl.lit(value).alias("alt_frequency")))
+    with pytest.raises(ValueError, match="another row"):
+        make(frequencies(("1", 100, "A", "C", 0.1), ("chr1", 100, "a", "c", 0.2)))
+    with pytest.raises(ValueError, match="lacks"):
+        make(good.drop("alt_frequency"))
+    with pytest.raises(ValueError, match="null"):
+        make(frequencies(("1", 100, "A", None, 0.1)))
+    with pytest.raises(ValueError, match="1-based"):
+        make(frequencies(("1", 0, "A", "C", 0.1)))
+    with pytest.raises(ValueError, match="names the default"):
+        make(name="flat")
+    with pytest.raises(ValueError, match="needs a name"):
+        make(name=" ")
+    assert make().frequencies.height == 1 and make(frequencies(("1", 100, "A", "C", 0), ("1", 100, "A", "G", 1))).frequencies.height == 2
+    x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "0/1")], store)
+    y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "0/1")], store)
+    with pytest.raises(ValueError, match="the prior 't' is on GRCh37"):
+        consensus([x, y], atlas=TRIANGLE, prior=make(label="GRCh37"))
+    with pytest.raises(ValueError, match="prior is 'flat'"):
+        consensus([x, y], atlas=TRIANGLE, prior="hardy_weinberg")
 
 
 def cell(a: tuple, b: tuple, a_band: str, b_band: str, *, d: float, n: int = N) -> dict:

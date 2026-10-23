@@ -735,7 +735,7 @@ def consensus(
     regions: RegionSet | None = None,
     prior: str = "flat",
     default_rate: float | None = None,
-    scope: str = "carried_pass",
+    scope: str | None = None,
     pass_only: bool = True,
     gp_as: GpReading | str = GpReading.CALL,
     gq_on_reference: bool = False,
@@ -752,8 +752,9 @@ def consensus(
     the highest rate among them; without it, by its `all` rate. A facet whose caller the atlas never
     measured gets `default_rate`, or, when that is None, the worst rate a measured method has in the
     class; `atlas=None` needs `default_rate`. `pass_only` reads a row that failed its filters as
-    silent (and takes the atlas rows of scope `carried_pass`); `gp_as` says how a posterior is read
-    (`GpReading`); `gq_on_reference` and `force` are `genotype_evidence`'s and `absence_is_reference`'s.
+    silent; `scope` picks the atlas rows (by default `carried_pass` under `pass_only`, else
+    `carried`); `gp_as` says how a posterior is read (`GpReading`); `gq_on_reference` and `force`
+    are `genotype_evidence`'s and `absence_is_reference`'s.
 
     The rows are every sequence ALT allele a parent states in a row it would be read by, on every
     contig, in canonical order. Each is a `calls` row of the consensus facet: `alts = [alt]`,
@@ -769,7 +770,7 @@ def consensus(
     if regions is not None and regions.assembly_label != label:
         raise ValueError(f"the regions are on {regions.assembly_label}, the facets on {label}; lift one first")
     classes = regions.classes if regions is not None else (ALL,)
-    scope = "carried_pass" if pass_only else ("carried" if scope == "carried_pass" else scope)
+    scope = scope if scope is not None else ("carried_pass" if pass_only else "carried")
     rates = _facet_rates(rows, atlas, classes, default_rate, scope)
     defaulted = sorted({r["facet_id"] for r in rates.filter(pl.col("rate_basis") == RateBasis.DEFAULT.value).iter_rows(named=True)})
     if defaulted:

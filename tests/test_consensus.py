@@ -282,6 +282,9 @@ def test_a_failed_filter_is_silent_unless_asked(tmp_path: Path, store: Reference
     (row,) = rows_of(consensus(parents, atlas=carried, pass_only=False))
     assert row["s_silent"] == 0
     assert row["gp"] == pytest.approx(posterior([hard(1, E["X"]), hard(2, E["Y"])]), rel=1e-5)
+    # A scope given is the scope used, whatever pass_only says.
+    stated = consensus(parents, atlas=carried, scope="carried")
+    assert set(stated.rates["rate_basis"].cast(pl.String).to_list()) == {RateBasis.METHOD.value}
 
 
 def test_silence_reads_as_reference_only_where_absence_says_so(tmp_path: Path, store: ReferenceStore) -> None:

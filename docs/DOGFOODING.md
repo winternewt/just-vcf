@@ -45,3 +45,13 @@ repair from the text alone is wrong:
 - *Take the shortest allele as REF on a het:* it calls every ambiguous het an insertion.
 - *Split a repeat at the anchored point nearest the middle:* it chooses among splits the reference
   fits equally.
+
+Checked 2026-10-23 for RM281 (chip manifests), on the same file, counts only: no public manifest
+describes the Sirius chip. It is not a GSA: 14,360 of its 691,603 rows carry Affymetrix Axiom ids
+(`AX-…`, and one `AFFX-…`), and 405,273 rows sit at a GSA-24v3-0 A1 probe position. Of the 83 indel
+rows, 2 carry an rsid that names a GSA indel probe; the other 81 match none by name, and 2 by position
+one base off. So the GSA manifest settles at most 2 rows, and those only by assuming Living DNA's
+probe tests GSA's allele. A learned probe set cannot settle it either: PGP-HMS holds one Living DNA
+export, and learning its site alleles from the same person's WGS would make the array agree with that
+WGS by construction (a value filled from the source that checks it). Stays open until a second
+source of the Sirius chip's site alleles appears.

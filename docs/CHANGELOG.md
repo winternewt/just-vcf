@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- docs/METHOD_ATLAS.md: the two PGP-HMS CGI pairs rebuilt with F21 and F22. SNV discordance falls
+  from 3.40% to 0.54% and from 3.07% to 1.02%, indel from 7.95% to 4.98% and from 10.41% to 7.92%;
+  the per-region SNV table is now the VRS pairing's, with no complex-row artefact left to take out.
+
 - **Breaking:** `concordance` reads a haploid call against the same allele's diploid homozygote (a
   male's X outside the PARs, `1` against `1/1`) as `match`, with a new `sites.ploidy_differs` flag
   (null on a one-sided allele) that `summary` groups by (F22). `Agreement.PLOIDY_DIFFERS` is removed:

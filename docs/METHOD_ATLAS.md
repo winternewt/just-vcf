@@ -2,9 +2,11 @@
 
 Built 2026-10-23 with `scripts/method_atlas.py` over eight same-person facet pairs, on GIAB v3.6
 stratifications. The two PGP-HMS pairs were rebuilt the same day once `resolve_ref` read CGI's REF
-(F20), with VRS ids minted on both sides. The full table (768 rows: every region class, variant class
-and scope) is `data/output/method_atlas.parquet` and `.tsv`, git-ignored, with
-`method_atlas.pairs.tsv` listing each pair's methods and checks. Everything here is an aggregate over a whole genome: no position, sample
+(F20), with VRS ids minted on both sides, and again once `concordance` read complex rows by the
+allele's change (F21) and a haploid call against the same allele's homozygote as a match (F22). The
+full table (768 rows: every region class, variant class and scope) is `data/output/method_atlas.parquet`
+and `.tsv`, git-ignored, with `method_atlas.pairs.tsv` listing each pair's methods and checks; the
+last CGI build is `data/output/method_atlas_cgi.*` beside it (192 rows, the same columns). Everything here is an aggregate over a whole genome: no position, sample
 name or file is named, and the private pairs are described by their methods only. Columns and rules
 are in docs/SCHEMA.md ("A method-error atlas").
 
@@ -31,10 +33,15 @@ needs: the two spell indels and complex alleles differently.
 ## Headline rates
 
 Scope `carried_pass`: alleles at least one side's genotype carries, every stating row PASS or
-unfiltered. Discordant is `mismatch + ploidy_differs` over the alleles both sides called; one-sided
-is over all carried alleles. The 95% Wilson intervals are within ±0.1 percentage point for every
-`all` and `easy` cell of the private pairs and are in the full table. The PGP pairs have their own
-tables below, because most of their `discordant` count is a ploidy convention on X.
+unfiltered. Discordant is `mismatch` over the alleles both sides called (`match + mismatch`); a
+haploid call against the same allele's diploid homozygote is a match, its ploidy counted apart in
+`ploidy_differs` (F22). One-sided is over all carried alleles. The 95% Wilson intervals are within
+±0.1 percentage point for every `all` and `easy` cell of the private pairs and are in the full table.
+The private pairs have no allele whose two genotypes differ in ploidy (`ploidy_differs` is 0 in every
+row of their build), so the F22 rule leaves their rates as they are; they met by position, and the
+F21 reading changes only an allele whose genotype holds another ALT of one row that carries its
+change, which a caller writing one allele per site barely has. They were not rebuilt. The PGP pairs
+have their own tables below.
 
 **SNV genotype discordance, %** (private pairs)
 
@@ -70,7 +77,7 @@ tables below, because most of their `discordant` count is a ploidy convention on
 | DeepVariant 1.3.0 / 1.8.0 | 0.00 | 0.00 | 0.01 | 0.01 | 0.01 | 0.03 |
 
 Mean `p_same` over the graded SNVs (`gl_flat_prior`, `all`): 0.985 for DeepVariant 1.9.0 / GATK,
-0.980 to 0.984 for the DeepVariant releases, 0.966 and 0.969 for the PGP pairs. Clair3's rows carry
+0.980 to 0.984 for the DeepVariant releases, 0.985 and 0.990 for the PGP pairs. Clair3's rows carry
 no likelihood vector the comparison could use, so its pairs have no graded allele.
 
 ## Reading it
@@ -101,66 +108,70 @@ mints them (99.96% and over 99.99% of alleles on one pair, 99.96% and 95.1% on t
 freeBayes file has 256,986 rows on `hs37d5` and `NC_007605`, contigs the store does not have). Both pairs then met allele by allele through VRS
 ids (`assembly_check = content`, `pairing = vrs`).
 
-Two conventions sit inside these pairs' counts and are not method error:
+Two conventions sat inside these pairs' counts at that build, and neither is method error. Both are
+now rules of `concordance`:
 
 - **X outside the PARs is haploid in CGI and diploid in freeBayes** (every genotype there: CGI writes
-  one allele, freeBayes two). Every allele both call there is `ploidy_differs`: 72,462 and 64,818
-  SNVs, 65% and 67% of the pairs' discordant SNVs. The tables here therefore give **mismatch over
-  called both**: `ploidy_differs` is left out of the count and stays in `called_both`. The atlas's
-  `discordance_rate` (3.40% and 3.07% for SNVs) is in the full table.
+  one allele, freeBayes two). Every allele both called there was `ploidy_differs` and counted as
+  discordant: 72,462 and 64,818 SNVs, 65% and 67% of the pairs' discordant SNVs. Since F22 a haploid
+  call against the same allele's homozygote is a `match`, with `ploidy_differs` set apart: of the
+  71,715 and 64,382 flagged SNVs in `x_nonpar`, 71,193 and 61,920 now match, and 522 and 2,462 are
+  mismatches, a haploid call against a freeBayes het on a male X, which is a real disagreement and
+  stays in the rate.
 - **A complex freeBayes row can hold the allele under another spelling.** freeBayes writes a
   haplotype as one multi-allelic row: REF `CGCCC`, ALT `TGCCT,TGCCC`, GT `TGCCT/TGCCT`. Its ALT
   `TGCCC` trims to `C>T`, so its VRS id is CGI's `C>T` (GT `T/T`), and the two meet. `concordance`
-  then counts the copies of `TGCCC` in the freeBayes genotype, which are zero, although each
-  `TGCCT` haplotype carries the same `C>T`: a `mismatch` that is spelling. Counted on the VRS-paired
-  mismatches by looking for a carried sibling ALT in such a row (REF longer than one base): 20,434
-  SNVs in the CGA 2.5.0.44 pair whose sibling carries exactly the allele's change, 23,014 with any
-  carried sibling; 2,601 and 2,950 in the 2.5.0.24 pair; and up to 5,982 and 4,627 indels (for an
-  indel the sibling is not checked base by base, so that is an upper bound). The script that counted
-  this is not part of the repo. Fixing it is a rule for `concordance`, not the atlas: the `site` path
-  already refuses to read a row over another REF span, and the `vrs` path has no such guard.
+  counted the copies of the spelling `TGCCC`, zero, although each `TGCCT` haplotype carries the same
+  `C>T`. Counted at that build on the VRS-paired mismatches with a script outside the repo: 20,434
+  SNVs whose sibling carries exactly the allele's change in the CGA 2.5.0.44 pair, 23,014 with any
+  carried sibling; 2,601 and 2,950 in the 2.5.0.24 pair. Since F21 each genotype is read for the
+  allele's change in its own row; a sibling of another length over the allele's span cannot be read
+  and is `unreadable` (2,315 and 201 SNVs), outside `called_both`.
 
-**Before and after, region `all`, scope `carried_pass`, %.** "By position" is the first build (label
-check, alleles by position and spelling); the REF it did not read changes nothing there, since
-alleles fall back to the source REF. "Less the artefact" takes the complex-row mismatches (any
-carried sibling) out of both counts.
+**Before and after, region `all`, scope `carried_pass`.** "By position" is the first build (label
+check, alleles by position and spelling). "By VRS id" is the build with REF read and alleles met by
+VRS id, as it stood before F21 and F22; its discordance counted `ploidy_differs`. "Now" is the same
+pairing with both rules.
 
-| Methods (a / b) | Class | By position: carried | mismatch | one-sided | By VRS id: carried | called both | mismatch | less the artefact | one-sided | of which silent side reads reference |
-|---|---|---|---|---|---|---|---|---|---|---|
-| CGA 2.5.0.44 / freeBayes 0.9.15 | SNV | 4,441,897 | 0.49 | 25.97 | 4,416,242 | 3,281,233 | 1.19 | 0.49 | 24.93 | 55 |
-| CGA 2.5.0.24 / freeBayes 0.9.20 | SNV | 4,685,178 | 0.93 | 31.98 | 4,651,492 | 3,160,612 | 1.02 | 0.93 | 31.35 | 56 |
-| CGA 2.5.0.44 / freeBayes 0.9.15 | indel | 1,440,360 | 44.70 | 99.13 | 987,570 | 410,440 | 5.31 | 3.91 | 52.87 | 60 |
-| CGA 2.5.0.24 / freeBayes 0.9.20 | indel | 1,193,130 | 53.12 | 99.03 | 819,248 | 342,076 | 8.05 | 6.79 | 52.93 | 60 |
+| Methods (a / b) | Class | By position: mismatch % of called both, ploidy left out | By VRS id: discordance % | mismatch % of called both, ploidy left out | Now: called both | discordance % | `ploidy_differs` | `unreadable` | mean `p_same` (gl), before → now |
+|---|---|---|---|---|---|---|---|---|---|
+| CGA 2.5.0.44 / freeBayes 0.9.15 | SNV | 0.49 | 3.40 | 1.19 | 3,278,624 | 0.54 | 72,421 | 2,315 | 0.969 → 0.990 |
+| CGA 2.5.0.24 / freeBayes 0.9.20 | SNV | 0.93 | 3.07 | 1.02 | 3,160,432 | 1.02 | 64,818 | 201 | 0.966 → 0.985 |
+| CGA 2.5.0.44 / freeBayes 0.9.15 | indel | 44.70 | 7.95 | 5.31 | 405,102 | 4.98 | 10,784 | 5,658 | 0.863 → 0.879 |
+| CGA 2.5.0.24 / freeBayes 0.9.20 | indel | 53.12 | 10.41 | 8.05 | 338,839 | 7.92 | 8,063 | 3,391 | 0.865 → 0.882 |
+| CGA 2.5.0.44 / freeBayes 0.9.15 | MNV | | 12.37 | 10.77 | 87,290 | 3.86 | 1,328 | 4,701 | 0.661 → 0.706 |
+| CGA 2.5.0.24 / freeBayes 0.9.20 | MNV | | 12.23 | 10.92 | 51,206 | 5.76 | 713 | 3,609 | 0.776 → 0.808 |
+
+The 95% Wilson interval of every SNV cell here is within ±0.02 percentage point, of every indel cell
+within ±0.1. In the CGA 2.5.0.44 pair the SNV rate falls from 3.40% to 0.54%, near the first build's
+0.49%: outside `x_nonpar` its mismatches fall by 21,873, the complex rows (20,434 counted exactly). In the CGA 2.5.0.24
+pair it falls from 3.07% to 1.02%, which equals the old mismatch share only by coincidence: outside
+`x_nonpar` its mismatches fall by 2,460 (the 2,601 counted), and the 2,462 haploid-against-het X
+mismatches, hidden inside `ploidy_differs` before, are now counted. Carried MNVs rise by a quarter
+(264,478 to 332,824 in the CGA 2.5.0.44 pair): the atlas now counts an allele as carried where
+`concordance` read a copy of it under another spelling, which a VRS-met MNV whose CGI row holds it
+only inside another ALT was not before. One-sided rates do not move.
 
 Pairing by VRS id is what the indels needed. The two spellings of one indel used to count as two
 one-sided alleles: in the CGA 2.5.0.44 pair carried indels fall by a third (1.44 million to 0.99
-million) and the indels both facets call rise from 11,891 to 410,440; in both pairs one-sided indels
-drop from 99% to 53%, 16 to 18% in GIAB's easy regions. SNVs barely move: with the complex-row
-mismatches taken out, the mismatch rate is the first build's to two decimals (an SNV's VRS id and
-its position and spelling name one allele), which says the new pairing added no other error.
-`uncalled` grows with it (indels 420 to 43,543 in the CGA 2.5.0.24 pair, as CGI's half-calls now meet
-freeBayes), so `called_both` is less than the carried alleles minus the one-sided ones. MNVs are in
-the full table; complex rows are a larger share of them, and their mean `p_same` falls (0.93 to 0.66
-in the CGA 2.5.0.44 pair) for the same reason.
+million) and the indels both facets call rise from 11,891 to 405,102; in both pairs one-sided indels
+drop from 99% to 53%, 16 to 18% in GIAB's easy regions. `uncalled` grows with it (indels 420 to
+43,389 in the CGA 2.5.0.24 pair, as CGI's half-calls now meet freeBayes), so `called_both` is less
+than the carried alleles minus the one-sided ones.
 
-The artefact is counted for region `all` only. The VRS-paired SNV rates per region carry it in every
-class, so the SNV table below is the first build's, by position, which has no artefact and agrees
-with the VRS pairing once it is taken out (above). The indel table is the VRS pairing's, complex rows
-still in.
-
-**SNV mismatch, % of called both** (by position, the first build; `ploidy_differs` left out)
+**SNV discordance, % of called both** (by VRS id, both rules)
 
 | Methods (a / b) | all | easy | difficult | low mappability | segdups | homopolymer 7–11 | homopolymer ≥12 | TR 51–200 bp | TR 201–10k bp | GC <25 or >65 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| CGA 2.5.0.44 / freeBayes 0.9.15 | 0.49 | 0.29 | 1.60 | 2.70 | 1.63 | 1.25 | 10.75 | 3.12 | 2.53 | 0.67 |
-| CGA 2.5.0.24 / freeBayes 0.9.20 | 0.93 | 0.55 | 3.08 | 3.70 | 1.89 | 3.25 | 24.69 | 4.35 | 2.86 | 2.35 |
+| CGA 2.5.0.44 / freeBayes 0.9.15 | 0.54 | 0.30 | 1.85 | 3.01 | 2.01 | 1.43 | 11.34 | 3.72 | 2.92 | 0.76 |
+| CGA 2.5.0.24 / freeBayes 0.9.20 | 1.02 | 0.62 | 3.35 | 4.21 | 2.27 | 3.47 | 25.00 | 4.84 | 3.27 | 2.42 |
 
-**Indel mismatch, % of called both** (by VRS id, complex rows still in; `ploidy_differs` left out)
+**Indel discordance, % of called both** (by VRS id, both rules)
 
 | Methods (a / b) | all | easy | difficult | low mappability | segdups | homopolymer 7–11 | homopolymer ≥12 | TR 51–200 bp | TR 201–10k bp | GC <25 or >65 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| CGA 2.5.0.44 / freeBayes 0.9.15 | 5.31 | 1.54 | 7.90 | 6.72 | 6.10 | 4.37 | 14.61 | 12.65 | 9.78 | 4.75 |
-| CGA 2.5.0.24 / freeBayes 0.9.20 | 8.05 | 3.03 | 12.52 | 9.42 | 7.60 | 8.09 | 26.57 | 15.31 | 9.72 | 8.88 |
+| CGA 2.5.0.44 / freeBayes 0.9.15 | 4.98 | 1.47 | 7.43 | 6.62 | 5.90 | 3.94 | 14.08 | 12.12 | 9.43 | 4.47 |
+| CGA 2.5.0.24 / freeBayes 0.9.20 | 7.92 | 3.10 | 12.27 | 9.80 | 7.76 | 7.81 | 26.52 | 15.01 | 9.55 | 8.67 |
 
 **One-sided, % of carried** (by VRS id)
 
@@ -175,10 +186,9 @@ The 95% Wilson intervals of these `all` and `easy` cells are within ±0.2 percen
 
 Reading them:
 
-- **Easy regions mostly agree across technologies.** Leaving X's ploidy out, CGI and freeBayes
-  disagree on 0.29 to 0.55% of SNV genotypes in easy regions, around the same-reads callers' rate
-  (0.05 to 0.40%), and on 1.5 to 3.0% of indel genotypes with complex rows still in. Homopolymers of
-  12 or more bases are again the worst class, at 11 to 27%.
+- **Easy regions mostly agree across technologies.** CGI and freeBayes disagree on 0.30 to 0.62% of
+  SNV genotypes in easy regions, around the same-reads callers' rate (0.05 to 0.40%), and on 1.5 to
+  3.1% of indel genotypes. Homopolymers of 12 or more bases are again the worst class, at 11 to 27%.
 - **One-sided alleles are the larger difference.** A quarter to a third of carried SNVs, and half the
   indels, are stated by one side only, rising to 75 to 90% in low mappability, segmental duplications
   and long tandem repeats. Most are freeBayes's (`only_b` is 6 times `only_a` for SNVs), and in

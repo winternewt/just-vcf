@@ -23,6 +23,9 @@ against `0/.` a `mismatch`). The atlas's `called_both` is `match + mismatch` and
 `mismatch`, so the convention leaves the discordance rate. The graded comparison compares copies as a
 share of the ploidy (haploid `k` against diploid `2k`), as the hard one does. `Agreement` loses
 `ploidy_differs`.
+Measured on the rebuilt PGP pairs (`x_nonpar`, `carried_pass`): of 71,715 and 64,382 flagged SNVs,
+71,193 and 61,920 match and 522 and 2,462 are haploid calls against a freeBayes het, which stay
+discordant. The pairs' SNV discordance falls from 3.40% to 0.54% and from 3.07% to 1.02%, with F21.
 
 Rejected: keeping `ploidy_differs` as an agreement value and leaving it out of the rate (a haploid
 call against a het is a real disagreement, and the value hid it among the convention's matches);
@@ -56,6 +59,10 @@ read: it is open like a null haplotype, never zero copies, and a pair it leaves 
 `agreement` value `unreadable`, counted in a warning and in the atlas's `unreadable` column (never in
 `called_both`). The `site` pairing and the graded distribution read alleles the same way, and the
 atlas counts an allele as carried where `concordance` read a copy of it under another spelling.
+Measured on the rebuilt PGP pairs (region `all`, `carried_pass`, docs/METHOD_ATLAS.md): SNV
+mismatches outside X's non-PAR fall by 21,873 in the CGA 2.5.0.44 pair (20,434 counted exactly before)
+and by 2,460 in the 2.5.0.24 pair (2,601 counted); 2,315 and 201 SNVs are `unreadable`; mean `p_same`
+over graded MNVs rises from 0.661 to 0.706 and from 0.776 to 0.808.
 
 Rejected: marking every VRS pair whose row holds a sibling ALT unreadable (it drops the 20,000 SNVs
 the same-length rule reads exactly, and the common multi-allelic indel row); reading only the

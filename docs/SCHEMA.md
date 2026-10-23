@@ -109,9 +109,28 @@ same calls. A facet already read is refused rather than read again.
   MNV `CTA`/`CGA` becomes `T>G` one base on). The split itself never leaves an insertion that could
   move left: its inserted bases would end in the padding base, and the text would then fit a second
   split.
-- Left unread, each reason counted once: I/D codes, whole no-calls (the probe's REF span is unknown),
-  genotypes that could not be split, spans past the contig's end or at POS 0, and every row of a
-  contig that could not be matched with the reference (below).
+- An array row whose genotype is `I`/`D` codes (23andMe, AncestryDNA, a Final Report: `I` the allele
+  with the inserted bases, `D` the one without), on an assembly a configured Illumina manifest maps
+  its probes to (RM281, `just_vcf.probes`): matched with a manifest indel probe by an rsid among its
+  `ids`, on the same contig. The probe's source sequence names the inserted bases and about 60 bases
+  of flank each side; the site is located in the reference by those flanks, within 200 bases of the
+  probe's own span around its `MapInfo` (the flanks with the bases between them: the reference
+  carries them, a deletion site, `I` is REF; the flanks joined: an insertion site, `D` is REF). Taken
+  only when the flanks are found at exactly one place, on the strand the manifest's `SourceStrand`
+  gives. The site is then spelled with REF starting at the row's own `pos`, shifted along a repeat
+  where the export placed it elsewhere in one: the reference bases from `pos` up to the indel come
+  before both alleles, and where there are none both alleles end with the base after the indel (VCF's
+  padding base, on the right; `normalize` moves it left as it aligns). A site before `pos` that no
+  shift brings there, or more than 64 bases after it, stays unread. The row gets `ref` (read from the
+  reference, never from the manifest), `alts` (the called alleles other than REF, as for any array
+  row), `gt`, `end_pos`, and `gt_alleles` spelled as the two sequences, so `gt` indexes them like any
+  row's; `source_gt` keeps the codes. A row whose rsids name more than one located site, or none, is
+  left as loaded, each reason counted. Not affected by `strand_check`: `I` and `D` read the same on
+  either strand. `ref_check` stays null.
+- Left unread, each reason counted once: I/D codes no manifest probe resolves (above), whole
+  no-calls (the probe's REF span is unknown), genotypes that could not be split, spans past the
+  contig's end or at POS 0, and every row of a contig that could not be matched with the reference
+  (below).
 
 **Matching the reference to the facet.** Per contig the calls use, read through `canonical_chrom` on
 both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X):
@@ -192,8 +211,9 @@ How the awkward cases land under C:
 - **Hemizygous X/Y in arrays**: kept exactly as written (`["A"]` or `["A", "A"]`). An array writing
   `AA` on male X is not saying "homozygous". The facet's ploidy handling is a known open issue, not
   something the loader corrects.
-- **23andMe `I`/`D`**: kept verbatim as symbolic alleles. Resolving them needs chip manifests
-  (LANDSCAPE). No VRS id is minted for them.
+- **23andMe `I`/`D`**: kept verbatim as symbolic alleles at load. `resolve_ref` spells them as
+  sequences where a configured chip manifest's indel probe resolves them (above, RM281); until then,
+  and where none does, no VRS id is minted for them.
 - **CGI partial no-call inside an allele** (`GC?`): kept verbatim in `gt_alleles` (`"GC?"`), with no VRS
   id. The `?` marks the bases CGI could not call. Because `gt` indexes `[source_ref] + alts`, a partial
   allele is in `alts` too (the native `var` and `masterVarBeta` files; CGI's VCF writes such a
@@ -1082,6 +1102,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, RM281's chip manifests): no column changes. Rule added (Decision
+  2): `resolve_ref` resolves an array's `I`/`D` rows against the indel probes of the Illumina manifests
+  under `JUST_VCF_MANIFESTS_DIR`, filling `ref`, `alts`, `gt`, `end_pos` and replacing `gt_alleles`'
+  codes with the site's sequences (`source_gt` keeps them). Values change on array facets with such
+  rows when the manifests are configured; without them nothing changes but the warning's wording.
+  `RESOLVE_VERSION` 5.
 
 - **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
   (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from

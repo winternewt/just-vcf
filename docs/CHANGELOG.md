@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref` resolves an array's `I`/`D` indel codes (23andMe, AncestryDNA, Final Reports) against
+  the indel probes of the Illumina manifests under `JUST_VCF_MANIFESTS_DIR` (RM281, `just_vcf.probes`):
+  a row is matched with a probe by rsid, the probe's site is located in the reference by its flanks,
+  and the row gets `ref` (from the reference), `alts`, `gt`, `end_pos` and `gt_alleles` spelled as the
+  site's two sequences, REF starting at the row's own position; `source_gt` keeps the codes. Each
+  manifest is read once into a probe table under the cache's `probes/`. Rows no probe resolves stay as
+  loaded, each reason counted; without the manifests every code row stays unread, with a warning that
+  says so. A value change on array facets with I/D rows when the manifests are configured. Tests see
+  `JUST_VCF_MANIFESTS_DIR` empty; the opt-in manifest test takes the new `manifests_dir` fixture.
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

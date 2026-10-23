@@ -39,12 +39,13 @@ from gtars.refget import RefgetStore
 from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_snv_rows
 from just_vcf import cache
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
+from just_vcf.probes import IndelSite, Manifest, catalog_digest, indel_catalog, locate_indel, place_indel, window_for
 from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, StrandCheck, canonical_chrom, canonical_order, empty
 from just_vcf.strand import StrandResult, check_strand, withheld_reason
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 4
+RESOLVE_VERSION = 5
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes."""
 
 CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
@@ -303,6 +304,7 @@ def resolve_ref(
         warnings.append(strand.summary())
     withhold = strand is not None and strand.check is StrandCheck.MIXED
     concatenated = facet["format_id"] in CONCATENATED_ALLELES
+    codes = _code_catalog(loaded, facet, plan.label)
     entry = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
     with cache.spilling(entry, cache.RESOLVE_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])) as spill:
         # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each contig
@@ -310,7 +312,7 @@ def resolve_ref(
         # bytes also key the result: a run on the same input reuses what an earlier one wrote.
         staged = spill.stage / "input.parquet"
         loaded.calls.sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
-        key = cache.content_key([staged], facet)
+        key = cache.content_key([staged], {**facet, "probe_catalog": codes.digest})
         done = spill.find(key)
         if done is None:
             counts: Counter[str] = Counter()
@@ -319,12 +321,12 @@ def resolve_ref(
             for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
                 rows = source.filter(pl.col("chrom") == chrom).collect()
                 contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
-                resolved = _resolve_rows(rows, store, contig, counts, withhold, concatenated) if contig is not None else rows
+                resolved = _resolve_rows(rows, store, contig, counts, withhold, concatenated, codes) if contig is not None else rows
                 part = spill.stage / f"calls-{index:05d}.parquet"
                 canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
                 parts.append(part)
             staged.unlink()
-            done = spill.commit(key, {"calls": parts}, _row_warnings(counts, plan.digest))
+            done = spill.commit(key, {"calls": parts}, _row_warnings(counts, plan.digest, codes))
     warnings += done.warnings
     parts = done.files("calls")
     for warning in warnings:
@@ -533,11 +535,18 @@ def _read(rows: pl.DataFrame, store: ReferenceStore, contig: Contig) -> pl.Serie
 
 
 def _resolve_rows(
-    rows: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], withhold: bool = False, concatenated: bool = False
+    rows: pl.DataFrame,
+    store: ReferenceStore,
+    contig: Contig,
+    counts: Counter[str],
+    withhold: bool = False,
+    concatenated: bool = False,
+    codes: "_Codes | None" = None,
 ) -> pl.DataFrame:
     """One contig's rows with REF read; `counts` gathers the outcome per reason. `withhold`: the facet's
     strand is mixed (F13), so array rows whose genotype is not strand-safe get no `alts` or `gt`.
-    `concatenated`: the format writes an indel genotype as its two allele sequences back to back (F4)."""
+    `concatenated`: the format writes an indel genotype as its two allele sequences back to back (F4).
+    `codes`: the manifests' indel probes an `I`/`D` row is resolved against (RM281)."""
     if rows.is_empty():
         return rows
     is_vcf = pl.col("source_ref").is_not_null()
@@ -551,6 +560,7 @@ def _resolve_rows(
     work = _split_concatenated(work, store, contig, counts, withhold) if concatenated else work.with_columns(
         *[pl.lit(None, dtype=CALLS[name]).alias(f"_split_{name}") for name in ("ref", "alts", "gt", "end_pos")]
     )
+    work = _resolve_codes(work, store, contig, counts, codes)
 
     vcf = work.filter(pl.col("_vcf"))
     if vcf.height:
@@ -647,6 +657,123 @@ def _split_concatenated(work: pl.DataFrame, store: ReferenceStore, contig: Conti
     ).drop("_gt_alleles")
 
 
+CODES = ["I", "D"]
+"""An array's indel genotype letters: `I` the allele with the inserted bases, `D` the one without."""
+
+_CODE_NAMES = ("ref", "alts", "gt", "end_pos", "gt_alleles")
+
+
+@dataclass(frozen=True)
+class _Codes:
+    """The indel probes a facet's `I`/`D` rows are resolved against, or why there are none."""
+
+    catalog: pl.DataFrame | None
+    manifests: tuple[Manifest, ...]
+    absent: str | None
+    """Why `catalog` is None, for the warning; None also when the facet has no code rows at all."""
+
+    @property
+    def digest(self) -> str | None:
+        return catalog_digest(list(self.manifests)) if self.manifests else None
+
+
+def _code_catalog(loaded: Loaded, facet: dict, label: str | None) -> _Codes:
+    """The configured manifests' indel probes on the facet's assembly, read only when it has `I`/`D` rows."""
+    if facet["vcf_version"] is not None:
+        return _Codes(None, (), None)
+    code = pl.col("source_ref").is_null() & pl.col("gt_alleles").list.eval(pl.element().is_in(CODES)).list.any()
+    if not loaded.calls.select(code.fill_null(False).any()).collect().item():
+        return _Codes(None, (), None)
+    if label is None:
+        return _Codes(None, (), "the reference's assembly is unknown, so no manifest's build can be matched with it")
+    catalog, manifests = indel_catalog(label)
+    if not manifests:
+        return _Codes(None, (), f"no manifest with indel probes on {label} is configured (JUST_VCF_MANIFESTS_DIR)")
+    return _Codes(catalog, tuple(manifests), None)
+
+
+def _resolve_codes(work: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], codes: _Codes | None) -> pl.DataFrame:
+    """Array rows whose genotype is `I`/`D` codes, resolved against a manifest's indel probe (RM281).
+
+    A row is matched with a probe by an rsid among its `ids`, on the same contig. The probe's site is
+    located in the reference by its flanks (`locate_indel`) and spelled with REF starting at the row's
+    `pos` (`place_indel`), REF read from the reference: `I` is the longer of the site's two alleles and
+    `D` the shorter. The row gets `ref`, `alts` (the called alleles other than REF, as for any array
+    row), `gt`, `end_pos`, and `gt_alleles` spelled as the sequences; `source_gt` keeps the codes. A row
+    whose rsids name no probe or more than one site, or whose site is not located or cannot be spelled
+    at its position, is left as loaded, each reason counted. Returns `work` with the `_split_*` slots
+    filled for the rows resolved here, and their `gt_alleles` replaced.
+    """
+    is_code = pl.col("source_ref").is_null() & pl.col("gt_alleles").list.eval(pl.element().is_in(CODES)).list.any().fill_null(False)
+    only_codes = pl.col("gt_alleles").list.eval(pl.element().is_null() | pl.element().is_in(CODES)).list.all()
+    rows = work.filter(is_code).select("_row", "chrom", "pos", "ids", "gt_alleles", only_codes.alias("_only"))
+    found: dict[str, list] = {"_row": [], **{f"_code_{name}": [] for name in _CODE_NAMES}}
+    if rows.height:
+        counts["code_rows"] += rows.height
+        counts["code_mixed"] += rows.filter(~pl.col("_only")).height
+        rows = rows.filter(pl.col("_only"))
+        if codes is None or codes.catalog is None:
+            counts["code_no_manifest"] += rows.height
+        elif rows.height:
+            probes = codes.catalog.filter(pl.col("chrom") == rows["chrom"][0])
+            _resolve_code_rows(rows, probes, store, contig, counts, found)
+    resolved = pl.DataFrame(found, schema={"_row": pl.UInt32, **{f"_code_{name}": CALLS[name] for name in _CODE_NAMES}})
+    work = work.join(resolved, on="_row", how="left", maintain_order="left")
+    return work.with_columns(
+        *[pl.coalesce(f"_split_{name}", f"_code_{name}").alias(f"_split_{name}") for name in ("ref", "alts", "gt", "end_pos")],
+        pl.when(pl.col("_code_gt_alleles").is_not_null()).then(pl.col("_code_gt_alleles")).otherwise(pl.col("gt_alleles")).alias("gt_alleles"),
+    ).drop([f"_code_{name}" for name in _CODE_NAMES])
+
+
+def _resolve_code_rows(
+    rows: pl.DataFrame, probes: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], found: dict[str, list]
+) -> None:
+    """`_resolve_codes` for one contig's code rows against that contig's probes; appends to `found`."""
+    matched = (
+        rows.select("_row", pl.col("ids").list.unique().alias("rsid")).explode("rsid", empty_as_null=False)
+        .join(probes, on="rsid", how="inner")
+        .group_by("_row", maintain_order=True)
+        .agg(pl.struct("map_info", "left_flank", "indel_seq", "right_flank", "source_strand").unique(maintain_order=True).alias("probes"))
+    )  # fmt: skip
+    by_row = dict(zip(matched["_row"].to_list(), matched["probes"].to_list()))
+    located: dict[tuple, IndelSite | str] = {}
+    wanted = {tuple(probe.values()) for probe_list in by_row.values() for probe in probe_list}
+    spans = {key: window_for(key[0], key[1], key[2], key[3], contig.length) for key in wanted}
+    keys = sorted(spans)
+    windows = dict(zip(keys, store.fetch(contig, [spans[key] for key in keys]))) if keys else {}
+    for key in keys:
+        located[key] = locate_indel(windows[key], spans[key][0], key[1], key[2], key[3], key[4])
+    for row, pos, alleles in rows.select("_row", "pos", "gt_alleles").iter_rows():
+        probe_list = by_row.get(row)
+        if not probe_list:
+            counts["code_no_probe"] += 1
+            continue
+        sites = {(key, located[key]) for key in (tuple(probe.values()) for probe in probe_list)}
+        good = {site for _, site in sites if isinstance(site, IndelSite)}
+        if len(good) > 1:
+            counts["code_ambiguous"] += 1
+            continue
+        if not good:
+            counts[f"code_{sorted(str(site) for _, site in sites)[0]}"] += 1
+            continue
+        site = good.pop()
+        key = min(key for key, candidate in sites if candidate == site)  # deterministic among probes of one site
+        placed = place_indel(windows[key], spans[key][0], site, pos)
+        if isinstance(placed, str):
+            counts[f"code_{placed}"] += 1
+            continue
+        ref, alt = placed
+        longer, shorter = (ref, alt) if site.reference_carries else (alt, ref)
+        spelled = [None if code is None else (longer if code == "I" else shorter) for code in alleles]
+        called = {allele for allele in spelled if allele is not None}
+        counts["code_resolved"] += 1
+        for name, value in zip(
+            found,
+            (row, ref, sorted(called - {ref}), [None if a is None else int(a != ref) for a in spelled], pos + len(ref) - 1, spelled),
+        ):
+            found[name].append(value)
+
+
 def _count_vcf(vcf: pl.DataFrame, counts: Counter[str]) -> None:
     read = vcf.filter(pl.col("_bases").is_not_null())
     counts["vcf_rows"] += vcf.height
@@ -675,9 +802,9 @@ def _count_array_unreadable(rows: pl.DataFrame, counts: Counter[str]) -> None:
     rest = rows.filter(~pl.col("_array"))
     if not rest.height:
         return
-    codes = rest["gt_alleles"].list.eval(pl.element().is_in(["I", "D"])).list.any().fill_null(False)
+    codes = rest["gt_alleles"].list.eval(pl.element().is_in(CODES)).list.any().fill_null(False)
     no_call = rest["gt_alleles"].is_not_null() & (rest["gt_alleles"].list.drop_nulls().list.len() == 0)
-    counts["array_code"] += int(codes.sum())
+    # Rows with an I/D code are counted by `_resolve_codes`, by outcome.
     counts["array_no_call"] += int((no_call & ~codes).sum())
     counts["array_unreadable"] += int(rest["gt_alleles"].is_null().sum())
 
@@ -723,7 +850,40 @@ def _derive_array_alleles(work: pl.DataFrame, counts: Counter[str], withhold: bo
     return work
 
 
-def _row_warnings(counts: Counter[str], digest: str) -> list[str]:
+_CODE_REASONS = {
+    "code_mixed": "an I/D code beside a base letter",
+    "code_no_probe": "no indel probe of the manifests carries one of their rsids on their contig",
+    "code_ambiguous": "their rsids name more than one indel site",
+    "code_not_found": "their probe's flanks are not found in the reference near its position",
+    "code_several": "their probe's flanks are found at more than one place",
+    "code_strand": "their probe's flanks are found only on the strand its manifest does not give its source sequence on",
+    "code_before_pos": "the site lies before their position, and no shift along a repeat brings it there",
+    "code_far": "the site lies too far after their position",
+    "code_window": "the site reaches past the reference read for it",
+}
+
+
+def _code_warnings(counts: Counter[str], codes: _Codes | None) -> list[str]:
+    """One line for the I/D rows resolved, one per reason the others were left unread."""
+    if not counts["code_rows"]:
+        return []
+    lines = []
+    if codes is not None and codes.manifests:
+        used = ", ".join(f"{manifest.descriptor} (sha256 {manifest.sha256[:12]}…)" for manifest in codes.manifests)
+        lines.append(
+            f"{counts['code_resolved']} of {counts['code_rows']} array row(s) with an I/D indel code resolved against the indel "
+            f"probes of {used}: matched by rsid, the site located by the probe's flanks in the reference, REF read from it"
+        )
+    if counts["code_no_manifest"]:
+        absent = codes.absent if codes is not None and codes.absent else "no manifest was given"
+        lines.append(f"{counts['code_no_manifest']} array row(s) with an I/D indel code left unread: {absent}")
+    for key, reason in _CODE_REASONS.items():
+        if counts[key]:
+            lines.append(f"{counts[key]} array row(s) with an I/D indel code left unread: {reason}")
+    return lines
+
+
+def _row_warnings(counts: Counter[str], digest: str, codes: _Codes | None = None) -> list[str]:
     lines = []
     if counts["vcf_rows"]:
         line = (
@@ -742,7 +902,6 @@ def _row_warnings(counts: Counter[str], digest: str) -> list[str]:
             "on readable contigs; ALT derived from the genotype against it"
         )
     reasons = {
-        "array_code": "with an I/D indel code (resolving it needs the chip manifest)",
         "array_no_call": "with no allele called (the probe's REF span is unknown)",
         "array_unreadable": "whose genotype could not be split into alleles",
         "array_outside": "past the end of their contig, or at position 0",
@@ -750,7 +909,8 @@ def _row_warnings(counts: Counter[str], digest: str) -> list[str]:
     for key, reason in reasons.items():
         if counts[key]:
             lines.append(f"{counts[key]} array row(s) {reason}: REF left unread")
-    split = counts["concat_resolved"] + counts["concat_homozygous"] + counts["concat_repeat"]
+    lines += _code_warnings(counts, codes)
+    split =counts["concat_resolved"] + counts["concat_homozygous"] + counts["concat_repeat"]
     if split:
         lines.append(
             f"{split} genotype(s) written as two allele sequences back to back split where exactly one split fits the "

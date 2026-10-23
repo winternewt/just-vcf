@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- somalier as an optional second opinion on relatedness (RM274): `just_vcf.somalier.somalier_relate`
+  writes each facet at the panel's positions with `write_vcf`, runs `somalier extract` and `relate`,
+  and reads `pairs.tsv` into the relatedness frame (`method = somalier`, its `relatedness` kept
+  verbatim, half of it as `kinship`). Without a `somalier` binary on PATH it raises
+  `SomalierNotFoundError`. Not run on this machine: docs/TRUST.md has no row for its binary yet.
+
 - Relatedness between facets (RM274): `relatedness(a, b)` gives KING-robust kinship (between-family
   form), IBS0, IBS2, the shared site counts, a jackknife standard error and a band (`same_person`,
   `first_degree`, `second_degree`, `third_degree`, `unrelated`, or `unknown` with a reason);

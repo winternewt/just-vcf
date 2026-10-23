@@ -275,6 +275,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   three-column file that could be a BED3 is refused unless `kind=` states it. Nothing in `facets`,
   `calls` or `blocks` changes, so `SCHEMA_VERSION` stays (docs/SCHEMA.md, "Coverage facets").
 
+- `concordance(a, b, *, region=None)` compares two facets of one person on one assembly, allele by
+  allele (RM277). Alleles meet by VRS id where both facets minted one, else by position, REF and ALT,
+  else against the other facet's one row at the position. Each row states the agreement (match,
+  mismatch, ploidy differs, uncalled, one-sided), what a silent facet's absence means, and, where both
+  rows carry likelihoods or both posteriors, `p_same`, the probability the two hold the same copies of
+  the allele (likelihoods under a named flat prior). A summary counts alleles by agreement and variant
+  class. Disagreement is kept, never resolved. Facets on different assemblies are refused. New public
+  names: `concordance`, `Concordance`, `Agreement`, `PairKey`, `AbsenceReading`, `ComparisonBasis`.
+  No column changes; `SCHEMA_VERSION` is unchanged.
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

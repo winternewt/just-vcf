@@ -16,6 +16,7 @@ from just_vcf.coverage import (
     callable_sites,
     read_coverage,
 )
+from just_vcf.concordance import AbsenceReading, Agreement, ComparisonBasis, Concordance, PairKey, concordance
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.links import link_disagreements
@@ -79,6 +80,8 @@ __all__ = [
     "SUBJECT_CHECKS",
     "VCF_ZARR_VERSION",
     "AbsenceMeans",
+    "AbsenceReading",
+    "Agreement",
     "AssemblyLabelBasis",
     "BlockAllele",
     "BlockKind",
@@ -88,6 +91,8 @@ __all__ = [
     "CallsetType",
     "ChipAbsence",
     "ChipBasis",
+    "ComparisonBasis",
+    "Concordance",
     "Chain",
     "ContentFilter",
     "ContentFilterBasis",
@@ -101,6 +106,7 @@ __all__ = [
     "Loaded",
     "MultiSampleError",
     "NoSampleError",
+    "PairKey",
     "EvidenceBasis",
     "GenotypeClass",
     "KaryotypicSex",
@@ -152,6 +158,7 @@ __all__ = [
     "callable_sites",
     "clear_cache",
     "learn_probe_sets",
+    "concordance",
     "liftover",
     "link_disagreements",
     "load",

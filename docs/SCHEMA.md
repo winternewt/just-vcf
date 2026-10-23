@@ -1581,6 +1581,118 @@ beside it and renamed into place.
   store, which polars-bio counts back in 2.4 s. The same person's 11 facets (60 M calls, 27 M
   blocks) make a 1.26 GB parquet store, each add taking seconds after its load.
 
+## Concordance between two facets (RM277)
+
+`concordance(a, b, *, region=None, reference=None)` (`just_vcf.concordance`) compares two facets of
+one person and returns a `Concordance`: a `sites` frame, a `summary`, the alleles it left out
+(`excluded`, per facet and reason) and its warnings. It is a measurement over two facets, not a facet:
+nothing is written into either facet's frames, no winner is picked where they disagree (charter 8),
+and no derived facet comes out. RM280's consensus is the place that would be. Its frames are
+just-vcf's own shape (charter 2: GA4GH has no concordance model). It adds no column to `facets`,
+`calls` or `blocks`, so `SCHEMA_VERSION` is unchanged.
+
+**One assembly.** Both facets need their REF read (`resolve_ref`). Equal `ref_seqcol_digest`s compare
+every contig. Two collections compare the contigs whose refget sequence is the same in both (Ensembl
+`1` and UCSC `chr1` of GRCh38 are one sequence; a VCF's alt contigs that `resolve_ref` could not
+match stay unread either way), and the rest are counted as `contig_not_shared`. A primary contig
+(1-22, X, Y) whose sequence differs, or no primary contig shared, refuses the pair
+(`ReferenceMismatchError`): lift one facet first. Neither facet read and one equal `assembly_label`
+on both is compared with a warning, since a label is not the assembly (charter 3); anything else is
+refused. Rejected: comparing by label alone. GRCh37 and hg19 share it and differ in MT.
+
+**The unit is one ALT allele**, Decision 1's per-allele view. Only sequence alleles are compared:
+`<*>`, `*`, symbolic alleles and breakends, ALTs that are no VCF allele, rows whose REF was never
+read, and array rows whose `alts` are still null are counted in `excluded`. An allele meets the other
+facet's in this order, each row saying which in `key`:
+
+1. `vrs`: both rows minted an id for it (the ALT's slot of `vrs_allele_ids`, never the REF slot: a
+   reference allele's id depends on how long the row's REF is). A VRS id is the fully justified
+   allele, so an indel written left-aligned in one file and at the right end of its repeat in the
+   other meets here without `normalize` (charter 4).
+2. `position`: the rest, by `(chrom, pos, REF, ALT)` as written, `REF` being `ref` or else
+   `source_ref`. Unnormalized indels that were not minted can miss each other here; mint both first.
+3. `site`: an allele the other facet does not state, where it wrote exactly one row at the
+   position over the same REF span: the other genotype is read for copies of this allele (an array's
+   hom-ref row, a DeepVariant `RefCall`, a monomorphic record, the other ALT of a multi-allelic
+   site). A row over another span is not read: a haplotype caller's complex allele (`AC>GT` beside
+   another facet's `A>G`) holds no allele of this span, so its genotype would read as zero copies, a
+   mismatch that is only representation. Several rows there and none with the allele (a split file)
+   are not read against, counted in a warning. Either way the allele stays one-sided, `absence =
+   other_alleles`.
+
+An allele stated by several rows of one facet (`normalize` keeps rows that differ, charter 8) pairs
+with each, counted in a warning.
+
+**Genotypes are compared as copies of the allele** in `gt_alleles`, unordered: phase sets are per
+facet and cannot be compared across facets, so `0|1` against `1|0` is a `match`. Copies count only
+this allele, so a split file's `0` for another ALT (bcftools' default) and a `.` (vt, `normalize`)
+read correctly: neither is this allele, and `.` is unknown. `agreement`:
+
+| Value | When |
+|---|---|
+| `match` | both fully called, the same ploidy and the same copies |
+| `mismatch` | both fully called and the copies differ; or with a null haplotype, the called ones already contradict (`1/.` against `0/0`) |
+| `ploidy_differs` | both written, with different numbers of haplotypes (a haploid X call against a diploid one) |
+| `uncalled` | a haplotype is null on either side and the rest do not contradict; a whole no-call (`./.`) is the source saying it could not tell, never a mismatch |
+| `only_a`, `only_b` | only one facet states the allele and the other gave no single row to read against |
+
+**Graded where possible** (charter 7). Each row's vector, in VCF genotype order over its own
+`source_alleles` (Decision 3), becomes a distribution over the copies of the allele: haploid when it
+has one entry per allele, diploid when it has n(n+1)/2, summed over the genotypes with each number of
+copies, so a multi-allelic row compares with a biallelic one. `p_same = Σ_k p_a(k) · p_b(k)` is the
+probability the two facets hold the same number of copies, the facets' errors taken as independent.
+`basis` says what it rests on:
+
+- `gl_flat_prior`: both rows carry likelihoods. Decision 3 forbids turning a likelihood into a
+  posterior without a prior, so the prior is named: flat over the genotypes the vector lists
+  (`p = 10^gl / Σ 10^gl`, in Float64). Preferred over `gp`: the likelihoods are the assay's evidence,
+  and two facets' posteriors can share a population prior that makes them agree for reasons other
+  than the reads.
+- `gp`: both rows carry posteriors, renormalized to sum to 1 (they are rounded, F10).
+- `hard`: anything else, `p_same` null. A likelihood is never compared with a posterior: they are
+  different quantities. A vector with a null entry, a length that fits neither ploidy, or an allele
+  list that does not hold the ALT exactly once is not used. A `site` pairing is `hard`: the other
+  row's vector indexes other alleles.
+
+Rejected: a distance in log space (no probability to read), and comparing the most likely genotypes
+only, which is the hard comparison again.
+
+**One-sided alleles** carry `absence`, what the silent facet says, checked in this order: a row there
+without the allele (`other_alleles`, also on `site` pairings), a `ref` or `no_call` block over the
+position (`ref_block`, `no_call_block`), else the facet's rule: `reference` when
+`absence_is_reference(facet, variant_class)` is True, `unknown` otherwise and on a contig the facet
+neither declared in its header nor wrote a row on. Never a negative (Decision 4). `absence` is null
+where both facets state the allele. A one-sided allele stays one-sided whatever the absence says:
+reading `reference` or a block as `0/0` would turn graded absence into a call.
+
+**`sites`**, one row per allele either facet states, in canonical order (contig rank, `pos`, `ref`,
+`alt`, then each facet's row order):
+
+| Column | Dtype | Meaning |
+|---|---|---|
+| `chrom`, `pos`, `ref`, `alt` | `str`, `u32`, `str`, `str` | the allele as the facet stating it wrote it, `a` first |
+| `variant_class` | `Enum` | `snv`, `mnv` or `indel` (Decision 5's rule) |
+| `vrs_allele_id` | `str` | either facet's id for the allele; null where neither minted one |
+| `key` | `Enum` | `vrs`, `position`, `site`; null on a one-sided allele |
+| `agreement` | `Enum` | above |
+| `absence` | `Enum` | above; null where both facets state the allele |
+| `basis` | `Enum` | `gl_flat_prior`, `gp`, `hard`; null on a one-sided allele |
+| `p_same` | `f64` | null unless `basis` is graded |
+| `a_pos`, `b_pos` | `u32` | where each facet wrote the allele (they differ for an indel met by VRS id); on a `site` pairing the other row's position; null on a silent side |
+| `a_gt_alleles`, `b_gt_alleles` | `list[str]` | each facet's genotype (on a `site` pairing, the other row's) |
+| `a_copies`, `b_copies` | `u8` | copies of the allele; null where a haplotype is uncalled |
+| `a_filters`, `b_filters`, `a_gq`, `b_gq` | `list[str]`, `u16` | each row's FILTER and GQ, so a consumer can restrict to PASS |
+
+**`summary`** (`summarize(sites)`) counts alleles per `(agreement, key, absence, variant_class,
+basis)` with the mean `p_same`; its counts sum to the height of `sites`. Run it on a filtered `sites`
+(PASS only, alleles either facet carries) to summarize that subset.
+
+**`region`** keeps the alleles whose `pos` lies in one of its intervals: a frame with `chrom`, `pos`
+and `end_pos`, 1-based and closed as `blocks` writes them (a BED's 0-based start is `pos - 1`), any
+contig spelling. Both facets are cut before they meet, so an indel met by VRS id whose two spellings
+straddle an edge counts on each side alone. RM279 calls it once per stratum. Rejected: carrying the
+region's own columns (a stratum name) into `sites`, which overlapping strata would duplicate.
+
 ## Open questions
 
 Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5 (`end_pos`) and Q6
@@ -1665,6 +1777,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 - **No version change** (2026-10-23, RM278 coverage facets): no column of `facets`, `calls` or
   `blocks` changes. `read_coverage`, `alignment_coverage` and `callable_sites` return their own
   `Coverage` shape beside the frames ("Coverage facets", above).
+
+- **No version change** (2026-10-23, RM277 concordance): no column changes to `facets`, `calls` or
+  `blocks`. `concordance` returns its own frames ("Concordance between two facets"), a measurement
+  beside the facets, not a facet.
 
 - **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
   (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from

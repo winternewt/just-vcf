@@ -34,7 +34,8 @@ Design references, not dependencies:
 - A per-person store of facets across assemblies, callers and phasings, with a graph between them.
 - Arrow-native left-align normalization and Arrow-native VRS computation (gtars is the closest, Rust,
   with `list[dict]` Python output).
-- Concordance on graded evidence (GL/PL/GP). Every benchmarking tool scores hard genotypes.
+- Concordance on graded evidence (GL/PL/GP). Every benchmarking tool scores hard genotypes. just-vcf's
+  `concordance` (RM277, 2026-10-23) compares likelihoods or posteriors where both facets carry them.
 - gVCF reference blocks in Arrow.
 - `liftover_to` edges, CisPhasedBlock or GA4GH Pedigree anywhere in the tabular stack. Pedigree has no
   Python tooling at all (pedigree-tools is Node.js).

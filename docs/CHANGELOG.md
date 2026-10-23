@@ -4,6 +4,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `consensus(person, atlas=...)` (RM280, `just_vcf.consensus`): a derived facet (`relation = consensus`, a
+  link from every parent) with one row per ALT allele the parents state on one assembly, its `gp` the
+  posterior over the copies of it. Each parent's reading (its row, its vector tempered by its rate, a
+  site row, a `ref` block, or silence where `absence_is_reference` allows) is weighted by its method's
+  error rate; `method_error_rates` turns the atlas's pair rates into per-method genotype and silence
+  rates (triangulated where three methods were compared, else half a pair's), by caller and version,
+  else caller, else a stated default (the worst measured), and `regions` picks the highest rate among
+  the classes holding an allele. `Consensus.support` counts per row the parents that supported,
+  contradicted or were silent and those weighted by a default; the parents keep their calls. Refuses
+  two assemblies, a facet with its own derivative, and two subjects. No column changes;
+  `SCHEMA_VERSION` unchanged.
 - `links.CONSENSUS` (`consensus`): a documented multi-parent lineage relation, for a facet whose rows are
   computed from all its parents (RM280). `merge` now means the parents' rows put together.
   `link_disagreements` checks a `consensus` facet as it checks a `merge` one.

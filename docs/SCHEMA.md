@@ -1895,6 +1895,105 @@ be pooled later and in any grouping. `scripts/method_atlas.py` builds an atlas f
 skipping a pair `same_person` does not answer True for; docs/METHOD_ATLAS.md holds the first one's
 headline rates.
 
+## A consensus posterior (RM280)
+
+`consensus(person, *, atlas, regions=None, prior="flat", …)` (`just_vcf.consensus`) reads every facet
+of one person at the alleles they state and gives each allele a posterior over the copies of it the
+person carries, weighing each facet by its method's error rate from a method-error atlas. The result is
+one more facet (charter 5), derived from all of them: `relation = consensus` (Decision 12), one
+`consensus` link from each parent, `derived_from` null. The parents' calls stay as they are, and each
+row says how many facets supported its most probable genotype, contradicted it or were silent
+(charter 8: the consensus resolves nothing away; it is a reading beside the others). The person chose
+it after the atlas (Part 2 interview, E7). Its shape is just-vcf's own (charter 2): GA4GH has no
+model for a cross-callset posterior. It adds no column to any frame, so `SCHEMA_VERSION` is unchanged.
+
+**Parents.** A `Person` (refused when its check read two people, warned when not every pair read as
+one) or `Loaded`s of one subject: two facets or more, none given twice, no consensus facet among
+them, and none made from another given one (its lineage, through `links` and `derived_from`): a facet
+and its `normalize`d child are the same reads twice. Kin facets (a PGP merge's freeBayes and VarScan2)
+are allowed. All on one assembly: equal `ref_seqcol_digest`s, or, where any facet's REF was not read,
+one equal `assembly_label` with a warning (charter 3). Anything else is `ReferenceMismatchError`:
+lift first.
+
+**The unit is one ALT allele**, as in concordance and the atlas. A row is `(chrom, pos, REF, ALT)`
+with REF as written, upper-cased, and its vector is over the copies of that ALT: 0, 1, 2 diploid, 0, 1
+haploid. The rows are every sequence ALT a parent states in a row the consensus reads (it passed its
+filters under `pass_only`, and it is graded or carries a genotype), on every contig. A multi-allelic
+site gives one row per ALT, each a marginal: copies of this ALT against anything else. Indels meet by
+spelling only (VRS ids are not used): two parents that spell one indel differently give two rows,
+each with the other parent silent or reading `other_span`. `normalize` both, or compare SNVs.
+
+**What a facet says** about an allele, the first that applies:
+
+| Reading | When | Its distribution over copies `q` |
+|---|---|---|
+| `stated` | a row states the allele | its vector (`genotype_evidence`'s `gl`, under a flat prior, or `gq`) summed by copies; else its genotype, a point mass. A `gp` row is read as its genotype unless `gp_as = likelihood` |
+| `site` | one row at the position over the same REF span, without the allele (a hom-ref record, another ALT) | zero copies, a point mass: its vector indexes other alleles |
+| `ref_block` | a `ref` block covers the position | the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; else zero copies |
+| `absence` | nothing covers it and `absence_is_reference(facet, class, force=force)` is True on a contig the facet declared or wrote | zero copies |
+
+Silent otherwise, each kind counted in the warnings per facet: `filtered` (`pass_only` and the row
+failed a filter), `no_call` (no haplotype called and no vector), `covered` (inside another record's
+span, a deletion), `several_rows` and `other_span` (concordance's rule: such a row holds no allele of
+this span), `no_call_block`, `unknown` (silence that says nothing: an array, a content filter, a
+class the facet did not call), `ploidy_differs` (below).
+
+**Error rates** (`method_error_rates(atlas)`). The atlas states how often two methods disagree, not
+which erred. With independent rare errors a pair's discordance is about the sum of its two methods'
+rates, so a method's `genotype_error` is `(d_xy + d_xz − d_yz) / 2` where it forms a triangle with two
+partners also compared with each other (the same-reads set), averaged over its triangles and kept at
+or below its lowest pair discordance (`triangle`); otherwise half of each pair's discordance, averaged
+over its partners (`half_pair`). Its `silence_error` is the share of the alleles a partner carries
+that it left one-sided, the lowest over its partners: an upper bound, since a partner's false calls
+count against it too. No rate goes below the 95% Wilson upper bound of zero events in the alleles it
+rests on. Rows of `scope` (`carried_pass`, or `carried` when `pass_only=False`) only, assemblies pooled.
+
+A facet takes, per region class and variant class, its caller's rates at its version (`method`),
+else its caller's pooled over versions without self pairs (`caller`), else the stated default
+(`default`): `default_rate=` when given, otherwise the worst rate any measured method has in that
+class. An unmeasured method is taken as no better than the worst one measured, not as average. Every
+row counts the facets that spoke with a default (`defaulted`), and `Consensus.rates` lists each
+parent's rates and their basis. With `regions` (a `RegionSet`) an allele is weighted by the highest
+rate among the classes holding its position, `all` where none does; without it, by `all`.
+
+**The posterior.** A stated or site reading gets the genotype error, a block or an absence the
+silence error, and becomes the likelihood `L(k) = (1 − e)·q(k) + e·(1 − q(k))/P` over `k = 0..P`
+copies: a genotype gets `1 − e` and spreads `e` evenly over the rest, and a graded vector is tempered
+so that no facet says more than its method's measured error allows (a PL of 3,000 against two
+facets that disagree is still one facet). The posterior is `prior(k) · ∏ L_f(k)`, normalized, in log
+space in Float64; the prior is flat over the copies (`prior = "flat"`, the only one so far). `P` is
+the ploidy most speaking readings state (diploid on a tie or where none states one); a reading of
+another ploidy is silent (`ploidy_differs`). The facets are taken as independent: two callers on
+the same reads are not, so where they agree the posterior is overconfident, and the atlas cannot
+correct that.
+
+**The facet.** `facets`: `caller = "just-vcf consensus"`, `caller_version = CONSENSUS_VERSION`, one
+`merge` step in `method_steps`, `derivation_inputs` one `error_rates` entry whose `sha256` digests
+`Consensus.rates`, `absence_means = unknown`, `variant_classes` counted from its rows, the parents'
+`assembly_label`, `ref_seqcol_digest`, `callset_type` and `subject` where they share one. `facet_id`
+digests the sorted parent ids, `CONSENSUS_VERSION`, the options and the rates. `calls`, one row per
+allele in canonical order: `alts = [alt]`, `source_alleles = [REF, ALT]`, `source_ref` the REF,
+`ref` the same where a parent read it from the reference (charter 10), `ref_check = not_run`, `gp` the
+posterior (VCF genotype order over `[REF, ALT]`), `gt` and `gt_alleles` its most probable genotype
+(the fewer copies on a tie), `evidence_basis = assay`, the rest null. `genotype_evidence` grades
+every row `gp`. `blocks` is empty.
+
+**`Consensus.support`**, one row per `calls` row in its order: `chrom`, `pos`, `ref`, `alt`,
+`variant_class`, `ploidy`, `copies` (the most probable), `confidence` (`-10·log10(1 − p)` of it from
+the log-space posterior: `gp` is Float32 and rounds a remainder below about 1e-45 to zero, which
+`genotype_evidence` then reads as infinite), `facets`, `supported`, `contradicted`, `silent` (they
+sum to `facets`), `defaulted` and `gp_as_likelihood` (the speaking facets read with a default rate,
+and with a posterior multiplied in). A sidecar, not `calls` columns: Decision 6's columns hold what a
+source states about a site, and these say how the consensus came about. Rejected: columns in `calls`,
+which every other facet would carry null and which would bump `SCHEMA_VERSION`; and the
+per-facet readings as rows, which copy the parents' calls into a second place.
+
+Rejected: a winner per site (charter 8); a joint posterior over a site's union of alleles, which the
+parents' allele lists do not share and which no other just-vcf measurement uses; multiplying GP as a
+likelihood by default (Decision 3: a posterior already holds its source's prior, which would count
+once per facet); one rate for every reading, which would let a whole genome's silence (one-sided
+rates of 1 to 30%, docs/METHOD_ATLAS.md) weigh like a stated genotype (0.05 to 3%).
+
 ## Open questions
 
 Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5 (`end_pos`) and Q6

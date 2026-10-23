@@ -381,3 +381,19 @@ def test_convert_options_that_do_not_fit_are_usage_errors(tmp_path: Path, fasta:
 def test_the_entry_point_is_registered() -> None:
     [script] = [ep for ep in entry_points(group="console_scripts") if ep.name == "just-vcf"]
     assert script.value == "just_vcf.cli:app"
+
+
+def test_load_summary_names_the_method_chain_without_its_options(tmp_path: Path) -> None:
+    path = vcf(tmp_path / f"{PERSON}.vcf", [("1", 100, "A", "G", "0/1")])
+    text = path.read_text().replace(
+        "##fileformat=VCFv4.2\n",
+        "##fileformat=VCFv4.2\n##reference=file:///home/Jane_Roe/ref/hg38.fa\n##DeepVariant_version=1.6.0\n"
+        f"##bcftools_normVersion=1.23.1\n##bcftools_normCommand=norm -m -both -f /home/{PERSON}/hg38.fa -o /home/{PERSON}/out.vcf.gz; "
+        "Date=Tue Mar 19 03:39:45 2024\n",
+    )
+    path.write_text(text)
+    result = run("load", path, "--json")
+    facet = report(result)["facets"][0]
+    assert facet["method_steps"] == ["call DeepVariant 1.6.0", "normalize bcftools norm 1.23.1"]
+    assert (facet["reference"], facet["aligner"]) == ("hg38.fa", None)
+    assert_private(result, PERSON)

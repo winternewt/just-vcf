@@ -321,6 +321,9 @@ _FACET_FIELDS = (
     "content_filter",
     "content_filter_basis",
     "phasing_method",
+    "reference",
+    "aligner",
+    "aligner_version",
     "strand_check",
 )
 """The facet columns a summary prints. Never `source_path`, `member`, `sample` or `sample_meta`: they
@@ -341,6 +344,12 @@ def _facet_summaries(loaded: Loaded, facets: pl.DataFrame) -> list[dict[str, Any
         summary: dict[str, Any] = {"index": index, **{name: facet[name] for name in _FACET_FIELDS}}
         summary["variant_classes"] = {entry["variant_class"]: entry["alleles"] for entry in facet["variant_classes"] or []} or None
         summary["dropped_fields"] = facet["dropped_fields"]
+        # Role, tool and version only: the options stay in the frame.
+        summary["method_steps"] = (
+            None
+            if facet["method_steps"] is None
+            else [" ".join(filter(None, (step["role"], step["tool"], step["version"]))) for step in facet["method_steps"]]
+        )
         counted = rows.get(facet["facet_id"], {})
         summary["rows"] = counted.get("rows", 0)
         summary["contigs"] = counted.get("contigs", 0)

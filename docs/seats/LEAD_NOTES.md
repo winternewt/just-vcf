@@ -124,3 +124,6 @@ status lines say what exists. Schema at 0.0.4.
   built a pre-F22 atlas row and guarded nothing; SCHEMA.md history (orphan heading, stale bump wording).
   Calibration merged at 86daede; the rebuilt atlas is in main's `data/output/`. Next audit after six more
   merges.
+- **2026-10-24 00:18 CEST, quota reset; building resumed** on layer 7 (82%), the one layer under 90%: one
+  builder builds desk #94–#96 as non-default options (defaults unchanged, so an answer is a one-line
+  change); one measures why the 60+ phred band is 2x overconfident and fixes it if no decision is needed.

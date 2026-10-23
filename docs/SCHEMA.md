@@ -130,7 +130,7 @@ same calls. A facet already read is refused rather than read again.
   is matched with Illumina's by rsid only on a chip where that was measured to hold, the share of
   resolved homozygous rows that read hom-ref (`23andme_v5` 98.7%, `ancestrydna_v2` 98.4%, PGP-HMS,
   2026-10-23). Every other chip (`23andme_v3` and `23andme_v4` at 76%, with the same sites hom-alt in
-  every export; `23andme_v1_v2` on 6 rows; an `illumina:` Final Report, a platform family or an unknown
+  every export, and on v3 hom-ref in the same person's CGI genome; `23andme_v1_v2` on 6 rows; an `illumina:` Final Report, a platform family or an unknown
   chip, never measured) has its code rows left as loaded, counted `id_orientation_unverified`.
 - Left unread, each reason counted once: I/D codes no manifest probe resolves (above), whole
   no-calls (the probe's REF span is unknown), genotypes that could not be split, spans past the

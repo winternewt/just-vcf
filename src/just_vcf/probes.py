@@ -114,7 +114,12 @@ _HOM_ALT_SITES = (
 ID_CALIBRATION: dict[str, IdCalibration] = {
     "23andme_v5": IdCalibration(True, "resolved homozygous I/D rows read hom-ref 98.7% (2 PGP-HMS exports, 2026-10-23)"),
     "ancestrydna_v2": IdCalibration(True, "resolved homozygous I/D rows read hom-ref 98.4% (1 PGP-HMS export, 2026-10-23)"),
-    "23andme_v3": IdCalibration(False, _HOM_ALT_SITES),
+    "23andme_v3": IdCalibration(
+        False,
+        _HOM_ALT_SITES + "; the same person's Complete Genomics var (hu0E7AAF, 2026-10-23) has a reference block and no "
+        "variant over all 44 sites its 23andMe v3 export reads hom-alt, and over all 127 it reads hom-ref: on those probes the "
+        "codes mean the other way round",
+    ),
     "23andme_v4": IdCalibration(False, _HOM_ALT_SITES),
     "23andme_v1_v2": IdCalibration(False, "6 resolved homozygous rows in one PGP-HMS export (2026-10-23), too few to calibrate"),
 }

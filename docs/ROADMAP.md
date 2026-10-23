@@ -81,7 +81,13 @@ manifests are read at run time from `JUST_VCF_MANIFESTS_DIR`, each once into a p
   against 21 of 2,313 on v5), with hardly a het. REF agrees with Ensembl's GRCh38 REF on long or short
   for all 154 biallelic v3 sites checked, so the reference read is right; whether those sites are ones
   where the reference carries the rare allele or where 23andMe's I/D mean the other way round needs the
-  same person's WGS (left, below).
+  same person's WGS (left, below). **Checked on one v3 person** (2026-10-23, hu0E7AAF, the export's
+  codes resolved with the gate lifted in memory, against the same person's CGI `var` on GRCh37): of
+  171 resolved homozygous sites, the 44 the export reads hom-alt and the 127 it reads hom-ref all lie
+  inside a CGI reference block with no variant within 2 bases. So on those probes 23andMe's I/D is the
+  other way round from Illumina's, not a rare reference allele; v3 stays withheld (now with that
+  evidence in `ID_CALIBRATION`), and a per-probe flip waits for more people. v4 is not checked yet:
+  loading one CGI `var` from Krypton took about 25 minutes.
 - **Strand per probe** (`resolve_ref`, mixed facets only): a withheld row is read by its probe's two
   alleles on the plus strand (`SNP` as written for `RefStrand` `+`, complemented for `-`; the GRCh37 base
   at `MapInfo` is in that pair for all but 2 of 20,000 sampled SNV probes of each manifest). Where the

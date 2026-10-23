@@ -12,7 +12,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   linked haplotype of a `var` or `masterVarBeta` row has `phased` true and the id in `phase_sets`,
   and `cis_phased_blocks` gives one VRS CisPhasedBlock per id and chromosome, the same from both
   files. `write_vcf` has no VCF field for a hapLink: it writes the haplotypes one phases unphased,
-  with a warning, since `|` without the set would read back as the chromosome's implicit set. Adding the enum
+  with a warning, since `|` without the set would read back as the chromosome's implicit set;
+  `write_vcf_zarr` writes such a row's `call_genotype_phased` false, for the same reason. Adding the enum
   member changes the `phase_set_kinds` dtype; `SCHEMA_VERSION` is bumped at merge.
 
 - CGI `masterVarBeta` rows carry `ad` (RM2): REF's count is `referenceAlleleReadCount`, each ALT's the

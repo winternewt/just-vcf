@@ -1740,7 +1740,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `phase_set_kinds` from `hapLink`, where they were null, and `hapLink` leaves `dropped_fields`;
   `cis_phased_blocks` gives one block per hapLink and chromosome; `write_vcf` writes a haplotype
   phased by a hapLink `/`, with no PS (VCF has no field for a hapLink, and `|` without its set would
-  read back as the chromosome's implicit set). Values change on CGI files that already load.
+  read back as the chromosome's implicit set), and `write_vcf_zarr` its `call_genotype_phased` false.
+  Values change on CGI files that already load.
 
 - **No version change** (2026-10-23, RM2's CGI read counts): no column changes. Rule changed
   (Decision 3): a `masterVarBeta` row fills `ad` and `source_alleles` from its per-allele read counts,

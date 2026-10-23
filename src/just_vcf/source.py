@@ -329,7 +329,8 @@ class Step:
     options: tuple[str, ...] = ()
     """The options that say what the step did, as written (`-m -both`, `selectTypeToInclude=[SNP]`).
     A value that is a path or a file name is written `<path>`, except a reference or a chain, which
-    keeps its base name. Inputs, outputs and sample-naming options are never kept."""
+    keeps its base name where it is a known reference's (`_known_reference`), else `<file>`. Inputs,
+    outputs and sample-naming options are never kept."""
     line: str = ""
     """The meta key the step was read from (`##bcftools_normCommand`, `##GATKCommandLine.SelectVariants.2`)."""
 
@@ -606,7 +607,7 @@ def method_chain(meta: list[str], callers: list[Caller], caller_at: dict[str, in
             add(_Found(index, Step("Eagle", versions.get("eagleVersion"), "phase", (), f"##{key}")))
         elif key == "liftOverProgram":
             program = re.match(r"<?([^,>]+)", value)
-            options = [f"{k}={_basename(v)}" for k, v in map(_meta_pair, meta) if k in ("liftOverChainFile", "targetRefGenome")]
+            options = [f"{k}={_known_reference(_basename(v))}" for k, v in map(_meta_pair, meta) if k in ("liftOverChainFile", "targetRefGenome")]
             add(_Found(index, Step(program.group(1) if program else value, _attr(value, "version"), "lift", tuple(options), f"##{key}")))
 
     for index, tool in gatk_sources:
@@ -671,12 +672,46 @@ def _reference(stated: list[str], called: list[str], steps: list[Step], warnings
 
 
 def _reference_name(value: str) -> str:
-    """`##reference=`'s base name; DRAGEN names the `reference.bin` inside its reference directory."""
+    """`##reference=`'s base name (`_known_reference`); DRAGEN names the `reference.bin` inside its
+    reference directory."""
     text = _strip_url(value)
     parts = [part for part in re.split(r"[/\\]", text) if part]
     if len(parts) > 1 and parts[-1] == "reference.bin":
-        return parts[-2]
-    return parts[-1] if parts else ""
+        return _known_reference(parts[-2])
+    return _known_reference(parts[-1]) if parts else ""
+
+
+FILE_PLACEHOLDER = "<file>"
+"""What a reference or chain file's base name is written as when it is not a known reference's."""
+
+_ASSEMBLY_WORD = re.compile(
+    r"hg(?:18|19|38)|grch3[678]|hs37d5|hs38(?:dh)?|hs1|b3[678]|build3[678]|ncbi3[678]|g1k|1kg|v37|assembly(?:19|38)"
+    r"|chm13(?:v\d+)?|t2t|gca|gcf|(?:hg\d+|grch3\d)to(?:hg\d+|grch3\d|chm13)",
+    re.IGNORECASE,
+)
+"""A word that names an assembly in a reference or chain file's name: UCSC's, GRC's, the 1000 Genomes
+and GATK bundles', NCBI's accessions (`GCA_000001405`, T2T's `GCA_009914755`) and UCSC's chains."""
+_REFERENCE_WORD = re.compile(
+    r"\d+|[prv]\d+|ucsc|human|homo|sapiens|assembly|primary|toplevel|dna|sm|rm|genome|genomic|nt|alt|aware|masked"
+    r"|decoy|hla|nohla|noalt|no|analysis|set|full|plus|ebv|mt|chrm|rcrs|cnv|graph|rna|to|over|chain|ref|reference"
+    r"|1000genomes|fa|fasta|fna|2bit|gz|bgz|bz2|bin|dict|fai",
+    re.IGNORECASE,
+)
+"""The other words such a name is made of: versions, the bundles' descriptors, extensions."""
+
+
+def _known_reference(name: str) -> str:
+    """`name` (a reference or chain file's base name) if it is a known reference's, else `<file>`.
+
+    Known: every word between `.`, `_`, `-` and `+` is an assembly word or a descriptor
+    (`_ASSEMBLY_WORD`, `_REFERENCE_WORD`), and one names an assembly: `hg38.fa`, `hs37d5.fa.gz`,
+    `Homo_sapiens.GRCh38.dna.primary_assembly.fa`, `GRCh38_to_GRCh37.chain.gz`. Any other base name
+    may carry a person's or a lab's name (`ALICESMITH-hg38.fa`); one made of known words cannot."""
+    words = [word for word in re.split(r"[._+\-]+", name) if word]
+    if not words:
+        return name
+    known = all(_ASSEMBLY_WORD.fullmatch(word) or _REFERENCE_WORD.fullmatch(word) for word in words)
+    return name if known and any(_ASSEMBLY_WORD.fullmatch(word) for word in words) else FILE_PLACEHOLDER
 
 
 def _strip_url(value: str) -> str:
@@ -810,7 +845,7 @@ def _tokens(text: str) -> list[str]:
 def _shown(value: str, kind: str) -> str:
     """A value as a step keeps it: a reference's base name, `<path>` for any other path or file."""
     if kind == "ref":
-        return _basename(value)
+        return _known_reference(_basename(value))
     # `INFO/DP` and `FORMAT/GQ` in a column list or an expression are field names, not paths.
     return "<path>" if _PATHLIKE.search(re.sub(r"\b(?:INFO|FORMAT|FMT)/", "", value.strip('"'))) else value
 

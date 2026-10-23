@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `reference`, and a reference or chain named in a method step's options, keep a file's base name
+  only where every word of it is a known reference's (`hg38.fa`, `hs37d5.fa.gz`,
+  `Homo_sapiens.GRCh38.dna.primary_assembly.fa`, `GRCh38_to_GRCh37.chain.gz`, DRAGEN's
+  `hg38_alt_aware`); any other is written `<file>`, since a base name like `ALICESMITH-hg38.fa` names
+  someone. A value change on facets whose header names such a file.
+
 - A method step's `tool` or `version` written as a path or file name is `<path>`, as an option's
   value is: `##liftOverProgram=</home/<name>/bin/CrossMap,…>` put a home directory in
   `method_steps`. A value change on such facets only.

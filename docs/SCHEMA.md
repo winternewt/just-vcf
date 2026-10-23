@@ -851,7 +851,10 @@ holding that collection and the target.
 5. **The derived facet.** `ref_seqcol_digest` is the target collection; `assembly_label` is the
    target's label, basis `inferred` (from the collection's lengths, which the chain's target side
    matched); `seqcol_digest`, `sorted_name_length_pairs_digest` and `header_contigs` are null (they were
-   the parent's header); `contig_map` maps the target collection's names of the contigs the rows use;
+   the parent's header); `reference` is null too, since it named the source assembly's file (the
+   target is `ref_seqcol_digest`), while `aligner`, `aligner_version` and `method_steps` stay the
+   parent's: the reads were aligned to the source, and what just-vcf did is in `links.provenance`;
+   `contig_map` maps the target collection's names of the contigs the rows use;
    `derivation_inputs` names the chain; `absence_means` is `unknown`, because the rows the lift dropped
    and the regions no chain covers are absent from it without being reference (the XYY stress case
    below).

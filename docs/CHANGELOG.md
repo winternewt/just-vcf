@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A lifted facet's `reference` is null: it kept the parent's, which named the source assembly's
+  file, while its rows are against the target (`ref_seqcol_digest`). `aligner`, `aligner_version`
+  and `method_steps` stay the parent's, since the reads were aligned to the source. `LIFT_VERSION` 6:
+  lifted facets get new `facet_id`s.
+
 - `write_vcf_zarr` writes a row with a slot in a VCF 4.5 PSL phase set unphased, counted in a
   warning, as it does a hapLink's: VCF Zarr has one phase flag per call and no PSL, so `true` put the
   row in the chromosome's implicit set. The store's `fileformat` follows `write_vcf` (VCF 4.5 where a

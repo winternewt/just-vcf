@@ -196,10 +196,14 @@ by, so this reads what F13's strand columns could not. Forward facets are not to
 by the pairs would rewrite rows of every export whose rsids a manifest shares, on evidence the strand
 check already found sound.
 
-A primary contig (1–22, X, Y) whose stated length or md5 differs refuses the whole facet
-(`ReferenceMismatchError`): it is another assembly. Any other contig that does not match (hg19's chrM
-against GRCh37's MT, an alt contig the reference lacks, a name the reference holds twice) leaves its
-rows unread. A facet of which nothing matches is refused. When a store holds several collections, the
+An autosome (1–22) whose stated length or md5 differs refuses the whole facet
+(`ReferenceMismatchError`): it is another assembly. Any other contig that does not match leaves its
+rows unread, and the matching contigs are read: X, Y and MT, where assemblies of one build
+legitimately differ (Complete Genomics' GRCh37 chrY has another md5 than Ensembl's at the same length,
+F20; hg19's chrM against GRCh37's MT), an alt contig the reference lacks, a name the reference holds
+twice. A length or md5 mismatch is counted per contig in the warnings, with what was stated and what
+the reference holds. A facet of which nothing matches is refused. (`concordance` across two collections and
+`liftover` keep their own rule, which refuses on X and Y too.) When a store holds several collections, the
 one that matches the most rows is used; a tie is refused unless the caller names one.
 
 | Option | Cost |

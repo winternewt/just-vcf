@@ -153,7 +153,7 @@ def test_an_mt_of_another_length_is_left_unread_and_counted(tmp_path: Path, stor
     mt = calls.filter(pl.col("chrom") == "MT")
     assert mt["ref"].null_count() == 2
     assert set(mt["ref_check"].cast(pl.String)) == {"not_run"}
-    assert any(w.startswith("2 row(s) left with REF unread") and "MT (stated 402, reference 400)" in w for w in resolved.warnings)
+    assert any(w.startswith("2 row(s) left with REF unread") and "MT (2 rows; length stated 402, reference 400)" in w for w in resolved.warnings)
 
 
 def test_md5_is_compared_when_stated(tmp_path: Path, store: ReferenceStore) -> None:
@@ -164,6 +164,75 @@ def test_md5_is_compared_when_stated(tmp_path: Path, store: ReferenceStore) -> N
     bad = vcf(tmp_path, records, contig_lines({"1": 3000}, md5={"1": "0" * 32}), name="bad.vcf")
     with pytest.raises(ReferenceMismatchError, match="md5_mismatch"):
         resolve_ref(load(bad), store)
+
+
+WITH_Y = {**SEQ, "Y": "".join(random.Random(11).choice("ACGT") for _ in range(1200))}
+"""The synthetic reference plus a Y, for the sex-chromosome rule (F20). Kept apart from `SEQ` so the
+other tests' collection does not change."""
+
+
+def md5_of(seqs: dict[str, str]) -> dict[str, str]:
+    return {name: hashlib.md5(seq.encode()).hexdigest() for name, seq in seqs.items()}
+
+
+@pytest.fixture
+def store_with_y(tmp_path: Path) -> ReferenceStore:
+    s = ReferenceStore.open(tmp_path / "store-y")
+    s.add_fasta(write_fasta(tmp_path / "ref-y.fa", WITH_Y))
+    return s
+
+
+@pytest.mark.parametrize("sex", ["X", "Y"])
+@pytest.mark.parametrize("kind", ["md5", "length"])
+def test_a_sex_chromosome_that_differs_is_left_unread_when_the_autosomes_match(
+    tmp_path: Path, store_with_y: ReferenceStore, sex: str, kind: str
+) -> None:
+    """F20: CGI's vcfBeta states a chrY of GRCh37's length with another md5. With every autosome
+    matching, the autosomes are read and only the sex chromosome's rows stay unread, counted."""
+    lengths = {name: len(seq) for name, seq in WITH_Y.items()}
+    md5 = md5_of(WITH_Y)
+    if kind == "md5":
+        md5[sex] = "0" * 32
+    else:
+        lengths[sex] += 7
+    records = [
+        ("1", 10, base("1", 10), "N", "0/1"),
+        ("2", 70, base("2", 70), "N", "1/1"),
+        (sex, 5, WITH_Y[sex][4], "N", "1"),
+        (sex, 6, WITH_Y[sex][5], "N", "1"),
+        (sex, 9, WITH_Y[sex][8], "N", "1"),
+    ]
+    resolved = resolve_ref(load(vcf(tmp_path, records, contig_lines(lengths, md5=md5))), store_with_y)
+    facets, calls = frames(resolved)
+    assert facets["ref_seqcol_digest"].to_list() == store_with_y.collections()
+    autosomes = calls.filter(pl.col("chrom").is_in(["1", "2"]))
+    assert autosomes["ref"].to_list() == [base("1", 10), base("2", 70)]
+    assert set(autosomes["ref_check"].cast(pl.String)) == {"match"}
+    unread = calls.filter(pl.col("chrom") == sex)
+    assert unread.height == 3 and unread["ref"].null_count() == 3
+    assert set(unread["ref_check"].cast(pl.String)) == {"not_run"}
+    reference = store_with_y.contigs(store_with_y.collections()[0])
+    contig = next(c for c in reference if c.name == sex)
+    stated = f"md5 stated {'0' * 32}, reference {contig.md5}" if kind == "md5" else f"length stated {lengths[sex]}, reference {contig.length}"
+    line = next(w for w in resolved.warnings if "left with REF unread" in w)
+    assert line.startswith("3 row(s) left with REF unread")
+    assert f"stated {kind} differs" in line and f"{sex} (3 rows; {stated})" in line
+
+
+def test_an_autosome_that_differs_still_refuses_beside_a_differing_y(tmp_path: Path, store_with_y: ReferenceStore) -> None:
+    lengths = {name: len(seq) for name, seq in WITH_Y.items()}
+    md5 = {**md5_of(WITH_Y), "2": "0" * 32, "Y": "0" * 32}
+    records = [("1", 10, base("1", 10), "N", "0/1"), ("2", 70, base("2", 70), "N", "1/1"), ("Y", 5, WITH_Y["Y"][4], "N", "1")]
+    with pytest.raises(ReferenceMismatchError, match=r"contig 2: md5_mismatch"):
+        resolve_ref(load(vcf(tmp_path, records, contig_lines(lengths, md5=md5))), store_with_y)
+
+
+def test_a_facet_whose_only_contig_is_a_differing_y_is_refused(tmp_path: Path, store_with_y: ReferenceStore) -> None:
+    """Nothing to read: refused as a facet of which nothing matches, not read on an unchecked Y."""
+    records = [("Y", 5, WITH_Y["Y"][4], "N", "1")]
+    path = vcf(tmp_path, records, contig_lines({"Y": len(WITH_Y["Y"])}, md5={"Y": "0" * 32}))
+    with pytest.raises(ReferenceMismatchError, match="no contig of the facet's calls could be matched"):
+        resolve_ref(load(path), store_with_y)
 
 
 def test_rows_past_the_contig_end_stay_unread(tmp_path: Path, store: ReferenceStore) -> None:

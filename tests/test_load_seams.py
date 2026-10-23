@@ -352,7 +352,7 @@ def test_every_reason_holds_for_every_facet_it_covers(loads: dict[str, Case]) ->
         assert column in FACETS and column not in NEVER_EXCUSED, (key, column)
         assert reason.strip(), (key, column)
         covered = [row for row in rows if key in facet_keys(row)]
-        if not covered and not skipped:
+        if not covered and not (skipped and key in NEEDS_PYSAM):
             problems.append(f"{key}: {column} covers no facet")
         problems += [f"{key}: {column} is filled in {facet_keys(row)[0]}" for row in covered if row[column] is not None]
     assert problems == []

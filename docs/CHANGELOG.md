@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A method step's `tool` or `version` written as a path or file name is `<path>`, as an option's
+  value is: `##liftOverProgram=</home/<name>/bin/CrossMap,…>` put a home directory in
+  `method_steps`. A value change on such facets only.
+
 - `chip_absence` reads only a genotype table as an array export: a headerless VCF, a CASAVA or
   SOAPsnp site table, a Nirvana, Color or GET-Evidence export and a CGI `var` or `masterVarBeta` file
   state no VCF version and load with no callset type, so they were read as arrays, and a site such a

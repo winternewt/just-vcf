@@ -321,7 +321,9 @@ class Step:
     """One step the header records: a tool, its stated version, what it did, and its key options."""
 
     tool: str
+    """The tool's name; a path or file name is written `<path>`, as an option's value is."""
     version: str | None
+    """As stated; a path or file name is written `<path>`."""
     role: str
     """One of `schema.STEP_ROLES`."""
     options: tuple[str, ...] = ()
@@ -616,10 +618,17 @@ def method_chain(meta: list[str], callers: list[Caller], caller_at: dict[str, in
         call = calls[name]
         found.append(_Found(call.position + 0.25, Step(name, call.step.version, "phase", (), "##FORMAT=<ID=PS>"), call.dated, call.when))
 
-    chain.steps = [item.step for item in _ordered(found, chain.warnings)]
+    chain.steps = [_without_paths(item.step) for item in _ordered(found, chain.warnings)]
     called = list(dict.fromkeys(ref for item in found if item.step.role == "call" for ref in item.references))
     chain.reference = _reference(stated, called, chain.steps, chain.warnings)
     return chain
+
+
+def _without_paths(step: Step) -> Step:
+    """`step` with a tool or version that is a path or a file name written `<path>`, as an option's
+    value is: `##liftOverProgram=</home/<name>/bin/CrossMap,…>` names a home directory."""
+    version = None if step.version is None else _shown(step.version, "v")
+    return Step(_shown(step.tool, "v"), version, step.role, step.options, step.line)
 
 
 def _meta_pair(line: str) -> tuple[str, str]:

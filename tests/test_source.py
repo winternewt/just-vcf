@@ -392,6 +392,18 @@ def test_a_crossmap_lift_is_a_step_and_explains_a_second_reference() -> None:
     assert len(unexplained.warnings) == 1 and "no liftover step is recorded" in unexplained.warnings[0]
 
 
+def test_a_tool_or_version_written_as_a_path_is_withheld_like_an_option() -> None:
+    """A path names a home directory; the frame never holds it, in a step's tool or version either."""
+    meta = [
+        "##liftOverProgram=</home/plantedname/bin/CrossMap,version=0.6.3>",
+        "##bcftools_normVersion=/home/plantedname/opt/bcftools-1.9",
+        "##bcftools_normCommand=norm -m -both -Oz -o /work/out.vcf.gz /work/in.vcf.gz; Date=Tue Mar 19 03:39:45 2024",
+    ]
+    steps = detect_source(meta).steps
+    assert [(s.tool, s.version, s.role) for s in steps] == [("<path>", "0.6.3", "lift"), ("bcftools norm", "<path>", "normalize")]
+    assert not any("plantedname" in str(value) for step in steps for value in step.as_row().values())
+
+
 def test_reference_falls_back_to_the_caller_and_two_references_leave_it_null() -> None:
     assert detect_source(CLAIR3).reference == "hg38.fa"
     two = detect_source(["##reference=/ref/hg19.fa", "##reference=/ref/hs37d5.fa"])

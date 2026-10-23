@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Coverage as a facet (RM278): `read_coverage` reads mosdepth's per-base, regions, quantized and
+  summary outputs and `samtools depth` / `samtools coverage` into a `Coverage` (a `CoverageFacet` and
+  a lazy `intervals` frame of depth mean, bounds and described bases per interval);
+  `alignment_coverage` runs polars-bio's `depth()` over a BAM or CRAM and folds its blocks into
+  1,000-base windows while they stream; `callable_sites` and `callable_at` say per position whether
+  the reads reached a `min_depth`, `True`, `False` or unknown with a reason. Nothing in `facets`,
+  `calls` or `blocks` changes, so `SCHEMA_VERSION` stays (docs/SCHEMA.md, "Coverage facets").
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

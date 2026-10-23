@@ -4,6 +4,18 @@ from importlib.metadata import version
 
 from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
 from just_vcf.callset import absence_is_reference
+from just_vcf.coverage import (
+    Callability,
+    Coverage,
+    CoverageFacet,
+    CoverageFormat,
+    Resolution,
+    UnsupportedCoverageError,
+    alignment_coverage,
+    callable_at,
+    callable_sites,
+    read_coverage,
+)
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.loading import (
@@ -58,12 +70,16 @@ __all__ = [
     "BlockKind",
     "CacheClearReport",
     "CacheEntryInfo",
+    "Callability",
     "CallsetType",
     "ChipBasis",
     "Chain",
     "ContentFilter",
     "ContentFilterBasis",
     "ContigNames",
+    "Coverage",
+    "CoverageFacet",
+    "CoverageFormat",
     "DamagedBgzfError",
     "Lifted",
     "Loaded",
@@ -75,6 +91,7 @@ __all__ = [
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
+    "Resolution",
     "SexChromosomeEvidence",
     "Sniffed",
     "SniffOutcome",
@@ -82,6 +99,7 @@ __all__ = [
     "StrandCheck",
     "TableLayoutError",
     "UnsortedRowsError",
+    "UnsupportedCoverageError",
     "UnsupportedFormatError",
     "UnwritableRowsError",
     "VariantClass",
@@ -89,6 +107,9 @@ __all__ = [
     "XCopies",
     "__version__",
     "absence_is_reference",
+    "alignment_coverage",
+    "callable_at",
+    "callable_sites",
     "clear_cache",
     "liftover",
     "load",
@@ -96,6 +117,7 @@ __all__ = [
     "normalize",
     "open_payload",
     "read_chain",
+    "read_coverage",
     "reference_dir",
     "rejoin_split",
     "resolve_ref",

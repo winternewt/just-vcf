@@ -37,9 +37,37 @@ Severity: medium · Status: open (decided by the person in the Part 2 interview,
 The person chose graded where possible (E2): GL/GP compared where both facets carry them, hard genotypes otherwise, and every row says which. Kept as data, never resolved to a winner (invariant 8). Needs RM273 and VRS ids (RM271).
 
 ## RM278 — Coverage as a facet
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: medium · Status: in progress (built 2026-10-23: readers, BAM depth, callable) · Owner: lead
 
 The person chose summaries and BAM depth (E3): mosdepth/samtools summaries, and polars-bio's `depth()` over a BAM the person has (scope note of 2026-09-28). Absence with a cause. RM269's XX and XO labels wait for this (the person chose to wait, 2026-10-23).
+
+**Built 2026-10-23** (`just_vcf.coverage`; docs/SCHEMA.md "Coverage facets"): `read_coverage` for
+mosdepth's four outputs and `samtools depth`/`coverage`, told by content; `alignment_coverage` over a
+BAM or CRAM through polars-bio `depth()`, folded into 1,000-base windows with exact mean, min, max and
+described bases, tiling the header's contigs with zeros; `callable_sites`/`callable_at` with
+`min_depth` required. Decisions, each with what was rejected: a `Coverage` beside `Loaded`, not a
+fourth frame (the load contract and the cache of every format would change for evidence about an
+alignment); windows, not `depth()`'s raw runs (hundreds of millions of rows at 30x, estimated); a mean
+bounds no base, so regions and summaries answer callable unknown (rejected: reading a mean of 30 as
+"every base above 4"); `min_depth` with no default (rejected: GATK CallableLoci's 4, a convention the
+caller should choose); a BAM's `facet_id` from its header, index and size (rejected: hashing the bytes,
+a second full read). mosdepth's thresholds file is refused for now.
+
+Substrate findings, polars-bio 0.36 (for the upstream-liaison seat to file; read in the mirror under
+`data/interim/`, `bio-function-pileup` and `polars-bio/src/pileup.rs`):
+
+- `depth()`'s output column `coverage` is Int16, written by `prev_cov as i16` from a 32-bit count, so a
+  base deeper than 32,767 comes out negative and one past 65,535 as a wrong positive. Shown by a test
+  (`test_a_depth_past_int16_is_left_out_and_counted`, 32,770 reads over five bases). Mitigated here:
+  negative depths are left out of their window and counted in a warning.
+- `DepthTableProvider::scan` drops pushed-down filters and `depth()` takes no region, and `PileupExec`
+  holds a dense `Vec<i32>` per touched contig (its full length) for the whole file before emitting
+  anything. Peak memory therefore grows with the genome, not with a window; it cannot be bounded from
+  just-vcf.
+
+Left: a cache spill of the windows keyed by `facet_id` (RM268's pattern), so a BAM is read once; a
+quantized output from one depth pass; mosdepth's thresholds file; a person-level layer that pairs a
+coverage facet with callsets.
 
 ## RM279 — A method-error atlas
 Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead

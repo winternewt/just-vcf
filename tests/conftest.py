@@ -3,10 +3,34 @@ import sys
 from pathlib import Path
 
 import pytest
-from dotenv import dotenv_values, find_dotenv
 
 # scripts/ holds dev tools that import each other by module name (pgp_participants imports pgp_leech).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+OPT_IN = (
+    "JUST_VCF_SAMPLES_DIR",
+    "JUST_VCF_ANCESTRY_DIR",
+    "JUST_VCF_MANIFESTS_DIR",
+    "JUST_VCF_TEST_REFERENCE_DIR",
+    "JUST_VCF_TEST_CHAIN_DIR",
+)
+"""The variables that point tests at private genomes and real reference data. Each is empty unless the
+shell running pytest sets it: a repo `.env` never opts a run in (the CLI's `load_dotenv` keeps a value
+already set, the empty one included). An opt-in run names them on its command line."""
+
+for _name in OPT_IN:
+    os.environ.setdefault(_name, "")
+
+
+def _opt_in_dir(name: str, value: str | None = None) -> Path:
+    """The directory `name` points at, or a skip when it is empty or absent."""
+    value = os.environ.get(name, "") if value is None else value
+    if not value:
+        pytest.skip(f"{name} is not set")
+    path = Path(value)
+    if not path.is_dir():
+        pytest.skip(f"{path} is absent")
+    return path
 
 
 @pytest.fixture(autouse=True)
@@ -23,38 +47,20 @@ def isolated_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest
 
 @pytest.fixture(scope="session")
 def samples_dir() -> Path:
-    """`JUST_VCF_SAMPLES_DIR`: the environment wins, an empty value included; else the repo `.env`.
+    """`JUST_VCF_SAMPLES_DIR` as the shell set it; empty (never the repo `.env`'s value) skips.
 
-    Read without exporting, so a test that neutralises the variable with `setenv(…, "")` still skips.
+    Read when asked, so a test that neutralises the variable with `setenv(…, "")` still skips.
     """
-    if "JUST_VCF_SAMPLES_DIR" in os.environ:
-        value = os.environ["JUST_VCF_SAMPLES_DIR"]
-    else:
-        value = dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_SAMPLES_DIR")
-    if not value:
-        pytest.skip("JUST_VCF_SAMPLES_DIR is not set")
-    path = Path(value)
-    if not path.is_dir():
-        pytest.skip(f"{path} is absent")
-    return path
+    return _opt_in_dir("JUST_VCF_SAMPLES_DIR")
 
 
 @pytest.fixture(scope="session")
 def ancestry_dir() -> Path:
     """`JUST_VCF_ANCESTRY_DIR`, the directory of reference panels, read like `samples_dir`."""
-    if "JUST_VCF_ANCESTRY_DIR" in os.environ:
-        value = os.environ["JUST_VCF_ANCESTRY_DIR"]
-    else:
-        value = dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_ANCESTRY_DIR")
-    if not value:
-        pytest.skip("JUST_VCF_ANCESTRY_DIR is not set")
-    path = Path(value)
-    if not path.is_dir():
-        pytest.skip(f"{path} is absent")
-    return path
+    return _opt_in_dir("JUST_VCF_ANCESTRY_DIR")
 
 
-_MANIFESTS_DIR = os.environ.get("JUST_VCF_MANIFESTS_DIR")
+_MANIFESTS_DIR = os.environ["JUST_VCF_MANIFESTS_DIR"]
 """`JUST_VCF_MANIFESTS_DIR` as the session started, before `isolated_cache` empties it for every test."""
 
 
@@ -65,13 +71,7 @@ def manifests_dir() -> Path:
     The library reads the variable too (RM281), so every test sees it empty; a test that reads the real
     manifests asks for this fixture and sets it itself.
     """
-    value = _MANIFESTS_DIR if _MANIFESTS_DIR is not None else dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_MANIFESTS_DIR")
-    if not value:
-        pytest.skip("JUST_VCF_MANIFESTS_DIR is not set")
-    path = Path(value)
-    if not path.is_dir():
-        pytest.skip(f"{path} is absent")
-    return path
+    return _opt_in_dir("JUST_VCF_MANIFESTS_DIR", _MANIFESTS_DIR)
 
 
 @pytest.fixture(scope="session")
@@ -81,31 +81,13 @@ def test_reference_dir() -> Path:
     Apart from `JUST_VCF_REFERENCE_DIR`, which every test sees empty: a test that reads a real assembly
     asks for this fixture, and only reads the store.
     """
-    if "JUST_VCF_TEST_REFERENCE_DIR" in os.environ:
-        value = os.environ["JUST_VCF_TEST_REFERENCE_DIR"]
-    else:
-        value = dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_TEST_REFERENCE_DIR")
-    if not value:
-        pytest.skip("JUST_VCF_TEST_REFERENCE_DIR is not set")
-    path = Path(value)
-    if not path.is_dir():
-        pytest.skip(f"{path} is absent")
-    return path
+    return _opt_in_dir("JUST_VCF_TEST_REFERENCE_DIR")
 
 
 @pytest.fixture(scope="session")
 def test_chain_dir() -> Path:
     """`JUST_VCF_TEST_CHAIN_DIR`, a directory of public UCSC chain files, read like `samples_dir`."""
-    if "JUST_VCF_TEST_CHAIN_DIR" in os.environ:
-        value = os.environ["JUST_VCF_TEST_CHAIN_DIR"]
-    else:
-        value = dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_TEST_CHAIN_DIR")
-    if not value:
-        pytest.skip("JUST_VCF_TEST_CHAIN_DIR is not set")
-    path = Path(value)
-    if not path.is_dir():
-        pytest.skip(f"{path} is absent")
-    return path
+    return _opt_in_dir("JUST_VCF_TEST_CHAIN_DIR")
 
 
 @pytest.fixture(scope="session")

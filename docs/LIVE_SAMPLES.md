@@ -6,6 +6,13 @@ by their folder alias, which CLAUDE.md §11 already names; no sample name, genot
 recorded here, and a library number is a sequencing-run label, not a person. Tests that use the private sets
 run locally and skip without them; anything shown or shipped uses PGP-HMS.
 
+The opt-in tests read their directories from the shell only: `tests/conftest.py` defaults `JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DIR`, `JUST_VCF_MANIFESTS_DIR`, `JUST_VCF_TEST_REFERENCE_DIR` and `JUST_VCF_TEST_CHAIN_DIR` to empty, whatever the repo `.env` says. Name the ones a run needs on its command line:
+
+```bash
+uv run pytest -q                                                  # plain: every opt-in test skips
+JUST_VCF_SAMPLES_DIR=/data/genomes uv run pytest -q tests/test_person.py
+```
+
 
 Sources: the Krypton copy `/mnt/krypton/Genomes/genomes/<alias>/` (the fuller one), the local
 `/data/genomes/<alias>/`, the a3-bench inputs copy of newton, `../just-prs/data/input/vcf/`. Every fact comes from

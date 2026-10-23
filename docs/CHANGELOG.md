@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The suite's opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DIR`, `JUST_VCF_MANIFESTS_DIR`,
+  `JUST_VCF_TEST_REFERENCE_DIR`, `JUST_VCF_TEST_CHAIN_DIR`) are empty unless the shell sets them:
+  `tests/conftest.py` no longer reads them from the repo `.env`, and defaults each to `""` so the CLI's
+  `load_dotenv` cannot fill them either. A plain `uv run pytest` never opens a private genome; an opt-in
+  run names the variables on its command line (CLAUDE.md §4, docs/LIVE_SAMPLES.md). No library change.
+
 - In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
   probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
   (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or

@@ -139,7 +139,7 @@ COVERAGE_TWO_X_MIN_RATIO = 0.875
 COVERAGE_TWO_X_MAX_RATIO = 1.25
 """Copy number puts one X at 0.5 of an autosome's depth and two at 1.0; each unknown band is the
 gap's central half, as for the call-based lines, and above 1.25 is unknown (three copies would sit at
-1.5). Checked on the BAMs measured for RM278 (docs/ROADMAP.md)."""
+1.5). On four BAMs every ratio lay within 0.034 of its copy-number value (docs/ROADMAP.md RM269)."""
 
 COVERAGE_Y_ABSENT_MAX_RATIO = 0.125
 COVERAGE_Y_PRESENT_MIN_RATIO = 0.375

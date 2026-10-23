@@ -84,6 +84,11 @@ the machine shared with about eleven other sessions, load 17–31):
 | 27.4 GB | blocks | 18.1 min | 22.6 GB | not recorded | 3,099,848 |
 | 27.4 GB | per-base | 12.7 min | 13.3 GB | 49.6 GB | 3,099,848 |
 | 48.3 GB | blocks | 38.3 min | 33.6 GB | 96.7 GB | 3,099,848 |
+| 42.1 GB | per-base | 20.4 min | 16.3 GB | 83.1 GB | 3,099,848 |
+| 39.2 GB | per-base | 16.7 min | 13.6 GB | 78.5 GB | 3,099,848 |
+
+The four come from three person folders (the 48.3 and 39.2 GB BAMs are two libraries in one folder,
+which docs/LIVE_SAMPLES.md says are different people).
 
 Each BAM had a few windows (18 on the first) holding bases deeper than 32,767, reported as wrapped
 (the Int16 finding above).
@@ -1097,7 +1102,15 @@ and chr20 (`CoverageRatios`, on the result's `coverage` field). X: a third line,
 at most 0.625, two from 0.875 to 1.25, and all measured X lines must agree. Y: present at 0.375 or
 more, absent at 0.125 or less, unknown between; absent with one X names `XO`, with two `XX`. Each band
 is the central half of the copy-number gap (one copy 0.5, two 1.0; a Y 0.5, none 0), the rule the
-call-based bands followed; the BAM calibration is below. Decisions, each with what was rejected:
+call-based bands followed. Decisions, each with what was rejected:
+
+Calibration, 2026-10-23, on the four private BAMs of RM278's table (aggregates only, pooled, no file
+named or classed): every X and Y coverage ratio lay within 0.034 of its nearest copy-number
+expectation (0, 0.5 or 1.0), so every file fell inside a class band with at least 0.09 to spare; each
+file's X and Y pair was one of the usual two (one X with a Y, two X without); chr20's even share was
+0.972 or more. The X-degenerate Y coverage of the files without a Y read near 0, against 0.35–0.40
+from the calls' DP on the local two-X VCFs: the call-site line sees the mismapped stretches only.
+Four files from three person folders confirm the bands' placement, not their width.
 
 - Coverage shows a Y absent where call-site depth could not: the coverage median runs over every base
   of the region, the calls' DP only over the sites a caller found something at, which in a genome

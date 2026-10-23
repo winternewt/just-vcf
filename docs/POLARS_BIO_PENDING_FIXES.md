@@ -65,6 +65,7 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P13 `write_vcf` drops undeclared columns | write-side twin of P1; answered by recipe in pb #351; related open pb #474 | polars-bio |
 | P14 fork after a polars-bio call hangs the child | inherent to native thread pools (plain Polars hangs too) | polars-bio (docs), low |
 | P15 haploid no-call GT `.` read as null (2026-10-22) | noodles maps `.` to missing before its GT parser; dbf writes null, same as no GT | datafusion-bio-formats |
+| P16 `import polars_bio` configures the root logger (2026-10-23) | `basicConfig()` plus a root level of WARNING at import; already open as pb #291 | polars-bio (comment on #291) |
 
 ## Verdicts by kind (2026-09-30)
 
@@ -84,6 +85,7 @@ another path is named.
 | P9 | a spec-legal POS 0 record fails the whole scan | datafusion-bio-formats | re-read without POS 0 rows, count them (done) |
 | P10 | spec-legal FORMAT `Number=LA/LR/LG/M` refuses the whole file | zaeleus/noodles | **none yet**: rewrite to `Number=.` and warn |
 | P15 | a haploid no-call GT `.` reads as null, the same as a sample with no GT | datafusion-bio-formats | a no-call block for CGI VCFs only (`518f796`); elsewhere `gt`, `gt_alleles`, `source_gt` stay null |
+| P16 | `import polars_bio` adds a stderr handler to the root logger and sets its level to WARNING; Python's logging HOWTO says a library adds only a `NullHandler` | polars-bio | the CLI turns logging off while a command runs (`cli.py:149-152`); a library user still gets the handler |
 
 ### Feature requests: works as designed, we want more
 
@@ -395,6 +397,29 @@ so a GT key yielded with `None` means the text was `.`, and writing `.` there re
 sample written as `.` alone would then read as a haploid no-call too. **File at
 datafusion-bio-formats**, citing the noodles ordering; the same one-line reorder in the biodatageeks fork
 or at zaeleus/noodles would fix it at the root.
+
+## P16 — `import polars_bio` configures the root logger
+
+Found by the lead seat building the CLI (merged as `5b8700f`): after `import polars_bio`, every
+`logging` warning in the process, just-vcf's included, prints to stderr, whatever the application set
+up. polars-bio's `polars_bio/logging.py:3-5`, run on import through `__init__.py:26`, calls
+`logging.basicConfig()` and sets the root logger to WARNING; `set_loglevel` changes the root level
+again (`:30`, `:34`, `:38`). Reproduced on 0.36.0: a root logger with no handlers at DEBUG comes out
+of the import with a stderr `StreamHandler` at WARNING. Python's logging HOWTO ("Configuring Logging
+for a Library") says a library adds no handler but a `NullHandler` and leaves the root logger to the
+application.
+
+Mitigation: the CLI turns logging off while a command runs and back on when it closes
+(`src/just_vcf/cli.py:149-152`), because a library error's message must not reach stderr unredacted.
+A program that imports just-vcf as a library gets polars-bio's handler. Not worked around in the
+library: it would mean undoing another package's import side effect. Not filed.
+
+*Upstream (2026-10-23).* Already reported: pb #291, "How do I get polars-bio logging to not stomp on my
+colorlog logging?" (open since 2026-02-10, labelled "analysis needed"; the maintainer said they would look,
+the reporter asked again on 2026-09-17). It gives no cause and no fix. Upstream master after 0.36.0
+leaves `logging.py` unchanged (0.36.2 is the newest tag). **Comment on pb #291**, not a new issue:
+name the two lines, and the fix: drop `basicConfig()` and the root level, give the `polars_bio`
+logger a `NullHandler`, and let `set_loglevel` set that logger's level alone.
 
 ## Harvested and closed without an entry (2026-09-30)
 

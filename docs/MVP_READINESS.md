@@ -82,3 +82,28 @@ Order the run would take if every recommendation were accepted: Part 1 rows 5–
 then 14–16, then E1, E4, E13, E2, E3, E8, E7, with E5, E6, E9–E12 and E14 as the interview ranks
 them. Each step lands as its own commit with its test and changelog line; each Part 2 item gets its
 `RMn` when it is accepted.
+
+## The interview, 2026-10-23
+
+The person answered every Part 2 question in chat. Each accepted item now has its roadmap id.
+
+| # | Answer | Roadmap |
+|---|---|---|
+| E1 | the caller supplies a subject id; the library checks it by relatedness and warns, never regroups | RM273 |
+| E2 | graded where both facets carry GL/GP, hard otherwise, said per row | RM277 |
+| E3 | coverage summaries and polars-bio depth over a BAM; XX and XO wait for it | RM278 |
+| E4 | a links frame | RM275 |
+| E5 | phase sets stay columns; CisPhasedBlock on demand | RM284 |
+| E6 | both somalier (optional subprocess) and just-vcf's own relatedness; pedigree as supplied data | RM274 |
+| E7 | after the atlas | RM280 |
+| E8 | GIAB stratifications | RM279 |
+| E9 | public manifests and probe sets learned from paired PGP people | RM281 |
+| E10 | after GRCh37/38 | RM286 |
+| E11 | load SVs, withhold VRS ids | RM282 |
+| E12 | an aggregate-only helper beside `load` | RM283 |
+| E13 | both: a parquet store per person and a VCF Zarr export | RM276 |
+| E14 | a spec in this repo | RM285 |
+| CLI | yes, Typer, counts only | RM272 |
+
+Build order for the run: RM272 (CLI) and RM274 (relatedness) first, then RM273, RM275, RM276, RM278,
+RM277, RM279, RM280; RM281–RM286 beside them as builders free up.

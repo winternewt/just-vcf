@@ -546,6 +546,12 @@ same applies when the user corrects a preference: it goes below, in their words,
   `wgs`; the facet records which classes it carries, absence reads as reference only for those, and any
   hom-ref restoration refuses a filtered facet without `force=True`.
 
+- 2026-10-23, the extended shape (the Part 2 interview, answered in chat): a person is a subject id the
+  caller supplies, checked by relatedness, never regrouped by the library; relatedness both by somalier and
+  our own; concordance graded where possible; coverage from summaries and BAM depth; a links frame; a
+  parquet store per person plus a VCF Zarr export; the posterior only after the error atlas; XX and XO wait
+  for coverage. Every answer is in docs/MVP_READINESS.md and the RM272–RM286 entries.
+
 ## 11. Learned workspace facts
 
 - Real genomes live under `/data/genomes/<person>/`, all private. What is there by kind:

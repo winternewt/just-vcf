@@ -6,6 +6,81 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM272 — CLI
+Severity: high · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+Typer, registered in `[project.scripts]`, loading `.env` with python-dotenv (CLAUDE.md §4): `just-vcf sniff`, `load` (a summary of the facets), `convert` (to VCF/gVCF via `write_vcf`, optionally through `resolve_ref`, `normalize`, `liftover`, `mint_vrs_ids`) and `check`. Output is counts and aggregates only, never rows: the CLI is a privacy boundary like E12.
+
+## RM273 — A person (subject) in the schema
+Severity: high · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose "Both: supplied, checked" (E1): the caller supplies a subject id when loading; nothing is inferred and facets are never regrouped by the library. The library checks the claim with relatedness (RM274) and warns on a mismatch. Most of the extended shape sits on this: RM275, RM276, RM277, RM280.
+
+## RM274 — Relatedness and families
+Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose both (E6): somalier (MIT) as an optional subprocess, skipped cleanly when absent, and just-vcf's own relatedness on the frames (IBS/KING-style over a validated site panel, so arrays work too). Pedigrees as supplied GA4GH Pedigree data. Feeds RM273's check.
+
+## RM275 — The facet graph as a links frame
+Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose a small links frame (E4): (from, to, relation, provenance), so a facet can have several parents (a merge, a consensus). `derived_from` and `relation` stay on `facets` for the one-parent case. Relations verbatim from GA4GH where it has them (`liftover_to`), just-vcf's own otherwise, documented.
+
+## RM276 — A durable per-person store
+Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose both (E13): a directory per person holding parquet per facet, the links frame and a manifest, read lazily; and a VCF Zarr export (its spec has no gVCF blocks, so blocks stay parquet-only). Facets accumulate; nothing is overwritten (invariant 5).
+
+## RM277 — Concordance between facets
+Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose graded where possible (E2): GL/GP compared where both facets carry them, hard genotypes otherwise, and every row says which. Kept as data, never resolved to a winner (invariant 8). Needs RM273 and VRS ids (RM271).
+
+## RM278 — Coverage as a facet
+Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose summaries and BAM depth (E3): mosdepth/samtools summaries, and polars-bio's `depth()` over a BAM the person has (scope note of 2026-09-28). Absence with a cause. RM269's XX and XO labels wait for this (the person chose to wait, 2026-10-23).
+
+## RM279 — A method-error atlas
+Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose GIAB stratifications as regions (E8): error and discordance rates by caller and region from multi-facet PGP-HMS people (docs/LIVE_SAMPLES.md). Needs RM277.
+
+## RM280 — A consensus posterior
+Severity: low · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose after the atlas (E7): a per-site posterior across one person's facets as a derived facet, with RM279's rates as priors; never before them.
+
+## RM281 — Chip manifests
+Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose both sources (E9): public vendor manifests (Illumina GSA/OmniExpress are on disk) and probe sets learned from PGP people with an array and a WGS. Resolves I/D codes, strand per probe, and which sites a chip has (absence with a cause). Closes F17.
+
+## RM282 — Structural-variant facets
+Severity: low · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose load with ids withheld (E11): SV calls load as rows with type and `end_pos`, VRS ids withheld with a reason (VRS 2.x has no SV model; charter: never a non-conforming GA4GH value).
+
+## RM283 — An aggregate-only query helper
+Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose a helper beside `load` (E12): an API that answers counts, shares and presence questions and never returns rows, for agents and apps; `load` stays for code that may read rows.
+
+## RM284 — Phasing as CisPhasedBlock
+Severity: low · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose columns with an export on demand (E5): phase sets stay columns; VRS CisPhasedBlock objects are minted only when asked.
+
+## RM285 — The format registry as a spec
+Severity: low · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose this repo (E14): the declared formats and the broken shapes (F1–F17) documented as a readable spec in docs/ with synthetic examples; no genome data.
+
+## RM286 — T2T-CHM13
+Severity: low · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+
+The person chose after GRCh37/38 (E10): CHM13 in the reference store, the assembly table, liftover chains and the sex-chromosome regions.
+
 ## RM1 — Final shape and plan
 Severity: blocker · Status: charter drafted, not signed · Owner: user
 

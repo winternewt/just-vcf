@@ -593,6 +593,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             "key(s) declared with a Type VCF 4.3 reserves otherwise, which polars-bio refuses, not carried: "
             + ", ".join(f"{name} (Type={kind}, 4.3 reserves {vcf.V43_RESERVED_TYPES[name]})" for name, kind in sorted(refused.items()))
         )
+    if any_number := vcf.any_number_keys(header):
+        warnings.append(
+            "FORMAT key(s) declared Number=P, which polars-bio refuses (P10), read through a copy declaring "
+            f"Number=. with each value's count checked against GT: {', '.join(any_number)}"
+        )
     if not header.meta:
         warnings.append(
             "no meta lines: read under a synthesised header (##fileformat=VCFv4.2 and the carried keys the "
@@ -625,7 +630,8 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     if gl_phred:
         warnings.append("CGAPipeline writes GL in phred units (GQ is the gap between the two best): read as GL / 10")
     if (header.version_tuple or (0, 0)) >= (4, 4):
-        warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld")
+        warnings.append("VCF 4.4+: polars-bio drops a leading GT phase indicator (P4), so phased[0] and source_gt are withheld "
+            "(phased[0] is read where PSL names the first slot's set)")
     versions = {caller.name: caller.version for caller in source.callers}
     stated = sniffed.build
     if binary:

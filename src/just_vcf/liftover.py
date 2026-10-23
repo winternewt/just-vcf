@@ -60,7 +60,7 @@ from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceM
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 4
+LIFT_VERSION = 5
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits."""
 
 RELATION = LIFTOVER_TO
@@ -102,7 +102,7 @@ REASON_TEXT: dict[str, str] = {
     "ref_mismatch_after_lift": "the target's REF equals none of the row's alleles",
 }
 
-PARENT_COLUMNS_KEPT = ("ids", "phased", "phase_sets", "phase_set_kinds", "gl", "gp", "dosage", "evidence_basis", "gq", "dp", "ad", "qual", "filters", "sample_filters", "split_signal")
+PARENT_COLUMNS_KEPT = ("ids", "phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "gl", "gp", "dosage", "evidence_basis", "gq", "dp", "ad", "qual", "filters", "sample_filters", "split_signal")
 """`calls` columns a lifted row carries from its parent as they were (phase sets and dosage aside, below)."""
 
 REPORT = pl.Schema(
@@ -705,7 +705,7 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
         pl.lit(None, dtype=CALLS["ciend"]).alias("ciend"),
         pl.when(pl.col("_swap")).then(None).otherwise(pl.col("dosage")).alias("dosage"),
         pl.when(pl.col("_swap")).then(None).otherwise(pl.col("alt_copy_numbers")).alias("alt_copy_numbers"),
-        *[pl.when(moved_contig).then(None).otherwise(pl.col(name)).alias(name) for name in ("phased", "phase_sets", "phase_set_kinds")],
+        *[pl.when(moved_contig).then(None).otherwise(pl.col(name)).alias(name) for name in ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities")],
         array.alias("_array"),
     )
     if out["_reanchor"].any():

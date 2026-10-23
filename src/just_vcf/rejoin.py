@@ -19,14 +19,14 @@ from just_vcf.links import SPLIT_REJOINED, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck, canonical_order_per_contig
 
-REJOIN_VERSION = 2
+REJOIN_VERSION = 3
 """Part of the derived `facet_id`: bumped whenever the join rule changes what it emits (2: the SV
 columns kept, RM282)."""
 
 RELATION = SPLIT_REJOINED
 """The derived facet's `relation`."""
 
-_KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "dp", "qual", "sv_type", "copy_number")
+_KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "dp", "qual", "sv_type", "copy_number")
 """Columns a joined row keeps only when every row of its group agrees; otherwise null (not known)."""
 
 _PER_ALT = {"cipos": 2, "ciend": 2, "alt_copy_numbers": 1}

@@ -14,6 +14,8 @@ What a block is:
 - **A PSL set** is keyed `(facet_id, name)`, `chrom` null: VCF 4.5 ties a PSL name to one haplotype
   and lets it span chromosomes, so the set itself is one block, `haplotype` null, whatever slot each
   allele sits in.
+- **A PSL record's slots go by their kind**: its named slots are in their PSL sets, and a phased
+  slot with PSL `.` (kind `ps`) is in the chromosome's implicit set, as a phased slot with no PS is.
 - **The members** are the ids in `vrs_allele_ids` of the alleles the haplotype carries: by default
   the non-reference ones only. A `0` on a record split one row per ALT, or under an overlapping
   deletion, means "not this ALT", not the reference base, so a REF member would state something the
@@ -30,7 +32,10 @@ first such slot in row order gives the reason: its phase is unknown (`phase_unkn
 0 polars-bio's rewrite hides, P4, when its allele would be a member), it is uncalled (`uncalled`),
 its allele has no index into the site's alleles (`not_indexed`), or the allele has no VRS id (the
 reason `vrs_withheld` gives, `not_run` when `mint_vrs_ids` has not run). A haplotype with fewer than two members is
-`too_few_members`: the spec requires two, and one allele is an Allele, not a block.
+`too_few_members`: the spec requires two, and one allele is an Allele, not a block. `withheld_chrom`,
+`withheld_pos` and `withheld_allele` name the slot that gave the reason (its record and its allele as
+`gt_alleles` holds it), so the one symbolic ALT that withholds a chromosome's implicit set can be found;
+they are null with `too_few_members`, which no one allele causes.
 
 The id is the VRS 2.x computed identifier: `ga4gh:CPB.` + sha512t24u of
 `{"members":[…],"type":"CisPhasedBlock"}`, the members being the Allele digests (the id without
@@ -62,6 +67,9 @@ CIS_PHASED_BLOCKS = pl.Schema(
         "members": pl.List(pl.String),
         "cpb_id": pl.String,
         "withheld": pl.String,
+        "withheld_chrom": pl.String,
+        "withheld_pos": pl.UInt32,
+        "withheld_allele": pl.String,
     }
 )
 """The frame `cis_phased_blocks` returns (docs/SCHEMA.md, "CisPhasedBlock export")."""
@@ -85,13 +93,13 @@ def cis_phased_blocks(loaded: Loaded, *, reference_alleles: bool = False) -> pl.
     phased_rows = loaded.calls.with_row_index("_order").filter(pl.col("phased").list.eval(pl.element().fill_null(False)).list.any().fill_null(False))
     rows = (
         vrs_withheld(phased_rows)
-        .select("_order", "facet_id", "chrom", "gt", "gt_alleles", "phased", "phase_sets", "phase_set_kinds", "vrs_allele_ids", "vrs_withheld")
+        .select("_order", "facet_id", "chrom", "pos", "gt", "gt_alleles", "phased", "phase_sets", "phase_set_kinds", "vrs_allele_ids", "vrs_withheld")
     )
     is_ps = pl.col("phase_set_kinds").list.eval(pl.element() == PhaseSetKind.PS.value).list.any().fill_null(False)
-    # A PS is one value per record, on each of its phased slots; null for the implicit set.
-    row_ps = pl.col("phase_sets").list.drop_nulls().list.first()
+    # A PS is one value per record, on each of its PS-kind slots; null for the implicit set. A PSL
+    # record's named slots are PSL sets, so only its `ps` slots (the implicit set) are read here.
     slots = (
-        rows.with_columns(is_ps.alias("_is_ps"), row_ps.alias("_row_ps"), pl.int_ranges(0, pl.col("phased").list.len(), dtype=pl.UInt32).alias("_h"))
+        rows.with_columns(is_ps.alias("_is_ps"), pl.int_ranges(0, pl.col("phased").list.len(), dtype=pl.UInt32).alias("_h"))
         .explode("_h", empty_as_null=False)
         .with_columns(
             pl.col("phased").list.get(pl.col("_h")).alias("_phased"),
@@ -104,6 +112,7 @@ def cis_phased_blocks(loaded: Loaded, *, reference_alleles: bool = False) -> pl.
             pl.col("vrs_allele_ids").list.get(pl.col("_index").cast(pl.Int64), null_on_oob=True).alias("_id"),
             pl.col("vrs_withheld").list.get(pl.col("_index").cast(pl.Int64), null_on_oob=True).alias("_why"),
         )
+        .with_columns(pl.col("_set").filter(pl.col("_kind") == PhaseSetKind.PS.value).drop_nulls().first().over("_order").alias("_row_ps"))
     )
     in_set = pl.col("_phased").fill_null(False)
     skipped = (pl.col("_allele") == "*") | ((pl.col("_index") == 0) & pl.lit(not reference_alleles))
@@ -126,21 +135,27 @@ def cis_phased_blocks(loaded: Loaded, *, reference_alleles: bool = False) -> pl.
     )
     slots = slots.with_columns(member.alias("_member"), problem.alias("_problem"), in_set.alias("_in_set"))
 
-    # A PS set: every slot of its records but the unphased ones, one block per slot.
-    ps = slots.filter(pl.col("_is_ps") & (pl.col("_phased").is_null() | pl.col("_phased"))).select(
+    # A PS set: every slot of its records but the unphased ones and those in a PSL set, one block per slot.
+    in_ps = (pl.col("_kind") == PhaseSetKind.PS.value) | (pl.col("_kind").is_null() & pl.col("_phased").is_null())
+    at = [pl.col("chrom").alias("_at_chrom"), pl.col("pos").alias("_at_pos"), pl.col("_allele").alias("_at_allele")]
+    ps = slots.filter(pl.col("_is_ps") & (pl.col("_phased").is_null() | pl.col("_phased")) & in_ps.fill_null(False)).select(
         "_order", "facet_id", "chrom", pl.lit(PhaseSetKind.PS.value).alias("_kind"), pl.col("_row_ps").alias("phase_set"), pl.col("_h").alias("haplotype"),
-        "_member", "_problem", "_in_set", "_id",
+        "_member", "_problem", "_in_set", "_id", *at,
     )
-    # A PSL set: the phased slots that name it, wherever they sit, one block per set.
-    psl = slots.filter(in_set & (pl.col("_kind") == PhaseSetKind.PSL.value)).select(
+    # A PSL set: the slots that name it, wherever they sit, one block per set. A named slot whose phase
+    # is unknown stays in it, to withhold it.
+    psl = slots.filter((pl.col("_phased").is_null() | in_set) & (pl.col("_kind") == PhaseSetKind.PSL.value)).select(
         "_order", "facet_id", pl.lit(None, dtype=pl.String).alias("chrom"), "_kind", pl.col("_set").alias("phase_set"), pl.lit(None, dtype=pl.UInt32).alias("haplotype"),
-        "_member", "_problem", "_in_set", "_id",
+        "_member", "_problem", "_in_set", "_id", *at,
     )
     key = ["facet_id", "chrom", "_kind", "phase_set", "haplotype"]
     grouped = pl.concat([ps, psl]).group_by(key).agg(
         pl.col("_order").min().alias("_first"),
         pl.col("_in_set").sum().cast(pl.UInt32).alias("sites"),
         pl.col("_problem").sort_by("_order").drop_nulls().first().alias("_problem"),
+        # The first slot that withheld the block, named by its record and allele.
+        *[pl.col(name).filter(pl.col("_problem").is_not_null()).sort_by(pl.col("_order").filter(pl.col("_problem").is_not_null())).first().alias(name)
+          for name in ("_at_chrom", "_at_pos", "_at_allele")],
         pl.col("_id").filter(pl.col("_member")).unique().sort().alias("_members"),
     )
     withheld = pl.coalesce(pl.col("_problem"), pl.when(pl.col("_members").list.len() < 2).then(pl.lit("too_few_members")))
@@ -162,6 +177,7 @@ def cis_phased_blocks(loaded: Loaded, *, reference_alleles: bool = False) -> pl.
             "members",
             "cpb_id",
             "withheld",
+            *[pl.when(pl.col("_problem").is_not_null()).then(pl.col(f"_at_{name}")).alias(f"withheld_{name}") for name in ("chrom", "pos", "allele")],
         )
     )
 

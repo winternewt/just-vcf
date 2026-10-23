@@ -165,6 +165,52 @@ def test_phasing_and_phase_sets(tmp_path: Path) -> None:
     assert [r["source_gt"] for r in rows.values()] == ["0|1", "1|0", "0/1", "1|0"]
 
 
+PSL_LINES = (
+    '##FORMAT=<ID=PSL,Number=P,Type=String,Description="Phase set list">',
+    '##FORMAT=<ID=PSO,Number=P,Type=Integer,Description="Phase set list ordinal">',
+    '##FORMAT=<ID=PSQ,Number=P,Type=Integer,Description="Phase set list quality">',
+)
+
+
+def test_psl_phase_sets_are_read_per_allele(tmp_path: Path) -> None:
+    """VCF 4.5's PSL, PSO and PSQ (`Number=P`, which polars-bio refuses, P10): one entry per GT allele."""
+    records = [
+        "1\t5\t.\tT\tG\t.\tPASS\t.\tGT:PSL\t|0/1:1*5*1,.",  # slot 0 named: phased though P4 drops the `|`
+        "1\t10\t.\tA\tT,G\t.\tPASS\t.\tGT:PSL:PSO:PSQ\t|1/2|1:1*10*1,.,1*5*1:1,.,2:30,.,40",
+        "2\t15\t.\tG\tC\t.\tPASS\t.\tGT:PSL\t1|0:.,1*10*1",  # slot 0's `.` says nothing: unknown, in no set
+        "2\t20\t.\tG\tC\t.\tPASS\t.\tGT:PSL\t1|1:1*5*1,.",  # slot 1 phased with `.`: the implicit set
+        "2\t25\t.\tG\tC\t.\tPASS\t.\tGT:PSL\t1/1:.,x",  # a name on an unphased allele is not read
+        "2\t30\t.\tG\tC\t.\tPASS\t.\tGT:PSL\t1|1:x",  # one entry for two alleles: phase withheld
+        "2\t35\t.\tG\tC\t.\tPASS\t.\tGT:PS:PSL\t1|1:35:y,y",  # PS and PSL both: PSL read
+    ]
+    path = write(tmp_path, vcf_text(records, fmt=("GT", "PS"), version="VCFv4.5", extra_meta=PSL_LINES))
+    calls, _, warnings = frames(path)
+    rows = {(r["chrom"], r["pos"]): r for r in calls.iter_rows(named=True)}
+    columns = ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities")
+
+    def phase(key: tuple) -> tuple:
+        return tuple(rows[key][name] for name in columns)
+
+    assert phase(("1", 5)) == ([True, False], ["1*5*1", None], ["psl", None], None, None)
+    assert phase(("1", 10)) == ([True, False, True], ["1*10*1", None, "1*5*1"], ["psl", None, "psl"], [1, None, 2], [30, None, 40])
+    assert phase(("2", 15)) == ([None, True], [None, "1*10*1"], [None, "psl"], None, None)
+    assert phase(("2", 20)) == ([True, True], ["1*5*1", None], ["psl", "ps"], None, None)
+    assert phase(("2", 25)) == ([None, False], None, None, None, None)
+    assert phase(("2", 30)) == ([None, None], None, None, None, None)
+    assert phase(("2", 35)) == ([True, True], ["y", "y"], ["psl", "psl"], None, None)
+    assert calls["gt"].to_list() == [[0, 1], [1, 2, 1], [1, 0], [1, 1], [1, 1], [1, 1], [1, 1]]
+    assert any("Number=P" in w and "PSL, PSO, PSQ" in w for w in warnings)
+    assert any(w.startswith("1 record(s) name a PSL phase set on an unphased allele") for w in warnings)
+    assert any(w.startswith("1 record(s) whose PSL is not one value per allele") for w in warnings)
+    assert any(w.startswith("1 record(s) carry both PS and PSL") for w in warnings)
+
+
+def test_a_file_without_psl_keeps_its_phase_set_lists_null(tmp_path: Path) -> None:
+    records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT:PS\t0|1:100"]
+    calls, _, _ = frames(write(tmp_path, vcf_text(records, fmt=("GT", "PS"))))
+    assert calls["phase_set_ordinals"].to_list() == calls["phase_set_qualities"].to_list() == [None]
+
+
 def test_header_repairs(tmp_path: Path) -> None:
     records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/1"]
     sorted_meta = vcf_text(records).split("\n")

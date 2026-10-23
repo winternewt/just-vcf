@@ -262,7 +262,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   writes each facet at the panel's positions with `write_vcf`, runs `somalier extract` and `relate`,
   and reads `pairs.tsv` into the relatedness frame (`method = somalier`, its `relatedness` kept
   verbatim, half of it as `kinship`). Without a `somalier` binary on PATH it raises
-  `SomalierNotFoundError`. Not run on this machine: docs/TRUST.md has no row for its binary yet.
+  `SomalierNotFoundError`. Not run on this machine: docs/TRUST.md has no row for its binary yet. The
+  module's names (`somalier_relate`, `read_somalier_pairs`, `somalier_binary`,
+  `SomalierNotFoundError`) are module-level, under `just_vcf.somalier`, not in `just_vcf.__all__`: an
+  optional runner of an outside binary, imported only by a caller who wants it.
 
 - Relatedness between facets (RM274): `relatedness(a, b)` gives KING-robust kinship (between-family
   form), IBS0, IBS2, the shared site counts, a jackknife standard error and a band (`same_person`,
@@ -362,7 +365,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 - `sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM269 with RM278): the
   median read depth over non-PAR X and the X-degenerate Y against chr20 is a third X line and a Y line
   that can show a Y absent, so `XX` and `XO` are now named where the lines agree. Without coverage
-  nothing changes; the result gains a nullable `coverage` field and two reasons
+  nothing changes; the result gains a nullable `coverage` field (`just_vcf.karyotype.CoverageRatios`,
+  module-level like the result's other nested models) and two reasons
   (`coverage_no_build`, `coverage_build_mismatch`, `coverage_uneven` for an exome-shaped depth).
 
 - Coverage as a facet (RM278): `read_coverage` reads mosdepth's per-base, regions, quantized and

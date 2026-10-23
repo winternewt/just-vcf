@@ -1390,7 +1390,7 @@ never `False` from the calls, because depth at called sites cannot show a Y abse
 read below the present band, close to the two-X range).
 
 `sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM278) of the same person and
-build, paired by the caller. Its `coverage` field (`CoverageRatios`) holds the length-weighted median
+build, paired by the caller. Its `coverage` field (`just_vcf.karyotype.CoverageRatios`, module-level like the result's other nested models) holds the length-weighted median
 read depth over non-PAR X, over the X-degenerate Y and over chr20 (zero-depth intervals left out on
 chr20 and X, where they are assembly gaps; kept on the Y, where zero is the signal), from intervals
 wholly inside each region and described at every base, and the two ratios. It is a third X line,

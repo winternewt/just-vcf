@@ -23,7 +23,7 @@ import polars as pl
 from just_vcf.callset import absence_is_reference
 from just_vcf.coverage import Coverage, callable_sites
 from just_vcf.loading import Loaded
-from just_vcf.schema import CONTIG_RANK, BlockKind, EvidenceBasis, VariantClass, enum_dtype
+from just_vcf.schema import CONTIG_RANK, BlockKind, EvidenceBasis, GlSource, VariantClass, enum_dtype
 
 __all__ = [
     "GENOTYPE_EVIDENCE",
@@ -44,8 +44,8 @@ class GradeBasis(str, Enum):
     GP = "gp"
     """The source's posterior probabilities (`gp`), as given."""
     GL = "gl"
-    """The source's likelihoods (`gl`, from VCF GL or PL: the frame keeps one column for both),
-    normalized under a flat prior."""
+    """The source's likelihoods (`gl`, from VCF GL or PL: the frame keeps one column for both, one
+    quantity on two scales), normalized under a flat prior. The row's `gl_source` says which key."""
     GQ = "gq"
     """The source's phred confidence of the genotype it called (`gq`), and nothing more."""
     DOSAGE = "dosage"
@@ -107,6 +107,7 @@ GENOTYPE_EVIDENCE = pl.Schema(
         "evidence_basis": enum_dtype(EvidenceBasis),
         "block_kind": enum_dtype(BlockKind),
         "grade_basis": enum_dtype(GradeBasis),
+        "gl_source": enum_dtype(GlSource),
         "confidence_kind": enum_dtype(ConfidenceKind),
         "genotype_alleles": pl.List(pl.String),
         "genotype_probabilities": pl.List(pl.Float64),
@@ -187,7 +188,14 @@ def _called_index(gt: pl.Expr) -> pl.Expr:
     )  # fmt: skip
 
 
-def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, keep: tuple[str, ...] = ()) -> pl.LazyFrame:
+def _with_gl_source(rows: pl.LazyFrame, facets: pl.LazyFrame) -> pl.LazyFrame:
+    """`rows` with their facet's `gl_source` as `_gl_source`, in their order: the key a row graded by its
+    likelihoods names. Joined lazily, so nothing is read until the answer is collected."""
+    sources = facets.select("facet_id", pl.col("gl_source").alias("_gl_source"))
+    return rows.join(sources, on="facet_id", how="left", maintain_order="left")
+
+
+def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, facets: pl.LazyFrame, keep: tuple[str, ...] = ()) -> pl.LazyFrame:
     gt, gt_alleles = pl.col("gt"), pl.col("gt_alleles")
     fully_called = gt.is_not_null() & (gt.list.len() > 0) & ~gt.list.eval(pl.element().is_null()).list.any()
     called_any = (
@@ -203,11 +211,12 @@ def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, keep: tuple[str,
     called_genotypes = _genotype_count(called_alleles.list.len(), gt.list.len().cast(pl.Int64))
     gq_applies = pl.col("gq").is_not_null() & fully_called & (pl.lit(True) if gq_on_reference else carries_alt)
 
-    rows = calls.select(
+    rows = _with_gl_source(calls, facets).select(
         "facet_id", "chrom", "pos", "end_pos", "evidence_basis", "gt", "gq", *keep,
         pl.col("source_alleles"), called_alleles.alias("_called_alleles"),
         pl.col("gp").cast(pl.List(pl.Float64)).alias("_gp"),
         pl.col("gl").cast(pl.List(pl.Float64)).alias("_gl"),
+        "_gl_source",
         pl.col("dosage"),
         vector_genotypes.alias("_vector_genotypes"),
         called_genotypes.alias("_called_genotypes"),
@@ -230,7 +239,7 @@ def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, keep: tuple[str,
                    vector_alleles=pl.col("source_alleles"), called_alleles=pl.col("_called_alleles"), keep=keep)  # fmt: skip
 
 
-def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool, keep: tuple[str, ...] = ()) -> pl.LazyFrame:
+def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool, facets: pl.LazyFrame, keep: tuple[str, ...] = ()) -> pl.LazyFrame:
     # A block's likelihoods are over [REF, <*>]: two alleles, so three values diploid and two haploid.
     # The frame keeps no REF base for a block, so that slot of `genotype_alleles` is null.
     gl = pl.col("gl").cast(pl.List(pl.Float64))
@@ -238,12 +247,13 @@ def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool, keep: tuple[st
     block_alleles = pl.concat_list(pl.lit(None, dtype=pl.String), pl.lit("<*>"))
     is_ref = pl.col("block_kind") == BlockKind.REF.value
     gq_applies = is_ref & pl.col("gq").is_not_null() & pl.lit(gq_on_reference)
-    rows = blocks.select(
+    rows = _with_gl_source(blocks, facets).select(
         "facet_id", "chrom", "pos", "end_pos", "gq", *keep,
         pl.lit(EvidenceBasis.REF_BLOCK.value).cast(enum_dtype(EvidenceBasis)).alias("evidence_basis"),
         pl.col("kind").alias("block_kind"),
         pl.lit(None, dtype=pl.List(pl.Float64)).alias("_gp"),
         gl.alias("_gl"),
+        "_gl_source",
         block_alleles.alias("_alleles"),
         pl.when(genotypes.is_in([2, 3])).then(genotypes).otherwise(None).alias("_vector_genotypes"),
     )  # fmt: skip
@@ -293,6 +303,8 @@ def _graded(rows: pl.LazyFrame, *, called_index: pl.Expr, called_genotypes: pl.E
         .when(is_gq).then(pl.col("gq").cast(pl.Float64))
         .alias("confidence"),
         basis.cast(enum_dtype(GradeBasis)).alias("grade_basis"),
+        # The key the likelihoods were read from, on the rows they grade; every other row rests on neither.
+        pl.when(is_gl).then(pl.col("_gl_source")).cast(enum_dtype(GlSource)).alias("gl_source"),
     ).select(*GENOTYPE_EVIDENCE.names(), *keep)  # fmt: skip
 
 
@@ -302,7 +314,8 @@ def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False) -> pl.La
     Per row, the first basis that applies (docs/SCHEMA.md, "Graded genotype evidence"):
 
     - `gp`: the posterior vector as written, `prior = source`;
-    - `gl`: the likelihoods (GL or PL) normalized with a flat prior, `prior = flat`;
+    - `gl`: the likelihoods (GL or PL) normalized with a flat prior, `prior = flat`. `gl_source` names
+      the key the facet read them from (`facets.gl_source`), and is null on every row of another basis;
     - `gq`: a fully called genotype carrying an ALT, with a GQ. VCF defines GQ as conditional on the
       site being variant, so by default it grades no reference genotype and no reference block;
       `gq_on_reference=True` lets it, as single-sample callers compute it. The called genotype gets
@@ -320,7 +333,8 @@ def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False) -> pl.La
     is the top genotype's index in VCF order, or the called genotype's. Ordered canonically, calls
     before blocks at one position. Lazy: nothing is read until collected.
     """
-    frame = pl.concat([_calls_evidence(loaded.calls, gq_on_reference), _blocks_evidence(loaded.blocks, gq_on_reference)], how="vertical")
+    facets = loaded.facets
+    frame = pl.concat([_calls_evidence(loaded.calls, gq_on_reference, facets), _blocks_evidence(loaded.blocks, gq_on_reference, facets)], how="vertical")
     rank = pl.col("chrom").replace_strict(CONTIG_RANK, default=len(CONTIG_RANK), return_dtype=pl.UInt16)
     origin = pl.col("evidence_basis").cast(pl.String)
     return frame.sort([pl.col("facet_id"), rank, pl.col("chrom"), pl.col("pos"), origin, pl.col("end_pos")], nulls_last=True, maintain_order=True)
@@ -399,7 +413,10 @@ def genotype_evidence_at(
         .filter(pl.col("facet_id").is_not_null() & (pl.col("_site_pos") <= pl.col("end_pos").cast(pl.Int64)))
         .drop("_site_pos", "_start")
     )  # fmt: skip
-    graded = pl.concat([_calls_evidence(hit_calls, gq_on_reference, keep=("_site",)), _blocks_evidence(hit_blocks, gq_on_reference, keep=("_site",))])
+    graded = pl.concat([
+        _calls_evidence(hit_calls, gq_on_reference, loaded.facets, keep=("_site",)),
+        _blocks_evidence(hit_blocks, gq_on_reference, loaded.facets, keep=("_site",)),
+    ])  # fmt: skip
     covered = (
         graded.rename({"pos": "record_pos", "end_pos": "record_end_pos"}).drop("chrom")
         .join(asked.lazy(), on="_site", how="inner")

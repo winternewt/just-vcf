@@ -17,7 +17,7 @@ import polars as pl
 from just_vcf.contig_names import PRIMARY_ACCESSIONS
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.17"
+SCHEMA_VERSION = "0.0.18"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -171,6 +171,22 @@ class StrandCheck(str, Enum):
     part of the probes is written on the minus strand."""
 
 
+class GlSource(str, Enum):
+    """The FORMAT key(s) a VCF facet's `gl` is read from, by the header's declarations (Decision 3).
+
+    GL and PL state one quantity, likelihoods, on two scales, and load equal into `gl`; this says which
+    was written. Null: the facet carries no likelihoods (not a VCF, or a header declaring neither key
+    with a genotype count). just-vcf's own vocabulary."""
+
+    GL = "gl"
+    """GL alone: log10 likelihoods as written (CGAPipeline's phred-unit GL as GL / 10)."""
+    PL = "pl"
+    """PL alone: phred-scaled likelihoods, read as `-PL/10`."""
+    GL_OVER_PL = "gl_over_pl"
+    """Both declared: a row's `gl` is its GL, and its PL only where the GL is missing or does not fit
+    the genotypes. Which key a given row took is not kept."""
+
+
 def enum_dtype(vocabulary: type[Enum]) -> pl.Enum:
     """The `pl.Enum` dtype for a closed vocabulary, categories in declaration order."""
     return pl.Enum([member.value for member in vocabulary])
@@ -224,6 +240,7 @@ FACETS = pl.Schema(
         "sample_meta": pl.List(pl.String),
         "dropped_fields": pl.List(pl.String),
         "split_marker": pl.String,
+        "gl_source": enum_dtype(GlSource),
         "derivation_inputs": pl.List(pl.Struct({"role": pl.String, "name": pl.String, "sha256": pl.String})),
         "chip": pl.String,
         "chip_basis": enum_dtype(ChipBasis),

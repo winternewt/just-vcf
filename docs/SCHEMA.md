@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.17.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.18.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -593,6 +593,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `sample_meta` | the file's `##SAMPLE` and `##PEDIGREE` lines for this sample, verbatim. Pedigree becomes GA4GH Pedigree later (charter) |
 | `dropped_fields` | INFO/FORMAT keys present in the file but not carried (Decision 9). For a delimited table, the file's own column names that no frame column carries (a Final Report's `GenCall Score`), or, where the file names none, the format's names for them; for CGI's native files and the key=value table, their columns and keys. `[]` = the loader read the file's fields and dropped none (every 23andMe-layout table: its four fields are all carried). Null = the format has no notion of fields; no loaded format is one today. A derived facet keeps its parent's |
 | `split_marker` | the declared split-marker INFO key(s), comma-joined, when any record was tagged as split off a multi-allelic site (vt's `OLD_MULTIALLELIC`, `write_vcf`'s `JUST_VCF_SPLIT`, a bcftools `--old-rec-tag` key). Null = no record was tagged, which is not "not split": see `split_signal` |
+| `gl_source` | which FORMAT key a VCF facet's `gl` is read from, by the header's declarations: `gl`, `pl`, or `gl_over_pl` where both are declared (a row's `gl` is its GL, and its PL only where the GL is missing or does not fit the genotypes; which key a given row took is not kept). A key declared with a fixed count or a refused Type is not read, so it does not count; one the rows use undeclared, which the loader declares, does. CGAPipeline's phred-unit GL is `gl`: the value names the key, the scale is in a load warning. Null = the facet carries no likelihoods: not a VCF, or a header with neither key, and then `gl` is null on every row. A derived facet keeps its parent's. just-vcf's own shape |
 | `derivation_inputs` | `list[struct{role, name, sha256}]`: the files a derived facet was made with besides its parent and its reference collection (`ref_seqcol_digest`). A liftover writes its chain (`role = chain`, the file's name, not its path, and the sha256 of its bytes). Null on a facet read from a file. just-vcf's own shape |
 | `chip`, `chip_basis` | the genotyping chip an array export came from (RM4, `just_vcf.chip`), and how it is known: `stated` (the header names it: AncestryDNA's array version, a Final Report's `Content` manifest, Living DNA's genotype chip) or `inferred` (a 23andMe export's row count and internal-id profile both point at one generation; a preamble-less table in its layout is read so when it carries 23andMe's `i…` ids; an FTDNA or MyHeritage export, or a Final Report that names no manifest, whose rsids one Illumina manifest clearly holds, by marker overlap). An open vocabulary: `23andme_v1_v2` (the two are not told apart), `23andme_v3`, `23andme_v4`, `23andme_v5`, `ancestrydna_v1`, `ancestrydna_v2`, `living_dna_sirius`, `illumina:<manifest>` as a Final Report names it, and the platform families `illumina_gsa` and `illumina_omniexpress`, which only marker overlap names: a stated value carries the manifest, an inferred one the family, since one manifest per family is compared with, and a GSA v2 Final Report matches the v3 manifest at 0.97: the overlap does not tell versions apart. Null = unknown (a statement with no entry is quoted in a warning; an overlap that names no chip says why in one) or not an array. just-vcf's own shape |
 | `strand_check` | `forward` or `mixed`: what `resolve_ref` found about the strand an array's genotypes are written on (F13, Decision 2). Null = not checked: not an array, REF not read yet, or too few heterozygous rows. Never read as forward |
@@ -1483,6 +1484,7 @@ reading) into every cache spill and need a version bump each time they move.
 | Column | Meaning |
 |---|---|
 | `grade_basis` | which quantity the value rests on (below). Never null |
+| `gl_source` | on a row graded `gl`, the facet's `gl_source`: `gl`, `pl`, or `gl_over_pl` where the header declares both (the row took its GL, else its PL, and the frame does not keep which). Null on every row of another basis, which rests on neither key |
 | `confidence_kind` | `quantified` (a number), `asserted` (a genotype stated without a quantity) or `unknown` (none stated). It follows from the basis, and is a column so that a null `confidence` is never read as a low one |
 | `genotype_alleles` | the alleles `genotype_probabilities` and `genotype_index` index: `source_alleles` for a vector (Decision 2: never reordered; for a VCF row that is `[source_ref] + alts`), `[source_ref or ref] + alts` for a genotype, which is what `gt` indexes, and `[null, "<*>"]` for a block, whose REF base the frame does not keep |
 | `genotype_probabilities` | `list[f64]`, one probability per genotype in VCF genotype order at the row's ploidy; null where the source supports no vector |
@@ -1493,9 +1495,11 @@ reading) into every cache spill and need a version bump each time they move.
 **The bases**, the first that applies to a row:
 
 - `gp`: a usable GP vector, as written.
-- `gl`: a usable likelihood vector, normalized under a flat prior. GL and PL load into one `gl` column
-  that does not record which key was written (Decision 3 makes them load equal), so there is one basis
-  for both; telling them apart would take a stored column.
+- `gl`: a usable likelihood vector, normalized under a flat prior. GL and PL are one quantity on two
+  scales and load into one `gl` column (Decision 3), so there is one basis for both; the row's
+  `gl_source` says which key the facet read (`facets.gl_source`). Rejected: a `pl` basis beside `gl`,
+  which would split one quantity in two, change what `gl` means to a consumer already filtering on it,
+  and have no answer for a facet declaring both keys, whose rows do not keep which key each took.
 - `gq`: a fully called genotype carrying an ALT, with a GQ. VCF defines GQ as conditional on the site
   being variant ("Other VCF 4.5 points" above), so by default GQ grades no reference genotype and no
   reference block; `gq_on_reference=True` lets it, as single-sample callers compute it. The called
@@ -1817,6 +1821,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **A facet column, version bump pending** (2026-10-24, the lead's decision on GL and PL): `facets.gl_source` (`schema.GlSource`: `gl`, `pl`, `gl_over_pl`) names the FORMAT key `gl` is read from (Decision 5). Adding a column changes the `facets` schema; `SCHEMA_VERSION` was deliberately left as it is on this builder branch, and the lead bumps it at merge. No rule changes: `gl` loads as before.
+
 - **An enum member, version bump pending** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
   (`cgi_haplink`), CGI's `hapLink` as a phase set, just-vcf's own term. Adding a member changes the
   `pl.Enum` dtype of `calls.phase_set_kinds` and of `cis_phased_blocks`' `phase_set_kind`, which is a
@@ -2006,6 +2012,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   which runs beside other builders' branches; the lead bumps it at merge. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.18** (2026-10-23, the PL/GL source): `facets.gl_source` (`gl`, `pl`, `gl_over_pl` or null). Additive.
 
 - **0.0.17** (2026-10-24, the CGI leftovers): `PhaseSetKind.CGI_HAPLINK` (the `phase_set_kinds` dtype gains a
   member); CGI masterVarBeta fills `ad`; CGI `var` 1.x layouts tested.

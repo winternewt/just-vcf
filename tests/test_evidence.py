@@ -20,7 +20,7 @@ from just_vcf.evidence import (
     genotype_evidence,
     genotype_evidence_at,
 )
-from just_vcf.schema import ContentFilter, enum_dtype
+from just_vcf.schema import ContentFilter, GlSource, enum_dtype
 from test_load_vcf import vcf_text
 
 DS_LINE = '##FORMAT=<ID=DS,Number=A,Type=Float,Description="Dosage">'
@@ -83,13 +83,47 @@ def test_likelihoods_are_normalized_with_a_flat_prior(tmp_path: Path) -> None:
 
 
 def test_gl_and_pl_stating_one_likelihood_grade_alike(tmp_path: Path) -> None:
-    """The frame folds GL and PL into `gl` (Decision 3), so the basis is `gl` for both and the values agree."""
+    """The frame folds GL and PL into `gl` (Decision 3), so the basis is `gl` for both and the values agree;
+    `gl_source` says which key was written."""
     by_pl = _vcf(tmp_path, ["1\t100\t.\tA\tG\t50\t.\t.\tGT:PL\t0/1:40,0,300"], fmt=("GT", "PL"), name="pl.vcf")
     by_gl = _vcf(tmp_path, ["1\t100\t.\tA\tG\t50\t.\t.\tGT:GL\t0/1:-4,0,-30"], fmt=("GT",), extra=(GL_LINE,), name="gl.vcf")
     a, b = _row(_graded(by_pl), 100), _row(_graded(by_gl), 100)
     assert a["grade_basis"] == b["grade_basis"] == GradeBasis.GL.value
+    assert (a["gl_source"], b["gl_source"]) == (GlSource.PL.value, GlSource.GL.value)
     assert a["genotype_probabilities"] == pytest.approx(b["genotype_probabilities"], rel=1e-6)
     assert a["confidence"] == pytest.approx(b["confidence"], rel=1e-6)
+
+
+def test_a_facet_declaring_both_keys_grades_every_likelihood_row_under_its_rule(tmp_path: Path) -> None:
+    """GL and PL both declared: a row's `gl` is its GL, else its PL. The row cannot say which it took, so it
+    carries the facet's rule, `gl_over_pl`, and never a key it may not have read."""
+    loaded = _vcf(tmp_path, [
+        "1\t100\t.\tA\tG\t50\t.\t.\tGT:PL:GL\t0/1:40,0,300:-2,0,-20",
+        "1\t101\t.\tA\tG\t50\t.\t.\tGT:PL:GL\t0/1:40,0,300:.",
+    ], fmt=("GT", "PL"), extra=(GL_LINE,))  # fmt: skip
+    graded = _graded(loaded)
+    by_gl, by_pl = _row(graded, 100), _row(graded, 101)
+    assert by_gl["grade_basis"] == by_pl["grade_basis"] == GradeBasis.GL.value
+    assert by_gl["gl_source"] == by_pl["gl_source"] == GlSource.GL_OVER_PL.value
+    def flat(log10: list[float]) -> list[float]:
+        weights = [10**v for v in log10]
+        return [w / sum(weights) for w in weights]
+    assert by_gl["genotype_probabilities"] == pytest.approx(flat([-2, 0, -20]), rel=1e-6), "GL wins where the row has it"
+    assert by_pl["genotype_probabilities"] == pytest.approx(flat([-4, 0, -30]), rel=1e-6), "PL fills where GL is missing"
+
+
+def test_gl_source_is_null_on_a_row_the_likelihoods_do_not_grade(tmp_path: Path) -> None:
+    """The column says what the graded value rests on: a GP, GQ or bare genotype row rests on neither key."""
+    loaded = _vcf(tmp_path, [
+        "1\t100\t.\tA\tG\t50\t.\t.\tGT:GQ:PL:GP\t0/1:20:30,0,40:0.02,0.95,0.03",
+        "1\t101\t.\tA\tG\t50\t.\t.\tGT:GQ:PL:GP\t0/1:20:.:.",
+        "1\t102\t.\tA\tG\t50\t.\t.\tGT:GQ:PL:GP\t0/1:.:.:.",
+        "1\t103\t.\tA\tG\t50\t.\t.\tGT:GQ:PL:GP\t0/1:.:30,0,40:.",
+    ])  # fmt: skip
+    assert loaded.facets.collect()["gl_source"].to_list() == [GlSource.PL.value]
+    graded = _graded(loaded)
+    assert graded.schema["gl_source"] == enum_dtype(GlSource)
+    assert graded.select("grade_basis", "gl_source").rows() == [("gp", None), ("gq", None), ("gt_only", None), ("gl", "pl")]
 
 
 def test_extreme_likelihoods_keep_a_finite_confidence(tmp_path: Path) -> None:
@@ -203,6 +237,7 @@ def test_blocks_are_graded_by_their_likelihoods_or_asserted(tmp_path: Path) -> N
     ref = _row(graded, 100, "ref_block")
     weights = [10 ** (-v / 10) for v in (0, 60, 900)]
     assert ref["grade_basis"] == GradeBasis.GL.value and ref["block_kind"] == "ref"
+    assert ref["gl_source"] == GlSource.PL.value, "a gVCF block's likelihoods are its PL"
     assert ref["genotype_alleles"] == [None, "<*>"], "a block keeps no REF base"
     assert ref["genotype_probabilities"] == pytest.approx([w / sum(weights) for w in weights], rel=1e-6)
     assert ref["genotype_index"] == 0
@@ -249,6 +284,8 @@ def test_asked_positions_read_records_blocks_and_absence(tmp_path: Path) -> None
     by_pos = {r["pos"]: r for r in at.iter_rows(named=True)}
     assert by_pos[105]["evidence_basis"] == "ref_block" and (by_pos[105]["record_pos"], by_pos[105]["record_end_pos"]) == (100, 113)
     assert by_pos[115]["record_pos"] == 114 and by_pos[115]["grade_basis"] == "gl", "inside a called deletion is not absent"
+    assert by_pos[105]["gl_source"] == by_pos[115]["gl_source"] == GlSource.PL.value
+    assert by_pos[140]["gl_source"] is None, "absence rests on no key"
     assert by_pos[116]["record_pos"] == 114
     assert by_pos[140]["grade_basis"] == GradeBasis.ABSENT_UNKNOWN.value, "a gVCF's gap says nothing (absence_means = blocks)"
     assert by_pos[140]["record_pos"] is None and by_pos[140]["absence_means"] == "blocks"

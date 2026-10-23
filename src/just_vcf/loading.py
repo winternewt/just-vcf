@@ -751,6 +751,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     stated_filters = callset.stated_content_filters(header.meta)
     # The member's own name inside an archive; the name is read for its words and never logged.
     named_filter = callset.named_content_filter(sniffed.member or sniffed.path.name)
+    likelihoods = vcf.gl_source(header)
 
     facets: list[dict] = []
     facet_stats: list[dict] = []
@@ -839,6 +840,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 "sample_meta": header.sample_meta,
                 "dropped_fields": vcf.dropped_fields(header, data),
                 "split_marker": ",".join(sorted(header.split_markers)) if marker_rows else None,
+                "gl_source": likelihoods.value if likelihoods else None,
             }
         )
         # The flagged positions join above the per-contig sort, so a filter still reaches the parquet scan.

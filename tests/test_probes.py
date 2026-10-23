@@ -303,10 +303,10 @@ def ancestry_export(path: Path, positions: list[int]) -> Path:
 
 
 def test_a_probe_set_is_learned_from_a_chips_exports_and_read_back(tmp_path: Path) -> None:
-    exports = [ancestry_export(tmp_path / f"e{i}.txt", [100, 200, 300 + i]) for i in range(3)]
+    exports = [ancestry_export(tmp_path / f"e{i}.txt", [100, 200 + (i == 2), 300 + i]) for i in range(3)]
     [learned] = learn_probe_sets(exports)
     assert (learned.chip, learned.kind, learned.assembly_label) == ("ancestrydna_v2", ProbeSetKind.LEARNED, "GRCh37")
-    assert sorted(learned.sites.rows()) == [("1", 100), ("1", 200), ("1", 300), ("1", 301), ("1", 302)]
+    assert sorted(learned.sites.rows()) == [("1", 100), ("1", 200)], "a site one export of three carries is not on the chip"
     read = probe_set("ancestrydna_v2", "GRCh37")
     assert isinstance(read, ProbeSet) and read.sites.equals(learned.sites) and read.source == "learned from 3 export(s)"
 

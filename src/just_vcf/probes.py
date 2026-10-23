@@ -442,6 +442,15 @@ MIN_LEARNING_EXPORTS = 3
 """Exports of one chip on one assembly a learned probe set needs: fewer cannot tell a chip's site from
 one export's oddity, and the set is not written."""
 
+MIN_EXPORT_SHARE = 0.5
+"""Share of a chip's exports that must carry a site for it to be on the chip. Not the union: on PGP-HMS,
+one of 81 23andMe v1/v2 exports labelled build 36 carried 578,794 positions no other export has (an
+export in another coordinate system, or another chip), which the union would have put on the chip."""
+
+
+def _on_chip(table: pl.DataFrame) -> pl.DataFrame:
+    return table.filter(pl.col("exports") >= pl.col("of_exports") * MIN_EXPORT_SHARE).select("chrom", "pos")
+
 
 def _learned_path(chip: str, assembly_label: str) -> Path:
     return cache_dir() / "probes" / "learned" / f"{chip}-{assembly_label}-{LEARNED_VERSION}.parquet"
@@ -479,7 +488,7 @@ def probe_set(chip: str | None, assembly_label: str | None) -> ProbeSet | str:
     table = pl.read_parquet(path)
     exports = int(table["of_exports"].max() or 0)
     return ProbeSet(chip=chip, kind=ProbeSetKind.LEARNED, source=f"learned from {exports} export(s)", assembly_label=assembly_label,
-                    sites=table.select("chrom", "pos"))  # fmt: skip
+                    sites=_on_chip(table))  # fmt: skip
 
 
 def chip_absence(loaded: Loaded, sites: pl.DataFrame) -> ChipAbsence:
@@ -518,9 +527,10 @@ def learn_probe_sets(exports: Iterable[Path | str | Loaded], min_exports: int = 
     the positions its exports carry: 23andMe and AncestryDNA write a row for every probe, no-calls
     included. Each export counts under its facet's `chip` and `assembly_label`; an export with either
     unknown, a VCF, a platform family or a chip with its own manifest (`illumina:`) is passed over. A
-    set is the union of its exports' positions, each with the number of exports that carry it
+    set holds every position its exports carry, each with the number of exports that carry it
     (`exports`; `of_exports` is how many were read), and is written only from `min_exports` exports
-    or more. Learning again replaces the set. Returns the sets written.
+    or more; a site is on the chip when at least `MIN_EXPORT_SHARE` of them carry it. Learning again
+    replaces the set. Returns the sets written.
     """
     seen: dict[tuple[str, str], pl.DataFrame] = {}
     counted: dict[tuple[str, str], int] = {}
@@ -547,5 +557,5 @@ def learn_probe_sets(exports: Iterable[Path | str | Loaded], min_exports: int = 
         table.write_parquet(staged)
         os.replace(staged, target)
         written.append(ProbeSet(chip=chip, kind=ProbeSetKind.LEARNED, source=f"learned from {counted[(chip, label)]} export(s)",
-                                assembly_label=label, sites=table.select("chrom", "pos")))  # fmt: skip
+                                assembly_label=label, sites=_on_chip(table)))  # fmt: skip
     return written

@@ -455,9 +455,10 @@ not an array, chip or assembly unknown, or nothing configured or learned; the an
 reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
 (`ProbeSetKind`): `manifest`, the chip's own Illumina manifest when a Final Report names it
 (`illumina:<manifest>`) and it is configured (`JUST_VCF_MANIFESTS_DIR`), its probes on that build
-(`Chr 0` probes are unplaced and left out); or `learned`, the union of the positions the exports of
-that chip carry, written into the cache by `learn_probe_sets` from three exports or more, for a vendor
-that publishes no manifest (23andMe and AncestryDNA write a row per probe, no-calls included). A
+(`Chr 0` probes are unplaced and left out); or `learned`, the positions at least half of the exports
+of that chip carry, written into the cache by `learn_probe_sets` from three exports or more, for a
+vendor that publishes no manifest (23andMe and AncestryDNA write a row per probe, no-calls included).
+Not the union: one mislabelled export would put its whole coordinate system on the chip. A
 platform family named by marker overlap (`illumina_gsa`, `illumina_omniexpress`) has none: another
 version's manifest would put probes on the chip that it may not carry. A learned set is as complete as
 the exports it was learned from; `of_exports` and each site's `exports` count say how many. The cause

@@ -15,7 +15,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   export has a row there (`in_export`), the chip has a probe there and the export reports nothing
   (`no_call`), or the chip has no probe there (`not_on_chip`); null with a reason when the facet has no
   probe set. `probe_set(chip, assembly_label)` is the chip's own manifest for an `illumina:<manifest>`
-  chip (configured), or a set learned from exports of the chip by `learn_probe_sets`, written into the
+  chip (configured), or the sites at least half of the chip's exports carry, learned by `learn_probe_sets` into the
   cache's `probes/learned/` (`scripts/learn_probe_sets.py` walks a directory of exports). Platform
   families named by marker overlap get none. New public names: `chip_absence`, `ChipAbsence`,
   `AbsenceCause`, `probe_set`, `ProbeSet`, `ProbeSetKind`, `learn_probe_sets`. No column changes.

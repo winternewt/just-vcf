@@ -778,7 +778,9 @@ holding that collection and the target.
    `vrs_errors`, `cipos` and `ciend` are null: they described the source's representation on the
    source assembly (the intervals are offsets a minus-strand block would reverse). `gt`
    indexes `[ref] + alts`. `gl`, `gp`, `ad` and the order of `source_alleles` are the parent's (Decision
-   2: never reordered). A swapped row's `dosage` is null, since it counted the other allele. A row
+   2: never reordered). A swapped row's `dosage` is null, since it counted the other allele, and so
+   are its `alt_copy_numbers`: the swapped ALT's slot holds the old REF, whose copy number the source
+   did not state. A row
    lifted to another contig than its source's has `phased`, `phase_sets` and `phase_set_kinds` null: a
    PS set is keyed per contig, and two sets would otherwise merge. `ids`, `filters`, `qual`, `gq`, `dp`
    and `evidence_basis` are kept. Re-mint ids on the target with `mint_vrs_ids`.
@@ -1345,6 +1347,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, the audit of RM282's derived steps): no column changes. Rule
+  changed in `liftover`: a swapped row's `alt_copy_numbers` are null, as its `dosage` is
+  (`LIFT_VERSION` 3). `normalize` gets a new `facet_id` (`NORMALIZE_VERSION` 6) for RM282's rule,
+  which changed its output without a bump: per-ALT SV columns split with their ALT, a moved row's
+  intervals cleared.
 
 - **One facet column, landed in 0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every

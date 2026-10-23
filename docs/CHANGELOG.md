@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `liftover` withholds a swapped row's `alt_copy_numbers` (INFO CN, one per ALT), as it withholds its
+  `dosage`: the swapped ALT's slot holds the old REF, whose copy number the source did not state; a
+  warning counts them. `LIFT_VERSION` 3. `NORMALIZE_VERSION` 6, for RM282's change to what `normalize`
+  emits (per-ALT SV columns split with their ALT, a moved row's intervals cleared), which shipped
+  without a bump. Lifted and normalized facets get new `facet_id`s.
+
 - The suite's opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DIR`, `JUST_VCF_MANIFESTS_DIR`,
   `JUST_VCF_TEST_REFERENCE_DIR`, `JUST_VCF_TEST_CHAIN_DIR`) are empty unless the shell sets them:
   `tests/conftest.py` no longer reads them from the repo `.env`, and defaults each to `""` so the CLI's

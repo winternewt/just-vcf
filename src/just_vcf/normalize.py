@@ -60,8 +60,9 @@ from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, Re
 
 logger = logging.getLogger(__name__)
 
-NORMALIZE_VERSION = 5
-"""Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits."""
+NORMALIZE_VERSION = 6
+"""Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits (6: RM282's
+per-ALT SV columns split with their ALT, the intervals of a moved row cleared)."""
 
 RELATION = NORMALIZED
 """The derived facet's `relation`."""

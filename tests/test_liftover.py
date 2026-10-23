@@ -112,6 +112,7 @@ HEADER = [
     "##fileformat=VCFv4.2",
     *[f"##contig=<ID={name},length={len(seq)}>" for name, seq in SOURCE.items()],
     '##INFO=<ID=SVLEN,Number=1,Type=Integer,Description="SV length">',
+    '##INFO=<ID=CN,Number=A,Type=Integer,Description="Copy number per ALT">',
     '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
     '##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred likelihoods">',
     '##FORMAT=<ID=DS,Number=1,Type=Float,Description="Dosage">',
@@ -265,6 +266,26 @@ def test_strand_and_swaps(tmp_path: Path, setup) -> None:
 
     indel = calls["plus_deletion"]
     assert (indel["ref"], indel["alts"]) == (s1(450, 3), [s1(450)])
+
+
+def test_a_swapped_row_withholds_its_per_alt_copy_numbers(tmp_path: Path, setup) -> None:
+    """INFO CN is one per ALT: after a swap the ALT slot holds the old REF, so the numbers are withheld."""
+    store, _, _, chain = setup
+    cases = {
+        "plus_snv": row(201, s1(201), other(s1(201)), "0/1", rsid="plus_snv", info="CN=2"),
+        "swap": row(SWAP_POS, s1(SWAP_POS), SWAP_BASE, "0/1", rsid="swap", info="CN=3"),
+        "multi_swap": row(MULTI_SWAP_POS, s1(MULTI_SWAP_POS), f"{MULTI_ALT_1},{MULTI_BASE}", "1/2", rsid="multi_swap", info="CN=1,4"),
+    }
+    resolved, lifted = lifted_from_cases(tmp_path, store, chain, cases)
+    source = by_case(resolved.calls.collect())
+    calls = by_case(lifted.loaded.calls.collect())
+    report = by_case(lifted.report.collect())
+    assert all(source[case]["alt_copy_numbers"] is not None for case in cases)
+    for case in cases:
+        swapped = report[case]["lift_swapped"]
+        assert swapped is (case != "plus_snv")
+        assert calls[case]["alt_copy_numbers"] == (None if swapped else source[case]["alt_copy_numbers"])
+    assert any(line.startswith("2 swapped row(s): alt_copy_numbers withheld") for line in lifted.loaded.warnings)
 
 
 def test_minus_strand_indels_are_reanchored_on_the_base_before(tmp_path: Path, setup) -> None:

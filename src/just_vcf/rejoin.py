@@ -15,13 +15,14 @@ from itertools import groupby
 import polars as pl
 
 from just_vcf import cache
+from just_vcf.links import SPLIT_REJOINED, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck, canonical_order_per_contig
 
 REJOIN_VERSION = 1
 """Part of the derived `facet_id`: bumped whenever the join rule changes what it emits."""
 
-RELATION = "split_rejoined"
+RELATION = SPLIT_REJOINED
 """The derived facet's `relation`."""
 
 _KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "dp", "qual")
@@ -91,6 +92,7 @@ def rejoin_split(loaded: Loaded) -> Loaded:
         facets=facets,
         calls=calls,
         blocks=loaded.blocks.with_columns(pl.lit(facet_id).alias("facet_id")),
+        links=derived_links(loaded.links, facet["facet_id"], facet_id, RELATION, step="rejoin_split", step_version=str(REJOIN_VERSION)),
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )

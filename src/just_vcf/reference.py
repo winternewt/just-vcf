@@ -345,6 +345,7 @@ def resolve_ref(
         ),
         calls=pl.scan_parquet(parts) if parts else empty(CALLS),
         blocks=loaded.blocks,
+        links=loaded.links,
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )

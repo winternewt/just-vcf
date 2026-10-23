@@ -50,6 +50,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf import cache
+from just_vcf.links import LIFTOVER_TO, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import PRIMARY, Contig, ReferenceMismatchError, ReferenceStore, _derive_array_alleles, _span, _store_for
 from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceMeans, AssemblyLabelBasis, RefCheck, canonical_chrom, canonical_order, empty
@@ -59,7 +60,7 @@ logger = logging.getLogger(__name__)
 LIFT_VERSION = 2
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits."""
 
-RELATION = "liftover_to"
+RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
 
 UNLIFTED_REASONS: frozenset[str] = frozenset(
@@ -316,6 +317,7 @@ def liftover(
     present = calls.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
     names = {chrom: contig.name for chrom, contig in target_contigs.items()}
     label = store.assembly_label(target_digest)
+    chain_input = [{"role": "chain", "name": chain.name, "sha256": chain.sha256}]
     facets = parent.lazy().with_columns(
         pl.lit(facet_id).alias("facet_id"),
         pl.lit(facet["facet_id"]).alias("derived_from"),
@@ -331,12 +333,15 @@ def liftover(
             sorted(({"source": names.get(chrom, chrom), "chrom": chrom} for chrom in present), key=lambda entry: entry["source"]),
             dtype=FACETS["contig_map"],
         ).alias("contig_map"),
-        pl.lit([{"role": "chain", "name": chain.name, "sha256": chain.sha256}], dtype=FACETS["derivation_inputs"]).alias("derivation_inputs"),
+        pl.lit(chain_input, dtype=FACETS["derivation_inputs"]).alias("derivation_inputs"),
     )
     derived = Loaded(
         facets=facets.select(FACETS.names()),
         calls=calls,
         blocks=loaded.blocks.clear().with_columns(pl.lit(facet_id).alias("facet_id")),
+        links=derived_links(
+            loaded.links, facet["facet_id"], facet_id, RELATION, step="liftover", step_version=str(LIFT_VERSION), derivation_inputs=chain_input
+        ),
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )

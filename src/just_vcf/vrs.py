@@ -240,6 +240,7 @@ def mint_vrs_ids(loaded: Loaded, reference: "ReferenceStore | Path | str | None"
         facets=loaded.facets,
         calls=calls,
         blocks=loaded.blocks,
+        links=loaded.links,
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )

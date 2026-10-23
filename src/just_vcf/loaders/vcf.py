@@ -34,6 +34,7 @@ from polars_bio.sql import SQL
 
 from just_vcf import cache as cache_index
 from just_vcf.bgzf import BgzfWriter
+from just_vcf.links import CALLER_SPLIT  # noqa: F401 (kept importable here; defined in just_vcf.links)
 from just_vcf.schema import BLOCKS, CALLS, EMPTY_ALLELE, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,6 @@ FREEBAYES_VARSCAN2 = "vcf_freebayes_varscan2"
 SELECTION_INFO = ("SF",)
 """INFO keys read only to select a part's rows. The structural copy made for a refused header keeps
 them, or the retry could not split the file."""
-
-CALLER_SPLIT = "caller_split"
-"""The just-vcf relation of a facet that holds one caller's rows of a file merging several callers."""
 
 _MERGE_CALLERS = {"FB": "freeBayes", "VS": "VarScan2"}
 """The caller tokens PGP's pipeline puts in the merged inputs' names (`chr1.FB.vcf.gz`), as the

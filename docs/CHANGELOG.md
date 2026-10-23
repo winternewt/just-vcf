@@ -27,6 +27,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   Kleene `Presence` with its basis (stated, site genotyped, ref or no-call block, absence read through
   `absence_is_reference`, unknown). Not-carried is answered for SNVs only. No row, sample name or
   unasked position appears in any answer (docs/TRUST.md). No column changes.
+
+- The facet graph as a fourth frame, `Loaded.links` (RM275, SCHEMA.md Decision 12): one row per link,
+  `from_facet_id`, `to_facet_id`, `relation` and a `provenance` struct (the step, its rule's version,
+  the files it read). `rejoin_split`, `normalize` and `liftover` add a lineage link and carry their
+  parent's links, so a facet several steps from its file keeps every step; `resolve_ref` and
+  `mint_vrs_ids` pass them through. A load of several facets links them: a caller split's facets in
+  every pair, an appended export from the first export. A plain load has none. `facets.derived_from`
+  and `relation` stay for the one-parent case, and `link_disagreements` lists every place the two
+  disagree. `LINKS` and `link_disagreements` are exported. No column of the other frames changes; the
+  schema version is not bumped.
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

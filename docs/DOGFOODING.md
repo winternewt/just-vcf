@@ -4,6 +4,21 @@ Quirks, bugs and gaps found by using just-vcf on real genomes. Each carries a st
 moves to [PREVIOUS_ISSUES.md](PREVIOUS_ISSUES.md) when resolved here, or to
 `<UPSTREAM>_PENDING_FIXES.md` when it needs an upstream change first.
 
+## F20 — A CGI vcfBeta's chrY md5 refuses the whole facet
+
+Severity: medium · Found 2026-10-23 by RM279 (the method-error atlas) comparing PGP-HMS CGI vcfBeta
+facets against freeBayes.
+
+`resolve_ref` refuses a facet when any primary contig (1–22, X, Y) states a length or md5 the
+reference does not have. Checked with the library on the smallest PGP-HMS vcfBeta against the shared
+store: the header states 25 contigs (1–22, X, Y, M), every autosome and X agree with Ensembl GRCh37
+in length and md5, and Y agrees in length (59,373,566) but not in md5. So the whole facet is refused:
+no `ref`, no `ref_check`, no VRS ids, and the atlas compares the CGI pairs by label only
+(docs/METHOD_ATLAS.md). Assemblies of one build legitimately differ on X, Y and MT (PAR masking in an
+analysis set, rCRS against the Yoruba mitochondrion); an autosome of another sequence is another
+assembly. The lead's call (2026-10-23): when no autosome mismatches, read every matching contig and
+leave X, Y or MT rows that mismatch unread, counted per contig; an autosome mismatch still refuses.
+
 ## F1 — Deflate64 zips cannot be opened
 
 Severity: low · Found 2026-09-29 by `scripts/sniff_corpus.py` over the PGP-HMS participants.

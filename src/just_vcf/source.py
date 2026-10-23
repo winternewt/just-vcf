@@ -288,7 +288,11 @@ def _one_step(what: str, steps: list["Step"], warnings: list[str]) -> str | None
 
 
 def _distinct_callers(ev: _Evidence, warnings: list[str]) -> list[Caller]:
-    """One entry per caller name. Versions stated twice must agree, or the version is withheld."""
+    """One entry per caller name. Versions stated twice must agree, or the version is withheld.
+
+    The versions are compared as written; only then is one written as a path or a file name kept as
+    `<path>` (`_shown`), as a step's version is: `##DeepVariant_version=/home/<name>/…` names a home
+    directory. Comparing after would make two different paths agree."""
     by_name: dict[str, list[Caller]] = {}
     for caller in ev.callers:
         by_name.setdefault(caller.name, []).append(caller)
@@ -299,8 +303,9 @@ def _distinct_callers(ev: _Evidence, warnings: list[str]) -> list[Caller]:
             extra = extra + ev.versions.get("aengine", [])
         versions = sorted({c.version for c in seen if c.version} | set(extra))
         if len(versions) > 1:
-            warnings.append(f"the header gives {name} more than one version ({', '.join(versions)}); caller_version left null")
-        out.append(Caller(name, versions[0] if len(versions) == 1 else None, seen[0].line))
+            shown = ", ".join(_shown(version, "v") for version in versions)
+            warnings.append(f"the header gives {name} more than one version ({shown}); caller_version left null")
+        out.append(Caller(name, _shown(versions[0], "v") if len(versions) == 1 else None, seen[0].line))
     return out
 
 

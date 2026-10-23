@@ -210,8 +210,9 @@ PLANTED = {
     "##center=/srv/Quill_Center/sequencing": "Quill_Center",
     "##eagleVersion=~/Quill_Eagle": "Quill_Eagle",
 }
-WITHHELD = {"Quill_Eagle"}
-"""Planted names the library itself withholds: a method step's version written as a path is `<path>`."""
+WITHHELD = {"Quill_Eagle", "Quill_Deep", "Quill_Version_A", "Quill_Version_B"}
+"""Planted names the library itself withholds: a method step's or a caller's version written as a path
+is `<path>`, in the field and in the warning that quotes two of them."""
 CONFLICTING = {
     # The same fields stated twice: the library's warnings quote both values.
     "##DeepVariant_version=/home/Quill_Version_A/dv": "Quill_Version_A",

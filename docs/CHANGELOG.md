@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `facets.caller_version` written as a path or a file name (`##DeepVariant_version=/home/<name>/…`) is
+  `<path>`, as a method step's version already was, so the frame never holds the path; a caller split's
+  facets get the same. Two versions are still compared as written, so two different paths stay a conflict,
+  and the warning quotes each as `<path>`.
+
 - `ftdna_bigy` is in the `variant_calls` family, not `genotype_table`: Big Y is targeted chrY sequencing
   with the reference base stated, as CASAVA's and SOAPsnp's tables are, so `chip_absence` now refuses it as
   not an array export instead of reading its absent sites against a chip. A Big Y facet's `family` changes.

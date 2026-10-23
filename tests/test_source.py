@@ -123,6 +123,22 @@ def test_two_versions_of_one_caller_withhold_the_version() -> None:
     assert source.warnings == ["the header gives GATK HaplotypeCaller more than one version (3.7-0-gcfedb67, 4.1.4.1); caller_version left null"]
 
 
+def test_a_caller_version_written_as_a_path_is_withheld() -> None:
+    """`##DeepVariant_version=/home/<name>/…` is a path, not a version: `<path>`, as a step's version is."""
+    source = detect_source(["##DeepVariant_version=/home/Plantedsmith/bin/deepvariant-1.6.0"])
+    assert (source.caller, source.caller_version) == ("DeepVariant", "<path>")
+    assert [(c.name, c.version) for c in source.callers] == [("DeepVariant", "<path>")]
+    assert source.warnings == [] and "Plantedsmith" not in str([s.as_row() for s in source.steps])
+
+
+def test_two_caller_versions_written_as_paths_still_conflict() -> None:
+    """The versions are compared as written, before either is withheld: two paths are two versions."""
+    source = detect_source(["##DeepVariant_version=/home/Plantedsmith/dv", "##DeepVariant_version=C:\\Users\\Plantedjones\\dv"])
+    assert (source.caller, source.caller_version) == ("DeepVariant", None)
+    assert source.warnings == ["the header gives DeepVariant more than one version (<path>, <path>); caller_version left null"]
+    assert source.callers[0].version is None
+
+
 def test_two_vendors_conflict_without_falling_back_to_the_format() -> None:
     source = detect_source(["##generatedby=Gencove", "##pipeline=helix-v3.0.0"], spec_vendor="Complete Genomics")
     assert source.vendor is None and "more than one vendor" in source.warnings[0]

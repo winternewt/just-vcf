@@ -27,8 +27,10 @@ where they differ is counted (`n_vrs_differ`): on one assembly they never should
 (0.177) first degree, from 2^-3.5 (0.0884) second degree, from 2^-4.5 (0.0442) third degree, below that
 unrelated. A band is named only when the kinship's interval (two jackknife standard errors either side,
 over `JACKKNIFE_BLOCKS` contiguous blocks of panel sites) lies inside it; an interval across a boundary
-is `unknown` with the reason `between_bands`. The bands are just-vcf's own vocabulary: GA4GH Pedigree's
-KIN ontology names relationships (parent of, sibling of), not degrees inferred from genotypes.
+is `unknown` with the reason `between_bands`; a facet homozygous reference at none of the shared sites
+chose them by its own genotype, and the band is `unknown`, `variant_sites_only`, its kinship kept.
+The bands are just-vcf's own vocabulary: GA4GH Pedigree's KIN ontology names relationships (parent
+of, sibling of), not degrees inferred from genotypes.
 
 A facet's genotypes say nothing about who someone is: this measures only how alike two facets'
 genotypes are. Same-person (`same_person`) is the check `just_vcf.person` runs on facets a caller says
@@ -70,8 +72,13 @@ NO_HETEROZYGOUS_SITES = "no_heterozygous_sites"
 """A facet is heterozygous at none of the shared sites: KING-robust divides by that count."""
 BETWEEN_BANDS = "between_bands"
 """The kinship's interval crosses a band boundary."""
+VARIANT_SITES_ONLY = "variant_sites_only"
+"""A facet is homozygous reference at none of the shared sites: it has a genotype only where it carries
+the ALT (variant rows, and a silence that says nothing), so its person's genotype chose the sites, which
+biases KING-robust in a way the jackknife SE does not capture (up, on the exome measured). The kinship and its SE are
+kept; the band is not named. docs/RELATEDNESS.md has the measurement (a Genos exome gVCF whose blocks are all no-call)."""
 RELATEDNESS_REASONS: frozenset[str] = frozenset(
-    {ASSEMBLY_UNKNOWN, ASSEMBLY_MISMATCH, NO_PANEL, TOO_FEW_SITES, NO_HETEROZYGOUS_SITES, BETWEEN_BANDS}
+    {ASSEMBLY_UNKNOWN, ASSEMBLY_MISMATCH, NO_PANEL, TOO_FEW_SITES, NO_HETEROZYGOUS_SITES, BETWEEN_BANDS, VARIANT_SITES_ONLY}
 )
 """Why a relatedness is `unknown`. Grows additively."""
 
@@ -288,15 +295,18 @@ def pairwise_relatedness(
     panel: SitePanel | None = None,
     *,
     min_sites: int = DEFAULT_MIN_SITES,
+    pairs: Sequence[tuple[int, int]] | None = None,
 ) -> pl.DataFrame:
     """KING-robust relatedness of every pair of facets across `loaded`, one row per pair.
 
     Facets are taken in order, each `Loaded`'s facets in its `facets` order; a pair is `(i, j)` with
-    `i < j`. Each facet's calls are read once. Columns are `RELATEDNESS_FRAME`.
+    `i < j`. `pairs` limits the rows to those index pairs, in the order given. Each facet's calls are
+    read once. Columns are `RELATEDNESS_FRAME`.
     """
     facets = [(item, facet) for item in loaded for facet in facets_of(item)]
-    pairs = [(i, j) for i in range(len(facets)) for j in range(i + 1, len(facets))]
-    return _pairs(facets, panel, min_sites, pairs)
+    if pairs is None:
+        pairs = [(i, j) for i in range(len(facets)) for j in range(i + 1, len(facets))]
+    return _pairs(facets, panel, min_sites, list(pairs))
 
 
 def same_person(a: Loaded, b: Loaded, panel: SitePanel | None = None, *, min_sites: int = DEFAULT_MIN_SITES) -> bool | None:
@@ -389,6 +399,8 @@ def _compare(first: Facet, second: Facet, a: pl.DataFrame, b: pl.DataFrame, pane
         het_both=(pl.col("count") == 1) & (pl.col("count_b") == 1),
         ibs0=(pl.col("count").cast(pl.Int16) - pl.col("count_b").cast(pl.Int16)).abs() == 2,
         ibs2=pl.col("count") == pl.col("count_b"),
+        hom_ref_a=pl.col("count") == 0,
+        hom_ref_b=pl.col("count_b") == 0,
         vrs_compared=pl.col("vrs_id").is_not_null() & pl.col("vrs_id_b").is_not_null(),
         vrs_differ=pl.col("vrs_id") != pl.col("vrs_id_b"),
     )
@@ -399,6 +411,8 @@ def _compare(first: Facet, second: Facet, a: pl.DataFrame, b: pl.DataFrame, pane
         het_both=pl.col("het_both").sum(),
         ibs0=pl.col("ibs0").sum(),
         ibs2=pl.col("ibs2").sum(),
+        hom_ref_a=pl.col("hom_ref_a").sum(),
+        hom_ref_b=pl.col("hom_ref_b").sum(),
         vrs_compared=pl.col("vrs_compared").sum(),
         vrs_differ=pl.col("vrs_differ").fill_null(False).sum(),
     ).sort("block")  # group_by's order varies; the jackknife's float sums must not (charter 12)
@@ -425,6 +439,8 @@ def _compare(first: Facet, second: Facet, a: pl.DataFrame, b: pl.DataFrame, pane
     known["kinship_se"] = se
     band = interval_band(kinship, se) if se is not None else band_of(kinship)
     reason = BETWEEN_BANDS if band is RelationBand.UNKNOWN else None
+    if totals["hom_ref_a"] == 0 or totals["hom_ref_b"] == 0:
+        band, reason = RelationBand.UNKNOWN, VARIANT_SITES_ONLY
     return {"facet_a": first.facet_id, "facet_b": second.facet_id, "method": KING_METHOD, "band": band.value, "reason": reason, **known}
 
 

@@ -44,8 +44,18 @@ from just_vcf.loading import (
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
 from just_vcf.probes import AbsenceCause, ChipAbsence, ProbeSet, ProbeSetKind, chip_absence, learn_probe_sets, probe_set
-from just_vcf.pedigree import Pedigree, PedigreeError, read_pedigree
-from just_vcf.person import SUBJECT_CHECKS, Person, SameSubjectCheck, SubjectCheckOutcome, SubjectError, people
+from just_vcf.pedigree import EXPECTED_KINSHIP, ExpectedBasis, Pedigree, PedigreeError, expected_kinship, read_pedigree
+from just_vcf.person import (
+    PEDIGREE_CHECKS,
+    SUBJECT_CHECKS,
+    PedigreeAgreement,
+    Person,
+    SameSubjectCheck,
+    SubjectCheckOutcome,
+    SubjectError,
+    check_pedigree,
+    people,
+)
 from just_vcf.query import Dimension, GenotypeClass, Presence, PresenceBasis, Query, query
 from just_vcf.phasing import cis_phased_blocks
 from just_vcf.reference import ReferenceMismatchError, ReferenceStore, reference_dir, resolve_ref
@@ -128,6 +138,10 @@ __all__ = [
     "KaryotypicSex",
     "Pedigree",
     "PedigreeError",
+    "PedigreeAgreement",
+    "PEDIGREE_CHECKS",
+    "EXPECTED_KINSHIP",
+    "ExpectedBasis",
     "PhaseSetKind",
     "ProbeSet",
     "ProbeSetKind",
@@ -189,6 +203,8 @@ __all__ = [
     "mint_vrs_ids",
     "normalize",
     "people",
+    "check_pedigree",
+    "expected_kinship",
     "query",
     "open_payload",
     "probe_set",

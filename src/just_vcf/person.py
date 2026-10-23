@@ -20,7 +20,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from just_vcf.links import canonical_links
 from just_vcf.loading import Loaded
-from just_vcf.relatedness import same_person
+from just_vcf.pedigree import BAND_ORDER, EXPECTED_KINSHIP, Pedigree, expected_kinship
+from just_vcf.relatedness import (
+    BETWEEN_BANDS,
+    DEFAULT_MIN_SITES,
+    INTERVAL_SES,
+    RELATEDNESS_FRAME,
+    RelationBand,
+    SitePanel,
+    band_of,
+    pairwise_relatedness,
+    same_person,
+)
 from just_vcf.schema import LINKS, SCHEMA_VERSION, empty, enum_dtype
 
 logger = logging.getLogger(__name__)
@@ -135,12 +146,160 @@ class Person(BaseModel):
         )
 
 
-def people(*loaded: Loaded, check: SameSubjectCheck | None = same_person) -> dict[str, Person]:
+class PedigreeAgreement(str, Enum):
+    """What the measured relatedness of two facets says about the kinship a pedigree expects."""
+
+    AGREES = "agrees"
+    """Every band the measured interval reaches is one the pedigree allows."""
+    DISAGREES = "disagrees"
+    """No band the measured interval reaches is one the pedigree allows."""
+    CANNOT_TELL = "cannot_tell"
+    """The interval reaches both kinds, or one side is unknown; `reason` says which."""
+
+
+NO_FACET = "no_facet"
+"""A pedigree individual has no facet under its id as subject."""
+
+PEDIGREE_CHECKS = pl.Schema(
+    {
+        **EXPECTED_KINSHIP,
+        "facet_a": pl.String,
+        "facet_b": pl.String,
+        "band": RELATEDNESS_FRAME["band"],
+        "kinship": pl.Float64,
+        "kinship_se": pl.Float64,
+        "ibs0": pl.Float64,
+        "n_sites": pl.UInt32,
+        "relatedness_reason": pl.String,
+        "agreement": enum_dtype(PedigreeAgreement),
+        "reason": pl.String,
+    }
+)
+"""`check_pedigree`: `EXPECTED_KINSHIP`'s pair, a facet of each (`facet_a` the individual's, `facet_b`
+the relative's), the measured `relatedness` (`band`, `kinship`, `kinship_se`, `ibs0`, `n_sites`, and
+its `reason` as `relatedness_reason`), and the `agreement`, with `reason` when it is `cannot_tell`."""
+
+
+def _measured_bands(kinship: float, se: float | None) -> set[RelationBand]:
+    """The bands `kinship ± INTERVAL_SES·se` reaches (just the kinship's band without an SE)."""
+    if se is None:
+        return {band_of(kinship)}
+    low, high = BAND_ORDER.index(band_of(kinship - INTERVAL_SES * se)), BAND_ORDER.index(band_of(kinship + INTERVAL_SES * se))
+    return set(BAND_ORDER[low : high + 1])
+
+
+def _agreement(expected: dict, measured: dict) -> tuple[PedigreeAgreement, str | None]:
+    if expected["expected_reason"] is not None:
+        return PedigreeAgreement.CANNOT_TELL, expected["expected_reason"]
+    # A kinship kept beside a reason other than its interval's (`variant_sites_only`) names no band.
+    if measured["kinship"] is None or measured["reason"] not in (None, BETWEEN_BANDS):
+        return PedigreeAgreement.CANNOT_TELL, measured["reason"]
+    allowed = {RelationBand(value) for value in expected["expected_bands"]}
+    reached = _measured_bands(measured["kinship"], measured["kinship_se"])
+    if reached <= allowed:
+        return PedigreeAgreement.AGREES, None
+    if not reached & allowed:
+        return PedigreeAgreement.DISAGREES, None
+    return PedigreeAgreement.CANNOT_TELL, BETWEEN_BANDS
+
+
+def check_pedigree(
+    pedigree: Pedigree,
+    *sources: Person | Loaded,
+    panel: SitePanel | None = None,
+    min_sites: int = DEFAULT_MIN_SITES,
+) -> pl.DataFrame:
+    """A supplied pedigree set beside the measured relatedness of its individuals' facets, as
+    `PEDIGREE_CHECKS`: one row per pair of individuals (`expected_kinship`) and pair of their facets.
+
+    An individual's facets are those whose `subject` is its `individual_id` (RM273), each source once,
+    standing as `Person.checks` has it. A pair with an individual that has none is one row,
+    `cannot_tell`, `no_facet`. Relatedness is `just_vcf.relatedness`'s KING-robust estimate (`panel`
+    and `min_sites` passed on). The pedigree is never changed: a disagreement is a row, not a
+    correction (charter invariant 8). Facets under subjects the pedigree does not list are not read.
+    """
+    expected = expected_kinship(pedigree)
+    pieces: list[Loaded] = []
+    for source in sources:
+        if isinstance(source, Person):
+            source = Loaded(facets=source.facets, calls=source.calls, blocks=source.blocks, links=source.links, schema_version=source.schema_version)
+        pieces.extend(_pieces((source,)))
+    rows = [piece.facets.collect().row(0, named=True) for piece in pieces]
+    missing = sorted(row["facet_id"] for row in rows if row["subject"] is None)
+    if missing:
+        raise SubjectError(f"facet(s) without a subject: {', '.join(missing)}; load them with subject=...")
+    listed = set(pedigree.individuals["individual_id"].to_list())
+    by_subject: dict[str, list[int]] = defaultdict(list)
+    for index in sorted(range(len(rows)), key=lambda i: rows[i]["facet_id"]):
+        if rows[index]["subject"] in listed:
+            by_subject[rows[index]["subject"]].append(index)
+    standing = {
+        subject: [indices[i] for i in _standing([rows[index] for index in indices])] for subject, indices in by_subject.items()
+    }
+
+    used = sorted({index for indices in standing.values() for index in indices})
+    position = {index: place for place, index in enumerate(used)}
+    plan: list[tuple[dict, int | None, int | None]] = []
+    for pair in expected.iter_rows(named=True):
+        first, second = standing.get(pair["individual_id"], []), standing.get(pair["relative_id"], [])
+        if not first or not second:
+            plan.append((pair, None, None))
+            continue
+        plan.extend((pair, a, b) for a in first for b in second)
+    measured_pairs = sorted({(min(position[a], position[b]), max(position[a], position[b])) for _, a, b in plan if a is not None})
+    measured = pairwise_relatedness([pieces[index] for index in used], panel, min_sites=min_sites, pairs=measured_pairs)
+    by_pair = {frozenset((row["facet_a"], row["facet_b"])): row for row in measured.iter_rows(named=True)}
+
+    out = []
+    for pair, a, b in plan:
+        if a is None:
+            out.append({**pair, "agreement": PedigreeAgreement.CANNOT_TELL.value, "reason": NO_FACET})
+            continue
+        facet_a, facet_b = rows[a]["facet_id"], rows[b]["facet_id"]
+        found = by_pair[frozenset((facet_a, facet_b))]
+        agreement, reason = _agreement(pair, found)
+        out.append(
+            {
+                **pair,
+                "facet_a": facet_a,
+                "facet_b": facet_b,
+                "band": found["band"],
+                "kinship": found["kinship"],
+                "kinship_se": found["kinship_se"],
+                "ibs0": found["ibs0"],
+                "n_sites": found["n_sites"],
+                "relatedness_reason": found["reason"],
+                "agreement": agreement.value,
+                "reason": reason,
+            }
+        )
+    return pl.DataFrame(out, schema=PEDIGREE_CHECKS)
+
+
+def _pedigree_warnings(checks: pl.DataFrame, facet_ids: set[str]) -> list[str]:
+    """One warning for the disagreeing pairs a person's facets are in, naming facet ids and bands."""
+    pairs = [
+        f"{row['facet_a']}/{row['facet_b']} (expected {' or '.join(row['expected_bands'])}, measured {row['band']})"
+        for row in checks.filter(pl.col("agreement") == PedigreeAgreement.DISAGREES.value).iter_rows(named=True)
+        if row["facet_a"] in facet_ids or row["facet_b"] in facet_ids
+    ]
+    return [f"{len(pairs)} pair(s) of facets disagree with the supplied pedigree, kept as supplied: {'; '.join(pairs)}"] if pairs else []
+
+
+def people(
+    *loaded: Loaded,
+    check: SameSubjectCheck | None = same_person,
+    pedigree: Pedigree | None = None,
+) -> dict[str, Person]:
     """Every facet given, grouped into one `Person` per subject, sorted by subject.
 
     The grouping is the caller's labels and nothing else. A facet without a subject is refused with
     `SubjectError`. Facets of one source under different subjects (one file loaded twice under two
     labels) are allowed and warned in each person they appear in, naming the facet ids.
+
+    With a `pedigree`, its individuals are matched to subjects by id and `check_pedigree` runs (whatever
+    `check` is); each person whose facets are in a pair that disagrees with it gets a warning naming
+    the facet ids and the bands. Nothing is moved or relabelled.
     """
     pieces = _pieces(loaded)
     rows = [piece.facets.collect().row(0, named=True) for piece in pieces]
@@ -160,6 +319,15 @@ def people(*loaded: Loaded, check: SameSubjectCheck | None = same_person) -> dic
         for warning in shared:
             logger.warning("%s", warning)
         result[subject] = person.model_copy(update={"warnings": person.warnings + tuple(shared)}) if shared else person
+    if pedigree is not None:
+        checks = check_pedigree(pedigree, *loaded)
+        for subject, person in result.items():
+            ids = set(person.facets.select("facet_id").collect()["facet_id"].to_list())
+            found = _pedigree_warnings(checks, ids)
+            for warning in found:
+                logger.warning("%s", warning)
+            if found:
+                result[subject] = person.model_copy(update={"warnings": person.warnings + tuple(found)})
     return result
 
 
@@ -187,8 +355,8 @@ def _source(facet: dict) -> tuple:
     return (facet["source_sha256"], facet["member"], facet["sample"])
 
 
-def _check(pieces: list[Loaded], facets: list[dict], check: SameSubjectCheck | None) -> tuple[pl.DataFrame, list[str]]:
-    """The pair checks of one person's sources, and the warnings they give."""
+def _standing(facets: list[dict]) -> list[int]:
+    """The index of the facet standing for each source, in `facets` order (which is `facet_id` order)."""
     standing: dict[tuple, int] = {}
     for index, facet in enumerate(facets):
         key = _source(facet)
@@ -197,7 +365,12 @@ def _check(pieces: list[Loaded], facets: list[dict], check: SameSubjectCheck | N
         # `facet_id` order, so ties go to the lowest id.
         if held is None or (facets[held]["derived_from"] is not None and facet["derived_from"] is None):
             standing[key] = index
-    stand = sorted(standing.values())
+    return sorted(standing.values())
+
+
+def _check(pieces: list[Loaded], facets: list[dict], check: SameSubjectCheck | None) -> tuple[pl.DataFrame, list[str]]:
+    """The pair checks of one person's sources, and the warnings they give."""
+    stand = _standing(facets)
 
     rows: list[dict] = []
     for a, b in combinations(stand, 2):

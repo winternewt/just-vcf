@@ -41,8 +41,8 @@ class StoreProxy(_DataProxy):
         return {"length": contig.length, "aliases": [f"ga4gh:SQ.{contig.digest}"], "alphabet": "ACGTN"}
 
 
-def oracle_id(proxy: _DataProxy, accession: str, pos: int, ref: str, alt: str) -> str:
-    """vrs-python's id for the VCF allele `ref` → `alt` at 1-based `pos` on `accession` (`SQ.…`)."""
+def oracle_allele(proxy: _DataProxy, accession: str, pos: int, ref: str, alt: str) -> models.Allele:
+    """vrs-python's normalized Allele for the VCF allele `ref` → `alt` at 1-based `pos` on `accession` (`SQ.…`)."""
     start = pos - 1
     allele = models.Allele(
         location=models.SequenceLocation(
@@ -50,4 +50,14 @@ def oracle_id(proxy: _DataProxy, accession: str, pos: int, ref: str, alt: str) -
         ),
         state=models.LiteralSequenceExpression(sequence=alt.upper()),
     )
-    return ga4gh_identify(normalize(allele, proxy))
+    return normalize(allele, proxy)
+
+
+def oracle_id(proxy: _DataProxy, accession: str, pos: int, ref: str, alt: str) -> str:
+    """vrs-python's id for the VCF allele `ref` → `alt` at 1-based `pos` on `accession` (`SQ.…`)."""
+    return ga4gh_identify(oracle_allele(proxy, accession, pos, ref, alt))
+
+
+def oracle_block_id(alleles: list[models.Allele]) -> str:
+    """vrs-python's id for the CisPhasedBlock of `alleles`, each an inline Allele (never an IRI)."""
+    return ga4gh_identify(models.CisPhasedBlock(members=alleles))

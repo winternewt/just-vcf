@@ -254,7 +254,8 @@ its own phase set. So:
   to its chromosome's one implicit set (VCF 4.5: "All phased genotypes that do not contain a PS
   subfield are assumed to belong to the same phased set"), key `(facet_id, chrom, ps, null)`.
 
-The VRS CisPhasedBlock is built from `phase_sets` at export. It is not stored per row.
+The VRS CisPhasedBlock is built from `phase_sets` at export, by `cis_phased_blocks` ("CisPhasedBlock
+export" below). It is not stored per row.
 
 ## Decision 3: graded evidence (charter 7)
 
@@ -1174,6 +1175,46 @@ present band, close to the two-X range), so `XX` and `XO` wait for a coverage fa
 Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
 unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 
+## CisPhasedBlock export: computed on demand, not stored (RM284)
+
+The person chose columns with an export on demand: phase sets stay the three `calls` columns of
+Decision 2, and `cis_phased_blocks(loaded, reference_alleles=False)` returns a lazy frame of VRS 2.x
+`CisPhasedBlock`s when asked. It adds no column to the three frames and needs no version bump. Rejected:
+a stored block table, which every load would pay for and every change to an allele id would orphan.
+
+| Column | Dtype | Null means |
+|---|---|---|
+| `facet_id` | `str` | never null |
+| `chrom` | `str` | a PSL set, which is keyed per file and may span chromosomes |
+| `phase_set_kind` | `Enum{ps, psl}` | never null |
+| `phase_set` | `str` | the chromosome's implicit set (phased, no PS) |
+| `haplotype` | `u32` | a PSL set, which is one haplotype itself. For a PS set, the GT slot: slot `h` of every record in the set is one molecule |
+| `sites` | `u32` | never null. Records whose slot is in the set on this haplotype |
+| `members` | `list[str]` | the block is withheld. Otherwise the member Alleles' VRS ids, sorted, each once |
+| `cpb_id` | `str` | the block is withheld. Otherwise `ga4gh:CPB.` + the sha512t24u of `{"members":[<Allele digests, sorted>],"type":"CisPhasedBlock"}`, as vrs-python identifies a block of inline Alleles |
+| `withheld` | `str` | the block has an id. Otherwise why not (below) |
+
+- **Members** are the non-reference alleles the haplotype carries. A `0` on a record split one row per
+  ALT (RM270) or under an overlapping deletion says "not this ALT", not "the reference base", so REF
+  slots join only with `reference_alleles=True`. `*` never joins: its deletion is a member at its own
+  record.
+- **Withheld, never shortened** (charter 4). A block missing one of the haplotype's alleles would carry
+  an id that looks like the haplotype's. So the first slot in row order that cannot be stated gives the
+  reason for the whole block: `phase_unknown` (the slot's `phased` is null, as on slot 0 of every VCF
+  4.4+ record, P4, and its allele would be a member: a REF slot by default is not), `uncalled`,
+  `not_indexed` (no `gt` index), or the allele's own `vrs_withheld` reason (`not_run` before
+  `mint_vrs_ids`, `symbolic`, …). Then `too_few_members`: VRS requires two members. The vocabulary is
+  `phasing.CPB_WITHHELD_REASONS`, open like `vrs.WITHHELD_REASONS`. On a whole imputed genome this
+  bites: an implicit set is a chromosome, and one symbolic ALT on it withholds the haplotype's block
+  (a phased Genes for Good upload: 45 of 46 blocks withheld `symbolic`).
+- **Haploid calls** (no separator, so phased in VCF's reading) sit in their chromosome's implicit set
+  even in a file nobody phased. On one copy (male X outside the PARs, Y, MT) that is true by ploidy, so
+  they make a block. Rejected: leaving out haploid rows, which would drop a true statement to guard
+  against a caller that writes a two-copy region haploid.
+- **Order**: by the set's first row in `calls`, then kind, set name and haplotype.
+- An IRI is not an Allele to vrs-python 2.3: a block whose members are written as `ga4gh:VA.…` strings
+  digests to another id there. Resolve the members to Alleles before identifying it again.
+
 ## The cache under the lazy frames (RM268)
 
 The frames `load` and the derived steps return are lazy scans over files in `cache_dir()`
@@ -1265,6 +1306,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   rule); an `ALT .` record with a copy number is a call, not a block (Decision 4); `vrs_withheld` gives
   `sv_no_vrs_model` for an SV allele where it gave `symbolic` (`symbolic` now names only symbolic
   alleles that are no variant). Values change on SV and CNV files that already load.
+
+- **No version change** (2026-10-23, RM284): no column changes. A computed frame,
+  `cis_phased_blocks`, exports the phase sets as VRS CisPhasedBlocks ("CisPhasedBlock export").
+  `SCHEMA_VERSION` was deliberately left as it is on this builder branch.
 
 - **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
   (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from

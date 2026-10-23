@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `UnsupportedCoverageError` names the kind of input (`the coverage input is an empty file`, `the
+  BAM header lists no reference sequence …`, `the alignment input is not a BAM or CRAM …`), never
+  the file's name, as `DamagedBgzfError` carries no path.
+
 - The store's `manifest.json` keeps each facet's load warnings redacted as `query` returns them
   (the facets' sample, source path and member, and anything shaped like a path), where it kept them
   as the load gave them; `Store.loaded().warnings` reads them back so.

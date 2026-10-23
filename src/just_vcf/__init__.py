@@ -16,6 +16,15 @@ from just_vcf.coverage import (
     callable_sites,
     read_coverage,
 )
+from just_vcf.evidence import (
+    GENOTYPE_EVIDENCE,
+    GENOTYPE_EVIDENCE_AT,
+    ConfidenceKind,
+    GradeBasis,
+    VectorPrior,
+    genotype_evidence,
+    genotype_evidence_at,
+)
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.links import link_disagreements
@@ -72,6 +81,8 @@ __all__ = [
     "BLOCKS",
     "CALLS",
     "FACETS",
+    "GENOTYPE_EVIDENCE",
+    "GENOTYPE_EVIDENCE_AT",
     "LINKS",
     "LOADABLE_FORMATS",
     "SCHEMA_VERSION",
@@ -88,6 +99,7 @@ __all__ = [
     "CallsetType",
     "ChipAbsence",
     "ChipBasis",
+    "ConfidenceKind",
     "Chain",
     "ContentFilter",
     "ContentFilterBasis",
@@ -103,6 +115,7 @@ __all__ = [
     "NoSampleError",
     "EvidenceBasis",
     "GenotypeClass",
+    "GradeBasis",
     "KaryotypicSex",
     "Pedigree",
     "PedigreeError",
@@ -141,6 +154,7 @@ __all__ = [
     "UnwritableRowsError",
     "VariantClass",
     "VcfWritten",
+    "VectorPrior",
     "VcfZarrWritten",
     "XCopies",
     "__version__",
@@ -151,6 +165,8 @@ __all__ = [
     "callable_at",
     "callable_sites",
     "clear_cache",
+    "genotype_evidence",
+    "genotype_evidence_at",
     "learn_probe_sets",
     "liftover",
     "link_disagreements",

@@ -104,6 +104,20 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   loaded, with one warning counting them as `id_orientation_unverified` and naming the evidence. A value
   change on those facets when the manifests are configured; `RESOLVE_VERSION` 7.
 
+- Illumina Annotation Engine (Nirvana) JSON loads (`nirvana_json`, RM2, layer 1): each position object
+  is the VCF record it annotated, so rows get `source_ref`, `alts`, `gt`, `phased`, `gq`, `dp`, `ad`,
+  `qual` and `filters`; the annotations are listed in `dropped_fields`. Several samples load one at a
+  time with `sample=`. 32 of 39 declared formats load. No column changes.
+
+- Six more formats load (RM2, layer 1), through the new `loaders.site_tables`: CASAVA SNP and indel
+  tables, SOAPsnp consensus rows, FamilyTreeDNA Big Y CSVs, Color's `variant_set.csv` and GET-Evidence genome
+  GFFs. Each writes a reference base beside the genotype, so rows get `source_ref`, `alts` and a `gt`
+  over `[source_ref] + alts` at load; CASAVA rows also `ad` and `dp` (indels `ad`, `gq`, `qual`, the
+  padding dashes dropped, insertion points at the base before them), SOAPsnp `gq` and `dp`;
+  GET-Evidence's `REF` rows are `ref` blocks (`absence_means = blocks`). Big Y's Known SNP rows, which
+  have no position, are dropped with a count. 31 of 39 declared formats load. No column changes.
+  docs/FORMATS.md says why each remaining format does not load, and which are not facets.
+
 - In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
   probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
   (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or

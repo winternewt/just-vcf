@@ -94,7 +94,7 @@ Format ids are lowercase snake_case and form an open set: ids are added, never r
 
 ## Detection order
 
-39 formats, 25 of them loadable. Detection tries them in this order.
+39 formats, 32 of them loadable. Detection tries them in this order.
 
 | # | Format | Family | Vendor | Kind | Loads |
 |---|---|---|---|---|---|
@@ -106,14 +106,14 @@ Format ids are lowercase snake_case and form an open set: ids are added, never r
 | 6 | [`cgi_var`](#cgi_var) | `callset_native` | Complete Genomics | signature | yes |
 | 7 | [`cgi_master_var`](#cgi_master_var) | `callset_native` | Complete Genomics | signature | yes |
 | 8 | [`cgi_summary`](#cgi_summary) | `metadata` | Complete Genomics | signature | no |
-| 9 | [`nirvana_json`](#nirvana_json) | `annotated_variants` | Illumina | signature | no |
+| 9 | [`nirvana_json`](#nirvana_json) | `annotated_variants` | Illumina | signature | yes |
 | 10 | [`illumina_final_report`](#illumina_final_report) | `genotype_table` | Illumina | signature | yes |
 | 11 | [`illumina_final_report_headerless`](#illumina_final_report_headerless) | `genotype_table` | Illumina | signature | no |
-| 12 | [`get_evidence_gff`](#get_evidence_gff) | `annotated_variants` | PGP GET-Evidence | signature | no |
-| 13 | [`color_variant_set`](#color_variant_set) | `annotated_variants` | Color | signature | no |
-| 14 | [`ftdna_bigy`](#ftdna_bigy) | `genotype_table` | FamilyTreeDNA | signature | no |
-| 15 | [`casava_snp_table`](#casava_snp_table) | `variant_calls` | Illumina | signature | no |
-| 16 | [`casava_indel_table`](#casava_indel_table) | `variant_calls` | Illumina | signature | no |
+| 12 | [`get_evidence_gff`](#get_evidence_gff) | `annotated_variants` | PGP GET-Evidence | signature | yes |
+| 13 | [`color_variant_set`](#color_variant_set) | `annotated_variants` | Color | signature | yes |
+| 14 | [`ftdna_bigy`](#ftdna_bigy) | `genotype_table` | FamilyTreeDNA | signature | yes |
+| 15 | [`casava_snp_table`](#casava_snp_table) | `variant_calls` | Illumina | signature | yes |
+| 16 | [`casava_indel_table`](#casava_indel_table) | `variant_calls` | Illumina | signature | yes |
 | 17 | [`ancestrydna`](#ancestrydna) | `genotype_table` | AncestryDNA | signature | yes |
 | 18 | [`genos`](#genos) | `genotype_table` | Genos | signature | yes |
 | 19 | [`color_genotypes`](#color_genotypes) | `genotype_table` | Color | signature | yes |
@@ -132,7 +132,7 @@ Format ids are lowercase snake_case and form an open set: ids are added, never r
 | 32 | [`promethease_tab_genotype`](#promethease_tab_genotype) | `annotated_variants` | Promethease | signature | no |
 | 33 | [`freebayes_varscan2_keyvalue`](#freebayes_varscan2_keyvalue) | `variant_calls` | PGP-HMS | fallback | yes |
 | 34 | [`oxford_gen`](#oxford_gen) | `genotype_table` | generic (IMPUTE2 / Oxford .gen; Gencove) | fallback | no |
-| 35 | [`soapsnp_cns`](#soapsnp_cns) | `variant_calls` | BGI (SOAPsnp) | fallback | no |
+| 35 | [`soapsnp_cns`](#soapsnp_cns) | `variant_calls` | BGI (SOAPsnp) | fallback | yes |
 | 36 | [`rsid_result_csv`](#rsid_result_csv) | `genotype_table` | unknown | fallback | yes |
 | 37 | [`genographic_geno2_headerless`](#genographic_geno2_headerless) | `genotype_table` | National Geographic Genographic Project | fallback | no |
 | 38 | [`rsid_table`](#rsid_table) | `genotype_table` | unknown | fallback | yes |
@@ -657,7 +657,7 @@ Illumina Annotation Engine (Nirvana) JSON: a header object, then one position ob
 - **Family:** `annotated_variants`
 - **Vendor:** Illumina
 - **Registry position:** 9 of 39, a signature (`just_vcf.formats.other_tables`)
-- **Loads:** no
+- **Loads:** yes, through `just_vcf.loaders.nirvana`
 - **Delimiter:** not delimited text
 - **Comment prefix:** none
 - **Column names:** the file names no columns; they are the ones listed below, in file order
@@ -691,6 +691,7 @@ Illumina Annotation Engine (Nirvana) JSON: a header object, then one position ob
 **From real files**
 
 - Not NDJSON: line 1 is the header object plus `"positions":[`; each following line is one position object ending in `,`; the file closes with `]}`. Stream it line by line, stripping the trailing comma.
+- Other arrays can follow the positions: the PGP-HMS file closes them with `],"omim":[` and 13,343 OMIM entries before `]}`. The positions end at the first line starting with `]`.
 - Schema v4 (Annotation Engine 1.5) headers do not state the assembly. `dataSources[].version` values such as phyloP `hg19` describe the annotation source, not the coordinates; they are not a build hint.
 - Each position carries VCF-style REF/ALT; `variants[]` repeats them trimmed (`refAllele` `-` for an insertion, `begin` shifted by one). Load from the position level, not from `variants[]`.
 - Filtered records are present (`filters` other than PASS, genotypeQuality 0); keep FILTER, do not drop.
@@ -841,7 +842,7 @@ GET-Evidence genome GFF: a `##genome-build` line, then one site per line with an
 - **Family:** `annotated_variants`
 - **Vendor:** PGP GET-Evidence
 - **Registry position:** 12 of 39, a signature (`just_vcf.formats.other_tables`)
-- **Loads:** no
+- **Loads:** yes, through `just_vcf.loaders.site_tables`
 - **Delimiter:** tab
 - **Comment prefix:** `#`
 - **Column names:** the file names no columns; they are the ones listed below, in file order
@@ -900,7 +901,7 @@ Color Health `variant_set.csv`: the panel's reportable variants with HGVS and cl
 - **Family:** `annotated_variants`
 - **Vendor:** Color
 - **Registry position:** 13 of 39, a signature (`just_vcf.formats.other_tables`)
-- **Loads:** no
+- **Loads:** yes, through `just_vcf.loaders.site_tables`
 - **Delimiter:** comma
 - **Comment prefix:** none
 - **Column names:** the first line that is not a comment
@@ -946,6 +947,7 @@ Color Health `variant_set.csv`: the panel's reportable variants with HGVS and cl
 - A footer follows the data: blank line(s), `Raw data disclaimer:` and a quoted paragraph that may span lines. Stop at the first row whose SampleID cell is empty or `Raw data disclaimer:`.
 - Only the panel's reportable variants are listed; an absent site is unknown, not reference.
 - CRLF line ends.
+- Measured 2026-10-23: `Ref` equals GRCh37's bases at `Position` on all 262 rows of the two PGP-HMS files, so positions are 1-based, unlike Color's `discovery_genotypes.csv`.
 
 **Example**
 
@@ -962,7 +964,7 @@ FamilyTreeDNA Big Y results CSV: chrY sites with reference and observed base.
 - **Family:** `genotype_table`
 - **Vendor:** FamilyTreeDNA
 - **Registry position:** 14 of 39, a signature (`just_vcf.formats.other_tables`)
-- **Loads:** no
+- **Loads:** yes, through `just_vcf.loaders.site_tables`
 - **Delimiter:** comma
 - **Comment prefix:** none
 - **Column names:** the first line that is not a comment
@@ -994,6 +996,7 @@ FamilyTreeDNA Big Y results CSV: chrY sites with reference and observed base.
 - Known SNP rows have no position; they are placed only through a Y-SNP name table. Novel Variant rows have a position and mostly a genotype equal to the reference.
 - Neither build nor coordinate convention is stated; Big Y moved from hg19 to hg38 over its lifetime, so the build stays unknown.
 - Every field is double-quoted in some exports and bare in others.
+- Measured 2026-10-23: `Reference` equals GRCh38's base at `Position` on every sampled row (about 2,000 each) of the two PGP-HMS exports, and GRCh37's on about 20%, so those exports are 1-based on GRCh38. That is a measurement, not a statement: the loader still leaves the build unknown.
 
 **Example**
 
@@ -1011,7 +1014,7 @@ Illumina CASAVA-era SNP calls with per-base read counts, one file per chromosome
 - **Family:** `variant_calls`
 - **Vendor:** Illumina
 - **Registry position:** 15 of 39, a signature (`just_vcf.formats.other_tables`)
-- **Loads:** no
+- **Loads:** yes, through `just_vcf.loaders.site_tables`
 - **Delimiter:** tab
 - **Comment prefix:** none
 - **Column names:** the first line that is not a comment
@@ -1053,6 +1056,7 @@ Illumina CASAVA-era SNP calls with per-base read counts, one file per chromosome
 - `Sample Name` holds free text, in real files a person's name. Drop it on load; never log it.
 - `Chr Id` spells mtDNA `M`; map it to `MT` explicitly.
 - No build is stated; the producer is inferred (CASAVA read-count calls), the file does not name it.
+- Measured 2026-10-23: `Ref Base` equals NCBI36's base at `Position` on every sampled row (2,000 of one PGP-HMS table), so positions are 1-based; the build is still not stated.
 - CRLF line ends. `Genes` and `dbSNP SNP Name` are often empty, leaving trailing tabs.
 
 **Example**
@@ -1070,7 +1074,7 @@ Illumina CASAVA `indels.txt` columns, exported with Index and Sample columns in 
 - **Family:** `variant_calls`
 - **Vendor:** Illumina
 - **Registry position:** 16 of 39, a signature (`just_vcf.formats.other_tables`)
-- **Loads:** no
+- **Loads:** yes, through `just_vcf.loaders.site_tables`
 - **Delimiter:** tab
 - **Comment prefix:** none
 - **Column names:** the first line that is not a comment
@@ -1114,6 +1118,7 @@ Illumina CASAVA `indels.txt` columns, exported with Index and Sample columns in 
 - Only called indels are listed; an absent site is unknown.
 - `Sample` holds free text, in real files a person's name. Drop it on load; never log it.
 - No build is stated. `Chr` spells mtDNA `M`; map it to `MT` explicitly. CRLF line ends.
+- Measured 2026-10-23 against NCBI36 (2,000 sampled rows of the one PGP-HMS table): `ref_upstream` ends at the base before `pos`; a deletion's bases start at `pos`, with `ref_downstream` after them; an insertion's `ref_downstream` starts at `pos`. So `pos` is 1-based, the span's first base or the base after the insertion point. `ref/indel` pads with `-` on both sides of complex events (`C-A/-TA`).
 
 **Example**
 
@@ -2092,7 +2097,7 @@ SOAPsnp consensus output, SNP rows only, 17 SOAPsnp columns plus distance to the
 - **Family:** `variant_calls`
 - **Vendor:** BGI (SOAPsnp)
 - **Registry position:** 35 of 39, a fallback, tried after every signature (`just_vcf.formats.other_tables`)
-- **Loads:** no
+- **Loads:** yes, through `just_vcf.loaders.site_tables`
 - **Delimiter:** tab
 - **Comment prefix:** none
 - **Column names:** the file names no columns; they are the ones listed below, in file order
@@ -2135,6 +2140,7 @@ SOAPsnp consensus output, SNP rows only, 17 SOAPsnp columns plus distance to the
 - Rows with depth 0 and consensus quality 1 are prior-driven calls at dbSNP sites (`dbsnp` 1) with no read evidence; the loader must carry depth and quality through, never treat them as observed.
 - Only SNP rows are present; an absent site is unknown.
 - No build is stated. `chrM` must be mapped to `MT` explicitly.
+- Measured 2026-10-23: `ref` equals NCBI36's base at `position` on every sampled row (2,000 of the one PGP-HMS file), so positions are 1-based; the build is still not stated.
 
 **Example**
 

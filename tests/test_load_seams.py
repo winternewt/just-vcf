@@ -114,6 +114,21 @@ NULL_REASONS: dict[tuple[str, str], str] = {
     **_each(("freebayes_varscan2_keyvalue/VarScan2", "freebayes_varscan2_keyvalue/freeBayes"), ("method_steps",), "The key=value table has no header lines to record a method chain."),
     ("rsid_table_headerless/appended_export", "method_steps"): _NOT_A_VCF,
     ("vcf_no_meta", "reference"): "A VCF with no meta lines has no `##reference=` and no recorded command line.",
+    # The site tables and Nirvana JSON (layer 1, 2026-10-23): what each states and what it does not.
+    **_each(('casava_snp_table', 'casava_indel_table', 'soapsnp_cns', 'ftdna_bigy', 'color_variant_set', 'get_evidence_gff', 'nirvana_json'), ("caller", "caller_version"), "The format names no caller (docs/ROADMAP.md RM2, site tables)."),
+    **_each(('casava_snp_table', 'casava_indel_table', 'soapsnp_cns', 'ftdna_bigy', 'color_variant_set', 'get_evidence_gff', 'nirvana_json'), ("ploidy_statements", "header_contigs", "vcf_version", "sample_meta", "method_steps", "reference", "split_marker"), _NOT_A_VCF),
+    **_each(('casava_snp_table', 'casava_indel_table', 'soapsnp_cns', 'ftdna_bigy', 'color_variant_set', 'get_evidence_gff', 'nirvana_json'), ("phasing_method",), "The format states no phasing method."),
+    **_each(('casava_snp_table', 'casava_indel_table', 'soapsnp_cns', 'ftdna_bigy', 'color_variant_set', 'get_evidence_gff', 'nirvana_json'), ("relation",), _ONE_FACET),
+    **_each(("casava_snp_table", "casava_indel_table", "soapsnp_cns", "get_evidence_gff", "ftdna_bigy"), ("sample",), _NO_SAMPLE),
+    **_each(("casava_snp_table", "casava_indel_table", "soapsnp_cns", "ftdna_bigy", "nirvana_json"), ("assembly_label", "assembly_label_basis"), (
+        "The file states no build; its positions were measured against the reference stores, but a measured build is "
+        "not a stated one (docs/LAYERS.md, layer 3 blocker)."
+    )),
+    **_each(("color_variant_set", "get_evidence_gff", "nirvana_json", "ftdna_bigy"), ("callset_type",), _TOO_FEW_SITES),
+    **_each(("color_variant_set", "get_evidence_gff", "nirvana_json"), ("content_filter", "content_filter_basis"), _CONTENT_FILTER),
+    **_each(("color_variant_set", "get_evidence_gff", "nirvana_json"), ("sorted_name_length_pairs_digest",), "The format carries no contig lengths."),
+    **_each(("color_variant_set", "get_evidence_gff", "nirvana_json", "ftdna_bigy"), ("chip", "chip_basis"), _NO_CHIP_RULE),
+    ("rsid_table_headerless/appended_export", "variant_classes"): "Not counted: a genotype table writes no REF or ALT (SCHEMA Decision 5).",
     ("*", "aligner"): "Only a header that records its aligner states one (DRAGEN with `--enable-map-align true`); no example does (SCHEMA Decision 5).",
     ("*", "aligner_version"): "Null with `aligner`: only a recorded aligner has a version.",
     **_each(('23andme_csv', '23andme', 'ancestrydna', 'cgi_master_var', 'cgi_var', 'color_genotypes', 'decodeme', 'ftdna', 'ftdna_space', 'genes_for_good_imputed', 'genes_for_good', 'genos', 'illumina_final_report', 'living_dna', 'plink_23', 'rsid_result_csv', 'rsid_table_headerless', 'rsid_table', 'selfdecode', 'freebayes_varscan2_keyvalue/VarScan2', 'freebayes_varscan2_keyvalue/freeBayes', 'rsid_table_headerless/appended_export'), ("reference",), "Not a VCF: no `##reference=` line or caller reference option to read (SCHEMA Decision 5)."),
@@ -127,7 +142,7 @@ NULL_REASONS: dict[tuple[str, str], str] = {
         "an array export states none."
     )),
     **_each((GT,), ("ploidy_statements", "header_contigs", "vcf_version", "sample_meta"), _NOT_A_VCF),
-    (GT, "variant_classes"): "Not counted: a genotype table writes no REF or ALT (SCHEMA Decision 5).",
+    **_each(('23andme', '23andme_csv', 'ancestrydna', 'color_genotypes', 'decodeme', 'ftdna', 'ftdna_space', 'genes_for_good', 'genes_for_good_imputed', 'genos', 'illumina_final_report', 'living_dna', 'plink_23', 'rsid_result_csv', 'rsid_table', 'rsid_table_headerless', 'selfdecode'), ("variant_classes",), "Not counted: a genotype table writes no REF or ALT (SCHEMA Decision 5)."),
     **_each((GT,), ("content_filter", "content_filter_basis"), (
         "Its variant classes are not counted (no REF or ALT), so no class can be the one the rows were cut to."
     )),

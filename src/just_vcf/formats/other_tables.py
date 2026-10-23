@@ -55,6 +55,8 @@ NIRVANA_JSON = FormatSpec(
     notes=(
         "Not NDJSON: line 1 is the header object plus `\"positions\":[`; each following line is one position "
         "object ending in `,`; the file closes with `]}`. Stream it line by line, stripping the trailing comma.",
+        "Other arrays can follow the positions: the PGP-HMS file closes them with `],\"omim\":[` and 13,343 "
+        "OMIM entries before `]}`. The positions end at the first line starting with `]`.",
         "Schema v4 (Annotation Engine 1.5) headers do not state the assembly. `dataSources[].version` values "
         "such as phyloP `hg19` describe the annotation source, not the coordinates; they are not a build hint.",
         "Each position carries VCF-style REF/ALT; `variants[]` repeats them trimmed (`refAllele` `-` for an "
@@ -331,6 +333,8 @@ COLOR_VARIANT_SET = FormatSpec(
         "span lines. Stop at the first row whose SampleID cell is empty or `Raw data disclaimer:`.",
         "Only the panel's reportable variants are listed; an absent site is unknown, not reference.",
         "CRLF line ends.",
+        "Measured 2026-10-23: `Ref` equals GRCh37's bases at `Position` on all 262 rows of the two PGP-HMS "
+        "files, so positions are 1-based, unlike Color's `discovery_genotypes.csv`.",
     ),
     example=(
         "SampleID,Chromosome,Position,Ref,Alt,Gene,Type,cHGVS,pHGVS,Transcript,BIC,Zygosity,StructuralVariant,"
@@ -379,6 +383,9 @@ FTDNA_BIGY = FormatSpec(
         "Neither build nor coordinate convention is stated; Big Y moved from hg19 to hg38 over its "
         "lifetime, so the build stays unknown.",
         "Every field is double-quoted in some exports and bare in others.",
+        "Measured 2026-10-23: `Reference` equals GRCh38's base at `Position` on every sampled row (about "
+        "2,000 each) of the two PGP-HMS exports, and GRCh37's on about 20%, so those exports are 1-based on "
+        "GRCh38. That is a measurement, not a statement: the loader still leaves the build unknown.",
     ),
     example=(
         '"Type","Position","SNPName","Derived","OnTree","Reference","Genotype"\n'
@@ -435,6 +442,8 @@ CASAVA_SNP_TABLE = FormatSpec(
         "`Sample Name` holds free text, in real files a person's name. Drop it on load; never log it.",
         "`Chr Id` spells mtDNA `M`; map it to `MT` explicitly.",
         "No build is stated; the producer is inferred (CASAVA read-count calls), the file does not name it.",
+        "Measured 2026-10-23: `Ref Base` equals NCBI36's base at `Position` on every sampled row (2,000 of "
+        "one PGP-HMS table), so positions are 1-based; the build is still not stated.",
         "CRLF line ends. `Genes` and `dbSNP SNP Name` are often empty, leaving trailing tabs.",
     ),
     example=(
@@ -496,6 +505,10 @@ CASAVA_INDEL_TABLE = FormatSpec(
         "Only called indels are listed; an absent site is unknown.",
         "`Sample` holds free text, in real files a person's name. Drop it on load; never log it.",
         "No build is stated. `Chr` spells mtDNA `M`; map it to `MT` explicitly. CRLF line ends.",
+        "Measured 2026-10-23 against NCBI36 (2,000 sampled rows of the one PGP-HMS table): `ref_upstream` ends "
+        "at the base before `pos`; a deletion's bases start at `pos`, with `ref_downstream` after them; an "
+        "insertion's `ref_downstream` starts at `pos`. So `pos` is 1-based, the span's first base or the base "
+        "after the insertion point. `ref/indel` pads with `-` on both sides of complex events (`C-A/-TA`).",
     ),
     example=(
         "Index\tSample\tChr\tpos\tCIGAR\tref_upstream\tref/indel\tref_downstream\tQ(indel)\tmax_gtype\t"
@@ -605,6 +618,8 @@ SOAPSNP_CNS = FormatSpec(
         "read evidence; the loader must carry depth and quality through, never treat them as observed.",
         "Only SNP rows are present; an absent site is unknown.",
         "No build is stated. `chrM` must be mapped to `MT` explicitly.",
+        "Measured 2026-10-23: `ref` equals NCBI36's base at `position` on every sampled row (2,000 of the one "
+        "PGP-HMS file), so positions are 1-based; the build is still not stated.",
     ),
     example=(
         "chr1\t742429\tG\tR\t34\tG\t36\t12\t12\tA\t30\t10\t10\t22\t0.412\t1.00000\t1\t15882\n"

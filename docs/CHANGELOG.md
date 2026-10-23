@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The store's `manifest.json` keeps each facet's load warnings redacted as `query` returns them
+  (the facets' sample, source path and member, and anything shaped like a path), where it kept them
+  as the load gave them; `Store.loaded().warnings` reads them back so.
+
 - `reference`, and a reference or chain named in a method step's options, keep a file's base name
   only where every word of it is a known reference's (`hg38.fa`, `hs37d5.fa.gz`,
   `Homo_sapiens.GRCh38.dna.primary_assembly.fa`, `GRCh38_to_GRCh37.chain.gz`, DRAGEN's

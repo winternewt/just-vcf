@@ -1635,6 +1635,10 @@ layout (charter 2): GA4GH defines no on-disk store for a person's callsets.
 <dir>/.lock                            the OS file lock every add holds (just_vcf.cache's)
 ```
 
+The manifest's warnings are redacted as `query` returns them (`FacetRedactor`: the facets' sample,
+source path and member, and anything shaped like a path): it is the store's one plain-text file, and
+a load warning may quote a sample or a file name.
+
 - **Where.** `Store.open(path, subject=...)` creates the store in the directory the caller names,
   absent or empty, and never anywhere else: a store holds whole genomes. Opening an existing one
   with `subject` given checks it is the store's.

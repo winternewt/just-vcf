@@ -52,9 +52,90 @@ Severity: low · Status: open (decided by the person in the Part 2 interview, 20
 The person chose after the atlas (E7): a per-site posterior across one person's facets as a derived facet, with RM279's rates as priors; never before them.
 
 ## RM281 — Chip manifests
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: medium · Status: in progress (2026-10-23: I/D codes resolved against Illumina's indel probes, a mixed-strand array's withheld rows read by their probe's allele pair, absence with a cause from manifest or learned probe sets; left: WGS-learned I/D orientation, F17, the Forward/Design-only Final Report) · Owner: lead
 
 The person chose both sources (E9): public vendor manifests (Illumina GSA/OmniExpress are on disk) and probe sets learned from PGP people with an array and a WGS. Resolves I/D codes, strand per probe, and which sites a chip has (absence with a cause). Closes F17.
+
+**Shipped 2026-10-23** (`just_vcf.probes`; rules in docs/SCHEMA.md Decision 2 and Decision 4). The
+manifests are read at run time from `JUST_VCF_MANIFESTS_DIR`, each once into a probe table in the cache.
+
+- **I/D codes** (`resolve_ref`): matched with a manifest indel probe by rsid; the site located in the
+  reference by the probe's flanks (GSA-24v3-0 A1: 9,618 of its 10,118 indel probes found at exactly one
+  place against GRCh37, on the strand `SourceStrand` gives for all but 4); spelled with REF at the
+  export's own position, read from the reference. Measured on PGP-HMS GRCh37 exports (counts only):
+
+  | Chip | Exports | I/D rows each | Resolved | Resolved homozygous rows read hom-ref |
+  |---|---|---|---|---|
+  | `23andme_v5` | 2 | 4,815–5,166 | 46.6–48.6% | 98.7% |
+  | `ancestrydna_v2` | 1 | 7,631 | 43.0% | 98.4% |
+  | `23andme_v3` | 2 | 1,032–1,038 | 17.1–17.6% | 76% |
+  | `23andme_v4` | 2 | 4,840–4,866 | 3.6–3.7% | 76% |
+  | `23andme_v1_v2` (build 37 re-export) | 1 | 121 | 6.6% | 6 of 6 |
+  | `ancestrydna_v1` | 2 | 0 | | |
+  | `living_dna_sirius` | 1 | 0 codes (83 concatenated indels, F17) | | |
+
+  Most unresolved rows carry no rsid a GSA indel probe names (in two other v4 exports, 94% of about
+  15,200 I/D rows each carry internal `i…` ids); about 2% have flanks not found, under 1% a site no shift brings to the export's position.
+  Build-36 exports get none: the manifests map to GRCh37. **Open:** on 23andMe v3 and v4 the same sites
+  read hom-alt in every export (43 of 179 v3 sites and 40 of 156 v4 sites in all of four exports each,
+  against 21 of 2,313 on v5), with hardly a het. REF agrees with Ensembl's GRCh38 REF on long or short
+  for all 154 biallelic v3 sites checked, so the reference read is right; whether those sites are ones
+  where the reference carries the rare allele or where 23andMe's I/D mean the other way round needs the
+  same person's WGS (left, below).
+- **Strand per probe** (`resolve_ref`, mixed facets only): a withheld row is read by its probe's two
+  alleles on the plus strand (`SNP` as written for `RefStrand` `+`, complemented for `-`; the GRCh37 base
+  at `MapInfo` is in that pair for all but 2 of 20,000 sampled SNV probes of each manifest). Where the
+  pair holds the row's reference base and is not `A/T` or `C/G`, the row reads forward or minus by its
+  alleles alone. This is not the repair F13 rejected: F13 showed that no strand column predicts which
+  probes FTDNA flipped; the pair decides each row whatever the vendor flipped by.
+- **Absence with a cause** (`chip_absence`, `probe_set`, `learn_probe_sets`): `in_export`, `no_call`
+  or `not_on_chip` per asked site, from the chip's own manifest (`illumina:<manifest>`, configured) or a
+  set learned from its exports. Learned from every loadable 23andMe and AncestryDNA export under PGP-HMS
+  (sites carried by at least half of a chip's exports; every file counts, so a participant's copies of
+  one upload count more than once):
+
+  | Chip, assembly | Exports | Sites on the chip | Positions any export carries |
+  |---|---|---|---|
+  | `23andme_v1_v2`, GRCh36 | 81 | 576,342 | 1,175,160 |
+  | `23andme_v1_v2`, GRCh37 | 10 | 574,476 | 594,753 |
+  | `23andme_v3`, GRCh36 | 164 | 966,581 | 1,003,300 |
+  | `23andme_v3`, GRCh37 | 107 | 960,586 | 1,001,149 |
+  | `23andme_v4`, GRCh37 | 77 | 610,326 | 614,508 |
+  | `23andme_v5`, GRCh37 | 28 | 635,966 | 654,063 |
+  | `ancestrydna_v1`, GRCh37 | 25 | 701,478 | 944,173 |
+  | `ancestrydna_v2`, GRCh37 | 16 | 797,008 | 828,658 |
+
+  AncestryDNA's `V2.0` covers two contents (its exports have 664,429 rows; 797,008 sites are in half
+  of them or more), and `V1.0` likewise (425,316 sites in every export): the stated version does not
+  pin the probe set. A learned set is the cache's, never shipped: at 0.6–1.0 million positions per
+  chip it is several MB, past the few hundred KB a packaged constant may take.
+
+Decisions, each with what was rejected:
+
+- The manifests' indel probes serve every array on their build, matched by rsid. Rejected: only the
+  chip's own manifest, which resolves nothing on PGP-HMS (no export's chip has its manifest on disk).
+  Risk kept: a vendor's probe for a multi-allelic rsid may test another allele than Illumina's; the
+  hom-ref share above is the check, and v3/v4's is the open question.
+- A site is located by its flanks, not by `MapInfo`, which is not the anchor (the gap is one base
+  before it for 5,594 GSA probes, at or after it for the rest). REF comes from the reference; the
+  manifest gives the inserted bases and the locator only.
+- REF starts at the export's own position, the site shifted along a repeat to get there, padded on the
+  right where nothing lies between. Rejected: moving `pos` (it is what the source wrote) and the empty
+  allele (VCF has none, and an empty REF reads as an insertion after `pos`).
+- `gt_alleles` of a resolved row becomes the two sequences, `source_gt` keeping the codes. Rejected:
+  leaving `I`/`D` there, which would break `gt` indexing `[ref] + alts`.
+- Strand by pair only in mixed facets. Rejected: reading forward facets by it too, which would rewrite
+  rows of every export whose rsids a manifest shares, on evidence the strand check found sound.
+- A learned site needs half of the chip's exports. Rejected: the union, which took 578,794 positions
+  from one of 81 `23andme_v1_v2` build-36 exports into the set.
+- A platform family (`illumina_gsa`, `illumina_omniexpress`) has no probe set. Rejected: the family's
+  manifest, which would put another version's probes on the chip.
+
+Left: WGS-learned I/D orientation for the codes no manifest names (23andMe v4's internal ids) and the
+v3/v4 hom-alt question, from PGP people with a 23andMe export and a CGI `var` (its reference blocks say
+hom-ref outright); F17 (DOGFOODING: no public Sirius manifest, one export); the Final Report with only
+Forward/Design alleles (its manifest, HumanOmni2.5-8v1_A, is not on disk); exact-manifest absence on
+real data (no PGP-HMS export's chip has its own manifest on disk).
 
 ## RM282 — Structural-variant facets
 Severity: low · Status: loading built 2026-10-23, awaiting merge (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead

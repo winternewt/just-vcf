@@ -20,6 +20,7 @@ from just_vcf.loading import (
 )
 from just_vcf.loaders.table import TableLayoutError
 from just_vcf.normalize import normalize
+from just_vcf.probes import AbsenceCause, ChipAbsence, ProbeSet, ProbeSetKind, chip_absence, learn_probe_sets, probe_set
 from just_vcf.person import SUBJECT_CHECKS, Person, SameSubjectCheck, SubjectCheckOutcome, SubjectError, people
 from just_vcf.query import Dimension, GenotypeClass, Presence, PresenceBasis, Query, query
 from just_vcf.phasing import cis_phased_blocks
@@ -58,6 +59,7 @@ __all__ = [
     "LINKS",
     "LOADABLE_FORMATS",
     "SCHEMA_VERSION",
+    "AbsenceCause",
     "SUBJECT_CHECKS",
     "AbsenceMeans",
     "AssemblyLabelBasis",
@@ -66,6 +68,7 @@ __all__ = [
     "CacheClearReport",
     "CacheEntryInfo",
     "CallsetType",
+    "ChipAbsence",
     "ChipBasis",
     "Chain",
     "ContentFilter",
@@ -81,6 +84,8 @@ __all__ = [
     "GenotypeClass",
     "KaryotypicSex",
     "PhaseSetKind",
+    "ProbeSet",
+    "ProbeSetKind",
     "Person",
     "Presence",
     "PresenceBasis",
@@ -105,8 +110,10 @@ __all__ = [
     "XCopies",
     "__version__",
     "absence_is_reference",
+    "chip_absence",
     "cis_phased_blocks",
     "clear_cache",
+    "learn_probe_sets",
     "liftover",
     "link_disagreements",
     "load",
@@ -115,6 +122,7 @@ __all__ = [
     "people",
     "query",
     "open_payload",
+    "probe_set",
     "read_chain",
     "reference_dir",
     "rejoin_split",

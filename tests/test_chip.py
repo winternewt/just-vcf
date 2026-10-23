@@ -3,7 +3,6 @@
 import hashlib
 import importlib.util
 import json
-import os
 from importlib import resources
 from pathlib import Path
 
@@ -302,11 +301,9 @@ def test_a_small_ftdna_export_says_why_its_chip_is_unknown(tmp_path: Path) -> No
     assert any(w.startswith("chip unknown: 0 of the export's rsids are in the marker sample") for w in loaded.warnings)
 
 
-def test_the_packaged_sample_is_derived_from_the_manifests() -> None:
+def test_the_packaged_sample_is_derived_from_the_manifests(manifests_dir: Path) -> None:
     """Opt-in: `JUST_VCF_MANIFESTS_DIR` holds Illumina's manifest zips (docs/PROVENANCE.md names them)."""
-    root = os.environ.get("JUST_VCF_MANIFESTS_DIR")
-    if not root or not Path(root).is_dir():
-        pytest.skip("JUST_VCF_MANIFESTS_DIR is not set")
+    root = manifests_dir
     script = Path(__file__).resolve().parent.parent / "scripts" / "chip_markers.py"
     spec = importlib.util.spec_from_file_location("chip_markers_script", script)
     module = importlib.util.module_from_spec(spec)

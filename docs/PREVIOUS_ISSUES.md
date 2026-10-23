@@ -348,6 +348,15 @@ Why each other repair is wrong:
 - **Withholding nothing and warning only**: a flipped hom-ref row would still read as a confident
   hom-alt call downstream, which is the error F13 is about.
 
+Addendum 2026-10-23 (RM281): the withheld rows of a mixed facet are now read by their probe's two
+alleles on the plus strand, where a configured manifest names the rsid, the pair holds the reference
+base and is not `A/T` or `C/G` (docs/SCHEMA.md Decision 2). That is not the per-chip strand table
+rejected above: the columns still do not say which probes FTDNA flipped, but `TT` at a probe whose plus
+pair is `A/G` is a minus-strand `AA` whichever they are, so homozygous rows of such probes are read
+too. Not yet measured on F13's export (build 36, so matched by rsid; the pair is checked against the
+build-36 reference base): the search through the PGP-HMS FTDNA exports had not reached it when RM281
+was handed over.
+
 
 ## F10 — A GP that does not sum to 1 is lost when just-vcf reloads its own export
 

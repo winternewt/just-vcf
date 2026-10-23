@@ -109,9 +109,28 @@ same calls. A facet already read is refused rather than read again.
   MNV `CTA`/`CGA` becomes `T>G` one base on). The split itself never leaves an insertion that could
   move left: its inserted bases would end in the padding base, and the text would then fit a second
   split.
-- Left unread, each reason counted once: I/D codes, whole no-calls (the probe's REF span is unknown),
-  genotypes that could not be split, spans past the contig's end or at POS 0, and every row of a
-  contig that could not be matched with the reference (below).
+- An array row whose genotype is `I`/`D` codes (23andMe, AncestryDNA, a Final Report: `I` the allele
+  with the inserted bases, `D` the one without), on an assembly a configured Illumina manifest maps
+  its probes to (RM281, `just_vcf.probes`): matched with a manifest indel probe by an rsid among its
+  `ids`, on the same contig. The probe's source sequence names the inserted bases and about 60 bases
+  of flank each side; the site is located in the reference by those flanks, within 200 bases of the
+  probe's own span around its `MapInfo` (the flanks with the bases between them: the reference
+  carries them, a deletion site, `I` is REF; the flanks joined: an insertion site, `D` is REF). Taken
+  only when the flanks are found at exactly one place, on the strand the manifest's `SourceStrand`
+  gives. The site is then spelled with REF starting at the row's own `pos`, shifted along a repeat
+  where the export placed it elsewhere in one: the reference bases from `pos` up to the indel come
+  before both alleles, and where there are none both alleles end with the base after the indel (VCF's
+  padding base, on the right; `normalize` moves it left as it aligns). A site before `pos` that no
+  shift brings there, or more than 64 bases after it, stays unread. The row gets `ref` (read from the
+  reference, never from the manifest), `alts` (the called alleles other than REF, as for any array
+  row), `gt`, `end_pos`, and `gt_alleles` spelled as the two sequences, so `gt` indexes them like any
+  row's; `source_gt` keeps the codes. A row whose rsids name more than one located site, or none, is
+  left as loaded, each reason counted. Not affected by `strand_check`: `I` and `D` read the same on
+  either strand. `ref_check` stays null.
+- Left unread, each reason counted once: I/D codes no manifest probe resolves (above), whole
+  no-calls (the probe's REF span is unknown), genotypes that could not be split, spans past the
+  contig's end or at POS 0, and every row of a contig that could not be matched with the reference
+  (below).
 
 **Matching the reference to the facet.** Per contig the calls use, read through `canonical_chrom` on
 both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X):
@@ -150,9 +169,23 @@ checked), the alleles are derived as before, and a warning says so. A VCF is not
 the source's own. In a `mixed` facet every array row keeps `ref`, and the rows that are not
 strand-safe (homozygous calls, half-calls, and hets without the reference base) get `alts` and `gt`
 null, each reason counted in the warnings: `AA` at a reference `A` is a forward hom-ref call or a
-minus-strand hom-alt call of an A/T probe, and the rows cannot say which. No genotype is complemented,
-not even on a het that proves its probe minus: complementing exactly the minus probes needs the
-vendor's own strand table.
+minus-strand hom-alt call of an A/T probe, and the rows cannot say which. No genotype is complemented
+by the facet's rows alone, not even on a het that proves its probe minus: complementing exactly the
+minus probes needs to know each probe's alleles.
+
+A probe's own alleles decide it where a configured Illumina manifest gives them (RM281,
+`just_vcf.probes.snv_catalog`): a withheld row of a `mixed` facet is matched with a manifest SNV probe
+by an rsid among its `ids`, on the same contig, and the probe's two alleles are put on the plus strand
+(the `SNP` column as written where `RefStrand` is `+`, complemented where it is `-`). The row is read
+only when that pair holds the row's reference base (so the pair is on the facet's own plus strand,
+whatever build the manifest maps to) and is not its own complement (`A/T`, `C/G`). Called alleles all
+in the pair: forward, derived as written. All in the pair's complement: minus, `gt_alleles`
+complemented, then derived; `source_gt` keeps what the export wrote. Otherwise, or with no probe (or
+an rsid whose probes give two pairs), withheld as before; each outcome is counted in one warning.
+`TT` at a probe whose plus pair is `A/G` is a minus-strand `AA` whichever column the vendor flipped
+by, so this reads what F13's strand columns could not. Forward facets are not touched: reading them
+by the pairs would rewrite rows of every export whose rsids a manifest shares, on evidence the strand
+check already found sound.
 
 A primary contig (1–22, X, Y) whose stated length or md5 differs refuses the whole facet
 (`ReferenceMismatchError`): it is another assembly. Any other contig that does not match (hg19's chrM
@@ -194,8 +227,9 @@ How the awkward cases land under C:
 - **Hemizygous X/Y in arrays**: kept exactly as written (`["A"]` or `["A", "A"]`). An array writing
   `AA` on male X is not saying "homozygous". The facet's ploidy handling is a known open issue, not
   something the loader corrects.
-- **23andMe `I`/`D`**: kept verbatim as symbolic alleles. Resolving them needs chip manifests
-  (LANDSCAPE). No VRS id is minted for them.
+- **23andMe `I`/`D`**: kept verbatim as symbolic alleles at load. `resolve_ref` spells them as
+  sequences where a configured chip manifest's indel probe resolves them (above, RM281); until then,
+  and where none does, no VRS id is minted for them.
 - **CGI partial no-call inside an allele** (`GC?`): kept verbatim in `gt_alleles` (`"GC?"`), with no VRS
   id. The `?` marks the bases CGI could not call. Because `gt` indexes `[source_ref] + alts`, a partial
   allele is in `alts` too (the native `var` and `masterVarBeta` files; CGI's VCF writes such a
@@ -418,6 +452,26 @@ for consumers that restore hom-ref themselves (just-prs, just-dna-lite). A posit
 `None`, never `False`, including `blocks` (a gVCF decides per position, in its `blocks` frame). Any
 hom-ref restoration from absence that just-vcf grows must ask it, and refuse a facet with a
 `content_filter` unless called with `force=True`.
+
+**On an array, an absence has a cause (RM281).** An array's absence stays `unknown`, but
+`chip_absence(loaded, sites)` says why, per asked site (`chrom` canonical, `pos` 1-based), from the
+probe set of the facet's `chip` on its `assembly_label` (`just_vcf.probes.probe_set`):
+`absence_cause` is `in_export` (the export has a row there, a written no-call included), `no_call`
+(the chip has a probe there and the export reports nothing: a no-call it dropped, or a probe left out
+of this release) or `not_on_chip` (no probe there). Null for every site when there is no probe set:
+not an array, chip or assembly unknown, or nothing configured or learned; the answer carries the
+reason. Neither cause is ever evidence of reference. A probe set is one of two kinds
+(`ProbeSetKind`): `manifest`, the chip's own Illumina manifest when a Final Report names it
+(`illumina:<manifest>`) and it is configured (`JUST_VCF_MANIFESTS_DIR`), its probes on that build
+(`Chr 0` probes are unplaced and left out); or `learned`, the positions at least half of the exports
+of that chip carry, written into the cache by `learn_probe_sets` from three exports or more, for a
+vendor that publishes no manifest (23andMe and AncestryDNA write a row per probe, no-calls included).
+Not the union: one mislabelled export would put its whole coordinate system on the chip. A
+platform family named by marker overlap (`illumina_gsa`, `illumina_omniexpress`) has none: another
+version's manifest would put probes on the chip that it may not carry. A learned set is as complete as
+the exports it was learned from; `of_exports` and each site's `exports` count say how many. The cause
+is computed on request, not stored: it changes when a probe set is learned or configured, and the facet
+does not.
 
 `content_filter` comes from the strongest evidence that settles it, and each weaker piece that
 disagrees is a warning naming both sides; the strongest is kept:
@@ -1315,6 +1369,19 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 - **No version change** (2026-10-23, RM284): no column changes. A computed frame,
   `cis_phased_blocks`, exports the phase sets as VRS CisPhasedBlocks ("CisPhasedBlock export").
   `SCHEMA_VERSION` was deliberately left as it is on this builder branch.
+
+- **No version change** (2026-10-23, RM281's allele pairs): no column changes. Rule changed (Decision
+  2, "The strand of an array's genotypes"): in a `strand_check = mixed` facet, a withheld row whose
+  rsid names a configured manifest's SNV probe, with a pair that holds the reference base and is not
+  `A/T` or `C/G`, is read by that pair: forward as written, or minus with `gt_alleles` complemented.
+  Values change on mixed facets when the manifests are configured. `RESOLVE_VERSION` 6.
+
+- **No version change** (2026-10-23, RM281's chip manifests): no column changes. Rule added (Decision
+  2): `resolve_ref` resolves an array's `I`/`D` rows against the indel probes of the Illumina manifests
+  under `JUST_VCF_MANIFESTS_DIR`, filling `ref`, `alts`, `gt`, `end_pos` and replacing `gt_alleles`'
+  codes with the site's sequences (`source_gt` keeps them). Values change on array facets with such
+  rows when the manifests are configured; without them nothing changes but the warning's wording.
+  `RESOLVE_VERSION` 5.
 
 - **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
   (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from

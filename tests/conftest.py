@@ -16,6 +16,8 @@ def isolated_cache(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest
     monkeypatch.setenv("JUST_VCF_CACHE_DIR", str(path))
     # No configured reference store: a test that wants one passes it or sets the variable itself.
     monkeypatch.setenv("JUST_VCF_REFERENCE_DIR", "")
+    # No configured chip manifests either (RM281): a test that reads the real ones asks for `manifests_dir`.
+    monkeypatch.setenv("JUST_VCF_MANIFESTS_DIR", "")
     return path
 
 
@@ -46,6 +48,26 @@ def ancestry_dir() -> Path:
         value = dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_ANCESTRY_DIR")
     if not value:
         pytest.skip("JUST_VCF_ANCESTRY_DIR is not set")
+    path = Path(value)
+    if not path.is_dir():
+        pytest.skip(f"{path} is absent")
+    return path
+
+
+_MANIFESTS_DIR = os.environ.get("JUST_VCF_MANIFESTS_DIR")
+"""`JUST_VCF_MANIFESTS_DIR` as the session started, before `isolated_cache` empties it for every test."""
+
+
+@pytest.fixture(scope="session")
+def manifests_dir() -> Path:
+    """`JUST_VCF_MANIFESTS_DIR`, Illumina's manifest zips (docs/PROVENANCE.md), read like `samples_dir`.
+
+    The library reads the variable too (RM281), so every test sees it empty; a test that reads the real
+    manifests asks for this fixture and sets it itself.
+    """
+    value = _MANIFESTS_DIR if _MANIFESTS_DIR is not None else dotenv_values(find_dotenv(usecwd=True)).get("JUST_VCF_MANIFESTS_DIR")
+    if not value:
+        pytest.skip("JUST_VCF_MANIFESTS_DIR is not set")
     path = Path(value)
     if not path.is_dir():
         pytest.skip(f"{path} is absent")

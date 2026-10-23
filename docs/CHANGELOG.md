@@ -4,6 +4,32 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
+  probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
+  (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or
+  `C/G`; a row whose alleles are the pair's complement is a minus-strand row, and its `gt_alleles` are
+  complemented (`source_gt` keeps the text). Homozygous rows of such probes, withheld until now, get
+  `alts` and `gt`. Forward facets are unchanged. One warning counts every outcome.
+
+- An array's absence gets a cause (RM281): `chip_absence(loaded, sites)` says per site whether the
+  export has a row there (`in_export`), the chip has a probe there and the export reports nothing
+  (`no_call`), or the chip has no probe there (`not_on_chip`); null with a reason when the facet has no
+  probe set. `probe_set(chip, assembly_label)` is the chip's own manifest for an `illumina:<manifest>`
+  chip (configured), or the sites at least half of the chip's exports carry, learned by `learn_probe_sets` into the
+  cache's `probes/learned/` (`scripts/learn_probe_sets.py` walks a directory of exports). Platform
+  families named by marker overlap get none. New public names: `chip_absence`, `ChipAbsence`,
+  `AbsenceCause`, `probe_set`, `ProbeSet`, `ProbeSetKind`, `learn_probe_sets`. No column changes.
+
+- `resolve_ref` resolves an array's `I`/`D` indel codes (23andMe, AncestryDNA, Final Reports) against
+  the indel probes of the Illumina manifests under `JUST_VCF_MANIFESTS_DIR` (RM281, `just_vcf.probes`):
+  a row is matched with a probe by rsid, the probe's site is located in the reference by its flanks,
+  and the row gets `ref` (from the reference), `alts`, `gt`, `end_pos` and `gt_alleles` spelled as the
+  site's two sequences, REF starting at the row's own position; `source_gt` keeps the codes. Each
+  manifest is read once into a probe table under the cache's `probes/`. Rows no probe resolves stay as
+  loaded, each reason counted; without the manifests every code row stays unread, with a warning that
+  says so. A value change on array facets with I/D rows when the manifests are configured. Tests see
+  `JUST_VCF_MANIFESTS_DIR` empty; the opt-in manifest test takes the new `manifests_dir` fixture.
+
 - Schema 0.0.12 (RM273): `facets.subject`; `Person.of` groups one subject's facets and checks the claim.
 
 - `Person.of(*loaded, check=...)` and `people(*loaded, check=...)` group facets by the subject the

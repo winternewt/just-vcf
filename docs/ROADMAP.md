@@ -340,6 +340,36 @@ starling) were added from the PGP-HMS headers. Decisions:
 - `ploidy_statements` keeps lines verbatim with no vocabulary, as RM269's critique recommends; an
   option's path value is written `<path>`.
 
+**Shipped 2026-10-23: the method chain** (layer 2, charter 6), `source.method_chain`: `facets.method_steps`,
+`reference`, `aligner`, `aligner_version`, and `phasing_method` from the chain. Measured over 392
+PGP-HMS VCF headers and 52 local ones (the Krypton copy of `/data/genomes`, ancestry panels left out):
+`reference` 95% and 38% (DeepVariant writes no `##reference`), at least one step 80% and 83%, a step
+after the call 76% and 48%, `phasing_method` 34% and 38%, `aligner` 2% and 2% (DRAGEN only; no header
+on disk copies a BAM's `@PG` lines). Decisions, each with what was rejected:
+
+- Step order is header order, except dated steps (GATK, DRAGEN, bcftools), sorted by their stated
+  date among the places they hold: every GATK pipeline header on disk lists ApplyRecalibration before
+  HaplotypeCaller, because htsjdk sorts meta lines by text. Rejected: header order alone, which is
+  wrong for every GATK header; and a sort of all steps by date, which has nowhere to put the undated.
+- `reference` is `##reference=`, the coordinate system the rows are on, with the caller's reference
+  only as a fallback. Rejected: the caller's reference first, which for a file lifted by a tool that
+  records nothing (Picard) names the reference the rows are no longer on. When the two differ and no
+  `lift` step is recorded, a warning says so (four local headers, the Picard lifts).
+- A caller phased its own calls only where FORMAT `PS` is declared in the caller's own words
+  (`_CALLER_PHASE_SETS`). Rejected: any `PS` declaration, which credits the caller with a phaser's work.
+  HaplotypeCaller's PGT/PID alone is not a phase step: no `calls` column carries it.
+- Phasers with no header on disk get a rule only where their source code shows the line they write
+  (WhatsHap, SHAPEIT4, HapCUT2). Beagle, SHAPEIT5 and DRAGEN's `--vc-enable-phasing` without a `PS`
+  declaration have no rule: no header on disk, no source read.
+- `options` come from a list kept per tool, never the whole command: GATK writes forty defaults, and a
+  command carries inputs, outputs and sample names. Rejected: every option with paths redacted, which
+  still keeps `--vc-sample-name`.
+- One call step per caller name, at its first line, collecting its command lines' options; every
+  other line is its own step. Rejected: one step per caller line, which repeats a caller run per
+  chromosome.
+- The role vocabulary is open (`schema.STEP_ROLES`, a string column): `other` holds a conversion or a
+  gvcftools pass, and a new role is additive.
+
 **Open from `vcf_cgi` (2026-10-22):** a vcfBeta lists its no-called spans and half-calls but, in the
 rows counted, never a reference-called record, which suggests an absent position was called
 reference. The loader keeps `absence_means = blocks` (absent is not reference) until CGI's own
@@ -414,6 +444,7 @@ Header evidence found while declaring the VCF formats:
 | `##DRAGENCommandLine`, `##source=DRAGEN_SNV` | DRAGEN |
 | `##GATKCommandLine*`, `##source=HaplotypeCaller…`, `##UnifiedGenotyper=` | GATK |
 | `##DeepVariant_version=` | DeepVariant |
+| `##clair3_version=` | Clair3 |
 | `##source=Platypus_Version_*` | Platypus |
 | `##source=GenerateSVCandidates` | Manta |
 | `##source=aengine` | FamilyTreeDNA Big Y |

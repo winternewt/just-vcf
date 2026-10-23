@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Schema 0.0.16: the method chain on the facet (`method_steps`, `reference`, `aligner`, `aligner_version`);
+  the CLI and `query` pass `reference` and the aligner through their path and name redaction.
+
 - Schema 0.0.15: `calls.phase_set_ordinals`, `phase_set_qualities` (VCF 4.4+ PSO/PSQ); PSL phase sets load and
   write back under VCF 4.5.
 
@@ -72,6 +75,22 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   where it differs from the implicit one, CN declared Float), and 4.3 otherwise, as before; a PSL facet
   round-trips through `load`, and htslib reads it. `cis_phased_blocks` keeps a PSL record's
   implicit-set slots out of its PSL sets.
+
+- A facet records its method chain (layer 2, charter 6): four new nullable `facets` columns from the
+  `source` detector. `method_steps` lists every step the header records, in the order they ran, each
+  with its tool, version, role (`align`, `call`, `filter`, `normalize`, `merge`, `lift`, `annotate`,
+  `phase`, `other`), key options (paths written `<path>`, a reference or chain by its base name, no
+  sample names) and the meta key it came from: GATK in its three header styles, DRAGEN, bcftools,
+  vcftools, freeBayes, starling, Clair3, SnpEff, VEP, gvcftools, CrossMap, Eagle, WhatsHap, SHAPEIT4
+  and HapCUT2. Dated steps (GATK, DRAGEN, bcftools) are put in date order, because htsjdk sorts meta
+  lines by text. `reference` is `##reference=`'s base name or the caller's; `aligner` and
+  `aligner_version` are DRAGEN's when it mapped the reads. `phasing_method` now also names a caller
+  that declares FORMAT `PS` in its own words (DRAGEN, GATK HaplotypeCaller, DeepVariant, CGI) and the
+  phasers above; two phasing steps leave it null with a warning. `##clair3_version` names Clair3 as
+  the caller. A `##reference=` that differs from the caller's with no liftover recorded is a warning.
+  The CLI summary prints `reference`, `aligner` and each step's role, tool and version. `SCHEMA_VERSION`
+  is not bumped here.
+
 - In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
   probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
   (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or

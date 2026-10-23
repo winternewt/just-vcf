@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.15.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.16.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -555,7 +555,10 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele; null = not counted (a genotype table, which writes no REF or ALT). just-vcf's own shape |
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
-| `phasing_method` | null unless stated |
+| `phasing_method` | the tool and version of the one `phase` step in `method_steps` (`Eagle 2.3.5+htslib-1.4`, `DRAGEN 05.021.408.3.4.11`, `WhatsHap 1.7`). Null when the header records no phasing step, or more than one (with a warning). A caller counts as phasing its own calls only where the header declares FORMAT `PS` in that caller's own words (`method_steps`, below) |
+| `reference` | the reference the header says the rows are against: the base name of `##reference=` (`hg38.fa`, `human_g1k_v37.fasta`; DRAGEN's `…/<dir>/reference.bin` gives `<dir>`), or, with no such line, the one reference the call steps' command lines name (`--reference`, `reference_sequence=`, `--ref-dir`, freeBayes `-f`). Two references leave it null with a warning. A `##reference=` that differs from the caller's command line is kept, with a warning unless a `lift` step is recorded: a lift the header does not name (Picard LiftoverVcf writes no line) shows up this way. A label, never identity: `seqcol_digest` is that. just-vcf's own |
+| `aligner`, `aligner_version` | the tool of the one `align` step: today only DRAGEN, where its command line says `--enable-map-align true`. Null when no header line records an alignment, which is most files: the callers that read a BAM do not copy its `@PG` lines |
+| `method_steps` | `list[struct{tool, version, role, options, line}]`: every step the header records, in the order the steps ran (charter 6). `role` is one of `align`, `call`, `filter`, `normalize`, `merge`, `lift`, `annotate`, `phase`, `other` (`schema.STEP_ROLES`, an open vocabulary, so a string). `options` are the step's key options as written (`-m -both`, `selectTypeToInclude=[SNP]`, `mode=SNP`), from a list kept per tool: inputs, outputs, sample names and defaults are not kept, a path or file name is written `<path>`, a reference or chain keeps its base name. `line` is the meta key it came from. One call step per caller name; command lines of the same caller add their options to it. Order is header order, except that steps whose line states a run date (GATK, DRAGEN, bcftools) are sorted by it among the places they hold, since htsjdk writes meta lines sorted by text. These are the steps the header records: a facet just-vcf derived (`normalize`, `liftover`, `rejoin_split`) keeps its parent's list, and what just-vcf did is in `links.provenance` (Decision 12). Each facet of a caller split (Decision 8) carries the whole file's chain, both call steps and the merge; `caller` says which half it is. `[]` = a VCF header that records no step; null = not a VCF. just-vcf's own shape (charter 2) |
 | `derived_from`, `relation` | parent facet and how: `liftover_to` (Cat-VRS, written by `liftover`), or a documented just-vcf relation (`caller_split`, `merge`, `normalized`, `split_rejoined`, `appended_export`). `appended_export`, like `caller_split`, has no parent: a second export appended to a file after the first, in another layout (F3), loaded as its own facet beside the first's; `derived_from` stays null, since neither export was made from the other, and the two share `source_sha256` and `member` (below, "Two exports in one file"). A facet with several parents (`merge`) has `derived_from` null and its parents in `links` (Decision 12), which also links a caller split's facets and an appended export to the first; Decision 12 states how the two agree |
 | `contig_map` | `list[struct{source, chrom}]`: how this file's contig names were mapped (Decision 7) |
 | `header_contigs` | `list[struct{name, length, md5}]` from `##contig` lines. It is evidence for the assembly (RM4) and for the seqcol digest, not the digest itself |
@@ -1608,6 +1611,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   Added outside the three frames: `RELATEDNESS_FRAME` and the two pedigree frames ("Relatedness and
   pedigrees" above). `Person.of`'s default check is now `same_person`.
 
+- **Four facet columns, version not bumped in this change** (2026-10-23, layer 2, the method chain):
+  `reference`, `aligner`, `aligner_version` and `method_steps` (Decision 5), all nullable and additive,
+  and `phasing_method` now filled from the chain's one `phase` step. A new nullable column is a minor
+  bump by the rule above; `SCHEMA_VERSION` stays where it is on this builder branch and the lead bumps
+  it at merge with the round's other changes. `facet_id` digests none of them.
+
 - **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every
   derived facet. Nullable and additive. `facet_id` does not digest the subject (Decision 5).
@@ -1739,6 +1748,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   which runs beside other builders' branches; the lead bumps it at merge. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.16** (2026-10-23, layer 2's method chain): `facets.method_steps`, `reference`, `aligner`,
+  `aligner_version`. Additive; `phasing_method` now comes from the phase step.
 
 - **0.0.15** (2026-10-23, PSL phase sets): `calls.phase_set_ordinals` (PSO) and `phase_set_qualities` (PSQ);
   PSL read into `phase_sets` with kind `psl`. Additive.

@@ -6,12 +6,14 @@ the PGP-HMS headers found it (2026-10-22). Values are header text; nothing is re
 
 import collections
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from just_vcf import load, open_payload, sniff
 from just_vcf.loaders import vcf
+from just_vcf.schema import STEP_ROLES
 from just_vcf.source import detect_source, ploidy_statements
 from test_load_vcf import vcf_text, write
 
@@ -27,8 +29,8 @@ GATK4_HC = (
     '##GATKCommandLine=<ID=HaplotypeCaller,CommandLine="HaplotypeCaller --sample-ploidy 2 --emit-ref-confidence GVCF",'
     'Version="4.1.4.1",Date="July 13, 2020 2:56:16 PM HKT">'
 )
-GATK_SELECT = '##GATKCommandLine.SelectVariants=<ID=SelectVariants,Version=3.7-0-gcfedb67,Date="x",CommandLineOptions="analysis_type=SelectVariants">'
-GATK_VQSR = '##GATKCommandLine=<ID=ApplyVQSR,CommandLine="ApplyVQSR",Version="4.1.4.1",Date="x">'
+GATK_SELECT = '##GATKCommandLine.SelectVariants=<ID=SelectVariants,Version=3.7-0-gcfedb67,Date="Fri Feb 01 23:10:00 UTC 2019",CommandLineOptions="analysis_type=SelectVariants">'
+GATK_VQSR = '##GATKCommandLine=<ID=ApplyVQSR,CommandLine="ApplyVQSR",Version="4.1.4.1",Date="July 13, 2020 6:01:02 PM HKT">'
 DRAGEN = (
     '##DRAGENCommandLine=<ID=dragen,Version="SW: 05.021.408.3.4.11, HW: 05.021.408",Date="Wed Apr 01 09:02:15 UTC 2020",'
     'CommandLineOptions="--enable-variant-caller true --sample-sex male">'
@@ -164,9 +166,23 @@ def test_load_fills_the_facet_from_the_header(tmp_path: Path) -> None:
         "GATKCommandLine GenotypeGVCFs: --sample-ploidy 2",
     ]
     assert facet["callset_type"] is None
+    assert [(s["tool"], s["role"], s["line"]) for s in facet["method_steps"]] == [
+        ("GATK HaplotypeCaller", "call", "##GATKCommandLine"),
+        ("GATK GenotypeGVCFs", "call", "##GATKCommandLine"),
+    ]
+    assert facet["method_steps"][0]["options"] == ["--emit-ref-confidence GVCF"]
+    assert (facet["reference"], facet["aligner"], facet["aligner_version"]) == (None, None, None)
 
     plain = load(write(tmp_path, vcf_text(records), "plain.vcf")).facets.collect().row(0, named=True)
     assert (plain["vendor"], plain["caller"], plain["caller_version"], plain["ploidy_statements"]) == (None, None, None, [])
+    assert (plain["method_steps"], plain["reference"], plain["phasing_method"]) == ([], None, None)
+
+    dragen = load(write(tmp_path, vcf_text(records, extra_meta=(DRAGEN_MAPPED, DRAGEN_PS)), "dragen.vcf")).facets.collect()
+    row = dragen.row(0, named=True)
+    assert (row["aligner"], row["aligner_version"], row["reference"], row["phasing_method"]) == (
+        "DRAGEN", "07.021.624.3.10.4", "hg38_alt_aware", "DRAGEN 07.021.624.3.10.4"
+    )
+    assert [s["role"] for s in row["method_steps"]] == ["align", "call", "phase"]
 
 
 def test_load_states_array_content_and_warns_on_a_conflict(tmp_path: Path) -> None:
@@ -184,6 +200,7 @@ def test_rsid_tables_have_no_ploidy_statements(tmp_path: Path) -> None:
     path = write(tmp_path, "# rsid\tchromosome\tposition\tgenotype\nrs1\t1\t100\tAG\n", "genome.txt")
     facet = load(path).facets.collect().row(0, named=True)
     assert facet["ploidy_statements"] is None and facet["caller"] is None
+    assert (facet["method_steps"], facet["reference"], facet["aligner"]) == (None, None, None)
 
 
 def test_pgp_hms_headers(pgp_participants: Path) -> None:
@@ -207,6 +224,15 @@ def test_pgp_hms_headers(pgp_participants: Path) -> None:
         source = detect_source(header.meta)
         conflicts += bool(source.warnings)
         callers[(sniffed.format, source.caller, tuple(c.name for c in source.callers))] += 1
+        roles = {(step.role, step.tool) for step in source.steps}
+        assert {step.role for step in source.steps} <= STEP_ROLES
+        assert not any(re.search(r"[/\\]", re.sub(r"\b(?:INFO|FORMAT)/", "", o)) for step in source.steps for o in step.options)
+        if sniffed.format == "vcf_cgi":
+            # CGI declares PS in its own words in every pipeline VCF: the caller phased.
+            assert ("phase", "CGAPipeline") in roles and source.phasing_method == f"CGAPipeline {source.caller_version}"
+        else:
+            assert ("merge", "vcf-merge") in roles and {("call", "freeBayes"), ("call", "VarScan2")} <= roles
+        assert source.reference is not None
     if not callers:
         pytest.skip("no PGP-HMS pipeline VCF on disk")
     assert conflicts == 0
@@ -214,3 +240,236 @@ def test_pgp_hms_headers(pgp_participants: Path) -> None:
     assert {key for key in callers if key[0] == "vcf_freebayes_varscan2"} <= {
         ("vcf_freebayes_varscan2", None, ("freeBayes", "VarScan2")),
     }
+
+
+# The method chain (charter 6). Lines are written the way the PGP-HMS and local headers carry them
+# (survey of 2026-10-23); the paths in them are invented directories, which every step must withhold.
+
+GATK3_APPLY = (
+    '##GATKCommandLine.ApplyRecalibration=<ID=ApplyRecalibration,Version=3.8-1-0-gf15c1c3ef,Date="Tue Mar 02 10:00:00 CST 2021",'
+    'Epoch=1614650400000,CommandLineOptions="analysis_type=ApplyRecalibration input_file=[] reference_sequence=/ref/hg38.fa '
+    'input=[(RodBinding name=input source=/work/in.vcf)] mode=SNP ts_filter_level=99.5 excludeFiltered=false">'
+)
+GATK3_GENOTYPE = (
+    '##GATKCommandLine.GenotypeGVCFs=<ID=GenotypeGVCFs,Version=3.8-1-0-gf15c1c3ef,Date="Mon Mar 01 10:00:00 CST 2021",'
+    'Epoch=1614564000000,CommandLineOptions="analysis_type=GenotypeGVCFs reference_sequence=/ref/hg38.fa out=/work/out.vcf">'
+)
+GATK3_SELECT = (
+    '##GATKCommandLine.SelectVariants=<ID=SelectVariants,Version=3.8-1-0-gf15c1c3ef,Date="Wed Mar 03 10:00:00 CST 2021",'
+    'Epoch=1614736800000,CommandLineOptions="analysis_type=SelectVariants sample_name=[NA12878] selectTypeToInclude=[SNP] '
+    'selectTypeToExclude=[] excludeFiltered=true">'
+)
+GATK4_HC_PHASED = (
+    '##GATKCommandLine=<ID=HaplotypeCaller,CommandLine="HaplotypeCaller --emit-ref-confidence GVCF --output /work/x.g.vcf.gz '
+    '--input /work/x.bam --reference /ref/hg38.fa --sample-ploidy 2",Version="4.1.8.1",Date="February 20, 2021 4:33:39 PM CST">'
+)
+GATK_PS = '##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phasing set (typically the position of the first variant in the set)">'
+NORM_VERSION = "##bcftools_normVersion=1.23.1+htslib-1.23.1"
+NORM = (
+    "##bcftools_normCommand=norm -m -both -f /ref/hg38.fa --old-rec-tag ORIG -Oz -o /work/norm.vcf.gz /work/dv.vcf; "
+    "Date=Tue Mar 19 03:39:45 2024"
+)
+DRAGEN_MAPPED = (
+    '##DRAGENCommandLine=<ID=dragen,Version="SW: 07.021.624.3.10.4, HW: 07.021.624",Date="Wed Apr 01 09:02:15 UTC 2020",'
+    'CommandLineOptions="--ref-dir /staging/ref/hg38_alt_aware --fastq-list /work/list.csv --enable-map-align true '
+    '--enable-duplicate-marking true --enable-variant-caller true --vc-sample-name NA12878 --RGSM NA12878 --output-directory /work">'
+)
+DRAGEN_PS = (
+    '##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Physical phasing ID information, where each unique ID within a given '
+    'sample (but not across samples) connects records within a phasing group">'
+)
+CLAIR3 = [
+    "##clair3_version=1.0.10",
+    "##cmdline=/opt/bin/run_clair3.sh --bam_fn=/work/x.bam --ref_fn=/ref/hg38.fa --platform=ilmn --sample_name=NA12878 --output=/work/out",
+]
+
+
+def _chain(meta: list[str]) -> list[tuple[str, str | None, str, tuple[str, ...]]]:
+    return [(s.tool, s.version, s.role, s.options) for s in detect_source(meta).steps]
+
+
+def test_gatk_steps_run_in_date_order_not_in_the_sorted_header_order() -> None:
+    """htsjdk writes meta lines sorted by text, so ApplyRecalibration comes first in the header; the
+    stated dates put the steps back in the order they ran."""
+    meta = [GATK3_APPLY, GATK3_GENOTYPE, GATK3_SELECT, GATK4_HC_PHASED, GATK_PS, "##source=HaplotypeCaller", NORM_VERSION, NORM]
+    assert _chain(meta) == [
+        ("GATK HaplotypeCaller", "4.1.8.1", "call", ("--emit-ref-confidence GVCF", "--reference hg38.fa")),
+        ("GATK HaplotypeCaller", "4.1.8.1", "phase", ()),
+        ("GATK GenotypeGVCFs", "3.8-1-0-gf15c1c3ef", "call", ("reference_sequence=hg38.fa",)),
+        ("GATK ApplyRecalibration", "3.8-1-0-gf15c1c3ef", "filter", ("mode=SNP", "ts_filter_level=99.5")),
+        ("GATK SelectVariants", "3.8-1-0-gf15c1c3ef", "filter", ("selectTypeToInclude=[SNP]", "excludeFiltered=true")),
+        ("bcftools norm", "1.23.1+htslib-1.23.1", "normalize", ("-m -both", "-f hg38.fa", "--old-rec-tag ORIG")),
+    ]
+    # The order is the dates', whatever order the lines come in.
+    assert _chain([GATK3_SELECT, GATK4_HC_PHASED, GATK3_APPLY, GATK3_GENOTYPE]) == _chain(
+        [GATK3_APPLY, GATK3_GENOTYPE, GATK3_SELECT, GATK4_HC_PHASED]
+    )
+    source = detect_source(meta)
+    assert (source.reference, source.phasing_method, source.aligner) == ("hg38.fa", "GATK HaplotypeCaller 4.1.8.1", None)
+    assert source.warnings == []
+
+
+def test_undated_steps_keep_header_order() -> None:
+    meta = [
+        "##source=freeBayes v0.9.21-24-g840b412-dirty",
+        '##commandline="/opt/bin/freebayes -f /ref/hg19.fa -t /work/targets.bed /work/x.bam"',
+        "##source=VarScan2",
+        "##reference=/ref/hg19.fa",
+        "##source_20160919.1=vcf-merge(r840) /work/chr1.FB.vcf.gz /work/chr1.VS.vcf.gz",
+        "##source_20160919.2=/opt/bin/vcf-annotate(r953) -d key=INFO,ID=SF,Number=.,Type=String -a /work/sf.tab.gz -c CHROM,FROM,TO,INFO/SF",
+    ]
+    assert _chain(meta) == [
+        ("freeBayes", "0.9.21-24-g840b412-dirty", "call", ("-f hg19.fa",)),
+        ("VarScan2", None, "call", ()),
+        ("vcf-merge", "r840", "merge", ()),
+        ("vcf-annotate", "r953", "annotate", ("-c CHROM,FROM,TO,INFO/SF",)),
+    ]
+    assert detect_source(meta).reference == "hg19.fa"
+
+
+def test_a_dragen_run_that_mapped_the_reads_records_the_aligner() -> None:
+    meta = ["##reference=file:///staging/ref/hg38_alt_aware/reference.bin", DRAGEN_MAPPED, DRAGEN_PS, "##source=DRAGEN_SNV"]
+    source = detect_source(meta)
+    assert _chain(meta) == [
+        ("DRAGEN", "07.021.624.3.10.4", "align", ("--ref-dir hg38_alt_aware", "--enable-map-align true", "--enable-duplicate-marking true")),
+        ("DRAGEN", "07.021.624.3.10.4", "call", ("--ref-dir hg38_alt_aware", "--enable-variant-caller true")),
+        ("DRAGEN", "07.021.624.3.10.4", "phase", ()),
+    ]
+    assert (source.aligner, source.aligner_version) == ("DRAGEN", "07.021.624.3.10.4")
+    assert (source.reference, source.phasing_method, source.warnings) == ("hg38_alt_aware", "DRAGEN 07.021.624.3.10.4", [])
+    # From an external BAM DRAGEN maps nothing, so there is no aligner.
+    unmapped = detect_source([DRAGEN_MAPPED.replace("--enable-map-align true", "--enable-map-align false")])
+    assert unmapped.aligner is None and [s.role for s in unmapped.steps] == ["call"]
+
+
+def test_options_withhold_paths_samples_inputs_and_outputs() -> None:
+    view = (
+        "##bcftools_viewCommand=view -s NA12878 -f PASS -R /work/regions.bed -Oz -o /work/out.vcf.gz /work/in.vcf.gz; "
+        "Date=Tue Mar 19 04:00:00 2024"
+    )
+    options = [option for step in detect_source([DRAGEN_MAPPED, GATK3_SELECT, GATK4_HC_PHASED, NORM, view, *CLAIR3]).steps for option in step.options]
+    assert not any(word in option for option in options for word in ("/", "\\", "NA12878", "out", "x.bam", "in.vcf", "list.csv"))
+    assert "-R <path>" in options and "-f PASS" in options
+
+
+def test_bcftools_steps_take_their_role_from_the_subcommand_and_its_options() -> None:
+    meta = [
+        "##bcftools_viewVersion=1.23.1+htslib-1.23.1",
+        "##bcftools_viewCommand=view -Oz -o /work/a.vcf.gz /work/b.vcf.gz; Date=Tue Mar 19 03:00:00 2024",
+        "##bcftools_viewCommand=view -f PASS,. -Oz -o /work/a.vcf.gz /work/b.vcf.gz; Date=Tue Mar 19 03:10:00 2024",
+        "##bcftools_isecVersion=1.23.1+htslib-1.23.1",
+        "##bcftools_isecCommand=isec -n=3 -w1 -Oz -o /work/c.vcf.gz /work/a.vcf.gz /work/b.vcf.gz /work/d.vcf.gz; Date=Tue Mar 19 03:20:00 2024",
+        "##bcftools_concatCommand=concat -a -f /work/list.txt -Oz; Date=Tue Mar 19 03:30:00 2024",
+        "##bcftools_annotateCommand=annotate -a /work/clinvar.vcf.gz -c INFO/CLNSIG -Oz; Date=Tue Mar 19 03:40:00 2024",
+    ]
+    assert [(s.tool, s.version, s.role, s.options) for s in detect_source(meta).steps] == [
+        ("bcftools view", "1.23.1+htslib-1.23.1", "other", ()),
+        ("bcftools view", "1.23.1+htslib-1.23.1", "filter", ("-f PASS,.",)),
+        ("bcftools isec", "1.23.1+htslib-1.23.1", "merge", ("-n=3", "-w1")),
+        ("bcftools concat", None, "merge", ("-a",)),
+        ("bcftools annotate", None, "annotate", ("-a <path>", "-c INFO/CLNSIG")),
+    ]
+
+
+def test_a_crossmap_lift_is_a_step_and_explains_a_second_reference() -> None:
+    lift = [
+        "##liftOverProgram=<CrossMap,version=0.6.3,website=https://sourceforge.net/projects/crossmap>",
+        "##liftOverChainFile=/chains/GRCh38_to_GRCh37.chain.gz",
+        "##originalFile=/work/someone.hg38.vcf",
+        "##targetRefGenome=/ref/Homo_sapiens.GRCh37.75.dna.toplevel.fa",
+    ]
+    called = [GATK4_HC_PHASED, "##reference=file:///ref/Homo_sapiens.GRCh37.75.dna.toplevel.fa"]
+    source = detect_source(called + lift)
+    last = source.steps[-1]
+    assert (last.tool, last.version, last.role, last.options) == (
+        "CrossMap", "0.6.3", "lift", ("liftOverChainFile=GRCh38_to_GRCh37.chain.gz", "targetRefGenome=Homo_sapiens.GRCh37.75.dna.toplevel.fa"),
+    )
+    assert not any("someone" in option for step in source.steps for option in step.options)
+    assert source.reference == "Homo_sapiens.GRCh37.75.dna.toplevel.fa" and source.warnings == []
+    # The same pair of references with no lift recorded (Picard LiftoverVcf writes none) is kept, with a warning.
+    unexplained = detect_source(called)
+    assert unexplained.reference == "Homo_sapiens.GRCh37.75.dna.toplevel.fa"
+    assert len(unexplained.warnings) == 1 and "no liftover step is recorded" in unexplained.warnings[0]
+
+
+def test_reference_falls_back_to_the_caller_and_two_references_leave_it_null() -> None:
+    assert detect_source(CLAIR3).reference == "hg38.fa"
+    two = detect_source(["##reference=/ref/hg19.fa", "##reference=/ref/hs37d5.fa"])
+    assert two.reference is None and two.warnings == ["the header names more than one ##reference (hg19.fa, hs37d5.fa); reference left null"]
+    assert detect_source(["##reference=GRCh38"]).reference == "GRCh38"
+    assert (detect_source([]).reference, detect_source([]).steps) == (None, [])
+
+
+def test_clair3_is_a_caller_with_its_command_line_options() -> None:
+    source = detect_source(CLAIR3)
+    assert (source.caller, source.caller_version) == ("Clair3", "1.0.10")
+    assert _chain(CLAIR3) == [("Clair3", "1.0.10", "call", ("--ref_fn=hg38.fa", "--platform=ilmn"))]
+
+
+@pytest.mark.parametrize(
+    ("meta", "method"),
+    [
+        (["##source=Minimac3", "##eagleVersion=2.3.5+htslib-1.4", "##eagleCommand=eagle --vcfTarget /work/x.vcf.gz --chrom 1"],
+         "Eagle 2.3.5+htslib-1.4"),
+        (["##DeepVariant_version=1.6.0", '##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set">'], "DeepVariant 1.6.0"),
+        (["##center=Complete Genomics", "##source=CGAPipeline_2.5.0.37", '##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase Set">'],
+         "CGAPipeline 2.5.0.37"),
+        (['##commandline="(whatshap 1.7) phase -o /work/out.vcf --reference /ref/hg38.fa /work/in.vcf /work/in.bam"'], "WhatsHap 1.7"),
+        (["##source=shapeit4.1.3"], "SHAPEIT4 1.3"),
+        (['##INFO=<ID=hapcut2,Number=1,Type=Integer,Description="phased by HapCUT2 or not">'], "HapCUT2"),
+        # PS in other words than the caller's own: the caller is not shown to have phased.
+        (["##DeepVariant_version=1.6.0", '##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set identifier">'], None),
+        (["##DeepVariant_version=1.6.0"], None),
+    ],
+)
+def test_phasing_methods(meta: list[str], method: str | None) -> None:
+    source = detect_source(meta)
+    assert source.phasing_method == method
+    assert source.warnings == []
+
+
+def test_two_phasers_leave_the_method_null() -> None:
+    source = detect_source([
+        "##DeepVariant_version=1.6.0",
+        '##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set">',
+        '##commandline="(whatshap 1.7) phase -o /work/out.vcf /work/in.vcf /work/in.bam"',
+    ])
+    assert source.phasing_method is None
+    assert source.warnings == ["the header records more than one phasing step (DeepVariant 1.6.0; WhatsHap 1.7); left null"]
+    assert [s.options for s in source.steps if s.tool == "WhatsHap"] == [("phase",)]
+
+
+def test_gatk2_and_annotation_steps() -> None:
+    meta = [
+        '##SelectVariants="analysis_type=SelectVariants input_file=[] reference_sequence=/ref/G1K.37.nt.fasta selectTypeToInclude=[INDEL] out=/work/x"',
+        '##OriginalSnpEffCmd="SnpEff eff -config /opt/snpEff.config -onlyCoding true -o vcf -i vcf GRCh37.64 /work/x.vcf"',
+        '##OriginalSnpEffVersion="2.0.5 (build 2011-12-24), by Pablo Cingolani"',
+        "##VEP=v88 cache=/opt/vep/cache db=homo_sapiens_core_88_37 assembly=GRCh37",
+    ]
+    assert _chain(meta) == [
+        ("GATK SelectVariants", None, "filter", ("selectTypeToInclude=[INDEL]",)),
+        ("SnpEff", "2.0.5", "annotate", ("-onlyCoding true", "GRCh37.64")),
+        ("VEP", "v88", "annotate", ("db=homo_sapiens_core_88_37", "assembly=GRCh37")),
+    ]
+
+
+def test_dates_in_gatk_4_2_form_parse() -> None:
+    later = GATK4_HC_PHASED.replace("February 20, 2021 4:33:39 PM CST", "August 13, 2022 at 9:01:02 PM GMT").replace(
+        "HaplotypeCaller", "SelectVariants"
+    )
+    source = detect_source([later, GATK4_HC_PHASED])
+    assert [s.tool for s in source.steps] == ["GATK HaplotypeCaller", "GATK SelectVariants"] and source.warnings == []
+
+
+def test_an_unparsed_date_keeps_header_order_and_says_so() -> None:
+    source = detect_source([GATK3_SELECT.replace("Wed Mar 03 10:00:00 CST 2021", "yesterday"), GATK4_HC_PHASED])
+    assert [s.tool for s in source.steps] == ["GATK SelectVariants", "GATK HaplotypeCaller"]
+    assert source.warnings == ["a step's stated date did not parse; the method chain is in header order"]
+
+
+def test_every_role_is_in_the_vocabulary() -> None:
+    meta = [DRAGEN_MAPPED, DRAGEN_PS, GATK3_APPLY, GATK3_SELECT, NORM, *CLAIR3,
+            "##liftOverProgram=<CrossMap,version=0.6.3,website=x>", "##VEP=v88 assembly=GRCh37",
+            "##bcftools_concatCommand=concat -a; Date=Tue Mar 19 03:30:00 2024", "##gvcftools_cmdline=/opt/set_haploid_region --ref /ref/hg19.fa"]
+    roles = {step.role for step in detect_source(meta).steps}
+    assert roles == STEP_ROLES

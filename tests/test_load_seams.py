@@ -110,11 +110,17 @@ NULL_REASONS: dict[tuple[str, str], str] = {
         "either: they are kin, linked in `links` (SCHEMA Decision 5, 12)."
     ),
     ("*", "derivation_inputs"): "Null on a facet read from a file: only a derived step writes it (a liftover's chain).",
-    ("*", "phasing_method"): (
-        "Null unless stated, and only an `##eagleVersion` line states one (`just_vcf.source`): no example carries "
-        "it (`vcf_cgi`'s `##phasing=partial` and the merge's `##phasing=none` name no method), and the loaders "
-        "for tables and CGI's native files read no phasing statement."
-    ),
+    **_each(('23andme_csv', '23andme', 'ancestrydna', 'cgi_master_var', 'cgi_var', 'color_genotypes', 'decodeme', 'ftdna', 'ftdna_space', 'genes_for_good_imputed', 'genes_for_good', 'genos', 'illumina_final_report', 'living_dna', 'plink_23', 'rsid_result_csv', 'rsid_table_headerless', 'rsid_table', 'selfdecode'), ("method_steps",), _NOT_A_VCF),
+    **_each(("freebayes_varscan2_keyvalue/VarScan2", "freebayes_varscan2_keyvalue/freeBayes"), ("method_steps",), "The key=value table has no header lines to record a method chain."),
+    ("rsid_table_headerless/appended_export", "method_steps"): _NOT_A_VCF,
+    ("vcf_no_meta", "reference"): "A VCF with no meta lines has no `##reference=` and no recorded command line.",
+    ("*", "aligner"): "Only a header that records its aligner states one (DRAGEN with `--enable-map-align true`); no example does (SCHEMA Decision 5).",
+    ("*", "aligner_version"): "Null with `aligner`: only a recorded aligner has a version.",
+    **_each(('23andme_csv', '23andme', 'ancestrydna', 'cgi_master_var', 'cgi_var', 'color_genotypes', 'decodeme', 'ftdna', 'ftdna_space', 'genes_for_good_imputed', 'genes_for_good', 'genos', 'illumina_final_report', 'living_dna', 'plink_23', 'rsid_result_csv', 'rsid_table_headerless', 'rsid_table', 'selfdecode', 'freebayes_varscan2_keyvalue/VarScan2', 'freebayes_varscan2_keyvalue/freeBayes', 'rsid_table_headerless/appended_export'), ("reference",), "Not a VCF: no `##reference=` line or caller reference option to read (SCHEMA Decision 5)."),
+    **_each(('23andme', '23andme_csv', 'ancestrydna', 'bcf', 'cgi_master_var', 'cgi_var', 'color_genotypes', 'decodeme', 'ftdna', 'ftdna_space', 'genes_for_good', 'genes_for_good_imputed', 'genos', 'illumina_final_report', 'living_dna', 'plink_23', 'rsid_result_csv', 'rsid_table', 'rsid_table_headerless', 'selfdecode', 'vcf', 'vcf_no_meta', 'freebayes_varscan2_keyvalue/VarScan2', 'freebayes_varscan2_keyvalue/freeBayes', 'rsid_table_headerless/appended_export', 'vcf_freebayes_varscan2/freeBayes', 'vcf_freebayes_varscan2/VarScan2'), ("phasing_method",), (
+        "Null unless the header names a phasing step (`source.method_chain`): no other example does. `vcf_cgi`'s "
+        "header declares PS in CGAPipeline's wording, so it names CGAPipeline."
+    )),
     # Genotype tables.
     **_each((GT,), ("caller", "caller_version"), (
         "The RM2 source detector reads VCF header lines; a genotype table's loader names no calling program, and "

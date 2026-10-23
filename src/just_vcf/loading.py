@@ -710,6 +710,10 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 # What the header states (array or imputed content) wins; RM4 infers the rest from the rows.
                 "callset_type": kind.value if kind else None,
                 "phasing_method": source.phasing_method,
+                "reference": source.reference,
+                "aligner": source.aligner,
+                "aligner_version": source.aligner_version,
+                "method_steps": [step.as_row() for step in source.steps],
                 "relation": CALLER_SPLIT if part.split else None,
                 "sample": part.sample,
                 "assembly_label": label,

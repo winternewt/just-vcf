@@ -72,7 +72,7 @@ _PATH_LIKE = re.compile(r"(?<![\w/\\])(?:(?:~|[A-Za-z]:)(?:[\\/]+[\w.@+-]+)+|(?:
 """A path: two components or more (`/home/x/y`, a URL's `///home/x`, `\\\\host\\share`), or one after
 `~` or a drive letter (`~/x`, `C:\\x`). A file name alone is not one: the facet's own names cover it."""
 
-PROVENANCE_TEXT = ("format_id", "vendor", "caller", "caller_version", "phasing_method", "assembly_label", "relation", "vcf_version", "chip", "split_marker")
+PROVENANCE_TEXT = ("format_id", "vendor", "caller", "caller_version", "phasing_method", "assembly_label", "relation", "vcf_version", "chip", "split_marker", "reference", "aligner", "aligner_version")
 """Facet columns holding free text from the file's header or its caller (a `##DeepVariant_version`
 can be a path), passed through `FacetRedactor` wherever they are shown: here and in the CLI."""
 _COUNTED = re.compile(r"^(?:(?P<scope>[^:]{1,60} facet): )?(?P<count>\d+) (?P<rest>.+)$", re.DOTALL)
@@ -223,6 +223,9 @@ class FacetProvenance(_Answer):
     caller: Label | None
     caller_version: Label | None
     phasing_method: Label | None
+    reference: Label | None
+    aligner: Label | None
+    aligner_version: Label | None
     assembly_label: Label | None
     assembly_label_basis: AssemblyLabelBasis | None
     seqcol_digest: Digest | None

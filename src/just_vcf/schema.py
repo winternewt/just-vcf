@@ -17,7 +17,7 @@ import polars as pl
 from just_vcf.contig_names import PRIMARY_ACCESSIONS
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.15"
+SCHEMA_VERSION = "0.0.16"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -172,6 +172,16 @@ def enum_dtype(vocabulary: type[Enum]) -> pl.Enum:
     return pl.Enum([member.value for member in vocabulary])
 
 
+STEP_ROLES: frozenset[str] = frozenset({"align", "call", "filter", "normalize", "merge", "lift", "annotate", "phase", "other"})
+"""What a step of `facets.method_steps` did (SCHEMA.md Decision 5). An open vocabulary that grows
+additively, so the column is `pl.String`: `other` holds a step the header records whose role is none
+of the rest (a format conversion, a gvcftools pass)."""
+
+METHOD_STEP = pl.Struct(
+    {"tool": pl.String, "version": pl.String, "role": pl.String, "options": pl.List(pl.String), "line": pl.String}
+)
+"""One step of the method chain a header records, in the order the steps ran (`just_vcf.source`)."""
+
 _CONTIG_MAP = pl.List(pl.Struct({"source": pl.String, "chrom": pl.String}))
 
 FACETS = pl.Schema(
@@ -198,6 +208,10 @@ FACETS = pl.Schema(
         "content_filter": enum_dtype(ContentFilter),
         "content_filter_basis": enum_dtype(ContentFilterBasis),
         "phasing_method": pl.String,
+        "reference": pl.String,
+        "aligner": pl.String,
+        "aligner_version": pl.String,
+        "method_steps": pl.List(METHOD_STEP),
         "derived_from": pl.String,
         "relation": pl.String,
         "contig_map": _CONTIG_MAP,

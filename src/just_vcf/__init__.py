@@ -4,6 +4,7 @@ from importlib.metadata import version
 
 from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
 from just_vcf.callset import absence_is_reference
+from just_vcf.concordance import AbsenceReading, Agreement, ComparisonBasis, Concordance, PairKey, concordance
 from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.loading import (
@@ -53,6 +54,8 @@ __all__ = [
     "LOADABLE_FORMATS",
     "SCHEMA_VERSION",
     "AbsenceMeans",
+    "AbsenceReading",
+    "Agreement",
     "AssemblyLabelBasis",
     "BlockAllele",
     "BlockKind",
@@ -60,6 +63,8 @@ __all__ = [
     "CacheEntryInfo",
     "CallsetType",
     "ChipBasis",
+    "ComparisonBasis",
+    "Concordance",
     "Chain",
     "ContentFilter",
     "ContentFilterBasis",
@@ -69,6 +74,7 @@ __all__ = [
     "Loaded",
     "MultiSampleError",
     "NoSampleError",
+    "PairKey",
     "EvidenceBasis",
     "KaryotypicSex",
     "PhaseSetKind",
@@ -90,6 +96,7 @@ __all__ = [
     "__version__",
     "absence_is_reference",
     "clear_cache",
+    "concordance",
     "liftover",
     "load",
     "mint_vrs_ids",

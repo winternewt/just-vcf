@@ -320,9 +320,14 @@ own (SCHEMA Decision 4); the native files keep `blocks`. Builder's choices, each
   that says so.
 - `callset_type = wgs` only where `#TITLE` says whole-genome sequencing. Rejected: `wgs` from the
   format id alone.
-- `masterVarBeta`'s `totalReadCount` fills `dp`; its per-allele read counts are not made into `ad`.
+- `masterVarBeta`'s `totalReadCount` fills `dp`. Since 2026-10-23 its read counts fill `ad` over
+  `[source_ref] + alts`: REF from `referenceAlleleReadCount`, each ALT from the slot that carries it
+  (measured: a reference slot always counts what `referenceAlleleReadCount` does, both slots of a hom
+  ALT alike). Withheld, counted by reason, where a count is empty, an allele is partly called, or the
+  counts contradict that. Rejected: summing a hom ALT's two slots, which counts the same reads twice
+  (the sum passes `totalReadCount`); `ad` per slot, which is CGI's VCF AD and not VCF's.
 
-**Left for CGI:** `ad` from masterVarBeta's read counts; `hapLink` as phase sets; the 1.x layouts
+**Left for CGI:** `hapLink` as phase sets; the 1.x layouts
 (`totalScore`, no file on disk); memory (a whole `var` peaks at 8.9 GB, the haplotype sort);
 GET-Evidence copies named `<assembly>.tsv.bz2`, not checked.
 

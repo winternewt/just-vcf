@@ -18,6 +18,7 @@ import polars as pl
 import pytest
 
 from just_vcf import Loaded, callset, load, sniff
+from just_vcf.loaders import cgi
 from just_vcf.schema import BLOCKS, CALLS, CallsetType, canonical_order
 from test_load_vcf import assert_gt_consistent
 
@@ -275,7 +276,7 @@ def test_master_var_gives_the_same_sites_blocks_and_allele_sets(tmp_path: Path, 
     assert sniff(path).format == "cgi_master_var"
     loaded, facet, calls, blocks = frames(path)
     assert facet["caller_version"] == "2.5.0.48" and facet["sample"] == "GS000000001-ASM"
-    assert "totalReadCount" not in facet["dropped_fields"] and "allele1ReadCount" in facet["dropped_fields"]
+    assert not {"allele1ReadCount", "allele2ReadCount", "referenceAlleleReadCount", "totalReadCount"} & set(facet["dropped_fields"])
     assert blocks.drop("facet_id").equals(var_blocks.drop("facet_id"))
 
     def sites(frame: pl.DataFrame) -> pl.DataFrame:
@@ -352,6 +353,76 @@ def test_format_2_0_and_no_title(tmp_path: Path) -> None:
     assert facet["absence_means"] == "blocks"
     assert by_pos(calls)[("1", 752566)]["sample_filters"] == ["VQHIGH"], "varQuality's vocabulary is kept, not mapped"
     assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF", "hapLink"]
+
+
+# --- masterVarBeta's read counts as `ad` -------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Counted:
+    """One masterVarBeta variant locus with its read counts, and the `ad` it should give (None:
+    withheld, for `reason`). Counts are text as the file writes them; `""` is an empty field."""
+
+    begin: int
+    end: int
+    zygosity: str
+    reference: str
+    seqs: tuple[str, str]
+    counts: tuple[str, str, str]
+    """allele1ReadCount, allele2ReadCount, referenceAlleleReadCount."""
+    ad: list[int] | None
+    reason: str | None = None
+    ploidy: int = 2
+
+
+COUNTED = [
+    Counted(100, 101, "het-ref", "G", ("A", "G"), ("7", "9", "9"), [9, 7]),
+    Counted(200, 201, "hom", "G", ("T", "T"), ("12", "12", "0"), [0, 12]),
+    # The slots name the ALTs in the other order than `alts` sorts them: the counts follow the alleles.
+    Counted(300, 301, "het-alt", "G", ("T", "C"), ("5", "6", "1"), [1, 6, 5]),
+    Counted(400, 401, "hap", "G", ("C", ""), ("8", "", "0"), [0, 8], ploidy=1),
+    Counted(500, 501, "half", "G", ("A", "?"), ("4", "", "2"), [2, 4]),
+    Counted(600, 600, "het-ref", "", ("GG", ""), ("3", "10", "10"), [10, 3]),  # an insertion point
+    Counted(700, 701, "het-ref", "T", ("", "T"), ("5", "6", "6"), [6, 5]),  # a deletion
+    Counted(800, 801, "half", "G", ("G", "?"), ("", "", ""), None, "a read count the file leaves empty"),
+    Counted(900, 902, "half", "GA", ("?A", "GA"), ("2", "9", "9"), None, "a partly called allele"),
+    Counted(1000, 1001, "hom", "G", ("T", "T"), ("12", "11", "0"), None, "two haplotypes of one allele with different counts"),
+    Counted(1100, 1101, "het-ref", "G", ("A", "G"), ("7", "9", "8"), None, "a reference haplotype whose count is not referenceAlleleReadCount"),
+]
+
+
+def counted_master_var(loci: list[Counted]) -> str:
+    lines = [">" + "\t".join(MASTER_COLUMNS)]
+    for number, locus in enumerate(loci, 1):
+        row = [str(number), str(locus.ploidy), "chr1", str(locus.begin), str(locus.end), locus.zygosity, "complex", locus.reference,
+               *locus.seqs, *([""] * 4), "PASS", "" if locus.ploidy == 1 else "PASS", *([""] * 9), *locus.counts, "30"]
+        lines.append("\t".join(row))
+    return meta("VAR-OLPL") + "\n".join(lines) + "\n"
+
+
+def test_master_var_read_counts_are_ad_over_ref_and_alts(tmp_path: Path) -> None:
+    """`ad` is indexed over `source_alleles = [source_ref] + alts`: REF gets referenceAlleleReadCount,
+    each ALT the count of the slot that carries it. Where a count is missing, a slot's count
+    contradicts another, or an allele is only partly called, `ad` is withheld and the reason counted."""
+    loaded, facet, calls, _ = frames(write(tmp_path, counted_master_var(COUNTED), "masterVarBeta-GS000000003-ASM.tsv.bz2"))
+    assert not {"allele1ReadCount", "allele2ReadCount", "referenceAlleleReadCount", "totalReadCount"} & set(facet["dropped_fields"])
+    rows = by_pos(calls)
+    for locus in COUNTED:
+        row = rows[("1", locus.begin if locus.begin == locus.end else locus.begin + 1)]
+        assert row["ad"] == locus.ad, locus
+        if locus.ad is None:
+            assert row["source_alleles"] is None, locus
+        else:
+            assert row["source_alleles"] == [row["source_ref"], *row["alts"]], locus
+            assert len(row["ad"]) == len(row["source_alleles"])
+        assert row["dp"] == 30
+    reasons = {locus.reason for locus in COUNTED if locus.reason}
+    assert reasons <= cgi.AD_WITHHELD_REASONS
+    assert {w for w in loaded.warnings if "without `ad`" in w} == {f"1 row(s) without `ad`: {reason}" for reason in reasons}
+    # var has no read counts: nothing to index, and nothing withheld to report.
+    var_loaded, _, var_calls, _ = frames(write(tmp_path, var_text(LOCI), "var-GS000000003-ASM.tsv.bz2"))
+    assert var_calls["ad"].null_count() == var_calls.height and var_calls["source_alleles"].null_count() == var_calls.height
+    assert not [w for w in var_loaded.warnings if "without `ad`" in w]
 
 
 # --- var against CGI's own VCF of the same assembly --------------------------------------------------

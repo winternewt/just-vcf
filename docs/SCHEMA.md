@@ -335,6 +335,15 @@ another length gets null there, counted in the warnings. A key declared with a f
 different quantity under the same name and is not carried at all (VarScan2's AD, `Number=1`, is the
 ALT depth; CGI's AD, `Number=2`, counts reads per GT slot); it is listed in `dropped_fields`.
 
+CGI's native `masterVarBeta` states its counts per allele, not per slot, so it does fill `ad`, over
+`source_alleles = [source_ref] + alts`: REF gets `referenceAlleleReadCount`, each ALT the
+`allele<n>ReadCount` of the slot that carries it, and `dp` is `totalReadCount`. On a PGP-HMS file a
+slot carrying the reference always counts what `referenceAlleleReadCount` does and both slots of a
+hom ALT count alike; their sum passes `totalReadCount` (the same reads twice), so slots are never
+summed, and since CGI counts a read for every allele it supports, `ad` can add up past `dp`. A row
+whose counts are empty (a half-called reference), contradict that rule, or belong to a partly called
+allele (`?A`) has `ad` and `source_alleles` null, counted in a warning by reason.
+
 A dosage (VCF `DS`, the expected count of the second allele) is one number. It cannot be turned into a
 posterior triple, because two unknowns do not follow from one number, so it gets its own column:
 `dosage: f32`, with `gp` left null unless the source also gave GP.
@@ -1345,6 +1354,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, RM2's CGI read counts): no column changes. Rule changed
+  (Decision 3): a `masterVarBeta` row fills `ad` and `source_alleles` from its per-allele read counts,
+  where they were null. Values change on files that already load; `var` rows are unchanged.
 
 - **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every

@@ -309,12 +309,14 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
             checks.filter(pl.col("problem").is_not_null()).group_by("problem").len().sort("problem"),
             uniform.group_by("varType").len().sort("varType"),
             rows.filter(~cgi.malformed(rows)).select(pl.col("chromosome").unique()),
+            calls.filter(pl.col("ad_withheld").is_not_null()).group_by("ad_withheld").len().sort("ad_withheld"),
         ]
     )
     warnings = []
     if counts[0]["malformed"][0]:
         warnings.append(f"{counts[0]['malformed'][0]} row(s) whose locus, begin or end is not a number, or whose end lies before its begin, dropped")
     warnings += [f"{n} locus(es) with {problem} dropped" for problem, n in counts[1].iter_rows()]
+    warnings += [f"{n} row(s) without `ad`: {reason}" for reason, n in counts[4].iter_rows()]
     by_type = dict(counts[2].iter_rows())
     if by_type.get("PAR-called-in-X"):
         warnings.append(f"{by_type['PAR-called-in-X']} chrY stretch(es) called on chrX (PAR-called-in-X) kept as no-call blocks")

@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- CGI `masterVarBeta` rows carry `ad` (RM2): REF's count is `referenceAlleleReadCount`, each ALT's the
+  read count of the slot that carries it, indexed over `source_alleles = [source_ref] + alts`. A row
+  with an empty count, a partly called allele or counts that contradict each other keeps `ad` null,
+  counted in a load warning by reason (`loaders.cgi.AD_WITHHELD_REASONS`). The read count columns
+  leave `dropped_fields`. A value change on masterVarBeta facets; no column changes.
+
 - In an array facet whose strand is `mixed` (F13), `resolve_ref` reads the rows it withheld by their
   probe's two alleles on the plus strand, from the Illumina manifests under `JUST_VCF_MANIFESTS_DIR`
   (RM281): matched by rsid, read only where the pair holds the reference base and is not `A/T` or

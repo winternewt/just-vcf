@@ -349,6 +349,17 @@ def test_the_default_block_rule_is_the_likelihoods_and_gq_on_reference_only_move
         _graded(loaded, block_grade="lowest")
 
 
+def test_gq_on_reference_reaches_asked_positions(tmp_path: Path) -> None:
+    """Desk #95's option is built end to end: `genotype_evidence_at` grades a hom-ref call by its GQ when asked."""
+    loaded = _vcf(tmp_path, ["1\t100\t.\tA\tG\t50\t.\t.\tGT:GQ:PL:GP\t0/0:45:.:."])
+    sites = pl.DataFrame({"chrom": ["1"], "pos": [100]})
+    plain = genotype_evidence_at(loaded, sites, variant_class="snv").row(0, named=True)
+    asked = genotype_evidence_at(loaded, sites, variant_class="snv", gq_on_reference=True).row(0, named=True)
+    assert plain["grade_basis"] == GradeBasis.GT_ONLY.value and plain["confidence"] is None
+    assert asked["grade_basis"] == GradeBasis.GQ.value and asked["confidence"] == 45.0
+    assert asked["genotype_probabilities"] == pytest.approx(_gq_vector(45, 3), rel=1e-9)
+
+
 def test_an_array_genotype_is_asserted_and_its_no_call_unknown(tmp_path: Path) -> None:
     path = tmp_path / "genome.txt"
     path.write_text(

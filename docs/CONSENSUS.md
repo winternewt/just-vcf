@@ -139,3 +139,7 @@ default change; the rules are in docs/SCHEMA.md.
 
 - **#94, how a gVCF reference block speaks** (`block_grade=`): by its likelihoods (the default), by its
   GQ, or by the lower of the two. The checks have not been run under the other two.
+- **#95, GQ as the confidence of a reference call** (`gq_on_reference=`): off by default, as VCF
+  defines GQ (conditional on the site being variant); on, a row that lists the allele and calls
+  hom-ref with a GQ and no likelihoods is graded by that GQ. It reaches calls, not blocks, which
+  `block_grade` grades.

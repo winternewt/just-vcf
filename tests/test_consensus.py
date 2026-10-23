@@ -373,6 +373,19 @@ def test_each_block_rule_is_how_a_reference_block_speaks(tmp_path: Path, store: 
     assert consensus([x, y], atlas=TRIANGLE).facets.collect()["facet_id"].item() == ids[BlockGrade.LIKELIHOODS]
 
 
+def test_gq_on_reference_reaches_the_consensus(tmp_path: Path, store: ReferenceStore) -> None:
+    """Desk #95's option, end to end: Y writes hom-ref with a GQ and no likelihoods where X states a het.
+    By default Y says zero copies, asserted; asked, its GQ grades that call."""
+    x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "0/1")], store)
+    y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "0/0", GQ="25")], store)
+    (plain,) = rows_of(consensus([x, y], atlas=TRIANGLE))
+    assert plain["gp"] == pytest.approx(posterior([hard(1, E["X"]), hard(0, E["Y"])]), rel=1e-5)
+    (asked,) = rows_of(consensus([x, y], atlas=TRIANGLE, gq_on_reference=True))
+    error = 10 ** (-25 / 10)
+    assert asked["gp"] == pytest.approx(posterior([hard(1, E["X"]), tempered([1 - error, error / 2, error / 2], E["Y"])]), rel=1e-5)
+    assert plain["gp"] != pytest.approx(asked["gp"], rel=1e-5)
+
+
 def test_a_site_row_without_the_allele_reads_as_zero_copies(tmp_path: Path, store: ReferenceStore) -> None:
     x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "0/1")], store)
     y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "0/1", alt=1)], store)

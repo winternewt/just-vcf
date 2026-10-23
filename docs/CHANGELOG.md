@@ -9,7 +9,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   `lower_of_gq_and_likelihoods`, which takes whichever of GQ and the likelihoods' confidence in hom-ref
   is lower. Which one should be the default is the person's call (desk #94). A block lacking what its
   rule reads is `block`, reference asserted with no number, never graded by another rule's quantity.
-  Default outputs, consensus `facet_id`s included, are unchanged.
+  Default outputs, consensus `facet_id`s included, are unchanged. `gq_on_reference` (desk #95) was
+  already built end to end for calls; tests now cover it in `genotype_evidence_at` and `consensus`.
 
 - `Person` and `check_pedigree` no longer check a merged or consensus facet against the facets it was
   made from, nor stand two of them for one source: computed from its parents, it agreed with them by

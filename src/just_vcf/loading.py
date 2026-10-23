@@ -130,7 +130,7 @@ class Loaded(BaseModel):
     schema_version: str = SCHEMA_VERSION
 
 
-def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
+def load(source: Path | str | Sniffed, sample: str | None = None, subject: str | None = None) -> Loaded:
     """Load `source` (a path, or a `sniff` result for it) into the three frames.
 
     `sample` picks one sample of a multi-sample VCF or of a table with a sample column (an Illumina
@@ -140,6 +140,11 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
     is ignored for formats that hold one person by construction. A BGZF input with a block that does
     not read back is refused with `DamagedBgzfError`, naming the facet and the block's offset.
 
+    `subject` is the caller's label for the person the file belongs to (RM273), written to every facet
+    the file loads as and inherited by every derived facet. Nothing fills it otherwise: not the sample
+    name, not the file's contents. It does not enter `facet_id`, which identifies the data, not the
+    claim. An empty or blank label is refused with `ValueError`.
+
     A VCF's or Complete Genomics or key=value table's rows are spilled to parquet under `cache_dir()`,
     as a generation the same rows find again (`just_vcf.cache.Spill`), so a load run again never
     touches the files an earlier `Loaded` reads. An input polars-bio cannot read as it is is first
@@ -147,6 +152,15 @@ def load(source: Path | str | Sniffed, sample: str | None = None) -> Loaded:
     entries an older `REWRITE_VERSION`, `SCHEMA_VERSION`, `SPILL_LAYOUT` or `WORK_VERSION` wrote
     (`just_vcf.cache.sweep_stale`).
     """
+    if subject is not None and not subject.strip():
+        raise ValueError("subject must be a non-empty label, or None for no subject")
+    loaded = _load(source, sample)
+    if subject is None:
+        return loaded
+    return loaded.model_copy(update={"facets": loaded.facets.with_columns(pl.lit(subject, dtype=FACETS["subject"]).alias("subject"))})
+
+
+def _load(source: Path | str | Sniffed, sample: str | None) -> Loaded:
     cache.sweep_stale(cache.REWRITE_COPY, {"REWRITE_VERSION": vcf.REWRITE_VERSION})
     cache.sweep_stale(cache.FRAMES_SPILL, _FRAMES_VERSIONS)
     cache.sweep_stale(cache.WORK_COPY, _WORK_VERSIONS)

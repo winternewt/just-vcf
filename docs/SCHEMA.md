@@ -479,6 +479,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `derivation_inputs` | `list[struct{role, name, sha256}]`: the files a derived facet was made with besides its parent and its reference collection (`ref_seqcol_digest`). A liftover writes its chain (`role = chain`, the file's name, not its path, and the sha256 of its bytes). Null on a facet read from a file. just-vcf's own shape |
 | `chip`, `chip_basis` | the genotyping chip an array export came from (RM4, `just_vcf.chip`), and how it is known: `stated` (the header names it: AncestryDNA's array version, a Final Report's `Content` manifest, Living DNA's genotype chip) or `inferred` (a 23andMe export's row count and internal-id profile both point at one generation; a preamble-less table in its layout is read so when it carries 23andMe's `i…` ids; an FTDNA or MyHeritage export, or a Final Report that names no manifest, whose rsids one Illumina manifest clearly holds, by marker overlap). An open vocabulary: `23andme_v1_v2` (the two are not told apart), `23andme_v3`, `23andme_v4`, `23andme_v5`, `ancestrydna_v1`, `ancestrydna_v2`, `living_dna_sirius`, `illumina:<manifest>` as a Final Report names it, and the platform families `illumina_gsa` and `illumina_omniexpress`, which only marker overlap names: a stated value carries the manifest, an inferred one the family, since one manifest per family is compared with, and a GSA v2 Final Report matches the v3 manifest at 0.97: the overlap does not tell versions apart. Null = unknown (a statement with no entry is quoted in a warning; an overlap that names no chip says why in one) or not an array. just-vcf's own shape |
 | `strand_check` | `forward` or `mixed`: what `resolve_ref` found about the strand an array's genotypes are written on (F13, Decision 2). Null = not checked: not an array, REF not read yet, or too few heterozygous rows. Never read as forward |
+| `subject` | the person the facet belongs to, as the caller labels them (RM273): supplied at `load(..., subject=...)`, never read from the file, never a sample name, never inferred. Null = not supplied. Every derived step's facet inherits its parent's. It is a claim, not identity: `facet_id` does not digest it, so one file loaded under two subjects gives one `facet_id` twice. It identifies a person if the caller makes it so: logs, warnings and errors name the `facet_id`, never the subject. just-vcf's own shape |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
@@ -1082,6 +1083,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
+  label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every
+  derived facet. Nullable and additive. `SCHEMA_VERSION` is deliberately left at 0.0.11 on this
+  builder branch; the lead bumps it at merge. `facet_id` does not digest the subject (Decision 5).
 
 - **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
   (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from

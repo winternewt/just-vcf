@@ -208,6 +208,7 @@ FACETS = pl.Schema(
         "chip": pl.String,
         "chip_basis": enum_dtype(ChipBasis),
         "strand_check": enum_dtype(StrandCheck),
+        "subject": pl.String,
     }
 )
 """One row per facet (SCHEMA.md Decision 5)."""

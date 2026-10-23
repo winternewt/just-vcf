@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load(..., subject=...)` labels a file's facets with the person they belong to, in a new nullable
+  `facets.subject` column (RM273). The label is the caller's: nothing fills it from the sample name or
+  the file, and `facet_id` does not digest it. Every derived step (`resolve_ref`, `normalize`,
+  `liftover`, `rejoin_split`, `mint_vrs_ids`) carries its parent's. Schema change; the version bump is
+  the lead's at merge.
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

@@ -18,6 +18,8 @@ import pytest
 from just_vcf import UnsortedRowsError, UnwritableRowsError, load, write_vcf
 from just_vcf.loading import Loaded
 from just_vcf.vcf_zarr import write_vcf_zarr
+from test_load_cgi import LINKED, master_var_text
+from test_load_cgi import write as write_cgi
 from test_write_vcf import RICH, RICH_FORMAT, loaded_from
 
 GVCF = [
@@ -187,3 +189,16 @@ def test_an_existing_path_is_never_written_over_and_unsorted_rows_leave_nothing(
     with pytest.raises(UnsortedRowsError):
         write_vcf_zarr(shuffled, tmp_path / "out.vcz")
     assert not (tmp_path / "out.vcz").exists() and not (tmp_path / "out.vcz.partial").exists()
+
+
+def test_a_cgi_hap_link_is_written_unphased(tmp_path: Path) -> None:
+    """VCF Zarr has no field for a hapLink: as in `write_vcf`, a row it phases is written unphased,
+    since `GT_phased` with no PS would put it in the chromosome's implicit set."""
+    loaded = load(write_cgi(tmp_path, master_var_text(LINKED), "masterVarBeta-GS000000004-ASM.tsv.bz2"))
+    linked = loaded.calls.filter(pl.col("phase_sets").is_not_null()).select(pl.len()).collect().item()
+    written = write_vcf_zarr(loaded, tmp_path / "out.vcz")
+    back = read_back(written.path)
+    phased = back.select(pl.col("genotypes").struct.unnest()).get_column("GT_phased").list.first()
+    assert linked > 0 and back.height == loaded.calls.select(pl.len()).collect().item()
+    assert not phased.any()
+    assert f"{linked} row(s) phased by a CGI hapLink, which VCF Zarr has no field for; written unphased" in written.warnings

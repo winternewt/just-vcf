@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.16.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.17.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -288,8 +288,17 @@ its own phase set. So:
 - `phase_sets: list[str]`, parallel to `gt_alleles`: the raw value the file wrote, with no prefix. A
   `PS` integer is written as its decimal string on each phased haplotype; a `PSL` entry is taken as is.
   Unphased haplotypes are null.
-- `phase_set_kinds: list[Enum{ps, psl}]`, parallel to `phase_sets`: which field the value came from.
-  VCF 4.5 says PS and PSL "are not interoperable", so a PS `5` and a PSL `5` are different sets.
+- `phase_set_kinds: list[Enum{ps, psl, cgi_haplink}]`, parallel to `phase_sets`: which field the value
+  came from. VCF 4.5 says PS and PSL "are not interoperable", so a PS `5` and a PSL `5` are different
+  sets, and a CGI hapLink `5` is a third.
+- **CGI's `hapLink`** (native `var` and `masterVarBeta`, kind `cgi_haplink`, just-vcf's own term) is
+  an id on one haplotype of a locus, shared by the haplotypes of other loci on the same molecule: a
+  linked slot has `phased = true` and the id verbatim in `phase_sets` (an integer before format 2.5,
+  mostly `Phased_a_b_c` in 2.5); an unlinked slot has both null, since the file says nothing about it,
+  and a row with no linked slot has all three columns null. Like a PSL name it is a molecule, not a GT
+  slot; unlike PSL it is keyed per chromosome, `(facet_id, chrom, cgi_haplink, value)`: on a PGP-HMS
+  assembly no id leaves its chromosome, and CGI's own VCF writes the same phasing as PS sets of two
+  ids each (25,696 sets, 51,392 ids). A slot written `?` or partly called keeps its link.
 - **The key of a phase set depends on its kind.** A PS is scoped to its chromosome ("on the same
   chromosome and have the same PS value"), so its key is `(facet_id, chrom, ps, value)`. `PS=100` on
   chr1 and on chr2 are two sets. A PSL name is global to the file ("records with different CHROM but
@@ -364,6 +373,16 @@ per genotype of the row's ploidy (checked for haploid and diploid rows). A row w
 another length gets null there, counted in the warnings. A key declared with a fixed count is a
 different quantity under the same name and is not carried at all (VarScan2's AD, `Number=1`, is the
 ALT depth; CGI's AD, `Number=2`, counts reads per GT slot); it is listed in `dropped_fields`.
+
+CGI's native `masterVarBeta` states its counts per allele, not per slot, so it does fill `ad`, over
+`source_alleles = [source_ref] + alts`: REF gets `referenceAlleleReadCount`, each ALT the
+`allele<n>ReadCount` of the slot that carries it, and `dp` is `totalReadCount`. On a PGP-HMS file a
+slot carrying the reference always counts what `referenceAlleleReadCount` does and both slots of a
+hom ALT count alike; their sum passes `totalReadCount` (the same reads twice), so slots are never
+summed, and since CGI counts a read for every allele it supports, `ad` can add up past `dp`. A row
+that calls no haplotype (an uncalled insertion point, whose counts the file leaves empty), whose
+counts are empty (a half-called reference), contradict that rule, or belong to a partly called
+allele (`?A`) has `ad` and `source_alleles` null, counted in a warning by reason.
 
 A dosage (VCF `DS`, the expected count of the second allele) is one number. It cannot be turned into a
 posterior triple, because two unknowns do not follow from one number, so it gets its own column:
@@ -652,8 +671,8 @@ With Decisions 1–5 as recommended:
 | `gt` | `list[u8]` | there is no allele list to index yet, or RM3 withheld it with `alts` (a mixed-strand array, Decision 2). Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
 | `source_gt` | `str` | the source wrote no genotype text (a BCF encodes GT in binary). The file's raw text, not polars-bio's rewrite of it |
 | `phased` | `list[bool]` | the source says nothing about phase for the whole row (every array export). Otherwise parallel to `gt_alleles`, with an element null where the source did not say for that haplotype |
-| `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS or PSL value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. Keyed by kind: PS per chromosome, PSL per file (Decision 2) |
-| `phase_set_kinds` | `list[Enum]` | parallel to `phase_sets`: `ps` or `psl`. Null where the haplotype is unphased |
+| `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS, PSL or CGI hapLink value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. Keyed by kind: PS and hapLink per chromosome, PSL per file (Decision 2) |
+| `phase_set_kinds` | `list[Enum]` | parallel to `phase_sets`: `ps`, `psl` or `cgi_haplink`. Null where the haplotype is unphased |
 | `phase_set_ordinals` | `list[u32]` | the row has no PSL set or its PSO gave no value. Parallel to `gt_alleles`: FORMAT `PSO`, the order a haplotype's alleles are met along a derivative chromosome, on the slots in a PSL set; null elsewhere and per `.` (Decision 2) |
 | `phase_set_qualities` | `list[u16]` | the row has no PSL set or its PSQ gave no value. Parallel to `gt_alleles`: FORMAT `PSQ`, the phred quality of each slot's PSL phasing (encoded like PQ), on the slots in a PSL set; null elsewhere, per `.` (unknown quality) and out of 0..65535 |
 | `gl` | `list[f32]` | no likelihoods given |
@@ -1319,9 +1338,9 @@ a stored block table, which every load would pay for and every change to an alle
 |---|---|---|
 | `facet_id` | `str` | never null |
 | `chrom` | `str` | a PSL set, which is keyed per file and may span chromosomes |
-| `phase_set_kind` | `Enum{ps, psl}` | never null |
+| `phase_set_kind` | `Enum{ps, psl, cgi_haplink}` | never null |
 | `phase_set` | `str` | the chromosome's implicit set (phased, no PS) |
-| `haplotype` | `u32` | a PSL set, which is one haplotype itself. For a PS set, the GT slot: slot `h` of every record in the set is one molecule |
+| `haplotype` | `u32` | a PSL set or a CGI hapLink, each one haplotype itself (a hapLink block keeps its `chrom`). For a PS set, the GT slot: slot `h` of every record in the set is one molecule |
 | `sites` | `u32` | never null. Records whose slot is in the set on this haplotype |
 | `members` | `list[str]` | the block is withheld. Otherwise the member Alleles' VRS ids, sorted, each once |
 | `cpb_id` | `str` | the block is withheld. Otherwise `ga4gh:CPB.` + the sha512t24u of `{"members":[<Allele digests, sorted>],"type":"CisPhasedBlock"}`, as vrs-python identifies a block of inline Alleles |
@@ -1343,6 +1362,10 @@ a stored block table, which every load would pay for and every change to an alle
   `phasing.CPB_WITHHELD_REASONS`, open like `vrs.WITHHELD_REASONS`. On a whole imputed genome this
   bites: an implicit set is a chromosome, and one symbolic ALT on it withholds the haplotype's block
   (a phased Genes for Good upload: 45 of 46 blocks withheld `symbolic`).
+- **A CGI hapLink** is one molecule: one block per id and chromosome, `haplotype` null, whichever
+  slot each allele sits in, so `var` and `masterVarBeta` (whose slot orders differ) give the same
+  blocks. A linked haplotype CGI wrote `?` withholds its block `uncalled`. A locus with every haplotype
+  no-called is a block, not a `calls` row, so whatever links it carried are not in `calls`.
 - **Haploid calls** (no separator, so phased in VCF's reading) sit in their chromosome's implicit set
   even in a file nobody phased. On one copy (male X outside the PARs, Y, MT) that is true by ploidy, so
   they make a block. Rejected: leaving out haploid rows, which would drop a true statement to guard
@@ -1443,6 +1466,91 @@ Rejected, each with its cost:
 - Keeping `depth()`'s run-length blocks as they come: 498 million runs on a 27 GB BAM (RM278), where
   windows with exact bounds answer the same questions. `alignment_coverage` reads `depth()`'s
   per-base mode, which peaks lower than its block mode (docs/ROADMAP.md RM278).
+
+## Graded genotype evidence: computed on demand, not stored (layer 7, charter 7)
+
+The frames keep each quantity as the source wrote it (Decision 3). `just_vcf.evidence` reads them into
+one graded value a consumer can rank and compare across sources, and stores nothing: it is a function
+over `calls` and `blocks`, like `sex_chromosome_evidence`, so no column changes and `SCHEMA_VERSION`
+stays. The shape is just-vcf's own (charter 2): VRS 2.x has no genotype model and GA4GH defines no
+graded-evidence value. Rejected: a stored column, which would freeze today's rules (the prior, the GQ
+reading) into every cache spill and need a version bump each time they move.
+
+`genotype_evidence(loaded)` gives one row per `calls` row and per `blocks` row (`GENOTYPE_EVIDENCE`):
+`facet_id`, `chrom`, `pos`, `end_pos`, `evidence_basis` (the origin, Decision 3: `assay` or
+`ref_block`), `block_kind`, and
+
+| Column | Meaning |
+|---|---|
+| `grade_basis` | which quantity the value rests on (below). Never null |
+| `confidence_kind` | `quantified` (a number), `asserted` (a genotype stated without a quantity) or `unknown` (none stated). It follows from the basis, and is a column so that a null `confidence` is never read as a low one |
+| `genotype_alleles` | the alleles `genotype_probabilities` and `genotype_index` index: `source_alleles` for a vector (Decision 2: never reordered; for a VCF row that is `[source_ref] + alts`), `[source_ref or ref] + alts` for a genotype, which is what `gt` indexes, and `[null, "<*>"]` for a block, whose REF base the frame does not keep |
+| `genotype_probabilities` | `list[f64]`, one probability per genotype in VCF genotype order at the row's ploidy; null where the source supports no vector |
+| `prior` | how the vector was made: `source` (GP as given, under whatever prior the source used), `flat` (GL/PL normalized with every genotype equally likely beforehand, just-vcf's choice), `even_remainder` (GQ alone, below) |
+| `genotype_index` | the genotype `confidence` speaks for: the top one of a vector (the first on a tie), or the called one (`gt`, haploid or diploid). 0 for reference asserted by a block or by absence |
+| `confidence` | phred-like: `-10·log10(1 - p)` of that genotype, from 0 (no confidence; a flat three-genotype vector gives 1.76) up. Null where nothing quantifies it, never 0 for unknown. Infinite where the source gave every other genotype probability zero (a rounded GP `0,1,0`); it is computed in log space, so a PL of 3,000 gives 3,000 and not infinity by rounding |
+
+**The bases**, the first that applies to a row:
+
+- `gp`: a usable GP vector, as written.
+- `gl`: a usable likelihood vector, normalized under a flat prior. GL and PL load into one `gl` column
+  that does not record which key was written (Decision 3 makes them load equal), so there is one basis
+  for both; telling them apart would take a stored column.
+- `gq`: a fully called genotype carrying an ALT, with a GQ. VCF defines GQ as conditional on the site
+  being variant ("Other VCF 4.5 points" above), so by default GQ grades no reference genotype and no
+  reference block; `gq_on_reference=True` lets it, as single-sample callers compute it. The called
+  genotype gets `1 - 10^(-GQ/10)` and the rest is spread evenly over the other genotypes, which the
+  source did not rank (`prior = even_remainder`); `confidence` is GQ. No vector beyond diploid, or for a
+  block, whose ploidy the frame does not keep without its likelihoods.
+- `dosage`: only a dosage. One number gives no vector (Decision 3), so no vector and no number.
+- `gt_only`: a genotype with at least one allele called and no quantity: asserted, unquantified. A
+  half-call (`0/.`) is here even with a GQ: there is no one genotype for GQ to grade.
+- `block`: a `ref` block with no quantity (CGI's native blocks): reference asserted, unquantified.
+- `no_call`: the source wrote that it looked and called nothing (`./.`, a `no_call` block) and gave no
+  vector: unknown. A no-call that carries likelihoods is graded by them (a gVCF `./.` block with PL
+  `0,0,0` is `gl` at 1.76).
+- `absent_reference` and `absent_unknown`: only from `genotype_evidence_at` (below).
+
+A vector is usable when it has one value per genotype at the row's ploidy (GT's, else diploid as the
+spec says, ploidy 1 to 4), at least two genotypes, no missing value, and for GP no negative value and a
+positive sum. Otherwise the row falls to the next basis; nothing is patched.
+
+**Asked positions.** `genotype_evidence_at(loaded, sites, variant_class=…)` answers a one-facet
+`loaded` at each `chrom, pos` (`GENOTYPE_EVIDENCE_AT`): one row per record that covers the site (a
+`calls` row from `pos` to `end_pos`, or its `pos` alone where the span is unknown; a `blocks` row over
+its span), graded as above, with the record's span as `record_pos`, `record_end_pos`. A site inside a
+called deletion is not absent. A facet's blocks are taken not to overlap one another (a gVCF's and
+CGI's tile the genome; none of 10.8M CGI `var` blocks or 14.6M DeepVariant blocks overlaps its
+predecessor), so the block over a site is the last one starting at or before it; only the
+matched records are graded, so a panel's answer does not grade a genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:
+`absent_reference` (asserted, no number, `genotype_index` 0) where `absence_is_reference(facet,
+variant_class, force=force)` is True, else `absent_unknown`; `force` lifts a content filter's hold for
+the class it kept, as there. Decision 3 rejected a made-up number for an
+unquantified call, and that holds for absence too. `absence_means` comes along on every row, so a
+CGI `reference` silence and a `weak_reference` one stay apart. `coverage=` with `min_depth=` adds
+`callable`, `callable_reason` and the depths of `callable_sites` beside the answer; they change no
+basis, because reads reaching a base are not a call (coverage facets, above).
+
+Measured 2026-10-23 on PGP-HMS facets, each asked at the packaged relatedness panel's 15,289 SNVs:
+
+| Facet | Bases of its rows | Panel sites |
+|---|---|---|
+| 23andMe, AncestryDNA, Living DNA, Genes for Good (array and its 23andMe-layout imputed export, which writes no probabilities) | `gt_only`, `no_call` 0.0–1.9% | 26–51% `gt_only`, rest `absent_unknown` |
+| Genos exome VCF (GATK, gVCF-banded) | `gl` 44,784 (confidence p10/p50/p90 102/581/2,473), `no_call` blocks 259,070 | 46% `gl`, 25% `no_call` block, 29% `absent_unknown` |
+| CGI `var` (whole genome) | `gt_only` 4.2M, `block` 7.7M, `no_call` 3.1M blocks and 356k calls | 60% `gt_only`, 38% `block`, 2% `no_call`; none absent |
+| CGI VCF of the same genome | `gl` 4.16M (3/357/1,022 at p1/p50/p90), `gt_only` 48,655, `no_call` blocks | 60% `gl`, **5,763 `absent_reference`: the same 5,763 sites its `var` file calls with a `ref` block** |
+| DRAGEN `.snp.` half (GP) | `gp` 3.86M (41/48/175) | 62% `gp`, 38% `absent_unknown` (its `content_filter` holds absence back unless `force`) |
+| DRAGEN `.indel.` half | `gp` 956,057 | all `absent_unknown`: an SNV question, an indel-only cut |
+| Isaac/Starling GRCh38 VCF | `gq` 4.63M (45/137/235) | 62% `gq`, 38% `absent_reference` |
+| PGP freeBayes + VarScan2, the two caller facets | freeBayes `gl` 4.85M (42/97/97), `gt_only` 114,598; VarScan2 `gq` 340,150 (16/42/141) | freeBayes 59% `gl`, 40% `absent_reference`; VarScan2 2% `gq`, rest `absent_unknown` |
+
+No PGP facet carried both GQ and likelihoods on a reference genotype, so the GQ reading was checked on
+a local DeepVariant gVCF (aggregates only): on 1.32M hom-ref calls GQ is within 1.5 of the confidence
+their PL gives (clipped at 99, the highest GQ DeepVariant wrote on them) for 96.6%, which is what `gq_on_reference=True`
+assumes. On its 13.6M reference blocks only 26.9% agree, median difference 49: a block's GQ is the
+band's floor (at most 50 there), its PL is not, so a block graded by its likelihoods (median 291) states more than its
+weakest base supports. Which of the two should grade a block is the person's call; until then a
+block is graded by its likelihoods, as written.
 
 ## The cache under the lazy frames (RM268)
 
@@ -1789,6 +1897,21 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **An enum member, version bump pending** (2026-10-23, RM2's CGI hapLink): `PhaseSetKind.CGI_HAPLINK`
+  (`cgi_haplink`), CGI's `hapLink` as a phase set, just-vcf's own term. Adding a member changes the
+  `pl.Enum` dtype of `calls.phase_set_kinds` and of `cis_phased_blocks`' `phase_set_kind`, which is a
+  schema change; `SCHEMA_VERSION` was deliberately left as it is on this builder branch, and the lead
+  bumps it at merge. Rule changes (Decision 2): CGI's native rows fill `phased`, `phase_sets` and
+  `phase_set_kinds` from `hapLink`, where they were null, and `hapLink` leaves `dropped_fields`;
+  `cis_phased_blocks` gives one block per hapLink and chromosome; `write_vcf` writes a haplotype
+  phased by a hapLink `/`, with no PS (VCF has no field for a hapLink, and `|` without its set would
+  read back as the chromosome's implicit set), and `write_vcf_zarr` its `call_genotype_phased` false.
+  Values change on CGI files that already load.
+
+- **No version change** (2026-10-23, RM2's CGI read counts): no column changes. Rule changed
+  (Decision 3): a `masterVarBeta` row fills `ad` and `source_alleles` from its per-allele read counts,
+  where they were null. Values change on files that already load; `var` rows are unchanged.
+
 - **No version change** (2026-10-23, the audit of RM282's derived steps): no column changes. Rule
   changed in `liftover`: a swapped row's `alt_copy_numbers` are null, as its `dosage` is
   (`LIFT_VERSION` 3). `normalize` gets a new `facet_id` (`NORMALIZE_VERSION` 6) for RM282's rule,
@@ -1963,6 +2086,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   which runs beside other builders' branches; the lead bumps it at merge. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.17** (2026-10-24, the CGI leftovers): `PhaseSetKind.CGI_HAPLINK` (the `phase_set_kinds` dtype gains a
+  member); CGI masterVarBeta fills `ad`; CGI `var` 1.x layouts tested.
 
 - **0.0.16** (2026-10-23, layer 2's method chain): `facets.method_steps`, `reference`, `aligner`,
   `aligner_version`. Additive; `phasing_method` now comes from the phase step.

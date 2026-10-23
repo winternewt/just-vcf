@@ -8,9 +8,13 @@ one beside it, and no run rewrites or removes a committed generation. Every test
 cache `isolated_cache` sets up (conftest).
 """
 
+import faulthandler
 import multiprocessing
-import queue
+import multiprocessing.connection
+import os
+import pickle
 import shutil
+import signal
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -168,7 +172,81 @@ def test_a_spill_in_the_layout_before_generations_is_swept(tmp_path: Path, defau
     assert not old.exists()
 
 
-def _run_chain(frames: tuple[pl.LazyFrame, pl.LazyFrame, pl.LazyFrame], results: "multiprocessing.Queue") -> None:
+CHILD_DEADLINE = 600.0
+"""Seconds the children of one two-process test may take. Alone they take a few. In the full suite at
+a load average near 100, one small VCF `load` in `tests/test_callset.py` took 488 s (2026-10-23), so
+the 120 s this used to allow can pass while the children still work. The deadline is what turns a
+hang into a failure, not a timing claim."""
+
+
+def _child(target: Callable, args: tuple, result: Path, stack: Path) -> None:
+    """In a spawned child: run `target(*args)` and write what it returns to `result`.
+
+    The result goes to a file, never a pipe: a child that has put more onto a `multiprocessing.Queue`
+    than the pipe holds (64 KiB; one report here is about 57 KiB) cannot exit until the parent reads
+    it, and a parent whose loop failed never does. Such a child sits in its queue's feeder thread
+    forever, and pytest's own exit joins it forever (multiprocessing joins every non-daemon child).
+    SIGUSR1 dumps every thread's stack to `stack`: the parent sends it when the deadline passes.
+    """
+    with stack.open("w") as handle:
+        faulthandler.register(signal.SIGUSR1, file=handle, all_threads=True)
+        data = pickle.dumps(target(*args))
+        written = result.with_name(f"{result.name}.part")
+        written.write_bytes(data)
+        os.replace(written, result)
+
+
+def _stacks(children: list, stacks: list[Path]) -> str:
+    """Every live child's stack, from the dump SIGUSR1 asks of it (`_child`). A child still starting,
+    before `_child` registered the dump, has no stack file, and the signal ends it."""
+    alive = [(child, stack) for child, stack in zip(children, stacks, strict=True) if child.is_alive()]
+    for child, _ in alive:
+        os.kill(child.pid, signal.SIGUSR1)
+    until = time.monotonic() + 5
+    while time.monotonic() < until and not all(stack.is_file() and stack.stat().st_size for _, stack in alive):
+        time.sleep(0.1)
+    time.sleep(0.2)
+    dumps = [(child, stack.read_text() if stack.is_file() else "") for child, stack in alive]
+    return "\n".join(f"child {child.pid}:\n{dump or '(no stack written: still starting)'}" for child, dump in dumps)
+
+
+def run_children(target: Callable, args: tuple, check: Callable[[], None], workdir: Path, count: int = 2) -> list:
+    """Start `count` spawned children on `target(*args)`, running `check` until each has exited, and
+    return what each one's `target` returned.
+
+    Fails within `CHILD_DEADLINE` instead of hanging: past it, the message carries every live child's
+    stack. A child left alive by any failure is killed before the test ends, so none outlives it.
+    """
+    context = multiprocessing.get_context("spawn")
+    workdir.mkdir(exist_ok=True)
+    results = [workdir / f"child-{n}.result" for n in range(count)]
+    stacks = [workdir / f"child-{n}.stack" for n in range(count)]
+    children = [
+        context.Process(target=_child, args=(target, args, results[n], stacks[n]), daemon=True) for n in range(count)
+    ]
+    try:
+        for child in children:
+            child.start()
+        reads = 0
+        deadline = time.monotonic() + CHILD_DEADLINE
+        while any(child.exitcode is None for child in children):
+            if time.monotonic() > deadline:
+                pytest.fail(f"children still running after {CHILD_DEADLINE:.0f} s:\n{_stacks(children, stacks)}")
+            assert all(child.exitcode in (None, 0) for child in children), [child.exitcode for child in children]
+            check()
+            reads += 1
+            multiprocessing.connection.wait([child.sentinel for child in children if child.exitcode is None], timeout=0.01)
+        assert [child.exitcode for child in children] == [0] * count
+        assert reads > 0
+        return [pickle.loads(result.read_bytes()) for result in results]
+    finally:
+        for child in children:
+            if child.is_alive():
+                child.kill()
+                child.join(10)
+
+
+def _run_chain(frames: tuple[pl.LazyFrame, pl.LazyFrame, pl.LazyFrame]) -> dict[str, bytes]:
     """In a child process: every derived step on the facet the parent loaded (passed as its plans, so
     the child does not rewrite the parent's load spill), reporting each step's rows."""
     loaded = Loaded(facets=frames[0], calls=frames[1], blocks=frames[2])
@@ -180,7 +258,7 @@ def _run_chain(frames: tuple[pl.LazyFrame, pl.LazyFrame, pl.LazyFrame], results:
         "normalize": normalize(resolved, store),
         "mint_vrs_ids": mint_vrs_ids(resolved, store),
     }
-    results.put({name: result.calls.collect().write_ipc(None).getvalue() for name, result in out.items()})
+    return {name: result.calls.collect().write_ipc(None).getvalue() for name, result in out.items()}
 
 
 def test_two_processes_running_every_step_leave_a_live_frame_working(tmp_path: Path, default_store: ReferenceStore) -> None:
@@ -195,30 +273,12 @@ def test_two_processes_running_every_step_leave_a_live_frame_working(tmp_path: P
     expected = {name: frame.calls.collect() for name, frame in live.items()}
     stamps = {kind: file_stamps(entry_of(kind)) for kind, _, _ in STEPS.values()}
 
-    context = multiprocessing.get_context("spawn")
-    results = context.Queue()
-    children = [context.Process(target=_run_chain, args=((loaded.facets, loaded.calls, loaded.blocks), results)) for _ in range(2)]
-    for child in children:
-        child.start()
-    reported: list[dict] = []
-    reads = 0
-    deadline = time.monotonic() + 120
-    # Results are taken while the children run: a child that has put its result exits only once it is read.
-    while len(reported) < len(children):
-        assert time.monotonic() < deadline, "children did not report in time"
-        assert all(child.exitcode in (None, 0) for child in children), [child.exitcode for child in children]
+    def check() -> None:
         for name, frame in live.items():
             assert frame.calls.collect().equals(expected[name]), name
-        reads += 1
-        try:
-            reported.append(results.get(timeout=0.01))
-        except queue.Empty:
-            pass
-    for child in children:
-        child.join(60)
-        assert child.exitcode == 0
 
-    assert reads > 0
+    reported = run_children(_run_chain, ((loaded.facets, loaded.calls, loaded.blocks),), check, tmp_path / "children")
+
     for report in reported:
         for name, data in report.items():
             assert pl.read_ipc(data).equals(expected[name]), name
@@ -304,37 +364,10 @@ def test_a_lift_spill_from_before_the_index_is_swept(tmp_path: Path, default_sto
     assert not old.exists()
 
 
-def _run_lift(frames: tuple[pl.LazyFrame, pl.LazyFrame, pl.LazyFrame], chain: Path, results: "multiprocessing.Queue") -> None:
+def _run_lift(frames: tuple[pl.LazyFrame, pl.LazyFrame, pl.LazyFrame], chain: Path) -> list[bytes]:
     """In a child process: `liftover` on the facet the parent resolved, reporting its rows and report."""
     lifted = liftover(Loaded(facets=frames[0], calls=frames[1], blocks=frames[2]), chain, ReferenceStore.open())
-    results.put([frame.write_ipc(None).getvalue() for frame in lifted_frames(lifted)])
-
-
-def run_children(target, args: tuple, check: Callable[[], None], count: int = 2) -> list:
-    """Start `count` spawned children on `target(*args, queue)`, running `check` until each reports."""
-    context = multiprocessing.get_context("spawn")
-    results = context.Queue()
-    children = [context.Process(target=target, args=(*args, results)) for _ in range(count)]
-    for child in children:
-        child.start()
-    reported: list = []
-    reads = 0
-    deadline = time.monotonic() + 120
-    # Results are taken while the children run: a child that has put its result exits only once it is read.
-    while len(reported) < len(children):
-        assert time.monotonic() < deadline, "children did not report in time"
-        assert all(child.exitcode in (None, 0) for child in children), [child.exitcode for child in children]
-        check()
-        reads += 1
-        try:
-            reported.append(results.get(timeout=0.01))
-        except queue.Empty:
-            pass
-    for child in children:
-        child.join(60)
-        assert child.exitcode == 0
-    assert reads > 0
-    return reported
+    return [frame.write_ipc(None).getvalue() for frame in lifted_frames(lifted)]
 
 
 def test_two_processes_lifting_leave_a_live_lift_working(tmp_path: Path, default_store: ReferenceStore, lift_chain: Path) -> None:
@@ -348,7 +381,7 @@ def test_two_processes_lifting_leave_a_live_lift_working(tmp_path: Path, default
     def check() -> None:
         assert lifted_frames(live)[0].equals(calls) and lifted_frames(live)[1].equals(report)
 
-    reported = run_children(_run_lift, ((resolved.facets, resolved.calls, resolved.blocks), lift_chain), check)
+    reported = run_children(_run_lift, ((resolved.facets, resolved.calls, resolved.blocks), lift_chain), check, tmp_path / "children")
 
     for got_calls, got_report in reported:
         assert pl.read_ipc(got_calls).equals(calls) and pl.read_ipc(got_report).equals(report)
@@ -406,9 +439,9 @@ def test_a_load_spill_in_the_layout_before_generations_is_swept(tmp_path: Path) 
     assert not old.exists()
 
 
-def _run_load(path: Path, results: "multiprocessing.Queue") -> None:
+def _run_load(path: Path) -> list[bytes]:
     """In a child process: load the file, reporting its frames."""
-    results.put([frame.write_ipc(None).getvalue() for frame in all_frames(load(path))])
+    return [frame.write_ipc(None).getvalue() for frame in all_frames(load(path))]
 
 
 @pytest.mark.parametrize("name", SOURCES)
@@ -420,7 +453,10 @@ def test_two_processes_loading_leave_a_live_load_working(name: str, tmp_path: Pa
     assert len(entries) == rows[0].height  # one spill per facet
     before = {entry: file_stamps(entry) for entry in entries}
 
-    reported = run_children(_run_load, (path,), lambda: None if same(all_frames(live), rows) else pytest.fail("the live frame changed"))
+    def check() -> None:
+        assert same(all_frames(live), rows), "the live frame changed"
+
+    reported = run_children(_run_load, (path,), check, tmp_path / "children")
 
     for frames in reported:
         assert same([pl.read_ipc(data) for data in frames], rows)

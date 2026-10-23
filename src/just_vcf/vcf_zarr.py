@@ -21,7 +21,7 @@ What is written:
   `variant_quality`, `filter_id` (`PASS` first) and `variant_filter`;
 - `sample_id`, `call_genotype` (`-1` an uncalled haplotype, `-2` past the row's ploidy) and
   `call_genotype_phased` (true where every separator after the first slot is `|`, as `write_vcf`
-  writes GT);
+  writes GT; false on a row phased by a CGI hapLink, which has no field here);
 - the FORMAT fields any row has: `call_GQ`, `call_DP`, `call_AD`, `call_GL`, `call_GP`, `call_DS`,
   `call_PS` (PS-kind phase sets, as integers), `call_FT`, `call_CN`; and the INFO fields any row has:
   `variant_SVTYPE`, `variant_JUST_VCF_SPLIT`. `call_AD`, `call_GL` and `call_GP` are written only
@@ -57,6 +57,7 @@ from just_vcf.writing import (
     UnsortedRowsError,
     UnwritableRowsError,
     _contig_names,
+    _has_haplink,
     _Names,
     _ps_text,
     _unwritable,
@@ -171,6 +172,9 @@ def write_vcf_zarr(
     mixed = rows.filter(pl.col("_mixed_phase")).height
     if mixed:
         warnings.append(f"{mixed} row(s) had phased and unphased slots in one genotype; written unphased")
+    haplinked = rows.filter(pl.col("_haplink")).height
+    if haplinked:
+        warnings.append(f"{haplinked} row(s) phased by a CGI hapLink, which VCF Zarr has no field for; written unphased")
 
     partial = path.with_name(path.name + ".partial")
     shutil.rmtree(partial, ignore_errors=True)
@@ -205,10 +209,13 @@ def _columns() -> list[pl.Expr]:
         pl.col("qual"),
         pl.col("filters"),
         pl.col("gt"),
-        (phased.list.len().fill_null(0).gt(0) & phased.list.eval(pl.element().fill_null(False)).list.all()).alias("_phased"),
-        (phased.list.eval(pl.element().fill_null(False)).list.any() & ~phased.list.eval(pl.element().fill_null(False)).list.all())
+        # A row phased by a CGI hapLink is written unphased, as `write_vcf` writes it: no PS says which
+        # set, so `true` would put it in the chromosome's implicit one.
+        (~_has_haplink() & phased.list.len().fill_null(0).gt(0) & phased.list.eval(pl.element().fill_null(False)).list.all()).alias("_phased"),
+        (~_has_haplink() & phased.list.eval(pl.element().fill_null(False)).list.any() & ~phased.list.eval(pl.element().fill_null(False)).list.all())
         .fill_null(False)
         .alias("_mixed_phase"),
+        _has_haplink().alias("_haplink"),
         pl.col("gq"),
         pl.col("dp"),
         pl.when(indexable).then(pl.col("ad")).alias("_AD"),

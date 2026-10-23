@@ -83,7 +83,8 @@ order they first appear, as `vcf_samples` does for a VCF.
 `loaders.cgi` reads both CGI callsets into one per-haplotype shape (a `var` locus's sub-rows joined
 in `begin` order, a `masterVarBeta` row's two allele columns) and makes the rows from there, so the
 two files of one assembly give the same sites, blocks and allele sets; the haplotype slots can differ,
-since neither file's slot order is a phase and `phased` stays null. The facet's caller is
+since neither file's slot order is a phase. Phase comes from `hapLink`, an id per haplotype that is a
+phase set of kind `cgi_haplink`, so the two files give the same sets too. The facet's caller is
 `CGAPipeline` at the file's `#SOFTWARE_VERSION`, as CGI's own VCF names it, its `callset_type` is
 `wgs` where `#TITLE` says whole-genome sequencing (28 of 250 PGP-HMS files have no `#TITLE`), and its
 blocks make `absence_means = blocks`. A whole PGP-HMS `var` (18.9M rows, bz2) loads in about 3.5
@@ -154,8 +155,12 @@ entry says how.
 - **Columns differ by format version.** A spec declares one layout (CGI declares 2.5). Earlier
   versions drop, add or rename columns; CGI 1.x has `totalScore` where 2.x has three score columns.
   The loader should read names from the file's header and look dtypes up by name. *Closed for CGI:*
-  the loader reads the `>` line and takes columns by name; the ones on disk are format 2.0 (3 `var`, 1
-  `masterVarBeta`) and 2.5.
+  the loader reads the `>` line and takes columns by name. The PGP-HMS census (2026-10-23) holds
+  `var` in formats 1.6 and 1.7 (one each, CGA 1.11 and 1.12: twelve columns, `totalScore`, no filter
+  column), 2.0 (199), 2.2 (1) and 2.5 (178, one with `intervalId`/`intervalAllele`), and
+  `masterVarBeta` in 2.0 (2) and 2.5 (123). Loaded whole: a 1.6 `var` and a 2.5 `var` and
+  `masterVarBeta`; synthetic files of 1.6, 1.7, 2.0 and 2.5 are tested; 2.2 and the `intervalId`
+  variant read by the same by-name rule, not loaded here. A 1.x row has `sample_filters` null.
 - **An alias can hide a vocabulary change.** CGI `varQuality` (VQHIGH/VQLOW, ≤2.2) is aliased to
   `varFilter` (PASS/VQLOW/AMBIGUOUS, 2.5); the values need mapping, not just the name. *Kept, not
   mapped:* `sample_filters` holds VQHIGH as written; no CGI document read here equates it with PASS.

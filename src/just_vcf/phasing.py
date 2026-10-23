@@ -14,6 +14,9 @@ What a block is:
 - **A PSL set** is keyed `(facet_id, name)`, `chrom` null: VCF 4.5 ties a PSL name to one haplotype
   and lets it span chromosomes, so the set itself is one block, `haplotype` null, whatever slot each
   allele sits in.
+- **A CGI hapLink set** (`cgi_haplink`, CGI's native files) is keyed `(facet_id, chrom, id)`: like a
+  PSL name the id is one haplotype, so the set is one block, `haplotype` null; unlike PSL it never
+  leaves its chromosome, so `chrom` is kept.
 - **A PSL record's slots go by their kind**: its named slots are in their PSL sets, and a phased
   slot with PSL `.` (kind `ps`) is in the chromosome's implicit set, as a phased slot with no PS is.
 - **The members** are the ids in `vrs_allele_ids` of the alleles the haplotype carries: by default
@@ -73,6 +76,9 @@ CIS_PHASED_BLOCKS = pl.Schema(
     }
 )
 """The frame `cis_phased_blocks` returns (docs/SCHEMA.md, "CisPhasedBlock export")."""
+
+_NAMED_KINDS = [PhaseSetKind.PSL.value, PhaseSetKind.CGI_HAPLINK.value]
+"""Kinds whose set names one haplotype, not a GT slot: one block per set, `haplotype` null."""
 
 _VA = "ga4gh:VA."
 _CPB = "ga4gh:CPB."
@@ -142,10 +148,16 @@ def cis_phased_blocks(loaded: Loaded, *, reference_alleles: bool = False) -> pl.
         "_order", "facet_id", "chrom", pl.lit(PhaseSetKind.PS.value).alias("_kind"), pl.col("_row_ps").alias("phase_set"), pl.col("_h").alias("haplotype"),
         "_member", "_problem", "_in_set", "_id", *at,
     )
-    # A PSL set: the slots that name it, wherever they sit, one block per set. A named slot whose phase
-    # is unknown stays in it, to withhold it.
-    psl = slots.filter((pl.col("_phased").is_null() | in_set) & (pl.col("_kind") == PhaseSetKind.PSL.value)).select(
-        "_order", "facet_id", pl.lit(None, dtype=pl.String).alias("chrom"), "_kind", pl.col("_set").alias("phase_set"), pl.lit(None, dtype=pl.UInt32).alias("haplotype"),
+    # A PSL set or a CGI hapLink: the slots that name it, wherever they sit, one block per set. A named
+    # slot whose phase is unknown stays in it, to withhold it. A PSL name is the file's; a hapLink is
+    # keyed per chromosome.
+    psl = slots.filter((pl.col("_phased").is_null() | in_set) & pl.col("_kind").is_in(_NAMED_KINDS)).select(
+        "_order",
+        "facet_id",
+        pl.when(pl.col("_kind") != PhaseSetKind.PSL.value).then(pl.col("chrom")).alias("chrom"),
+        "_kind",
+        pl.col("_set").alias("phase_set"),
+        pl.lit(None, dtype=pl.UInt32).alias("haplotype"),
         "_member", "_problem", "_in_set", "_id", *at,
     )
     key = ["facet_id", "chrom", "_kind", "phase_set", "haplotype"]

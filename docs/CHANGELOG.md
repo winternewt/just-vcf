@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `links.CONSENSUS` (`consensus`): a documented multi-parent lineage relation, for a facet whose rows are
+  computed from all its parents (RM280). `merge` now means the parents' rows put together.
+  `link_disagreements` checks a `consensus` facet as it checks a `merge` one.
+
 - Schema 0.0.18: `facets.gl_source` says whether `gl` was read from PL or GL; `genotype_evidence` reports it
   on rows graded `gl`.
 

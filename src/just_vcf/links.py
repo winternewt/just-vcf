@@ -23,16 +23,20 @@ NORMALIZED = "normalized"
 SPLIT_REJOINED = "split_rejoined"
 """just-vcf's: the `to` facet is the `from` facet with its pre-split sites joined again (RM270)."""
 MERGE = "merge"
-"""just-vcf's: several parents, one facet (a merge, a consensus). Documented; no step emits it yet."""
+"""just-vcf's: several parents, one facet whose rows are the parents' rows put together (a merge).
+Documented; no step emits it yet."""
+CONSENSUS = "consensus"
+"""just-vcf's: several parents, one facet whose rows are computed from all of them: a posterior per
+allele that weighs each parent's evidence (`consensus`, RM280). The parents keep their own calls."""
 CALLER_SPLIT = "caller_split"
 """just-vcf's: facets holding one caller's rows each of a file merging several callers (Decision 8)."""
 APPENDED_EXPORT = "appended_export"
 """just-vcf's: an export appended to a file after another one, read as its own facet (F3). GA4GH has
 no term for two exports in one file."""
 
-LINEAGE_RELATIONS: frozenset[str] = frozenset({LIFTOVER_TO, NORMALIZED, SPLIT_REJOINED, MERGE})
+LINEAGE_RELATIONS: frozenset[str] = frozenset({LIFTOVER_TO, NORMALIZED, SPLIT_REJOINED, MERGE, CONSENSUS})
 """Relations where the `to` facet was made from the `from` facet."""
-MULTI_PARENT_RELATIONS: frozenset[str] = frozenset({MERGE})
+MULTI_PARENT_RELATIONS: frozenset[str] = frozenset({MERGE, CONSENSUS})
 """Lineage relations a facet holds with two or more parents, so `facets.derived_from` stays null."""
 KIN_RELATIONS: frozenset[str] = frozenset({CALLER_SPLIT, APPENDED_EXPORT})
 """Relations between facets of one source, neither made from the other."""
@@ -121,8 +125,8 @@ def link_disagreements(facets: pl.DataFrame, links: pl.DataFrame) -> list[str]:
 
     - `derived_from` set: exactly one lineage link ends at the facet, from `derived_from`, with the
       facet's `relation`, which is a lineage relation and not a multi-parent one;
-    - `derived_from` null, `relation` a multi-parent relation (`merge`): two or more lineage links end at
-      the facet, all with that relation;
+    - `derived_from` null, `relation` a multi-parent relation (`merge`, `consensus`): two or more lineage
+      links end at the facet, all with that relation;
     - `derived_from` null, `relation` a kin relation: no lineage link ends at the facet, and at least one
       link of that relation names it at either end;
     - both null: no lineage link ends at the facet.

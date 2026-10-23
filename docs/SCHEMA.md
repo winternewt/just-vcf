@@ -1130,7 +1130,8 @@ relation terms GA4GH defines.
 | `liftover_to` | lineage | `liftover` | Cat-VRS's term, verbatim: `to` is `from` lifted to another assembly |
 | `normalized` | lineage | `normalize` | just-vcf's: `to` is `from` split, left-aligned, trimmed and deduplicated |
 | `split_rejoined` | lineage | `rejoin_split` | just-vcf's: `to` is `from` with its pre-split sites joined again |
-| `merge` | lineage, several parents | none yet | just-vcf's: `to` was made from every `from` linked to it (a merge, a consensus) |
+| `merge` | lineage, several parents | none yet | just-vcf's: `to` was made from every `from` linked to it by putting their rows together (a merge) |
+| `consensus` | lineage, several parents | `consensus` | just-vcf's: `to` holds a posterior per allele computed from every `from` linked to it (RM280); the parents keep their own calls |
 | `caller_split` | kin | `load` | just-vcf's: two facets split by caller from one merge (Decision 8), the merge itself no facet |
 | `appended_export` | kin | `load` | just-vcf's: `to` is the export appended to a file after `from` (Decision 8, "Two exports in one file") |
 
@@ -1146,7 +1147,8 @@ is lineage: `derived_from` stays null on both ends.
 
 - `derived_from` set: exactly one lineage link ends at the facet, from `derived_from`, with the
   facet's `relation`;
-- `derived_from` null and `relation = merge`: two or more `merge` links end at the facet;
+- `derived_from` null and `relation` `merge` or `consensus`: two or more links of that relation end at
+  the facet, and no other lineage link;
 - `derived_from` null and a kin `relation`: no lineage link ends at the facet, and a link of that
   relation names it;
 - both null: no lineage link ends at the facet.

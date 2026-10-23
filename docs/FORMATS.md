@@ -158,7 +158,9 @@ entry says how.
   the loader reads the `>` line and takes columns by name. The PGP-HMS census (2026-10-23) holds
   `var` in formats 1.6 and 1.7 (one each, CGA 1.11 and 1.12: twelve columns, `totalScore`, no filter
   column), 2.0 (199), 2.2 (1) and 2.5 (178, one with `intervalId`/`intervalAllele`), and
-  `masterVarBeta` in 2.0 (2) and 2.5 (123); all load. A 1.x row has `sample_filters` null.
+  `masterVarBeta` in 2.0 (2) and 2.5 (123). Loaded whole: a 1.6 `var` and a 2.5 `var` and
+  `masterVarBeta`; synthetic files of 1.6, 1.7, 2.0 and 2.5 are tested; 2.2 and the `intervalId`
+  variant read by the same by-name rule, not loaded here. A 1.x row has `sample_filters` null.
 - **An alias can hide a vocabulary change.** CGI `varQuality` (VQHIGH/VQLOW, ≤2.2) is aliased to
   `varFilter` (PASS/VQLOW/AMBIGUOUS, 2.5); the values need mapping, not just the name. *Kept, not
   mapped:* `sample_filters` holds VQHIGH as written; no CGI document read here equates it with PASS.

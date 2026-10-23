@@ -46,6 +46,7 @@ from just_vcf.schema import (
     VariantClass,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
+from just_vcf.store import Store, StoreAdded, StoredFacet, StoreError, StoreManifest, StoreVersionError
 from just_vcf.writing import BlockAllele, ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
 from just_vcf.vrs import mint_vrs_ids, vrs_withheld
 
@@ -93,6 +94,12 @@ __all__ = [
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
+    "Store",
+    "StoreAdded",
+    "StoreError",
+    "StoreManifest",
+    "StoreVersionError",
+    "StoredFacet",
     "StrandCheck",
     "SubjectCheckOutcome",
     "SubjectError",

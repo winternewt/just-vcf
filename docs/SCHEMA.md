@@ -1279,6 +1279,48 @@ frame stops working when its files go.
 - Rejected: a size cap with least-recently-used eviction. `last_used` is when a step wrote or reused an
   entry, not when a frame last read it, so a cap could evict under a live frame without anyone asking.
 
+## The durable store (RM276)
+
+The person chose both (Part 2 interview, E13): a directory per person holding parquet per facet, the
+links and a manifest, read lazily; and a VCF Zarr export of one facet's calls (below). The store
+adds no column and needs no version bump; it holds the four frames as they are. just-vcf's own
+layout (charter 2): GA4GH defines no on-disk store for a person's callsets.
+
+```
+<dir>/manifest.json                    store_layout, schema_version, subject, created; per facet its
+                                       facet_id, added and the warnings its load gave
+<dir>/facets/<facet_id>/facets.parquet, calls.parquet, blocks.parquet, links.parquet
+<dir>/.lock                            the OS file lock every add holds (just_vcf.cache's)
+```
+
+- **Where.** `Store.open(path, subject=...)` creates the store in the directory the caller names,
+  absent or empty, and never anywhere else: a store holds whole genomes. Opening an existing one
+  with `subject` given checks it is the store's.
+- **One person, one schema version.** The subject is named at creation. `add` refuses a facet with
+  no subject or another one (`SubjectError`, naming facet ids, never the subject), and a `Loaded` of
+  another `SCHEMA_VERSION` (`StoreVersionError`). A store of another version opens, so its manifest
+  can be read, but its frames are not read and nothing is added: versions are never mixed, and there
+  is no migration yet (load the sources again into a new store). A later `store_layout` is refused.
+- **Facets accumulate (charter 5).** A facet's directory is written once and never rewritten or
+  removed; adding a facet the store holds, by `facet_id`, is a no-op that writes nothing. The links
+  are kept per facet, so adding one never touches a file another facet owns: each facet keeps the
+  links of the `Loaded` it came with that end at it or at one of its lineage ancestors, so a facet
+  added without its parent still names it. `loaded()` reads them all back once each, in Decision 12's
+  order. Rejected: one `links.parquet` for the store, which every add would rewrite.
+- **Atomic per facet, safe under concurrent adds.** An add holds the store's lock from its check of
+  what is present to its last manifest write: each facet is sunk into a staging directory, synced,
+  renamed to `facets/<facet_id>/`, and committed by rewriting the manifest (temporary name, then
+  `os.replace`). Since the lock spans the whole add, a staging directory or a facet directory the
+  manifest does not name is a dead writer's: `open` reports it and the next add removes it. Rejected:
+  sinking outside the lock and locking only the commit, which lets concurrent adds overlap but leaves
+  no safe moment to remove a dead writer's staging directory.
+- **Lazy reads.** `loaded()` returns one `Loaded` over every facet, scans of its files in `facet_id`
+  order (the canonical order, Decision 11), the links each once, and the facets' warnings each once;
+  an empty store gives empty frames. `person(check=...)` is `Person.of` over it; an empty store has
+  no person (`StoreError`). A frame read from a store keeps working after later adds.
+- **Deterministic (charter 12).** The same `Loaded` sinks to the same parquet bytes under one polars
+  release. The manifest holds times and differs between two stores of one input.
+
 ## Open questions
 
 Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5 (`end_pos`) and Q6
@@ -1291,6 +1333,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every
   derived facet. Nullable and additive. `SCHEMA_VERSION` is deliberately left at 0.0.11 on this
   builder branch; the lead bumps it at merge. `facet_id` does not digest the subject (Decision 5).
+
+- **No version change** (2026-10-23, RM276, the durable store): `Store` holds the four frames per
+  facet as parquet with a manifest ("The durable store"). No column of any frame changes;
+  `SCHEMA_VERSION` is not bumped.
 
 - **No version change** (2026-10-23, RM275, the `links` frame): a fourth frame, `Loaded.links`
   (Decision 12), and no column of `facets`, `calls` or `blocks` changes. `SCHEMA_VERSION` is not

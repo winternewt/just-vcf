@@ -25,8 +25,8 @@ still refused. Measured with the library on the same vcfBeta: 4,166,235 rows, 4,
 every one `match`; the 3,048 Y rows stay `not_run`, X (90,020) and MT (36) are read in full, and
 `mint_vrs_ids` then mints 8,316,880 allele ids. `RESOLVE_VERSION` 9.
 
-Rejected: dropping Y from the refusal only (X carries the same PAR, and a masked analysis set
-differs there too); matching Y by length alone when the md5 differs (the md5 is the evidence that the
+Rejected: dropping Y from the refusal only (the lead's rule names X, Y and MT together, as the
+contigs where assemblies of one build vary; no X mismatch has been seen on real data yet); matching Y by length alone when the md5 differs (the md5 is the evidence that the
 bases differ, and reading them would check CGI's REF against a sequence it did not use); changing
 `PRIMARY`, which `concordance` and `liftover` read for their own rules. Code: `reference.AUTOSOMES`,
 `reference._plan`, `reference._contig_warnings`; tests in `tests/test_reference.py`

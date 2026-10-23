@@ -35,7 +35,7 @@ import polars as pl
 import typer
 
 from just_vcf import Loaded, ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, resolve_ref, same_person
-from just_vcf.atlas import ALL, giab_stratifications, pair_counts, pool_counts
+from just_vcf.atlas import ALL, ALL_BANDS, giab_stratifications, pair_counts, pool_counts
 
 logger = logging.getLogger("method_atlas")
 app = typer.Typer(add_completion=False)
@@ -140,7 +140,8 @@ def _by_caller(loaded: Loaded, caller: str) -> Loaded:
 
 
 def _alleles(counts: pl.DataFrame) -> int:
-    return int(counts.filter((pl.col("region_class") == ALL) & (pl.col("scope") == "carried"))["alleles"].sum())
+    pooled = (pl.col("a_band") == ALL_BANDS) & (pl.col("b_band") == ALL_BANDS) if "a_band" in counts.columns else pl.lit(True)
+    return int(counts.filter((pl.col("region_class") == ALL) & (pl.col("scope") == "carried") & pooled)["alleles"].sum())
 
 
 def _methods(counts: pl.DataFrame) -> dict[str, str | None]:

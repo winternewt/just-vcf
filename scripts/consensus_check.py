@@ -22,6 +22,13 @@ held-out facet against the consensus made without it, per confidence bin: the pr
 disagreement against the observed one), `<out>.support.tsv` (rows per supported / contradicted /
 silent count) and `<out>.rates.tsv` (the rates each method was weighted by). Aggregates only: no
 path, sample name or position is written. Autosomes by default.
+
+The prediction is the chance the held-out facet disagrees with the consensus's most probable genotype
+under the consensus's posterior, with the held-out facet erring at its own rate at that allele, taken
+by the rule the consensus weighs a facet by (its region classes, its row's confidence band where the
+atlas measured one): `predicted`. `predicted_flat` is the same with one overall rate for the held-out
+method, as the first check took it; `consensus_error` is `1 - p` of the top genotype alone, and
+`held_error` the held-out rate alone, so the two parts of a prediction can be read apart.
 """
 
 import json
@@ -33,8 +40,8 @@ import polars as pl
 import typer
 
 from just_vcf import Loaded, ReferenceMismatchError, ReferenceStore, concordance, consensus, load, resolve_ref
-from just_vcf.atlas import giab_stratifications, wilson_interval
-from just_vcf.consensus import method_error_rates
+from just_vcf.atlas import ALL_BANDS, CONFIDENCE_BANDS, _confidence_at, confidence_band, giab_stratifications, wilson_interval
+from just_vcf.consensus import _facet_rates, _site_rates
 
 logger = logging.getLogger("consensus_check")
 app = typer.Typer(add_completion=False)
@@ -123,26 +130,50 @@ def main(
                 )
         others = [part for method, part in parts.items() if method != held]
         loo = consensus(others, atlas=atlas, regions=regions)
-        held_rates = method_error_rates(atlas, by="caller")
-        held_caller = methods[held].facets.select("caller").collect()["caller"][0]
-        e = dict(
-            zip(
-                *held_rates.filter((pl.col("caller") == held_caller) & (pl.col("region_class") == "all")).select(pl.col("variant_class").cast(pl.String), "genotype_error")
-                .to_dict(as_series=False).values()
-            )
-        )  # fmt: skip
-        sites = concordance(loo, _one(parts[held], ids[held][0])).sites.collect()
+        held_part = _one(parts[held], ids[held][0])
+        held_row = held_part.facets.collect().row(0, named=True)
+        held_rates = _facet_rates([held_row], atlas, regions.classes, None, "carried_pass")
+        overall = held_rates.filter((pl.col("region_class") == "all") & (pl.col("confidence_band") == ALL_BANDS) & (pl.col("variant_class").cast(pl.String) == "snv"))
+        e_snv = overall["genotype_error"].item()
+        sites = concordance(loo, held_part).sites.collect()
         both = _carried(sites).filter(pl.col("agreement").cast(pl.String).is_in(["match", "mismatch"]) & (pl.col("variant_class").cast(pl.String) == "snv"))
-        sup = loo.support.collect().select("chrom", "pos", "ref", "alt", "copies", "confidence", "ploidy")
+        sup = loo.support.collect().select("chrom", "pos", "ref", "alt", "copies", "confidence", "ploidy", "facets", "silent", "banded")
         posterior = loo.calls.collect().select("chrom", "pos", pl.col("source_ref").alias("ref"), pl.col("alts").list.first().alias("alt"), pl.col("gp").cast(pl.List(pl.Float64)))
         joined = both.join(sup, on=["chrom", "pos", "ref", "alt"], how="inner").join(posterior, on=["chrom", "pos", "ref", "alt"], how="inner")
-        e_snv = e.get("snv")
+        # The held-out facet's own rate at each allele, by the rule the consensus weighs a facet by:
+        # the highest among the region classes holding it, of its row's confidence band where measured.
+        joined = joined.with_row_index("_site").join(
+            _confidence_at(held_part).select("chrom", pl.col("pos").cast(pl.UInt32).alias("b_pos"), "confidence").rename({"confidence": "_held_confidence"}),
+            on=["chrom", "b_pos"], how="left", maintain_order="left",
+        )  # fmt: skip
+        at = _site_rates(joined.select("_site", "chrom", "pos", "variant_class"), held_rates, regions)
+        band = confidence_band(pl.col("_held_confidence"))
+        banded_rate = pl.coalesce([pl.when(band == b).then(pl.col(f"_ge_{b}")) for b in CONFIDENCE_BANDS])
+        joined = joined.join(at.drop("_facet", "_se", "_defaulted"), on="_site", how="left").with_columns(pl.coalesce(banded_rate, pl.col("_ge")).alias("_e_held"))
         p_map = pl.col("gp").list.get(pl.col("copies").cast(pl.Int64))
-        predicted = 1 - (p_map * (1 - e_snv) + (1 - p_map) * e_snv / pl.col("ploidy").cast(pl.Float64))
+        P = pl.col("ploidy").cast(pl.Float64)
+
+        def miss(e: pl.Expr) -> pl.Expr:
+            return 1 - (p_map * (1 - e) + (1 - p_map) * e / P)
+
         calibration.append(
-            joined.with_columns(pl.col("confidence").cut(BINS[1:-1], left_closed=True).alias("bin"), predicted.alias("_predicted"))
+            joined.with_columns(
+                pl.col("confidence").cut(BINS[1:-1], left_closed=True).alias("bin"),
+                miss(pl.col("_e_held")).alias("_predicted"),
+                miss(pl.lit(e_snv)).alias("_predicted_flat"),
+                (1 - p_map).alias("_consensus_error"),
+            )
             .group_by("bin")
-            .agg(pl.len().alias("alleles"), (pl.col("agreement") == "mismatch").sum().alias("mismatch"), pl.col("_predicted").sum().alias("predicted_sum"))
+            .agg(
+                pl.len().alias("alleles"),
+                (pl.col("agreement") == "mismatch").sum().alias("mismatch"),
+                pl.col("_predicted").sum().alias("predicted_sum"),
+                pl.col("_predicted_flat").sum().alias("predicted_flat_sum"),
+                pl.col("_consensus_error").sum().alias("consensus_error_sum"),
+                pl.col("_e_held").sum().alias("held_error_sum"),
+                (pl.col("facets") - pl.col("silent")).sum().alias("speaking_sum"),
+                (pl.col("banded") > 0).sum().alias("with_banded"),
+            )
         )
 
     ag = (
@@ -151,7 +182,14 @@ def main(
         .sort("method", "variant_class")
     )  # fmt: skip
     cal = pl.concat(calibration).with_columns(pl.col("bin").cast(pl.String)).group_by("bin").agg(pl.exclude("bin").sum()).sort("bin")
-    cal = cal.with_columns((pl.col("mismatch") / pl.col("alleles")).alias("observed"), (pl.col("predicted_sum") / pl.col("alleles")).alias("predicted"))
+    cal = cal.with_columns(
+        (pl.col("mismatch") / pl.col("alleles")).alias("observed"),
+        (pl.col("predicted_sum") / pl.col("alleles")).alias("predicted"),
+        (pl.col("predicted_flat_sum") / pl.col("alleles")).alias("predicted_flat"),
+        (pl.col("consensus_error_sum") / pl.col("alleles")).alias("consensus_error"),
+        (pl.col("held_error_sum") / pl.col("alleles")).alias("held_error"),
+        (pl.col("speaking_sum") / pl.col("alleles")).alias("speaking_mean"),
+    )
     intervals = [wilson_interval(int(m), int(n)) for m, n in zip(cal["mismatch"], cal["alleles"])]
     cal = cal.with_columns(pl.Series("observed_ci_low", [i[0] for i in intervals]), pl.Series("observed_ci_high", [i[1] for i in intervals]))
     sp = pl.concat(support).group_by(pl.exclude("len")).agg(pl.col("len").sum()).sort(pl.exclude("len"))

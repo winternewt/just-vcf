@@ -6,7 +6,7 @@ stratifications. The two PGP-HMS pairs were rebuilt the same day once `resolve_r
 allele's change (F21) and a haploid call against the same allele's homozygote as a match (F22). The
 full table (768 rows: every region class, variant class and scope) is `data/output/method_atlas.parquet`
 and `.tsv`, git-ignored, with `method_atlas.pairs.tsv` listing each pair's methods and checks; the
-last CGI build is `data/output/method_atlas_cgi.*` beside it (192 rows, the same columns). Everything here is an aggregate over a whole genome: no position, sample
+last CGI build is `data/output/method_atlas_cgi.*` beside it (192 pooled rows; rebuilt 2026-10-24 with the cells of both sides' confidence bands beside them, 10,552 rows, the pooled ones unchanged). Everything here is an aggregate over a whole genome: no position, sample
 name or file is named, and the private pairs are described by their methods only. Columns and rules
 are in docs/SCHEMA.md ("A method-error atlas").
 
@@ -198,6 +198,24 @@ Reading them:
   silence. In the CGA 2.5.0.24 pair, 262,836 freeBayes alleles (before the carried and PASS
   filters) lie on `hs37d5` and `NC_007605`, which the CGI facet never declared; they are one-sided
   with `absence = unknown` and fall in `all` only.
+
+**By confidence band.** The 2026-10-24 rebuild splits each pair by both sides' own confidence in
+the allele (`genotype_evidence`'s confidence of each side's row, docs/SCHEMA.md). SNV discordance,
+region `all`, scope `carried_pass`, by one side's band with the other side's pooled (% of the alleles
+both called in that band; CGI's few rows below 10 phred and those with no confidence left out):
+
+| Pair | Side | 10–20 | 20–30 | 30–40 | 40–60 | 60–100 | 100+ |
+|---|---|---|---|---|---|---|---|
+| CGA 2.5.0.44 / freeBayes 0.9.15 | CGI | 6.17 | 5.35 | 3.29 | 2.11 | 1.18 | 0.37 |
+| CGA 2.5.0.44 / freeBayes 0.9.15 | freeBayes | 6.28 | 3.66 | 1.13 | 0.73 | 0.30 | |
+| CGA 2.5.0.24 / freeBayes 0.9.20 | CGI | 7.25 | 6.79 | 4.78 | 3.17 | 2.19 | 0.73 |
+| CGA 2.5.0.24 / freeBayes 0.9.20 | freeBayes | 9.18 | 2.47 | 0.78 | 0.47 | 0.29 | 0.16 |
+
+freeBayes 0.9.15 has no SNV row at 100 phred or more, so its top band is empty. 90 and 91% of CGI's
+SNVs both called sit at 100 phred or more, where the pair disagrees on 0.37 and 0.73%, against 0.54
+and 1.02% overall; at CGI's rows below 60 phred it disagrees three to eleven times more often. Much
+of a method's average rate is its unsure rows. `method_error_rates` fits each pair's cells as one
+rate per band of each side (docs/CONSENSUS.md has the rates).
 
 X and Y classes are in the full table only: for a private pair they would state an aggregate about
 the person's sex chromosomes.

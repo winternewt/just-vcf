@@ -1945,9 +1945,17 @@ and `only_b` follow them, so a pair counts the same whichever facet comes first 
 two methods pool.
 
 **`atlas`**, one row per (`region_set`, `assembly_label`, `a_caller`, `a_caller_version`,
-`b_caller`, `b_caller_version`, `region_class`, `variant_class`, `scope`), sorted by them (region
-classes in the table's order). Every variant class but `sv` has a row in every class, zero counts
-included:
+`b_caller`, `b_caller_version`, `region_class`, `variant_class`, `scope`, `a_band`, `b_band`), sorted
+by them (region classes in the table's order, bands in `CONFIDENCE_BANDS`' order after `all`). The
+pooled rows have `a_band = b_band = all`, and every variant class but `sv` has one in every class, zero
+counts included. Beside them, one row per cell of the two sides' **confidence bands** where alleles
+fall: each side's band is that of `genotype_evidence`'s `confidence` of its row at the allele (the
+lowest where it wrote several rows at the position), `0-10`, `10-20`, `20-30`, `30-40`, `40-60`,
+`60-100` or `100+` phred, `none` where the row states no confidence or the side wrote no row. A
+side's bands, summed over the other's, give the pooled row. Counts written before the bands (no band
+columns) pool as pooled rows. The cells say how often two methods disagree where each was sure and
+where it was not, which a method's average spreads over all its rows (docs/CONSENSUS.md: fitted on
+one PGP pair, a CGI row at 100 phred or more errs on 0.05% of SNVs, against CGI's 0.51% average):
 
 | Column | Dtype | Meaning |
 |---|---|---|
@@ -2022,9 +2030,9 @@ class the facet did not call), `ploidy_differs` (below).
 
 **Error rates** (`method_error_rates(atlas)`). The atlas states how often two methods disagree, not
 which erred. With independent rare errors a pair's genotype disagreement `d = mismatch / (match +
-mismatch)` is about the sum of its two methods' rates. `ploidy_differs` is left out of both: a haploid
-call against a diploid one on a male X is two conventions, not a wrong genotype (it is 69 to 82% of
-the PGP pairs' SNV `discordant`), and the consensus never combines two ploidies. A method's
+mismatch)` is about the sum of its two methods' rates. A haploid call against the same allele's
+diploid homozygote (a male X written two ways) is a `match` in the atlas since F22, so two conventions
+are no genotype error; a haploid call against a het stays a mismatch, a real disagreement. A method's
 `genotype_error` is `(d_xy + d_xz − d_yz) / 2` where it forms a triangle with two
 partners also compared with each other (the same-reads set), averaged over its triangles and kept at
 or below its lowest pair discordance (`triangle`); otherwise half of each pair's discordance, averaged
@@ -2032,6 +2040,23 @@ over its partners (`half_pair`). Its `silence_error` is the share of the alleles
 that it left one-sided, the lowest over its partners: an upper bound, since a partner's false calls
 count against it too. No rate goes below the 95% Wilson upper bound of zero events in the alleles it
 rests on. Rows of `scope` (`carried_pass`, or `carried` when `pass_only=False`) only, assemblies pooled.
+These are the `confidence_band = all` rows of `METHOD_RATES`, from the pooled atlas rows only.
+
+**Rates by confidence band** (`confidence_band` a band, `genotype_attribution = band`), from the
+atlas's cells: per pair and class, each cell's discordance `d_ij` is fitted, weighted by its alleles,
+as `e_x(i) + e_y(j)`, one rate per band of each side (least squares, by alternating means). One pair
+fixes these rates only up to a constant moved from one side to the other, as it fixes the averages
+only up to their split; the split taken is even in the cell where both sides are at their most
+confident band holding `MIN_BAND_ALLELES` (1,000) alleles both called, the `half_pair` rule applied
+where neither row's own confidence explains a disagreement. A band is given where it holds
+`MIN_BAND_ALLELES` and both sides have two such bands (a side that states no confidence cannot be told
+apart from its partner band by band); floored at the Wilson bound of its alleles; averaged over
+partners. A band row carries the method's average silence rate. The `all` rate stays the pooled rule,
+so a method's bands weighted by their alleles need not average to it. Rejected: one side's band less
+its partner's average, which credits the partner with its unsure rows' errors at alleles where it
+was sure (it put freeBayes's confident bands at the Wilson floor, about 4e-6); and the row's own
+`1 - p` plus a method residual, which the PGP cells refute: CGI's rows at 20 to 30 phred state at
+most 1% error and disagree with freeBayes on 5.4 and 6.8% of SNVs in the two pairs.
 
 A facet takes, per region class and variant class, its caller's rates at its version (`method`),
 else its caller's pooled over versions without self pairs (`caller`), else the stated default
@@ -2039,13 +2064,22 @@ else its caller's pooled over versions without self pairs (`caller`), else the s
 class. An unmeasured method is taken as no better than the worst one measured, not as average. Every
 row counts the facets that spoke with a default (`defaulted`), and `Consensus.rates` lists each
 parent's rates and their basis. With `regions` (a `RegionSet`) an allele is weighted by the highest
-rate among the classes holding its position, `all` where none does; without it, by `all`.
+rate among the classes holding its position, `all` where none does; without it, by `all`, with a
+warning where the atlas carries rates in other region classes (the atlas holds class names, not their
+intervals). A facet's band rates are its method's, else its caller's (`rate_basis`), never a
+default: a band no atlas row measured is absent from `Consensus.rates`, and a row in it takes the
+average. Among the classes holding an allele, a class without the row's band gives its average.
 
-**The posterior.** A stated or site reading gets the genotype error, a block or an absence the
-silence error, and becomes the likelihood `L(k) = (1 − e)·q(k) + e·(1 − q(k))/P` over `k = 0..P`
-copies: a genotype gets `1 − e` and spreads `e` evenly over the rest, and a graded vector is tempered
-so that no facet says more than its method's measured error allows (a PL of 3,000 against two
-facets that disagree is still one facet). The posterior is `prior(k) · ∏ L_f(k)`, normalized, in log
+**The posterior.** A stated reading whose row's own confidence falls in a band its method has a rate
+for gets that rate `e_b`, the measured share of such rows whose genotype was wrong: `L(top) = 1 − e_b`
+for the copies its distribution `q` puts first (the fewer on a tie), and `e_b` shared among the other
+copies in proportion to `(1 − e_b)·q(k) + e_b·(1 − q(k))/P`, which ranks them as `q` does and is never
+zero. The band rate is the whole error of such a row, so the row's own `1 − p` is not added to it.
+Any other reading (a site reading, a stated one without a measured band) gets the genotype error, a
+block or an absence the silence error, and becomes the likelihood `L(k) = (1 − e)·q(k) + e·(1 −
+q(k))/P` over `k = 0..P` copies: a genotype gets `1 − e` and spreads `e` evenly over the rest, and a
+graded vector is tempered so that no facet says more than its method's measured error allows (a PL
+of 3,000 against two facets that disagree is still one facet). The posterior is `prior(k) · ∏ L_f(k)`, normalized, in log
 space in Float64; the prior is flat over the copies (`prior = "flat"`, the only one so far). `P` is
 the ploidy most speaking readings state (diploid on a tie or where none states one); a reading of
 another ploidy is silent (`ploidy_differs`). The facets are taken as independent: two callers on
@@ -2067,8 +2101,8 @@ every row `gp`. `blocks` is empty.
 `variant_class`, `ploidy`, `copies` (the most probable), `confidence` (`-10·log10(1 − p)` of it from
 the log-space posterior: `gp` is Float32 and rounds a remainder below about 1e-45 to zero, which
 `genotype_evidence` then reads as infinite), `facets`, `supported`, `contradicted`, `silent` (they
-sum to `facets`), `defaulted` and `gp_as_likelihood` (the speaking facets read with a default rate,
-and with a posterior multiplied in). A sidecar, not `calls` columns: Decision 6's columns hold what a
+sum to `facets`), `defaulted`, `gp_as_likelihood` and `banded` (the speaking facets read with a
+default rate, with a posterior multiplied in, and with their row's band rate). A sidecar, not `calls` columns: Decision 6's columns hold what a
 source states about a site, and these say how the consensus came about. Rejected: columns in `calls`,
 which every other facet would carry null and which would bump `SCHEMA_VERSION`; and the
 per-facet readings as rows, which copy the parents' calls into a second place.
@@ -2088,6 +2122,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-23, calibrating the consensus, layers 5 and 7): no column of
+  `facets`, `calls` or `blocks` changes. The atlas gains the key columns `a_band` and `b_band` and its
+  rows per cell of the two sides' confidence bands; `METHOD_RATES` and `FACET_RATES` gain
+  `confidence_band`; `CONSENSUS_SUPPORT` gains `banded`. Rules changed: a consensus row stated in a
+  measured band of its method's confidence is weighted by that band's rate (`CONSENSUS_VERSION` 2),
+  and a consensus given an atlas with region rows and no regions warns.
 
 - **No version change** (2026-10-23, the lead's three follow-ups to that audit): no column changes.
   Rules changed: `reference`'s two conflict checks compare base names as written, before either is

@@ -20,6 +20,10 @@ docs/SCHEMA.md ("A method-error atlas"); in short:
    nothing about a method's error. Scope `carried_pass` keeps those whose every stating row passed
    its filters (`PASS`, or no filter written).
 4. **`p_same` is pooled per basis**, likelihoods and posteriors apart (Decision 3).
+5. **Rows by confidence band.** Beside each pooled row (`a_band = b_band = all`), the same counts
+   split by both sides' own confidence in the allele (`genotype_evidence`'s `confidence` of the row
+   stating it, in `CONFIDENCE_BANDS`), one row per cell of the two bands where alleles fall: how
+   often two methods disagree where each was sure, and where it was not.
 """
 
 import logging
@@ -31,6 +35,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.concordance import SITES, AbsenceReading, Agreement, ComparisonBasis, _covered, _merged_intervals, concordance
+from just_vcf.evidence import _calls_evidence
 from just_vcf.loading import Loaded
 from just_vcf.reference import ReferenceStore
 from just_vcf.schema import VariantClass, enum_dtype
@@ -69,6 +74,30 @@ passed its filters."""
 
 CI_Z = 1.959963984540054
 """The normal quantile of the 95% Wilson score interval every rate carries."""
+
+ALL_BANDS = "all"
+"""The confidence band that is no band: every allele, whatever either side's confidence."""
+
+NO_CONFIDENCE = "none"
+"""The band of an allele whose row states no confidence (a genotype alone, `gt_only`), or where the
+side wrote no row."""
+
+BAND_EDGES: tuple[float, ...] = (10.0, 20.0, 30.0, 40.0, 60.0, 100.0)
+"""Where the confidence bands (phred-like, `genotype_evidence`'s `confidence`) break, each band
+closed below: `[0, 10)`, `[10, 20)`, ... `[100, inf)`."""
+
+CONFIDENCE_BANDS: tuple[str, ...] = ("0-10", "10-20", "20-30", "30-40", "40-60", "60-100", "100+", NO_CONFIDENCE)
+"""The bands of one side's confidence in an allele, in order: what `a_band` and `b_band` hold beside
+`all`."""
+
+
+def confidence_band(confidence: pl.Expr) -> pl.Expr:
+    """The `CONFIDENCE_BANDS` label of a phred-like confidence; `none` where it is null."""
+    labels = CONFIDENCE_BANDS[:-1]
+    band = pl.lit(labels[0])
+    for edge, label in zip(BAND_EDGES, labels[1:]):
+        band = pl.when(confidence >= edge).then(pl.lit(label)).otherwise(band)
+    return pl.when(confidence.is_null() | confidence.is_nan()).then(pl.lit(NO_CONFIDENCE)).otherwise(band)
 
 _GIAB_ASSEMBLIES = ("GRCh37", "GRCh38")
 
@@ -150,6 +179,8 @@ COUNTS = pl.Schema(
         "region_class": pl.String,
         "variant_class": enum_dtype(VariantClass),
         "scope": pl.String,
+        "a_band": pl.String,
+        "b_band": pl.String,
         "pairs": pl.UInt32,
         "alleles": pl.UInt64,
         "match": pl.UInt64,
@@ -168,7 +199,7 @@ COUNTS = pl.Schema(
 )
 """Per pair (`pair_counts`) or pooled (`pool_counts`), the counts the atlas's rates come from."""
 
-_KEYS = ["region_set", "assembly_label", "a_caller", "a_caller_version", "b_caller", "b_caller_version", "region_class", "variant_class", "scope"]
+_KEYS = ["region_set", "assembly_label", "a_caller", "a_caller_version", "b_caller", "b_caller_version", "region_class", "variant_class", "scope", "a_band", "b_band"]
 _SUMMED = [name for name in COUNTS.names() if name not in _KEYS]
 
 ATLAS = pl.Schema(
@@ -235,10 +266,11 @@ def pair_counts(
             raise ValueError(f"facet {facet['facet_id']} is on {facet['assembly_label']}, the regions on {regions.assembly_label}; lift one first")
     if by_contig:
         contigs = sorted(set(_contigs(a)) | set(_contigs(b)))
-        chunks = [_counts(concordance(_on(a, chrom), _on(b, chrom), reference=reference).sites.collect(), regions) for chrom in contigs]
-        counts = pl.concat(chunks).group_by("region_class", "variant_class", "scope").agg(pl.exclude("region_class", "variant_class", "scope").sum()) if chunks else _counts(_NO_SITES, regions)
+        chunks = [_pair_chunk(_on(a, chrom), _on(b, chrom), regions, reference) for chrom in contigs]
+        keys = ["region_class", "variant_class", "scope", "a_band", "b_band"]
+        counts = pl.concat(chunks).group_by(keys).agg(pl.exclude(keys).sum()) if chunks else _counts(_NO_SITES, regions)
     else:
-        counts = _counts(concordance(a, b, reference=reference).sites.collect(), regions)
+        counts = _pair_chunk(a, b, regions, reference)
     swap = _method(fb) < _method(fa)
     if swap:
         fa, fb = fb, fa
@@ -252,8 +284,21 @@ def pair_counts(
         pl.lit(1, dtype=pl.UInt32).alias("pairs"),
     )
     if swap:
-        counts = counts.rename({"only_a": "only_b", "only_b": "only_a"})
+        counts = counts.rename({"only_a": "only_b", "only_b": "only_a", "a_band": "b_band", "b_band": "a_band"})
     return _sorted(counts.select(COUNTS.names()).cast(dict(COUNTS)))
+
+
+def _pair_chunk(a: Loaded, b: Loaded, regions: RegionSet, reference: "ReferenceStore | Path | str | None") -> pl.DataFrame:
+    """One comparison's counts, each allele banded by each side's confidence in it."""
+    sites = concordance(a, b, reference=reference).sites.collect()
+    return _counts(sites, regions, (_confidence_at(a), _confidence_at(b)))
+
+
+def _confidence_at(loaded: Loaded) -> pl.DataFrame:
+    """Per `(chrom, pos)` the facet wrote a row at, the lowest `genotype_evidence` confidence among its
+    rows there (null where none states one): what an allele the facet wrote there is banded by."""
+    graded = _calls_evidence(loaded.calls, False, loaded.facets).select("chrom", "pos", "confidence")
+    return graded.group_by("chrom", "pos").agg(pl.col("confidence").min()).collect()
 
 
 def pool_counts(counts: Iterable[pl.DataFrame]) -> pl.DataFrame:
@@ -263,6 +308,8 @@ def pool_counts(counts: Iterable[pl.DataFrame]) -> pl.DataFrame:
     frames = list(counts)
     if not frames:
         return pl.DataFrame(schema=ATLAS)
+    # Counts written before the bands carry no band columns: they are the pooled rows.
+    frames = [frame.with_columns(*[pl.lit(ALL_BANDS).alias(name) for name in ("a_band", "b_band") if name not in frame.columns]) for frame in frames]
     pooled = pl.concat([frame.select(COUNTS.names()).cast(dict(COUNTS)) for frame in frames]).group_by(_KEYS).agg(pl.col(_SUMMED).sum())
     called = pl.col("match") + pl.col("mismatch")
     discordant = pl.col("mismatch")
@@ -334,17 +381,21 @@ def _passes(side: str) -> pl.Expr:
     return filters.is_null() | filters.list.eval(~pl.element().is_in(["PASS", ""])).list.any().not_()
 
 
-def _counts(sites: pl.DataFrame, regions: RegionSet) -> pl.DataFrame:
-    """Counts per (region class, variant class, scope) over one pair's `sites`."""
+def _counts(sites: pl.DataFrame, regions: RegionSet, confidence: tuple[pl.DataFrame, pl.DataFrame] | None = None) -> pl.DataFrame:
+    """Counts per (region class, variant class, scope), pooled (`a_band = b_band = all`) and, where both
+    sides' confidence at their rows is given (`_confidence_at`), per cell of the two sides' bands."""
     # A genotype carries the allele where it spells it, or where it holds it under another ALT of its
     # row (a complex row met by VRS id, whose copies `concordance` read from the change).
     spelled = pl.col("a_gt_alleles").list.contains(pl.col("alt")).fill_null(False) | pl.col("b_gt_alleles").list.contains(pl.col("alt")).fill_null(False)
     carries = spelled | (pl.col("a_copies") > 0).fill_null(False) | (pl.col("b_copies") > 0).fill_null(False)
-    probe = (
-        sites.filter(carries)
-        .with_columns(pl.col("pos").cast(pl.Int64).alias("_at"), (_passes("a") & _passes("b")).alias("_pass"))
-        .sort("chrom", "_at")
-    )
+    probe = sites.filter(carries).with_columns(pl.col("pos").cast(pl.Int64).alias("_at"), (_passes("a") & _passes("b")).alias("_pass"))
+    if confidence is not None:
+        for side, frame in zip("ab", confidence):
+            at = frame.select("chrom", pl.col("pos").cast(pl.UInt32).alias(f"{side}_pos"), pl.col("confidence").alias(f"_{side}_confidence"))
+            probe = probe.join(at, on=["chrom", f"{side}_pos"], how="left", maintain_order="left").with_columns(
+                confidence_band(pl.col(f"_{side}_confidence")).alias(f"{side}_band")
+            )
+    probe = probe.sort("chrom", "_at")
     members = {ALL: pl.Series("_covered", [True] * probe.height, dtype=pl.Boolean)}
     for label, merged in regions.intervals.items():
         members[label] = _covered(probe, merged)
@@ -352,17 +403,22 @@ def _counts(sites: pl.DataFrame, regions: RegionSet) -> pl.DataFrame:
     for label in regions.classes:
         inside = probe.filter(members[label])
         for scope, kept in (("carried", inside), ("carried_pass", inside.filter(pl.col("_pass")))):
-            pieces.append(_tally(kept).with_columns(pl.lit(label).alias("region_class"), pl.lit(scope).alias("scope")))
-    return pl.concat(pieces, how="vertical")
+            tags = [pl.lit(label).alias("region_class"), pl.lit(scope).alias("scope")]
+            pieces.append(_tally(kept).with_columns(*tags, pl.lit(ALL_BANDS).alias("a_band"), pl.lit(ALL_BANDS).alias("b_band")))
+            if confidence is not None:
+                pieces.append(_tally(kept, by=["a_band", "b_band"]).with_columns(*tags))
+    columns = pieces[0].columns
+    return pl.concat([piece.select(columns) for piece in pieces], how="vertical")
 
 
-def _tally(sites: pl.DataFrame) -> pl.DataFrame:
-    """Counts per variant class, one row for every class even where it has no allele."""
+def _tally(sites: pl.DataFrame, by: list[str] | None = None) -> pl.DataFrame:
+    """Counts per variant class, one row for every class even where it has no allele; with `by`, per
+    variant class and value of those columns, only where alleles fall."""
     agreement = pl.col("agreement").cast(pl.String)
     gl = (pl.col("basis").cast(pl.String) == ComparisonBasis.GL_FLAT_PRIOR.value) & pl.col("p_same").is_not_null()
     gp = (pl.col("basis").cast(pl.String) == ComparisonBasis.GP.value) & pl.col("p_same").is_not_null()
     one_sided_reference = pl.col("absence").cast(pl.String).is_in([AbsenceReading.REFERENCE.value, AbsenceReading.REF_BLOCK.value])
-    tallied = sites.group_by("variant_class").agg(
+    tallied = sites.group_by(["variant_class", *(by or [])]).agg(
         pl.len().cast(pl.UInt64).alias("alleles"),
         *[_count(agreement == value.value).alias(value.value) for value in Agreement],
         _count(pl.col("ploidy_differs") & agreement.is_in([Agreement.MATCH.value, Agreement.MISMATCH.value])).alias("ploidy_differs"),
@@ -372,6 +428,9 @@ def _tally(sites: pl.DataFrame) -> pl.DataFrame:
         _count(gp).alias("graded_gp"),
         pl.col("p_same").filter(gp).sum().cast(pl.Float64).alias("p_same_gp_sum"),
     )
+    if by is not None:
+        small = tallied.filter(pl.col("variant_class").cast(pl.String) != VariantClass.SV.value)
+        return small.with_columns(pl.col("variant_class").cast(enum_dtype(VariantClass)))
     every = pl.DataFrame({"variant_class": [cls.value for cls in VariantClass if cls is not VariantClass.SV]}, schema={"variant_class": enum_dtype(VariantClass)})
     return every.join(tallied.with_columns(pl.col("variant_class").cast(enum_dtype(VariantClass))), on="variant_class", how="left").fill_null(0)
 
@@ -383,7 +442,9 @@ def _count(condition: pl.Expr) -> pl.Expr:
 def _sorted(frame: pl.DataFrame) -> pl.DataFrame:
     order = {label: rank for rank, label in enumerate([ALL, *GIAB_V36_FILES])}
     rank = pl.col("region_class").replace_strict(order, default=len(order), return_dtype=pl.UInt16)
+    bands = {label: rank for rank, label in enumerate([ALL_BANDS, *CONFIDENCE_BANDS])}
+    band = [pl.col(name).replace_strict(bands, default=len(bands), return_dtype=pl.UInt16) for name in ("a_band", "b_band")]
     return frame.sort(
-        [pl.col(name) for name in _KEYS[:6]] + [rank, pl.col("region_class"), pl.col("variant_class"), pl.col("scope")],
+        [pl.col(name) for name in _KEYS[:6]] + [rank, pl.col("region_class"), pl.col("variant_class"), pl.col("scope"), *band],
         nulls_last=True,
     )

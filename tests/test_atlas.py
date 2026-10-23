@@ -11,13 +11,15 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceStore, load, mint_vrs_ids, resolve_ref
+from just_vcf import ReferenceStore, genotype_evidence, load, mint_vrs_ids, resolve_ref
 from just_vcf.atlas import (
     ALL,
+    ALL_BANDS,
     ATLAS,
     COUNTS,
     GIAB_V36_FILES,
     RegionSet,
+    confidence_band,
     giab_stratifications,
     method_atlas,
     pair_counts,
@@ -305,3 +307,57 @@ def test_giab_stratifications_are_found_by_name_and_read_one_based(tmp_path: Pat
         giab_stratifications(tmp_path, "GRCh38", ["easy", "hard"])
     with pytest.raises(ValueError, match="GRCh37, GRCh38"):
         giab_stratifications(tmp_path, "T2T-CHM13")
+
+
+def test_each_side_s_confidence_bands_its_own_rows(tmp_path: Path, store: ReferenceStore) -> None:
+    # freeBayes's PL puts each het at a stated confidence (the gap to the next genotype, in phred);
+    # GATK's rows state none. Each banded row counts the alleles in one band of one side's confidence,
+    # the other side pooled.
+    def snv(pos: int, gt: str, **extra: str) -> tuple:
+        ref = base("1", pos)
+        return ("1", pos, ref, other(ref), gt, "PASS", extra)
+
+    gaps = {100: 5, 200: 15, 300: 150, 400: 150, 500: None}
+    agree = {100: "match", 200: "mismatch", 300: "match", 400: "mismatch", 500: "match"}
+    fb_rows = [snv(pos, "0/1", **({"PL": f"{gap},0,{gap}"} if gap is not None else {})) for pos, gap in gaps.items()]
+    gatk_rows = [snv(100, "0/1"), snv(200, "1/1"), snv(300, "0/1"), snv(400, "1/1"), snv(500, "0/1"), snv(600, "0/1")]
+    fb = facet(tmp_path, "fb", "freeBayes v1.3.6", fb_rows, store)
+    gatk = facet(tmp_path, "gatk", "HaplotypeCaller", gatk_rows, store)
+    regions = RegionSet.from_frames("test set", "GRCh38", {})
+    counts = pair_counts(fb, gatk, regions)
+    snv_rows = counts.filter((pl.col("variant_class") == "snv") & (pl.col("scope") == "carried"))
+    pooled = snv_rows.filter((pl.col("a_band") == ALL_BANDS) & (pl.col("b_band") == ALL_BANDS)).row(0, named=True)
+    assert (pooled["alleles"], pooled["match"], pooled["mismatch"]) == (6, 3, 2)
+    # "GATK HaplotypeCaller" sorts first, so freeBayes, the banded side, is `b`.
+    assert (pooled["a_caller"], pooled["b_caller"]) == ("GATK HaplotypeCaller", "freeBayes")
+    cells = snv_rows.filter((pl.col("a_band") != ALL_BANDS) & (pl.col("b_band") != ALL_BANDS))
+    # Every cell is a band of each side; none mixes a band with `all`.
+    assert snv_rows.filter((pl.col("a_band") == ALL_BANDS) != (pl.col("b_band") == ALL_BANDS)).is_empty()
+    # GATK states no confidence: its side of every cell is `none`.
+    assert set(cells["a_band"].to_list()) == {"none"}
+    by_band = {r["b_band"]: r for r in cells.iter_rows(named=True)}
+    graded = genotype_evidence(fb).collect().select("pos", confidence_band(pl.col("confidence")).alias("band"))
+    want: dict[str, list[int]] = {}
+    for pos, band in graded.iter_rows():
+        tally = want.setdefault(band, [0, 0, 0])
+        tally[0] += 1
+        tally[1] += agree[pos] == "match"
+        tally[2] += agree[pos] == "mismatch"
+    # The allele only GATK wrote is `none` on freeBayes's side: it wrote no row there.
+    want.setdefault("none", [0, 0, 0])[0] += 1
+    assert set(want) == {"0-10", "10-20", "100+", "none"}
+    assert {band: [r["alleles"], r["match"], r["mismatch"]] for band, r in by_band.items()} == want
+    # The cells sum to the pooled row.
+    for name in ("alleles", "match", "mismatch", "only_a", "only_b"):
+        assert cells[name].sum() == pooled[name]
+    # The bands follow the method whichever facet comes first.
+    assert pair_counts(gatk, fb, regions).equals(counts)
+
+
+def test_counts_written_before_the_bands_pool_as_the_pooled_rows(pair: tuple[Loaded, Loaded]) -> None:
+    regions = RegionSet.from_frames("test set", "GRCh38", REGIONS)
+    one = pair_counts(*pair, regions)
+    pooled_only = (pl.col("a_band") == ALL_BANDS) & (pl.col("b_band") == ALL_BANDS)
+    old = pool_counts([one.filter(pooled_only).drop("a_band", "b_band")])
+    assert old.schema == ATLAS
+    assert old.equals(pool_counts([one]).filter(pooled_only))

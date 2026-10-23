@@ -1539,11 +1539,13 @@ def render() -> str:
         "`scripts/format_registry.py`: edit those, then run `uv run python scripts/format_registry.py`. A test "
         "fails when this file and the code disagree.",
         "",
-        "**Examples are synthetic.** Ids and positions are real dbSNP sites at their positions on the build "
+        "**Examples are synthetic.** A format's example is its spec's `example`, a head the spec declares "
+        "synthetic: real dbSNP ids and positions, never a person's genotypes. The examples of the broken "
+        "shapes were written for this document the same way: ids and positions are real sites on the build "
         "the example states (or build 36 where it says so); genotypes, alleles, scores, sample ids, dates and "
-        "member names are invented and describe no person. Each format's example is a test vector: the suite "
-        "sniffs it and requires that format back, and no format earlier in the order. Tabs in examples are "
-        "literal tab characters.",
+        "member names are invented and describe no person. Every example is a test vector: the suite sniffs "
+        "a format's example and requires that format back, and no format earlier in the order. Tabs in "
+        "examples are literal tab characters.",
         "",
         "## Contents",
         "",

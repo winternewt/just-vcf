@@ -228,6 +228,8 @@ def _shared_sources(subject: str, rows: list[dict], subjects_of_source: dict[tup
     sources = {_source(row) for row in rows if row["facet_id"] in own and row["subject"] == subject}
     others = sorted({row["facet_id"] for row in rows if row["subject"] != subject and _source(row) in sources})
     count = len(set().union(*(subjects_of_source[key] for key in sources)) - {subject})
+    if others == own:
+        return [f"facet(s) {', '.join(own)} given under {count + 1} subjects"]
     return [
         f"facet(s) {', '.join(own)} share their source (bytes, member, sample) with facet(s) {', '.join(others)} "
         f"under {count} other subject(s)"

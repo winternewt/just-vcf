@@ -9,7 +9,7 @@ from just_vcf import load, rejoin_split
 from just_vcf.formats import get_spec
 from just_vcf.loading import Loaded
 from just_vcf.person import SUBJECT_CHECKS, Person, SubjectError, people
-from just_vcf.schema import FACETS
+from just_vcf.schema import BLOCKS, CALLS, FACETS
 
 VCF_HEADER = [
     "##fileformat=VCFv4.2",
@@ -143,6 +143,10 @@ def test_a_person_holds_its_facets_rows_in_facet_id_order(tmp_path: Path) -> Non
     for one in (array, vcf):
         own = calls.filter(pl.col("facet_id") == _facet_id(one))
         assert own.equals(one.calls.collect()), "a facet's rows come through unchanged and in their order"
+    blocks = person.blocks.collect()
+    assert blocks.schema == BLOCKS
+    assert blocks.height == sum(one.blocks.collect().height for one in (array, vcf))
+    assert calls.schema == CALLS and facets.schema == FACETS
 
 
 def test_without_a_check_every_pair_is_not_run_and_nothing_passes(tmp_path: Path) -> None:
@@ -250,7 +254,7 @@ def test_one_file_under_two_subjects_is_allowed_and_warned(tmp_path: Path) -> No
     assert _facet_id(as_b) == facet_id
     for subject in ("person-a", "person-b"):
         (warning,) = grouped[subject].warnings
-        assert facet_id in warning and "1 other subject" in warning
+        assert warning == f"facet(s) {facet_id} given under 2 subjects"
         assert "person-a" not in warning and "person-b" not in warning
     assert grouped["person-c"].warnings == ()
 

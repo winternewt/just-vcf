@@ -243,6 +243,11 @@ CALLS = pl.Schema(
         "filters": pl.List(pl.String),
         "sample_filters": pl.List(pl.String),
         "split_signal": enum_dtype(SplitSignal),
+        "sv_type": pl.String,
+        "cipos": pl.List(pl.Int32),
+        "ciend": pl.List(pl.Int32),
+        "copy_number": pl.Float32,
+        "alt_copy_numbers": pl.List(pl.Float32),
     }
 )
 """One row per site per facet (SCHEMA.md Decision 6)."""

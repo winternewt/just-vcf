@@ -36,6 +36,7 @@ from gtars.refget import sha512t24u_digest
 from gtars.vrs import normalize_allele
 
 from just_vcf import cache
+from just_vcf.callset import NOT_A_VARIANT
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _span, _store_for
 from just_vcf.schema import CALLS, SCHEMA_VERSION, RefCheck, empty
@@ -52,6 +53,7 @@ contig (`no_contig`), or gtars refused the allele (`refused`, its message counte
 WITHHELD_REASONS: frozenset[str] = frozenset(
     {
         # What the allele is, read from its string.
+        "sv_no_vrs_model",
         "symbolic",
         "unspecified",
         "spanning_deletion",
@@ -98,8 +100,10 @@ def _allele_kind(allele: pl.Expr) -> pl.Expr:
         .then(pl.lit("unspecified"))
         .when(upper == "*")
         .then(pl.lit("spanning_deletion"))
-        .when(symbolic)
+        .when(symbolic & upper.is_in(list(NOT_A_VARIANT)))
         .then(pl.lit("symbolic"))
+        .when(symbolic)
+        .then(pl.lit("sv_no_vrs_model"))
         .when(upper.str.contains("?", literal=True))
         .then(pl.lit("partial_call"))
         .when(upper.is_in(["I", "D"]) & pl.col("source_ref").is_null())
@@ -143,7 +147,8 @@ def vrs_withheld(calls: pl.LazyFrame) -> pl.LazyFrame:
     """`calls` with a `vrs_withheld` column: why each allele's id is missing, parallel to `[ref] + alts`.
 
     Null where the id exists. The first reason that applies wins, in this order: what the allele is
-    (`symbolic`, `unspecified`, `spanning_deletion`, `array_code`, `partial_call`, `not_sequence`),
+    (`sv_no_vrs_model`, `symbolic`, `unspecified`, `spanning_deletion`, `array_code`, `partial_call`,
+    `not_sequence`),
     the row's state (`telomere`, `ref_unresolved`, `ref_unchecked`, `ref_mismatch`), what minting
     reported (the `vrs_errors` element), else `not_run`. A computed column, never stored: RM3 fills
     `ref`, and a stored reason would still say "unchecked".
@@ -277,7 +282,11 @@ class _Tally:
 
 
 _EXPLAIN = {
-    "symbolic": "a symbolic allele or breakend, which has no sequence",
+    "sv_no_vrs_model": (
+        "a structural variant (a symbolic allele or a breakend): no VRS Allele holds one, and VRS 2's "
+        "copy-number and adjacency objects are not minted"
+    ),
+    "symbolic": "a symbolic allele that names no variant (Complete Genomics' no-call)",
     "unspecified": "the unspecified allele <*>",
     "spanning_deletion": "the spanning deletion *, called at another record",
     "array_code": "a 23andMe I/D code (resolving it needs the chip manifest)",

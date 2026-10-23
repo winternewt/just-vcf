@@ -29,7 +29,7 @@ short:
    target contig's first base (no base before it to anchor on), symbolic alleles and `*`, rows
    flagged as one record of a pre-split site, and the `blocks` frame.
 
-A lifted row's `source_ref`, `ref_check`, `source_gt` and VRS ids are null: they described the
+A lifted row's `source_ref`, `ref_check`, `source_gt`, VRS ids, `cipos` and `ciend` are null: they described the
 source's representation on the source assembly. `gl`, `gp` and `ad` stay indexed over
 `source_alleles`, never reordered (SCHEMA.md Decision 2); a swapped row's `dosage` is withheld, since it
 counted the other allele. Re-mint ids on the target with `mint_vrs_ids`.
@@ -691,6 +691,9 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
         pl.lit(None, dtype=CALLS["source_gt"]).alias("source_gt"),
         pl.lit(None, dtype=CALLS["vrs_allele_ids"]).alias("vrs_allele_ids"),
         pl.lit(None, dtype=CALLS["vrs_errors"]).alias("vrs_errors"),
+        # Offsets from the source's POS and END, which a minus-strand block reverses.
+        pl.lit(None, dtype=CALLS["cipos"]).alias("cipos"),
+        pl.lit(None, dtype=CALLS["ciend"]).alias("ciend"),
         pl.when(pl.col("_swap")).then(None).otherwise(pl.col("dosage")).alias("dosage"),
         *[pl.when(moved_contig).then(None).otherwise(pl.col(name)).alias(name) for name in ("phased", "phase_sets", "phase_set_kinds")],
         array.alias("_array"),

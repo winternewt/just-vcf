@@ -565,6 +565,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             "FORMAT key(s) declared with a Number that is not one value per allele or genotype, not carried: "
             + ", ".join(f"{key} (Number={number})" for key, number in sorted(unfit.items()))
         )
+    if refused := vcf.refused_types(header):
+        warnings.append(
+            "key(s) declared with a Type VCF 4.3 reserves otherwise, which polars-bio refuses, not carried: "
+            + ", ".join(f"{name} (Type={kind}, 4.3 reserves {vcf.V43_RESERVED_TYPES[name]})" for name, kind in sorted(refused.items()))
+        )
     if not header.meta:
         warnings.append(
             "no meta lines: read under a synthesised header (##fileformat=VCFv4.2 and the carried keys the "

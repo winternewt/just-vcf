@@ -47,6 +47,7 @@ from just_vcf.schema import (
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
 from just_vcf.store import Store, StoreAdded, StoredFacet, StoreError, StoreManifest, StoreVersionError
+from just_vcf.vcf_zarr import VCF_ZARR_VERSION, VcfZarrWritten, write_vcf_zarr
 from just_vcf.writing import BlockAllele, ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
 from just_vcf.vrs import mint_vrs_ids, vrs_withheld
 
@@ -60,6 +61,7 @@ __all__ = [
     "LOADABLE_FORMATS",
     "SCHEMA_VERSION",
     "SUBJECT_CHECKS",
+    "VCF_ZARR_VERSION",
     "AbsenceMeans",
     "AssemblyLabelBasis",
     "BlockAllele",
@@ -109,6 +111,7 @@ __all__ = [
     "UnwritableRowsError",
     "VariantClass",
     "VcfWritten",
+    "VcfZarrWritten",
     "XCopies",
     "__version__",
     "absence_is_reference",
@@ -132,4 +135,5 @@ __all__ = [
     "vcf_samples",
     "vrs_withheld",
     "write_vcf",
+    "write_vcf_zarr",
 ]

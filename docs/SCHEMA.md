@@ -1322,6 +1322,44 @@ layout (charter 2): GA4GH defines no on-disk store for a person's callsets.
 - **Deterministic (charter 12).** The same `Loaded` sinks to the same parquet bytes under one polars
   release. The manifest holds times and differs between two stores of one input.
 
+### VCF Zarr export
+
+`write_vcf_zarr(loaded, path)` writes one facet's `calls` as a VCF Zarr 0.4 store (Zarr format 2),
+the version polars-bio's `scan_vcf_zarr` reads. It is an export at the edge, beside `write_vcf`, and
+follows its rules for the rows: REF is `ref`, else `source_ref`, never the genotype; a row VCF
+cannot hold is refused, counted per reason, unless `resolved_only=True` (an array facet whose REF was
+not read writes no row until `resolve_ref` has run). The path must not exist; the store is written
+beside it and renamed into place.
+
+- **Blocks are not representable.** The VCF Zarr spec has no reference or no-call blocks, so a
+  facet's `blocks` stay in the parquet store: counted in `blocks_not_written`, in a warning and in
+  the root's attributes, never written as calls.
+- **Arrays.** `contig_id` (and `contig_length` where the header gave lengths), `variant_contig`,
+  `variant_position` (1-based), `variant_length` (`end_pos - pos + 1`, so a symbolic ALT keeps its
+  span), `variant_allele` (REF then ALTs), `variant_id` with `variant_id_mask`, `variant_quality`,
+  `filter_id` (`PASS` first, then the others sorted) and `variant_filter`; `sample_id`,
+  `call_genotype` and `call_genotype_phased` (true where every separator after the first slot is
+  `|`, as `write_vcf` writes GT); and, where any row has them, `call_GQ`, `call_DP`, `call_AD`,
+  `call_GL`, `call_GP`, `call_DS`, `call_PS` (PS-kind sets as integers), `call_FT`, `call_CN`,
+  `variant_SVTYPE` and `variant_JUST_VCF_SPLIT`. AD, GL and GP are written only where they are
+  indexed over the written REF and ALTs. `cipos`, `ciend` and `alt_copy_numbers` are not written yet,
+  counted in a warning.
+- **Missing and padding** are the spec's: `-1` and `-2` for integers, the NaNs `0x7F800001` and
+  `0x7F800002` for floats, `"."` and `""` for strings. The last chunk is padded whole, as Zarr v2
+  stores it. polars-bio hands the integer sentinels back as they are.
+- **The root's attributes** name the facet (`facet_id`, `source_sha256`, `format_id`,
+  `derived_from`, the schema version), never its `source_path`.
+- **Written with the standard library alone**: JSON metadata, `vlen-utf8` strings, `gzip` chunks
+  with no timestamp. So it needs no extra, and two writes of one frame give the same bytes (charter
+  12). polars-bio's reader takes `gzip` or no compressor and refuses `zlib` (checked 2026-10-23).
+  Rejected: bio2zarr, which converts VCF files, so the frame would go out through `write_vcf` and
+  back in through text, with cyvcf2 and numpy as dependencies; and the `zarr` package behind an
+  extra, for a format whose metadata is a few JSON files.
+- **Cost**: the columns written are held in memory and encoded in Python, chunk by chunk. Measured
+  2026-10-23 on a PGP-HMS participant's largest VCF facet: 37,559,140 rows in 378 s, a 454 MB
+  store, which polars-bio counts back in 2.4 s. The same person's 11 facets (60 M calls, 27 M
+  blocks) make a 1.26 GB parquet store, each add taking seconds after its load.
+
 ## Open questions
 
 Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5 (`end_pos`) and Q6
@@ -1336,8 +1374,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   builder branch; the lead bumps it at merge. `facet_id` does not digest the subject (Decision 5).
 
 - **No version change** (2026-10-23, RM276, the durable store): `Store` holds the four frames per
-  facet as parquet with a manifest ("The durable store"). No column of any frame changes;
-  `SCHEMA_VERSION` is not bumped.
+  facet as parquet with a manifest, and `write_vcf_zarr` exports one facet's calls ("The durable
+  store"). No column of any frame changes; `SCHEMA_VERSION` is not bumped.
 
 - **No version change** (2026-10-23, RM275, the `links` frame): a fourth frame, `Loaded.links`
   (Decision 12), and no column of `facets`, `calls` or `blocks` changes. `SCHEMA_VERSION` is not

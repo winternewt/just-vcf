@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf_zarr(loaded, path)` exports one facet's calls as a VCF Zarr 0.4 store, which polars-bio
+  reads back with `scan_vcf_zarr` (RM276). Rows follow `write_vcf`'s rules (REF from the reference
+  or the file, never the genotype; unwritable rows refused or counted). The VCF Zarr spec has no
+  blocks, so a facet's blocks stay in the parquet store and are counted. Written with the standard
+  library (gzip chunks, no timestamp), so no extra and the same bytes for the same frame.
+
 - A durable store per person (RM276): `Store.open(path, subject=...)` creates or opens a directory
   the caller names, `store.add(loaded)` writes each facet's four frames as parquet with a manifest
   (schema version, subject, facet ids, added times in UTC), and `store.loaded()` / `store.person()`

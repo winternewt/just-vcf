@@ -1698,8 +1698,87 @@ basis)` with the mean `p_same`; its counts sum to the height of `sites`. Run it 
 **`region`** keeps the alleles whose `pos` lies in one of its intervals: a frame with `chrom`, `pos`
 and `end_pos`, 1-based and closed as `blocks` writes them (a BED's 0-based start is `pos - 1`), any
 contig spelling. Both facets are cut before they meet, so an indel met by VRS id whose two spellings
-straddle an edge counts on each side alone. RM279 calls it once per stratum. Rejected: carrying the
-region's own columns (a stratum name) into `sites`, which overlapping strata would duplicate.
+straddle an edge counts on each side alone. RM279's atlas does not cut per stratum: it compares once
+and places each allele in its strata ("A method-error atlas"). Rejected: carrying the region's own
+columns (a stratum name) into `sites`, which overlapping strata would duplicate.
+
+## A method-error atlas (RM279)
+
+`method_atlas(pairs, regions)` (`just_vcf.atlas`) turns `concordance` over pairs of one person's
+facets into rates per method and region (charter 8: a facet's reliability is stated by method and by
+region). It returns one frame of counts and rates and never a per-site row: a consumer gets how often
+DeepVariant and GATK disagree in homopolymers of 7 to 11 bases, not where. It is just-vcf's own shape
+(charter 2; GA4GH has no model for it) and adds no column to `facets`, `calls` or `blocks`, so
+`SCHEMA_VERSION` is unchanged.
+
+**Regions** are a `RegionSet`: named classes of 1-based closed intervals on one assembly (`chrom`,
+`pos`, `end_pos`, any contig spelling), each merged once when the set is built and reused for every
+pair. `giab_stratifications(directory, assembly_label)` reads the GIAB v3.6 BEDs for GRCh37 or
+GRCh38 found by file name under `directory`, and refuses a missing one by name rather than leaving
+its class out:
+
+| Class | GIAB v3.6 file (`GRCh38_…`) |
+|---|---|
+| `easy`, `difficult` | `notinalldifficultregions`, `alldifficultregions` |
+| `low_mappability`, `segdups` | `lowmappabilityall`, `segdups` |
+| `homopolymer_4to6`, `homopolymer_7to11`, `homopolymer_ge12` | `SimpleRepeat_homopolymer_<n>_slop5` |
+| `tandem_repeat_le50bp`, `…_51to200bp`, `…_201to10000bp`, `…_ge10001bp` | `AllTandemRepeats_<n>_slop5` |
+| `gc_lt25_or_gt65` | `gclt25orgt65_slop50` |
+| `x_par`, `x_nonpar`, `y_nonpar` | `chrX_PAR`, `chrX_nonPAR`, `chrY_nonPAR` |
+
+`all` is the class with no region: every allele the pair compared. Classes overlap (a homopolymer is
+also `difficult`), so rows of one pair never sum across classes. A pair whose facets' `assembly_label`
+is not the set's is refused: lift one first.
+
+**One comparison per pair.** `concordance(a, b)` runs once and each allele is placed in every class
+whose intervals hold its `pos` (the spelling of the facet that states it, `a` first). Cutting each
+facet per class with `region=` would give the same counts except for an indel the two facets spelled
+at different positions across an edge, which the cut splits into two one-sided alleles; placing keeps
+it one paired allele. `by_contig=True` runs `concordance` per contig and sums the counts, the same
+counts with one contig's sites in memory at a time. Rejected: `region=` per class, which repeats the
+whole comparison for each of sixteen classes.
+
+**The unit is a carried allele.** A row counts an allele when at least one side's genotype holds a
+copy of it (its `gt_alleles` contain the ALT, an uncalled haplotype beside it included). An allele a
+row states and no genotype carries (a DeepVariant `RefCall` `0/0`, a split row's `0` for its ALT,
+`./.` on both sides) says nothing about either method's error and is left out of every count. Scope
+`carried` counts all of them; `carried_pass` keeps those whose every stating row passed its filters
+(FILTER `PASS`, or none written; a silent side has no row and passes).
+
+**The two sides are put in method order** (caller, then caller version, unknown first) and `only_a`
+and `only_b` follow them, so a pair counts the same whichever facet comes first and pairs of the same
+two methods pool.
+
+**`atlas`**, one row per (`region_set`, `assembly_label`, `a_caller`, `a_caller_version`,
+`b_caller`, `b_caller_version`, `region_class`, `variant_class`, `scope`), sorted by them (region
+classes in the table's order). Every variant class but `sv` has a row in every class, zero counts
+included:
+
+| Column | Dtype | Meaning |
+|---|---|---|
+| `pairs` | `u32` | pairs pooled into the row |
+| `alleles` | `u64` | carried alleles compared |
+| `match`, `mismatch`, `ploidy_differs`, `uncalled`, `only_a`, `only_b` | `u64` | `concordance`'s `agreement` per allele |
+| `called_both` | `u64` | `match + mismatch + ploidy_differs`: both sides called a genotype |
+| `discordant` | `u64` | `mismatch + ploidy_differs` |
+| `discordance_rate`, `discordance_ci_low`, `discordance_ci_high` | `f64` | `discordant / called_both` and its 95% Wilson score interval |
+| `one_sided_rate`, `one_sided_ci_low`, `one_sided_ci_high` | `f64` | `(only_a + only_b) / alleles` and its interval |
+| `one_sided_reference` | `u64` | one-sided alleles the silent side reads as reference (`absence` `reference` or `ref_block`): a stated disagreement, where the rest are silence |
+| `graded_gl`, `p_same_gl_mean` | `u64`, `f64` | alleles with `basis = gl_flat_prior` and their mean `p_same` |
+| `graded_gp`, `p_same_gp_mean` | `u64`, `f64` | the same for `basis = gp` |
+
+A rate whose denominator is zero is null, never zero (charter 9). `p_same` is pooled per basis: a mean
+over likelihoods and posteriors together would compare the two (Decision 3). The interval is the
+Wilson score interval without continuity correction (Newcombe 1998, method 3), which stays inside
+[0, 1] and is not degenerate at zero discordant alleles; it measures sampling error over the alleles
+compared, not the error of treating a few pairs as a method's whole behaviour, so `pairs` says how
+far a row generalizes.
+
+`pair_counts(a, b, regions)` returns one pair's counts (the `COUNTS` columns: the keys, `pairs`, and
+the summed counts with `p_same_gl_sum`, `p_same_gp_sum`), and `pool_counts(frames)` sums them per key
+and computes the rates from the sums; `method_atlas` is the two together. Counts written per pair can
+be pooled later and in any grouping. `scripts/method_atlas.py` builds an atlas from a plan of pairs,
+skipping a pair `same_person` does not answer True for.
 
 ## Open questions
 

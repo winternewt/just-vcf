@@ -332,12 +332,18 @@ def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame 
 
 def _in_region(frame: pl.DataFrame, region: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
     """The rows of `frame` whose `pos` lies in one of `region`'s 1-based closed intervals."""
+    probe = frame.with_columns(pl.col("pos").cast(pl.Int64).alias("_at")).sort("chrom", "_at")
+    return probe.filter(_covered(probe, _merged_intervals(region))).drop("_at")
+
+
+def _merged_intervals(region: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
+    """`region`'s 1-based closed intervals on canonical contigs, overlapping or touching ones merged,
+    as `chrom`, `_start`, `_end`, sorted: the one interval starting at or before a position is then
+    the only one that can hold it."""
     intervals = (region.lazy() if isinstance(region, pl.DataFrame) else region).select(
         canonical_chrom_expr("chrom").alias("chrom"), pl.col("pos").cast(pl.Int64), pl.col("end_pos").cast(pl.Int64)
     )
-    # Overlapping or touching intervals merged, so the one interval starting at or before a position is
-    # the only one that can hold it.
-    merged = (
+    return (
         intervals.sort("chrom", "pos", "end_pos")
         .with_columns(pl.col("end_pos").cum_max().shift(1).over("chrom").alias("_reach"))
         .with_columns((pl.col("_reach").is_null() | (pl.col("pos") > pl.col("_reach") + 1)).cum_sum().over("chrom").alias("_run"))
@@ -347,9 +353,13 @@ def _in_region(frame: pl.DataFrame, region: pl.LazyFrame | pl.DataFrame) -> pl.D
         .sort("chrom", "_start")
         .collect()
     )
-    probe = frame.with_columns(pl.col("pos").cast(pl.Int64).alias("_at")).sort("chrom", "_at")
-    hit = probe.join_asof(merged, left_on="_at", right_on="_start", by="chrom", strategy="backward", check_sortedness=False)
-    return hit.filter(pl.col("_end").is_not_null() & (pl.col("_at") <= pl.col("_end"))).drop("_at", "_start", "_end")
+
+
+def _covered(probe: pl.DataFrame, merged: pl.DataFrame) -> pl.Series:
+    """Per row of `probe` (sorted by `chrom`, `_at`; `_at` an Int64 1-based position), whether one of
+    `merged`'s intervals (`_merged_intervals`) holds it."""
+    hit = probe.select("chrom", "_at").join_asof(merged, left_on="_at", right_on="_start", by="chrom", strategy="backward", check_sortedness=False)
+    return (hit["_end"].is_not_null() & (hit["_at"] <= hit["_end"])).rename("_covered")
 
 
 def _pair(side_a: pl.DataFrame, side_b: pl.DataFrame, warnings: list[str]) -> pl.DataFrame:

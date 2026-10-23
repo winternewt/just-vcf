@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `method_atlas(pairs, regions)` (RM279, `just_vcf.atlas`): discordance and one-sided rates per
+  (each side's caller and version, region class, variant class, scope) over pairs of one person's
+  facets, with 95% Wilson intervals and the mean `p_same` per basis; counts and rates only, never a
+  per-site row. `giab_stratifications` reads the GIAB v3.6 BEDs (easy/difficult, low mappability,
+  segdups, homopolymers and tandem repeats by length, GC extremes, X and Y) into a `RegionSet` merged
+  once and reused per pair; each pair is compared once and its alleles placed in their classes, and
+  only alleles a genotype carries count. `pair_counts`/`pool_counts` split the run from the pooling;
+  `scripts/method_atlas.py` builds one from a plan of pairs, each gated by `same_person`. No column
+  changes; `SCHEMA_VERSION` unchanged.
+
 - Schema 0.0.16: the method chain on the facet (`method_steps`, `reference`, `aligner`, `aligner_version`);
   the CLI and `query` pass `reference` and the aligner through their path and name redaction.
 

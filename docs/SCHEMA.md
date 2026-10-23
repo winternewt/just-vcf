@@ -2088,7 +2088,11 @@ rate among the classes holding its position, `all` where none does; without it, 
 warning where the atlas carries rates in other region classes (the atlas holds class names, not their
 intervals). A facet's band rates are its method's, else its caller's (`rate_basis`), never a
 default: a band no atlas row measured is absent from `Consensus.rates`, and a row in it takes the
-average. Among the classes holding an allele, a class without the row's band gives its average.
+average. Among the classes holding an allele, a class without the row's band gives its average. A
+facet weighted by band rates its caller was measured at in other versions is named in a warning: a
+band's measured error belongs to the confidence scale of the facets it was measured on, and two
+facets of one caller can write that scale differently (docs/CONSENSUS.md, freeBayes 0.9.15 against
+0.9.20).
 
 **The posterior.** A stated reading whose row's own confidence falls in a band its method has a rate
 for gets that rate `e_b`, the measured share of such rows whose genotype was wrong: `L(top) = 1 − e_b`

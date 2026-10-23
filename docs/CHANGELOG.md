@@ -21,6 +21,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   Default outputs, consensus `facet_id`s included, are unchanged. `gq_on_reference` (desk #95) was
   already built end to end for calls; tests now cover it in `genotype_evidence_at` and `consensus`.
 
+- docs/CONSENSUS.md: the consensus's 2x overconfidence at 60 phred and up, measured. It was freeBayes
+  0.9.15 speaking with freeBayes 0.9.20's band rates, measured on another person's facet whose
+  confidence scale differs (PGP's 0.9.15 floors GL at -10 and caps at 97 phred; its 40-60 phred rows
+  err about five times as often as 0.9.20's). With its own bands fitted on the odd autosomes, the
+  even autosomes' 60+ band is at 1.02 (0.209% predicted, 0.212% seen). CGI and the array sharing
+  freeBayes's errors is ruled out (where freeBayes and the array agree, CGI disagrees on 0.010%), and
+  the even split of a pair's top cell is second order. `scripts/consensus_check.py` writes
+  `<out>.calibration_detail.tsv`, the calibration by band of the held-out facet's row and by which
+  facets wrote a row there. Whether to borrow bands across versions is left to the person (three
+  options in docs/CONSENSUS.md).
+- `consensus` warns, naming each facet weighted by confidence-band rates its caller was measured at
+  in other versions (`rate_basis = caller` on a band row). The rates and rows are unchanged.
+
 - `Person` and `check_pedigree` no longer check a merged or consensus facet against the facets it was
   made from, nor stand two of them for one source: computed from its parents, it agreed with them by
   construction and counted as evidence that they are one person (merge audit 4).

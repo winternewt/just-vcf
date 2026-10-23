@@ -657,6 +657,22 @@ def test_a_row_in_a_measured_band_speaks_with_that_band_s_rate(tmp_path: Path, s
     assert set(bands.filter(pl.col("confidence_band") != "all")["rate_basis"].cast(pl.String).to_list()) == {RateBasis.METHOD.value}
 
 
+def test_bands_borrowed_from_another_version_are_warned(tmp_path: Path, store: ReferenceStore) -> None:
+    # X at version 7 has no atlas row of its own: it takes X's rates pooled over versions, bands
+    # included, which were measured on another facet's confidence scale; the consensus says so.
+    rows = [snv("1", 100, "0/1", PL="150,0,150")]
+    other = facet(tmp_path, "x7", "X", "7", rows, store)
+    own = facet(tmp_path, "x1", "X", "1", rows, store)
+    y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "1/1")], store)
+    borrowed = consensus([other, y], atlas=BANDED)
+    bands = borrowed.rates.filter((pl.col("caller") == "X") & (pl.col("confidence_band") != "all"))
+    assert set(bands["rate_basis"].cast(pl.String).to_list()) == {RateBasis.CALLER.value}
+    other_id = other.facets.collect()["facet_id"].item()
+    lines = [line for line in borrowed.warnings if "other versions" in line]
+    assert len(lines) == 1 and other_id in lines[0]
+    assert not [line for line in consensus([own, y], atlas=BANDED).warnings if "other versions" in line]
+
+
 def test_an_atlas_with_region_rows_and_no_regions_is_warned(tmp_path: Path, store: ReferenceStore) -> None:
     x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "0/1")], store)
     y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "0/1")], store)

@@ -77,7 +77,7 @@ Substrate findings, polars-bio 0.36 (for the upstream-liaison seat to file; read
   file (below).
 
 **Measured 2026-10-23** on two private GRCh38 bwa-mem2 BAMs on the Krypton share (aggregates only;
-the machine shared with about eleven other sessions, load 17–31):
+the machine shared with about eleven other sessions, load average 17–60):
 
 | BAM | depth mode | time | peak RSS | bytes read | windows |
 |---|---|---|---|---|---|

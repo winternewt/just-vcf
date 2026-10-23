@@ -401,7 +401,7 @@ def _compare(first: Facet, second: Facet, a: pl.DataFrame, b: pl.DataFrame, pane
         ibs2=pl.col("ibs2").sum(),
         vrs_compared=pl.col("vrs_compared").sum(),
         vrs_differ=pl.col("vrs_differ").fill_null(False).sum(),
-    )
+    ).sort("block")  # group_by's order varies; the jackknife's float sums must not (charter 12)
     totals = {name: int(per_block[name].sum()) for name in per_block.columns if name != "block"}
     known = {
         "assembly_label": first.assembly_label,

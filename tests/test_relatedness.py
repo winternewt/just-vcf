@@ -14,7 +14,7 @@ import polars as pl
 import pytest
 from dotenv import dotenv_values, find_dotenv
 
-from just_vcf import FACETS, Loaded, load
+from just_vcf import FACETS, Loaded, load, mint_vrs_ids, resolve_ref
 from just_vcf.assembly import ASSEMBLY_LENGTHS
 from just_vcf.person import Person
 from just_vcf.reference import ReferenceStore
@@ -348,5 +348,62 @@ def test_pgp_arrays_of_one_person_and_of_two(pgp_participants: Path) -> None:
     assert together.band is RelationBand.SAME_PERSON and together.n_sites > 2_000
     assert together.n_ibs0 <= together.n_sites // 500
     apart = relatedness(one, other)
-    assert apart.band in (RelationBand.UNRELATED, RelationBand.UNKNOWN) and apart.kinship < THIRD_DEGREE_FLOOR
+    assert apart.band is RelationBand.UNRELATED and apart.kinship is not None and apart.kinship < THIRD_DEGREE_FLOOR
     assert same_person(one, same) is True and same_person(one, other) is False
+
+
+def test_minted_vrs_ids_are_compared_where_both_facets_carry_them(tmp_path: Path) -> None:
+    """Two facets of one person on a small labelled reference, VRS ids minted on both: every site where
+    both have an ALT row is compared and none differ; an id changed on one facet is counted."""
+    rng = random.Random(SEED + 3)
+    sequence = "".join(rng.choice("ACGT") for _ in range(6000))
+    fasta = tmp_path / "ref.fa"
+    fasta.write_text(">1\n" + "\n".join(sequence[i : i + 60] for i in range(0, len(sequence), 60)) + "\n")
+    store = ReferenceStore.open(tmp_path / "store")
+    store.add_fasta(fasta, assembly_label="GRCh37")
+    positions = list(range(20, 6000, 10))
+    ambiguous = ("AT", "TA", "CG", "GC")
+    alts = [next(b for b in "ACGT" if b != sequence[p - 1] and sequence[p - 1] + b not in ambiguous) for p in positions]
+    sites = pl.DataFrame(
+        {
+            "chrom": ["1"] * len(positions),
+            "pos": pl.Series(positions, dtype=pl.UInt32),
+            "ref_allele": [sequence[p - 1] for p in positions],
+            "effect_allele": alts,
+        }
+    )
+    panel = SitePanel(assembly_label="GRCh37", sites=sites, source="synthetic")
+    haplotypes = [(int(rng.random() < 0.4), int(rng.random() < 0.4)) for _ in positions]
+    header = ["##fileformat=VCFv4.2", f"##contig=<ID=1,length={len(sequence)}>", '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">']
+    header.append("\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "S1"]))
+    body = [f"1\t{p}\t.\t{sequence[p - 1]}\t{a}\t.\tPASS\t.\tGT\t{GT_TEXT[h]}" for p, a, h in zip(positions, alts, haplotypes) if h != (0, 0)]
+    minted = []
+    for name in ("x.vcf", "y.vcf"):
+        sample_line = header[-1].replace("S1", "S2") if name == "y.vcf" else header[-1]
+        (tmp_path / name).write_text("\n".join([*header[:-1], sample_line, *body]) + "\n")
+        loaded = mint_vrs_ids(resolve_ref(wgs(tmp_path / name), store), store)
+        # A contig this short gives no length-read build; the label the store asserts is the build.
+        labelled = loaded.facets.with_columns(pl.lit("GRCh37", dtype=FACETS["assembly_label"]).alias("assembly_label"))
+        minted.append(Loaded(facets=labelled, calls=loaded.calls, blocks=loaded.blocks))
+    first, second = minted
+    assert first.facets.select("facet_id").collect().item() != second.facets.select("facet_id").collect().item()
+    carriers = [p for p, h in zip(positions, haplotypes) if h != (0, 0)]
+    result = relatedness(first, second, panel, min_sites=10)
+    assert (result.n_sites, result.n_vrs_compared, result.n_vrs_differ) == (len(positions), len(carriers), 0)
+    changed_ids = pl.when(pl.col("pos") == carriers[0]).then(pl.col("vrs_allele_ids").list.eval(pl.element() + "x"))
+    changed = Loaded(
+        facets=second.facets,
+        calls=second.calls.with_columns(changed_ids.otherwise(pl.col("vrs_allele_ids")).alias("vrs_allele_ids")),
+        blocks=second.blocks,
+    )
+    assert relatedness(first, changed, panel, min_sites=10).n_vrs_differ == 1
+
+
+def test_the_result_is_the_same_bits_every_run(family, tmp_path: Path) -> None:
+    """Charter 12: the same frames give the same result to the bit. (It passed before the jackknife's
+    blocks were sorted too: group_by's order did not vary here, so it guards, it does not prove.)"""
+    panel, _, people = family
+    a = wgs(write_vcf(tmp_path / "a.vcf", panel, people["a"]))
+    g = load(write_23andme(tmp_path / "g.txt", panel, people["g"]))
+    first = relatedness(a, g, panel)
+    assert all(relatedness(a, g, panel) == first for _ in range(20))

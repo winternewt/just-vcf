@@ -2,6 +2,7 @@
 
 from importlib.metadata import version
 
+from just_vcf.atlas import RegionSet, giab_stratifications, method_atlas, pair_counts, pool_counts
 from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
 from just_vcf.callset import absence_is_reference
 from just_vcf.coverage import (
@@ -137,6 +138,7 @@ __all__ = [
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
+    "RegionSet",
     "Relatedness",
     "RelationBand",
     "SameSubjectCheck",
@@ -177,6 +179,10 @@ __all__ = [
     "genotype_evidence_at",
     "learn_probe_sets",
     "concordance",
+    "giab_stratifications",
+    "method_atlas",
+    "pair_counts",
+    "pool_counts",
     "liftover",
     "link_disagreements",
     "load",

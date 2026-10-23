@@ -11,6 +11,21 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 - `facets.gl_source` names the FORMAT key a VCF facet's `gl` is read from: `gl`, `pl`, or `gl_over_pl` where the header declares both (GL per row, PL where a row's GL is missing). Null where the facet carries no likelihoods. A new `facets` column; `SCHEMA_VERSION` is bumped at merge.
 
+- `method_atlas(pairs, regions)` (RM279, `just_vcf.atlas`): discordance and one-sided rates per
+  (each side's caller and version, region class, variant class, scope) over pairs of one person's
+  facets, with 95% Wilson intervals and the mean `p_same` per basis; counts and rates only, never a
+  per-site row. `giab_stratifications` reads the GIAB v3.6 BEDs (easy/difficult, low mappability,
+  segdups, homopolymers and tandem repeats by length, GC extremes, X and Y) into a `RegionSet` merged
+  once and reused per pair; each pair is compared once and its alleles placed in their classes, and
+  only alleles a genotype carries count. `pair_counts`/`pool_counts` split the run from the pooling;
+  `scripts/method_atlas.py` builds one from a plan of pairs, each gated by `same_person`. No column
+  changes; `SCHEMA_VERSION` unchanged.
+- The first method-error atlas (RM279), over eight same-person pairs (three callers on the same reads,
+  three DeepVariant releases, two PGP-HMS CGI-against-freeBayes pairs): headline rates in
+  docs/METHOD_ATLAS.md. `scripts/method_atlas.py` takes one facet of a file split per caller
+  (`a_caller`/`b_caller` in the plan) and compares a pair by label where `resolve_ref` refuses a facet
+  (CGI vcfBeta's chrY md5 differs from the store's GRCh37), saying so per pair.
+
 - Schema 0.0.17: `phase_set_kinds` gains `cgi_haplink`; CGI hapLinks load as phase sets, and masterVarBeta read
   counts fill `ad`.
 

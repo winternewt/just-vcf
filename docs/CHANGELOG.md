@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `Person` carries `links` (RM275's frame), which it dropped: every link its facets' loads carried,
+  once each, in `canonical_links` order, so a lifted facet grouped with its parent keeps its
+  `liftover_to` link. The CLI's `--facet` narrowing kept no links either, so a step after it lost the
+  load's kin links; it keeps them now. No column changes.
+
 - `rejoin_split` keeps the SV columns RM282 added, which it wrote null: `sv_type` and `copy_number`
   where the split rows agree, and `cipos`, `ciend` and `alt_copy_numbers` concatenated in the joined
   `alts` order (null when a row does not state them per ALT, or two rows disagree on one ALT).

@@ -462,12 +462,14 @@ def _choose_facet(facets: pl.DataFrame, choice: str | None) -> str:
 
 
 def _one_facet(loaded: Loaded, facet_id: str) -> Loaded:
-    """`loaded` narrowed to one facet. The warnings stay whole: a load's warnings are not split by facet."""
+    """`loaded` narrowed to one facet. The warnings and links stay whole: a load's warnings are not
+    split by facet, and a facet's lineage runs through links that do not name it."""
     keep = pl.col("facet_id") == facet_id
     return Loaded(
         facets=loaded.facets.filter(keep),
         calls=loaded.calls.filter(keep),
         blocks=loaded.blocks.filter(keep),
+        links=loaded.links,
         warnings=loaded.warnings,
         schema_version=loaded.schema_version,
     )

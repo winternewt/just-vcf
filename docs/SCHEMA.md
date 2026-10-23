@@ -1176,7 +1176,8 @@ library checks the claim and warns, and it never infers a subject or moves a fac
   else writes it.
 - **Grouped.** `Person.of(*loaded, check=...)` gathers facets that all carry one subject: their
   `facets`, `calls` and `blocks`, concatenated in `facet_id` order, which keeps the canonical order
-  (Decision 11). `people(*loaded, check=...)` returns one `Person` per subject, sorted by subject. A
+  (Decision 11), and `links`, every link the given loads carried, once each in `canonical_links`
+  order (Decision 12). `people(*loaded, check=...)` returns one `Person` per subject, sorted by subject. A
   facet without a subject, or two subjects handed to `Person.of`, is refused with `SubjectError`; one
   `facet_id` given twice is refused, since its rows would count twice.
 - **Checked.** `check` is a relatedness test over two facets, each handed in as a `Loaded` of that one

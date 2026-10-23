@@ -203,6 +203,18 @@ def test_library_logging_is_off_while_a_command_runs(tmp_path: Path, caplog: pyt
     assert logging.root.manager.disable == logging.NOTSET
 
 
+def test_narrowing_to_one_facet_keeps_the_links(tmp_path: Path) -> None:
+    """`convert --facet` narrows the load; the facet's kin link must survive into the steps after it."""
+    text, _, _ = _two_exports()
+    path = tmp_path / "genome.txt"
+    path.write_text(text)
+    loaded = load(path)
+    expected = loaded.links.collect()
+    assert expected.height == 1
+    for facet_id in loaded.facets.collect()["facet_id"].to_list():
+        assert cli._one_facet(loaded, facet_id).links.collect().equals(expected)
+
+
 def test_redaction_leaves_ordinary_words_alone(tmp_path: Path) -> None:
     """A file named `export.txt` written to `out.vcf` must not cut "export" or "out" out of a warning."""
     text, _, _ = _two_exports()

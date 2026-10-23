@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `ftdna_bigy` is in the `variant_calls` family, not `genotype_table`: Big Y is targeted chrY sequencing
+  with the reference base stated, as CASAVA's and SOAPsnp's tables are, so `chip_absence` now refuses it as
+  not an array export instead of reading its absent sites against a chip. A Big Y facet's `family` changes.
+
 - Schema 0.0.18: `facets.gl_source` says whether `gl` was read from PL or GL; `genotype_evidence` reports it
   on rows graded `gl`.
 

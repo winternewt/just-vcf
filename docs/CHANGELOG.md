@@ -4,6 +4,21 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Schema 0.0.12 (RM273): `facets.subject`; `Person.of` groups one subject's facets and checks the claim.
+
+- `Person.of(*loaded, check=...)` and `people(*loaded, check=...)` group facets by the subject the
+  caller supplied, with their calls and blocks, and check the claim with a pluggable relatedness test
+  (RM273). `Person.checks` keeps each pair's answer (`same`, `different`, `could_not_tell`, `not_run`)
+  and `Person.one_person` their Kleene AND; a `different` pair is a warning naming both facets, and the
+  facets stay where the caller put them. A file loaded under two subjects is allowed and warned. No
+  check is wired by default yet: RM274's relatedness takes that place.
+
+- `load(..., subject=...)` labels a file's facets with the person they belong to, in a new nullable
+  `facets.subject` column (RM273). The label is the caller's: nothing fills it from the sample name or
+  the file, and `facet_id` does not digest it. Every derived step (`resolve_ref`, `normalize`,
+  `liftover`, `rejoin_split`, `mint_vrs_ids`) carries its parent's. Schema change; the version bump is
+  the lead's at merge.
+
 - A PGP-HMS freeBayes+VarScan2 merge record whose INFO/SF names no caller (SF absent, or an index no
   `##sourceFiles` line declares) is counted in a load warning; it lands in no facet, as before, but
   was dropped without a word. Counting it reads the file a second time, beside the first part's stats

@@ -15,7 +15,7 @@ import polars as pl
 
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.11"
+SCHEMA_VERSION = "0.0.12"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -208,6 +208,7 @@ FACETS = pl.Schema(
         "chip": pl.String,
         "chip_basis": enum_dtype(ChipBasis),
         "strand_check": enum_dtype(StrandCheck),
+        "subject": pl.String,
     }
 )
 """One row per facet (SCHEMA.md Decision 5)."""

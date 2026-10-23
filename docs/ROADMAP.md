@@ -12,7 +12,7 @@ Severity: high · Status: open (decided by the person in the Part 2 interview, 2
 Typer, registered in `[project.scripts]`, loading `.env` with python-dotenv (CLAUDE.md §4): `just-vcf sniff`, `load` (a summary of the facets), `convert` (to VCF/gVCF via `write_vcf`, optionally through `resolve_ref`, `normalize`, `liftover`, `mint_vrs_ids`) and `check`. Output is counts and aggregates only, never rows: the CLI is a privacy boundary like E12.
 
 ## RM273 — A person (subject) in the schema
-Severity: high · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: high · Status: in progress (subject and Person shipped 2026-10-23; the default check waits for RM274) · Owner: lead
 
 The person chose "Both: supplied, checked" (E1): the caller supplies a subject id when loading; nothing is inferred and facets are never regrouped by the library. The library checks the claim with relatedness (RM274) and warns on a mismatch. Most of the extended shape sits on this: RM275, RM276, RM277, RM280.
 

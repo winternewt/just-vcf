@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.11.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.12.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -479,6 +479,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `derivation_inputs` | `list[struct{role, name, sha256}]`: the files a derived facet was made with besides its parent and its reference collection (`ref_seqcol_digest`). A liftover writes its chain (`role = chain`, the file's name, not its path, and the sha256 of its bytes). Null on a facet read from a file. just-vcf's own shape |
 | `chip`, `chip_basis` | the genotyping chip an array export came from (RM4, `just_vcf.chip`), and how it is known: `stated` (the header names it: AncestryDNA's array version, a Final Report's `Content` manifest, Living DNA's genotype chip) or `inferred` (a 23andMe export's row count and internal-id profile both point at one generation; a preamble-less table in its layout is read so when it carries 23andMe's `i…` ids; an FTDNA or MyHeritage export, or a Final Report that names no manifest, whose rsids one Illumina manifest clearly holds, by marker overlap). An open vocabulary: `23andme_v1_v2` (the two are not told apart), `23andme_v3`, `23andme_v4`, `23andme_v5`, `ancestrydna_v1`, `ancestrydna_v2`, `living_dna_sirius`, `illumina:<manifest>` as a Final Report names it, and the platform families `illumina_gsa` and `illumina_omniexpress`, which only marker overlap names: a stated value carries the manifest, an inferred one the family, since one manifest per family is compared with, and a GSA v2 Final Report matches the v3 manifest at 0.97: the overlap does not tell versions apart. Null = unknown (a statement with no entry is quoted in a warning; an overlap that names no chip says why in one) or not an array. just-vcf's own shape |
 | `strand_check` | `forward` or `mixed`: what `resolve_ref` found about the strand an array's genotypes are written on (F13, Decision 2). Null = not checked: not an array, REF not read yet, or too few heterozygous rows. Never read as forward |
+| `subject` | the person the facet belongs to, as the caller labels them (RM273): supplied at `load(..., subject=...)`, never read from the file, never a sample name, never inferred. Null = not supplied. Every derived step's facet inherits its parent's. It is a claim, not identity: `facet_id` does not digest it, so one file loaded under two subjects gives one `facet_id` twice. It identifies a person if the caller makes it so: logs, warnings and errors name the `facet_id`, never the subject. Grouping by it and the check of the claim are under "Facets of one person" below. just-vcf's own shape |
 
 No load timestamp: it would break determinism, and the file digest already says which bytes were read.
 
@@ -978,6 +979,43 @@ lifted to GRCh38. How the draft holds up:
 None of this changes a column today. It marks where the person-level layer and the coverage facet have
 to connect.
 
+## Facets of one person (RM273)
+
+The person chose "supplied, checked" (Part 2 interview, E1): the caller says whose a file is, the
+library checks the claim and warns, and it never infers a subject or moves a facet to another one.
+
+- **Supplied.** `load(..., subject=...)` writes the label into `facets.subject` on every facet the file
+  loads as (Decision 5). Derived steps copy their parent's row, so the label carries down. Nothing
+  else writes it.
+- **Grouped.** `Person.of(*loaded, check=...)` gathers facets that all carry one subject: their
+  `facets`, `calls` and `blocks`, concatenated in `facet_id` order, which keeps the canonical order
+  (Decision 11). `people(*loaded, check=...)` returns one `Person` per subject, sorted by subject. A
+  facet without a subject, or two subjects handed to `Person.of`, is refused with `SubjectError`; one
+  `facet_id` given twice is refused, since its rows would count twice.
+- **Checked.** `check` is a relatedness test over two facets, each handed in as a `Loaded` of that one
+  facet, answering `True` (one person), `False` (two) or `None` (could not tell). Facets of one source
+  (the same `source_sha256`, `member` and `sample`: a file, the facets derived from it, or the facets
+  one file loads as) are one person's data by construction and are not checked against each other.
+  Every other pair of sources is checked once, each source standing as its facet read from the file
+  (else its lowest `facet_id`). `Person.checks` holds one row per pair (`facet_id`, `other_facet_id`,
+  `outcome`: `same`, `different`, `could_not_tell`, `not_run`), and `Person.one_person` is their Kleene
+  AND: `False` when any pair is `different`, `True` only when every pair is `same`, `None` otherwise,
+  one source alone included. `different` and `could_not_tell` pairs are warnings naming both facet ids;
+  the facets stay where the caller put them. No check given leaves every pair `not_run`, which is not a
+  pass. RM274 brings the library's own check.
+- **One source under two subjects** (a file loaded twice under two labels) is allowed: `people` warns
+  in each person concerned, naming the facet ids. Two samples of one VCF under two subjects (a trio)
+  are different sources and draw no warning.
+- **The label is not identity.** `facet_id` does not digest it, so it cannot split one file's data into
+  two ids, and relabelling changes no `facet_id`, its own or a derived one's. A derived step's cache
+  key digests the facet row, subject included, so one step run on one file under two labels writes two
+  cache generations: disk, never correctness (rejected: stripping the subject from that key in
+  `just_vcf.cache`, a shared module, for a cost only relabelling pays). The subject identifies a person if
+  the caller makes it so; warnings and errors name facet ids, never the subject. Rejected: a subject
+  inferred from relatedness (the person's option b), which E6's relatedness may suggest but never
+  assign; a subject read from the sample name, which is a file's label, often a real name, and the
+  same for different people across files.
+
 ## Sex-chromosome evidence: computed per facet, not stored (RM269)
 
 `sex_chromosome_evidence(loaded)` returns one `SexChromosomeEvidence` per row of `loaded.facets`. Like
@@ -1083,6 +1121,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **One facet column, version bump pending** (2026-10-23, RM273): `facets.subject`, the caller's
+  label for the person a facet belongs to, supplied at `load(..., subject=...)` and inherited by every
+  derived facet. Nullable and additive. `SCHEMA_VERSION` is deliberately left at 0.0.11 on this
+  builder branch; the lead bumps it at merge. `facet_id` does not digest the subject (Decision 5).
+
 - **No version change** (2026-10-23, CGI native `callset_type`): no column changes. Rule changed
   (Decision 5, RM4): a `var` or `masterVarBeta` whose header has no whole-genome `#TITLE` is typed from
   its rows, where it was null. `absence_means` stays `blocks`. Values change on files that already
@@ -1165,6 +1208,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   which runs beside other builders' branches; the lead bumps it at merge. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.12** (2026-10-23, RM273): `facets.subject`, the caller's subject label. Additive.
 
 - **0.0.11** (2026-10-23): `AbsenceMeans.REFERENCE` (a CGI VCF's silence is its producer's reference call;
   the `absence_means` enum dtype gains a member). Values change: the empty allele is `""` in every loader,

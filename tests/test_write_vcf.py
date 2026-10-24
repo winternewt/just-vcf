@@ -11,6 +11,7 @@ from just_vcf import (
     Loaded,
     UnsortedRowsError,
     UnwritableRowsError,
+    genotype_evidence,
     load,
     rejoin_split,
     vcf_samples,
@@ -56,7 +57,7 @@ RICH = [
 RICH_FORMAT = ("GT", "GQ", "DP", "AD", "PL", "GL", "GP", "DS", "PS", "FT")
 
 KEY = ["chrom", "pos", "source_ref", "alts", "gt", "gt_alleles"]
-VALUES = ["ids", "end_pos", "qual", "filters", "gq", "dp", "ad", "gl", "gp", "dosage", "sample_filters", "phase_sets", "source_alleles"]
+VALUES = ["ids", "end_pos", "qual", "filters", "gq", "hq", "dp", "ad", "gl", "gp", "dosage", "sample_filters", "phase_sets", "source_alleles"]
 
 
 def vcf_text(records: list[str], fmt: tuple[str, ...] = ("GT",), info: tuple[str, ...] = (), contigs: tuple[str, ...] = CONTIGS,
@@ -458,6 +459,90 @@ def test_a_first_phase_psl_does_not_name_is_written_and_counted(tmp_path: Path) 
     assert any(w.startswith("1 row(s) state their first haplotype's phase") for w in written.warnings)
     back = load(written.path).calls.filter(pl.col("pos") == 12).collect()
     assert back["phased"].to_list() == [[None, False]]
+
+
+HQ_FORMAT_LINE = '##FORMAT=<ID=HQ,Number=2,Type=Integer,Description="Haplotype quality">'
+HQ_RECORDS = [
+    "1\t100\t.\tA\tG\t50\tPASS\t.\tGT:HQ\t0|1:51,40",
+    "1\t200\t.\tC\tT\t50\tPASS\t.\tGT:GQ:HQ\t0/0:30:48,47",
+    "1\t300\t.\tG\tA,C\t50\tPASS\t.\tGT:HQ\t./1:.,30",
+    "1\t400\t.\tT\tC\t50\tPASS\t.\tGT:HQ\t1/1:.,33",
+    "1\t500\t.\tT\tC\t50\tPASS\t.\tGT\t0/1",
+    "MT\t150\t.\tC\tT\t99\tPASS\t.\tGT:HQ\t1:51,.",
+]
+
+
+def hq_loaded(tmp_path: Path, records: list[str] = HQ_RECORDS, name: str = "hq.vcf", number: str = "2") -> Loaded:
+    path = tmp_path / name
+    text = vcf_text(records, fmt=("GT", "GQ")).replace("#CHROM", HQ_FORMAT_LINE.replace("Number=2", f"Number={number}") + "\n#CHROM")
+    path.write_text(text)
+    return load(path)
+
+
+def test_haplotype_qualities_round_trip_as_format_hq(tmp_path: Path) -> None:
+    """`hq` goes out as FORMAT HQ, declared as VCF reserves it (`Number=2`): a haploid row writes its
+    second value missing, as CGI's vcfBeta does, and an unscored allele `.`; the load reads it all back."""
+    loaded = hq_loaded(tmp_path)
+    original = loaded.calls.collect()
+    assert original["hq"].null_count() == 1, "the fixture scores every row but one"
+    written = write_vcf(loaded, tmp_path / "out.vcf.gz")
+    text = plain_text(written.path)
+    assert '##FORMAT=<ID=HQ,Number=2,Type=Integer,Description="Haplotype qualities">' in text
+    body = {(row[0], int(row[1])): dict(zip(row[8].split(":"), row[9].split(":"))) for row in (line.split("\t") for line in text.splitlines() if not line.startswith("#"))}
+    for row in original.iter_rows(named=True):
+        hq = row["hq"]
+        expected = None if hq is None else ",".join("." if v is None else str(v) for v in [*hq, *[None] * (2 - len(hq))])
+        assert body[(row["chrom"], row["pos"])].get("HQ") == expected, row
+    back = load(written.path).calls.collect()
+    assert written.warnings == ()
+    assert as_set(back, KEY + ["hq"]) == as_set(original, KEY + ["hq"])
+    graded = [genotype_evidence(facet).select("pos", "grade_basis", "confidence").sort("pos").collect() for facet in (loaded, load(written.path))]
+    assert graded[0].equals(graded[1]), "the export keeps every row's grade"
+
+
+def test_a_cgi_var_facet_keeps_its_allele_scores_through_vcf(tmp_path: Path) -> None:
+    """A CGI `var` facet's `hq` (varScoreEAF per haplotype) is written as HQ, so its VCF export grades
+    each written row as the facet did, by its lowest score."""
+    loaded = load(write_cgi(tmp_path, var_text(LOCI), "var-GS000000001-ASM.tsv.bz2"))
+    original = loaded.calls.collect()
+    assert original["hq"].is_not_null().sum() > 0
+    written = write_vcf(loaded, tmp_path / "out.vcf.gz", resolved_only=True)
+    reloaded = load(written.path)
+    back = reloaded.calls.collect()
+    assert back.height == written.rows_written and back["hq"].is_not_null().sum() > 0
+    assert as_set(back, KEY + ["hq"]) <= as_set(original, KEY + ["hq"])
+    key = ["chrom", "pos", "grade_basis", "confidence"]
+    before = genotype_evidence(loaded).filter(pl.col("evidence_basis") == "assay").select(key).collect()
+    after = genotype_evidence(reloaded).select(key).collect()
+    assert after.filter(pl.col("grade_basis") == "hq").height > 0
+    assert set(after.iter_rows()) <= set(before.iter_rows())
+
+
+def test_haplotype_qualities_past_two_alleles_are_left_out_and_counted(tmp_path: Path) -> None:
+    """HQ is `Number=2`: a row with more GT alleles cannot be written under it, and is left out of HQ."""
+    records = ["1\t100\t.\tA\tG\t50\tPASS\t.\tGT:HQ\t1/1/1:5,6,7", "1\t200\t.\tA\tG\t50\tPASS\t.\tGT:HQ\t0/1:20,30"]
+    loaded = hq_loaded(tmp_path, records, number=".")
+    assert loaded.calls.collect()["hq"].to_list() == [[5, 6, 7], [20, 30]]
+    written = write_vcf(loaded, tmp_path / "out.vcf.gz")
+    assert written.warnings == (
+        "1 row(s) had haplotype qualities for more than two GT alleles, which HQ (Number=2) cannot write; left out",
+    )
+    assert load(written.path).calls.collect()["hq"].to_list() == [None, [20, 30]]
+
+
+def test_htslib_reads_hq(tmp_path: Path) -> None:
+    """Opt-in external validation: htslib reads the written HQ as the frame holds it, a haploid row's
+    missing second value included."""
+    pysam = pytest.importorskip("pysam")
+    loaded = hq_loaded(tmp_path)
+    written = write_vcf(loaded, tmp_path / "out.vcf.gz")
+    with pysam.VariantFile(str(written.path)) as reader:
+        sample = list(reader.header.samples)[0]
+        got = {(r.chrom, r.pos): r.samples[sample].get("HQ") for r in reader}
+    for row in loaded.calls.collect().iter_rows(named=True):
+        hq = row["hq"]
+        expected = None if hq is None else tuple([*hq, *[None] * (2 - len(hq))])
+        assert got[(row["chrom"], row["pos"])] in ((expected,) if hq is not None else (None, (None, None))), row
 
 
 def test_one_facet_only(tmp_path: Path) -> None:

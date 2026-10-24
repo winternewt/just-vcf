@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf` writes `hq` as FORMAT `HQ` (`Number=2`, as VCF reserves it), so a CGI `var` or
+  masterVarBeta facet keeps its allele scores in its VCF export, graded alike on both sides, and a
+  VCF with HQ round-trips. A haploid row is written `51,.`, which `load` reads back as `[51]`; a row
+  with more than two GT alleles cannot be written under `Number=2` and has its `hq` left out, counted
+  in a warning.
+
 - The VCF loaders read FORMAT `HQ` (haplotype qualities) into `calls.hq`, one value per GT allele, so
   a VCF row with HQ and no GP, GL or GQ that grades it is graded by its lowest HQ (basis `hq`), a
   reference genotype included. A haploid row's `Number=2` pair with its second value missing (`51,.`,

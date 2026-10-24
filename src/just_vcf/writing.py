@@ -26,6 +26,10 @@ What is written, and the rules it follows:
   frame holds log10 likelihoods and does not remember
   whether the source wrote PL. `gl`, `gp` and `ad` are written only when `source_alleles`, the order
   they are indexed over, is the written `[REF] + ALTs`; otherwise they are left out and counted.
+  `hq` is written as HQ, declared `Number=2` as VCF reserves it: `.` per unscored allele, and a
+  haploid row's second value missing (`51,.`, as CGI's vcfBeta writes it), which the loader reads back
+  as the one value. A row with more than two GT alleles cannot be written under `Number=2`, and its
+  `hq` is left out, counted.
 - **VCF 4.3**, not 4.4+: GP is a probability from 4.3 on, which is what `gp` holds, and the writer
   emits no leading phase indicator, so the first haplotype's phase follows 4.3's implicit rule.
   **VCF 4.5 when a row holds a PSL phase set**, which 4.3 has no field for: FORMAT `PSL`, `PSO` and
@@ -97,6 +101,7 @@ VCF_VERSION_PSL = "VCFv4.5"
 _FORMAT_DESCRIPTIONS = {
     "GT": "Genotype",
     "GQ": "Conditional genotype quality",
+    "HQ": "Haplotype qualities",
     "DP": "Read depth of this sample",
     "MIN_DP": "Minimum read depth over the block",
     "AD": "Read depth for each allele",
@@ -312,6 +317,13 @@ def write_vcf(
             f"{stats['n_vectors_dropped']} row(s) had GL/GP/AD indexed over another allele list than the written "
             "REF and ALTs; those vectors were left out"
         )
+    if stats["n_hq_polyploid"]:
+        warnings.append(
+            f"{stats['n_hq_polyploid']} row(s) had haplotype qualities for more than two GT alleles, which HQ "
+            "(Number=2) cannot write; left out"
+        )
+    if stats["n_hq_unfit"]:
+        warnings.append(f"{stats['n_hq_unfit']} row(s) had haplotype qualities that are not one per GT allele; left out of HQ")
     if stats["n_ps_dropped"]:
         warnings.append(f"{stats['n_ps_dropped']} row(s) had a PS phase set that is not an integer, which PS cannot write; left out")
     if stats["n_haplink_unwritten"]:
@@ -557,12 +569,29 @@ def _gt_text(ploidy: int, v45: bool = False) -> pl.Expr:
     return pl.when(gt.list.len() > 0).then(pl.concat_str(parts, ignore_nulls=True))
 
 
+def _hq_writable() -> pl.Expr:
+    """True where `hq` holds a score and fits HQ's reserved `Number=2`: one value per GT allele, for
+    one or two alleles."""
+    hq = pl.col("hq")
+    return (
+        hq.list.drop_nulls().list.len().fill_null(0).gt(0) & (hq.list.len() == pl.col("gt").list.len()) & hq.list.len().is_between(1, 2)
+    ).fill_null(False)
+
+
+def _hq_text() -> pl.Expr:
+    """HQ: `hq` with `.` per unscored allele, and a haploid row's second value written missing (`51,.`),
+    as `Number=2` asks and as CGI's vcfBeta writes it; the loader reads it back as the one value."""
+    text = pl.when(pl.col("hq").list.len() == 1).then(pl.concat_str(_list_text("hq"), pl.lit(",."))).otherwise(_list_text("hq"))
+    return pl.when(_hq_writable()).then(text)
+
+
 def _format_values(ploidy: int, v45: bool = False) -> dict[str, pl.Expr]:
     """Each FORMAT key's text per row, null where the row has no value for it."""
     vectors = _vectors_indexable()
     return {
         "GT": _gt_text(ploidy, v45),
         "GQ": pl.col("gq").cast(pl.String),
+        "HQ": _hq_text(),
         "DP": pl.col("dp").cast(pl.String),
         "MIN_DP": pl.lit(None, dtype=pl.String),
         "AD": pl.when(vectors).then(_list_text("ad")),
@@ -588,6 +617,15 @@ def _scan(calls: pl.LazyFrame) -> dict:
             *[text.is_not_null().any().alias(f"has_{key}") for key, text in values.items()],
             *[text.is_not_null().any().alias(f"has_info_{key}") for key, text in _sv_info_values(v45).items()],
             (_has_vector() & ~_vectors_indexable() & pl.col("_unwritable").is_null()).sum().alias("n_vectors_dropped"),
+            *[
+                (pl.col("hq").list.drop_nulls().list.len().fill_null(0).gt(0) & ~_hq_writable() & pl.col("_unwritable").is_null() & fits)
+                .sum()
+                .alias(name)
+                for name, fits in (
+                    ("n_hq_polyploid", (pl.col("hq").list.len() == pl.col("gt").list.len()).fill_null(False)),
+                    ("n_hq_unfit", (pl.col("hq").list.len() != pl.col("gt").list.len()).fill_null(True)),
+                )
+            ],
             (pl.col("phase_sets").list.drop_nulls().list.len().fill_null(0).gt(0) & _ps_text().is_null() & ~_has_psl() & ~_has_haplink())
             .sum()
             .alias("n_ps_dropped"),

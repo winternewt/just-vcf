@@ -870,6 +870,33 @@ def test_hq_declared_with_another_number_is_not_carried(tmp_path: Path, number: 
     assert any(f"HQ (Number={number})" in w and "not carried" in w for w in loaded.warnings)
 
 
+@pytest.mark.parametrize(
+    ("kind", "rows"),
+    [
+        # (GT:HQ, the `hq` read, why a value is left out). A whole number is read as it is; one with a
+        # fraction is never rounded or cut to fit u16, and text that is no number is no score.
+        ("Float", [("0/1:30.5,40", [None, 40], "fraction"), ("0/1:30.0,40.0", [30, 40], None), ("0/1:.,40.9", None, "fraction"),
+                   ("0/1:nan,40", [None, 40], "text"), ("./1:30.5,40", [None, 40], "uncalled")]),
+        ("String", [("0/1:30,x", [30, None], "text"), ("0/1:30.5,40", [None, 40], "fraction"), ("0/1:30,40", [30, 40], None),
+                    ("0/1:.,x", None, "text"), ("./1:x,40", [None, 40], "uncalled")]),
+    ],
+)
+def test_hq_that_is_not_a_whole_number_is_left_out_and_counted(tmp_path: Path, kind: str, rows: list[tuple]) -> None:
+    """VCF 4.2 reserves nothing, so polars-bio reads HQ under whatever Type the header declares. A
+    score is a whole phred number: a value with a fraction is left out, not truncated, and text that is
+    no number is left out too, each reason counted in its own warning."""
+    meta = (f'##FORMAT=<ID=HQ,Number=2,Type={kind},Description="Haplotype quality">',)
+    loaded = load(write(tmp_path, vcf_text(_hq_records(rows), extra_meta=meta)))
+    assert loaded.calls.collect().sort("pos")["hq"].to_list() == [hq for _, hq, _ in rows]
+    counts = {reason: sum(1 for *_, why in rows if why == reason) for reason in ("fraction", "text", "uncalled")}
+    hq_warnings = {w for w in loaded.warnings if "HQ" in w}
+    assert hq_warnings == {
+        f"{counts['fraction']} HQ value(s) not a whole number left out",
+        f"{counts['text']} HQ value(s) not a number left out",
+        f"{counts['uncalled']} HQ value(s) on an uncalled GT allele not read",
+    }
+
+
 @pytest.mark.parametrize("version", ["VCFv4.3", "VCFv4.4", "VCFv4.5"])
 def test_hq_declared_with_a_type_its_version_reserves_otherwise_is_not_carried(tmp_path: Path, version: str) -> None:
     """VCF 4.3 on reserves HQ as Integer, and polars-bio refuses a header of those versions declaring it

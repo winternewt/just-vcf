@@ -744,7 +744,11 @@ other key:
   which allele each value speaks for is unknown; so does a record with no GT. Counted in one warning.
 - **Per value.** `.` is no value. A value on an uncalled allele (`./1:20,30`) speaks for no sequence
   and is not read, the rule CGI's native `?` slots follow; counted. A value outside 0..65535 is left out,
-  counted. A row left with no value is null (`.` and `.,.` alike).
+  counted. A VCF 4.2 header can declare HQ `Float` or `String` (polars-bio holds only 4.3+ to the
+  reserved Integer, Decision 9): a whole number is read as it is (`30.0` is 30), a number with a
+  fraction (`30.5`) is left out, never truncated or rounded, since that would be a score the file did
+  not write, and text that is no finite number (`x`, `nan`) is left out too, each reason counted in
+  its own warning. A row left with no value is null (`.` and `.,.` alike).
 - **Blocks** hold no `hq`; an HQ on a reference-block record is not read.
 
 CGI's vcfBeta (`vcf_cgi`) writes HQ beside `EHQ`, "haplotype quality, equal allele fraction

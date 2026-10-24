@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `normalize` no longer leaves a split row's `hq` whole: a GT slot it writes `.` (the slot held
+  another ALT) loses its haplotype quality too, and a row left with no score has `hq` null, so `1/2`
+  with HQ `51,40` splits into `[51, null]` and `[null, 40]`. Before, both rows kept `[51, 40]`, and
+  `write_vcf` wrote a score the loader then refused on the uncalled allele. `rejoin_split` now joins
+  `hq` per GT slot, as it joins GT (one score per slot from the rows, null where they give two or
+  none, or where the slot is uncalled), so a normalized site re-joins with its parent's scores, and a
+  vt-split file's HQ joins where it was dropped. Grades are unchanged (a split row with a `.` slot is
+  not graded by `hq`). `NORMALIZE_VERSION` 8, `REJOIN_VERSION` 5: derived `facet_id`s change.
+
 - `write_vcf` writes `hq` as FORMAT `HQ` (`Number=2`, as VCF reserves it), so a CGI `var` or
   masterVarBeta facet keeps its allele scores in its VCF export, graded alike on both sides, and a
   VCF with HQ round-trips. A haploid row is written `51,.`, which `load` reads back as `[51]`; a row

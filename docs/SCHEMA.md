@@ -783,6 +783,11 @@ parquet spill of `calls`, three columns, so they cost no second parse of the VCF
   source's ALT order, so a consumer compares ALTs as a set, or through `gt_alleles`.
 - Each GT slot takes the one allele the rows place there; `0` when no row places an ALT and a row says
   `0`; null when every row is null there. bcftools' `0` and vt's `.` read alike.
+- `hq` is joined per slot too: each slot takes the one score the rows give there, null where they give
+  none or two different ones, or where the joined GT slot is uncalled; null when no slot keeps one. So
+  a score copied whole to every row (bcftools copies a `Number=2` field) and one kept on a row's own
+  slot only (vt's `.`, `normalize`) read alike (`REJOIN_VERSION` 5; before, `hq` was kept only when
+  every row's whole list agreed, which `normalize`'s rows never do at a heterozygous site).
 - `ids` and `filters` are unions (sorted; `PASS` only when no row failed a filter); `phased`, the phase
   sets, `dp`, `qual`, `sv_type` and `copy_number` are kept when every row agrees and null otherwise.
 - The per-ALT columns, `cipos`, `ciend` (two values per ALT) and `alt_copy_numbers` (one), are each
@@ -808,7 +813,10 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    --multi-overlaps .`, vt and Glow write them: a GT slot holding another ALT is null (`.`), never
    `0`, so `1/2` at `A>G,T` becomes `1/.` and `./1`, and `1/1` gives `./.` on the uncarried ALT. Each
    split row has `split_signal = marker`: in the frame it is tagged as split, as vt's output is, and
-   `rejoin_split` can join it again. `source_gt` is null (no file wrote the text). Vectors:
+   `rejoin_split` can join it again. `source_gt` is null (no file wrote the text). `hq` keeps a slot's
+   score only where its GT slot is kept (REF or this row's ALT): a score speaks for the allele in its
+   slot, and the loaders give an uncalled slot none, so `1/2` with HQ `51,40` gives `[51, null]` and
+   `[null, 40]`, and a row left with no score has `hq` null (`NORMALIZE_VERSION` 8). Vectors:
    - `ad` is `[REF, ALT]`, sliced from the parent's: read counts per allele do not depend on the other
      alleles;
    - `gl` is sliced to the genotypes over `[REF, ALT]` (haploid `0, k`; diploid `0/0, 0/k, k/k`) only
@@ -2234,6 +2242,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-24, layer 7, `hq` through a split): `normalize` writes a split row's
+  `hq` null on each GT slot it writes `.` (the slot held another ALT), and the row's `hq` null when no
+  slot keeps a score, so `hq` holds one score per called GT slot, as every loader writes it. Before,
+  the parent's whole list stayed on every split row (`NORMALIZE_VERSION` 8). `rejoin_split` joins
+  `hq` per slot, as it joins GT, so `normalize`'s rows and other tools' (bcftools copies HQ whole, vt
+  keeps it on a row's own slot) give the parent's scores back (`REJOIN_VERSION` 5). Grades do not
+  move: `genotype_evidence` reads `hq` only on a fully called genotype, and a split row with a `.` slot
+  is not one.
 
 - **No version change** (2026-10-24, layer 7, a VCF's haplotype qualities): the VCF loaders read
   FORMAT `HQ` into `calls.hq` ("A VCF's haplotype qualities"), a column 0.0.19 defined as VCF's HQ

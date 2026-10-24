@@ -130,3 +130,12 @@ status lines say what exists. Schema at 0.0.4.
 - **Flaky test, 2026-10-24:** `tests/test_ancestry.py::test_prive_proportions_of_each_group[EUR]` failed once
   in a full run and passed alone and in the next full run. Its inputs are seeded (seed 11), so the
   nondeterminism is elsewhere (solver, thread order, or another test's state). Unexplained; a builder's.
+- **2026-10-24 evening, paused on the person's word** ("pause after this item I restart"). All eight layers at or
+  past 90% (docs/LAYERS.md); desk #100–#103 filed. Audit 5 (1a45d09..cc08843) done and its four findings fixed
+  and merged. Open follow-ups from that fix, none started: HQ declared Integer with an unparseable value
+  (`30.5,40`, `x,40`) still fails the whole 4.2 load (polars-bio sometimes names the field, so a retry dropping
+  it is possible: a design choice); GQ declared Float under 4.2 truncates silently; PSO/PSQ declared
+  `Number=1` with two values fail; FT declared Integer under 4.2 fails; CGI's `_number` nulls a non-integer
+  score silently. Next audit after six more merges. The CGI var builder's worktree is kept for its
+  `data/output` runs (copied to main's `data/output/`).
+- **Flaky Privé test:** fixed in 71fe6fd (the inner join's row order); likely cause, failure message not kept.

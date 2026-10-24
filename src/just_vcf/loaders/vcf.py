@@ -1052,9 +1052,10 @@ def _hq_slots(integer: bool = True) -> _HqSlots:
         return _HqSlots(unfit=stated & ~fits, read=head, uncalled=uncalled, not_whole=zero, not_number=zero)
     finite = head.list.eval(pl.element().is_finite().cast(pl.Int64)).list.sum().fill_null(0)
     whole = head.list.eval(pl.when(pl.element().is_finite() & (pl.element() == pl.element().floor())).then(pl.element()))
+    # Kept in Float64: a whole number past i64 (`1e30`) would not cast, and the range check reads floats.
     return _HqSlots(
         unfit=stated & ~fits,
-        read=whole.cast(pl.List(pl.Int64)),
+        read=whole,
         uncalled=uncalled,
         not_whole=finite - whole.list.drop_nulls().list.len().fill_null(0),
         not_number=on_called.list.sum().fill_null(0) - finite,

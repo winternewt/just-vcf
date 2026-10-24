@@ -876,9 +876,9 @@ def test_hq_declared_with_another_number_is_not_carried(tmp_path: Path, number: 
         # (GT:HQ, the `hq` read, why a value is left out). A whole number is read as it is; one with a
         # fraction is never rounded or cut to fit u16, and text that is no number is no score.
         ("Float", [("0/1:30.5,40", [None, 40], "fraction"), ("0/1:30.0,40.0", [30, 40], None), ("0/1:.,40.9", None, "fraction"),
-                   ("0/1:nan,40", [None, 40], "text"), ("./1:30.5,40", [None, 40], "uncalled")]),
+                   ("0/1:nan,40", [None, 40], "text"), ("./1:30.5,40", [None, 40], "uncalled"), ("0/1:1e30,40", [None, 40], "out")]),
         ("String", [("0/1:30,x", [30, None], "text"), ("0/1:30.5,40", [None, 40], "fraction"), ("0/1:30,40", [30, 40], None),
-                    ("0/1:.,x", None, "text"), ("./1:x,40", [None, 40], "uncalled")]),
+                    ("0/1:.,x", None, "text"), ("./1:x,40", [None, 40], "uncalled"), ("0/1:100000000000000000000,40", [None, 40], "out")]),
     ],
 )
 def test_hq_that_is_not_a_whole_number_is_left_out_and_counted(tmp_path: Path, kind: str, rows: list[tuple]) -> None:
@@ -888,9 +888,10 @@ def test_hq_that_is_not_a_whole_number_is_left_out_and_counted(tmp_path: Path, k
     meta = (f'##FORMAT=<ID=HQ,Number=2,Type={kind},Description="Haplotype quality">',)
     loaded = load(write(tmp_path, vcf_text(_hq_records(rows), extra_meta=meta)))
     assert loaded.calls.collect().sort("pos")["hq"].to_list() == [hq for _, hq, _ in rows]
-    counts = {reason: sum(1 for *_, why in rows if why == reason) for reason in ("fraction", "text", "uncalled")}
+    counts = {reason: sum(1 for *_, why in rows if why == reason) for reason in ("fraction", "text", "uncalled", "out")}
     hq_warnings = {w for w in loaded.warnings if "HQ" in w}
     assert hq_warnings == {
+        f"{counts['out']} HQ value(s) outside 0..65535 set to null",
         f"{counts['fraction']} HQ value(s) not a whole number left out",
         f"{counts['text']} HQ value(s) not a number left out",
         f"{counts['uncalled']} HQ value(s) on an uncalled GT allele not read",

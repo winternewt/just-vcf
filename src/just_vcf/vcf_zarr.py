@@ -24,6 +24,10 @@ What is written:
   writes GT; false on a row phased by a CGI hapLink or with a slot in a VCF 4.5 PSL phase set,
   neither of which has a field here: the spec's phase is one flag per call, read as PS's set or the
   chromosome's implicit one, so `true` would put the row in the wrong set);
+- `call_HQ` where any row has `hq`: one haplotype quality per GT slot on the `ploidy` dimension, as
+  `call_genotype` is, so `-1` on a slot with no score and `-2` past the row's ploidy; a row of any
+  ploidy is written (`write_vcf`'s HQ, `Number=2`, holds two). An `hq` not one per GT slot is left out,
+  counted;
 - the FORMAT fields any row has: `call_GQ`, `call_DP`, `call_AD`, `call_GL`, `call_GP`, `call_DS`,
   `call_PS` (PS-kind phase sets, as integers), `call_FT`, `call_CN`; and the INFO fields any row has:
   `variant_SVTYPE`, `variant_JUST_VCF_SPLIT`. `call_AD`, `call_GL` and `call_GP` are written only
@@ -90,6 +94,7 @@ _TYPECODES = {"|i1": "b", "<i2": "h", "<i4": "i", "<i8": "q"}
 
 _DESCRIPTIONS = {
     "GQ": "Conditional genotype quality",
+    "HQ": "Haplotype qualities",
     "DP": "Read depth of this sample",
     "AD": "Read depth for each allele",
     "GL": "Genotype likelihoods, log10",
@@ -177,6 +182,9 @@ def write_vcf_zarr(
             f"{vectors_dropped} row(s) had GL/GP/AD indexed over another allele list than the written REF and ALTs; "
             "those vectors were left out"
         )
+    hq_unfit = rows.filter(pl.col("_hq_unfit")).height
+    if hq_unfit:
+        warnings.append(f"{hq_unfit} row(s) had haplotype qualities that are not one per GT allele; left out of HQ")
     mixed = rows.filter(pl.col("_mixed_phase")).height
     if mixed:
         warnings.append(f"{mixed} row(s) had phased and unphased slots in one genotype; written unphased")
@@ -232,6 +240,10 @@ def _columns() -> list[pl.Expr]:
         _has_haplink().alias("_haplink"),
         (_has_psl() & ~_has_haplink()).alias("_psl"),
         pl.col("gq"),
+        # One score per GT slot, on the ploidy dimension; a list not parallel to `gt` says nowhere which
+        # slot each value speaks for, and is left out, as `write_vcf` leaves it out of HQ.
+        pl.when(pl.col("hq").list.len() == pl.col("gt").list.len()).then(pl.col("hq")).alias("_HQ"),
+        (pl.col("hq").is_not_null() & ~(pl.col("hq").list.len() == pl.col("gt").list.len()).fill_null(False)).alias("_hq_unfit"),
         pl.col("dp"),
         pl.when(indexable).then(pl.col("ad")).alias("_AD"),
         pl.when(indexable).then(pl.col("gl")).alias("_GL"),
@@ -366,6 +378,16 @@ def _write_store(
     gt_dtype = "|i1" if (gt_max or 0) < 2**7 else "<i2"
     array_of("call_genotype", ["variants", "samples", "ploidy"], gt_dtype, (1, ploidy), lambda part: _padded(part["gt"], ploidy), _INT_FILL)
     array_of("call_genotype_phased", ["variants", "samples"], "|b1", (1,), lambda part: part["_phased"].to_list(), None)
+    if rows["_HQ"].is_not_null().any():
+        array_of(
+            "call_HQ",
+            ["variants", "samples", "ploidy"],
+            "<i4",
+            (1, ploidy),
+            lambda part: _per_gt_slot(part["gt"], part["_HQ"], ploidy),
+            _INT_FILL,
+            _DESCRIPTIONS["HQ"],
+        )
     ps_max = rows["_PS"].abs().max() or 0
     ps_dtype = "<i4" if ps_max < 2**31 else "<i8"
     scalars = (("GQ", "gq", "<i4"), ("DP", "dp", "<i4"), ("DS", "dosage", "<f4"), ("PS", "_PS", ps_dtype), ("FT", "_FT", "|O"), ("CN", "copy_number", "<f4"))
@@ -410,6 +432,20 @@ def _padded(column: pl.Series, width: int) -> list:
         else:
             flat.extend(value)
             flat.extend([_PAD] * (width - len(value)))
+    return flat
+
+
+def _per_gt_slot(gt: pl.Series, column: pl.Series, ploidy: int) -> list:
+    """A list column parallel to `gt` as flat values, `ploidy` per row, padded as `call_genotype` is:
+    `None` for a slot with no value (a null list has none on any of the row's slots), `_PAD` past the
+    row's own ploidy; a row without a genotype is missing throughout, as `call_genotype` writes it."""
+    flat: list = []
+    for slots, values in zip(gt.to_list(), column.to_list()):
+        if slots is None:
+            flat.extend([None] * ploidy)
+            continue
+        flat.extend(values if values is not None else [None] * len(slots))
+        flat.extend([_PAD] * (ploidy - len(slots)))
     return flat
 
 

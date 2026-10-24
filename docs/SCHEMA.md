@@ -687,7 +687,7 @@ With Decisions 1–5 as recommended:
 | `dosage` | `f32` | no dosage given |
 | `evidence_basis` | `Enum` | never null. Origin only: `assay`, `ref_block`, `absence` (Decision 3) |
 | `gq` | `u16` | not given, or outside 0..65535 (counted in the warnings) |
-| `hq` | `list[u16]` | no slot has a score. Parallel to `gt`: a phred-scaled confidence in each haplotype's call (VCF's reserved FORMAT `HQ`, haplotype qualities). From CGI's native files, `varScoreEAF` per haplotype, the lowest of a `var` haplotype's sub-rows (rule in "CGI's allele scores", below); from a VCF, FORMAT `HQ` per GT allele (rule in "A VCF's haplotype qualities", below). An element null on an uncalled (`.`, `?`) or partly called slot, where the source gave none, or outside 0..65535 (counted). `write_vcf` writes it as FORMAT `HQ` (`Number=2`; a haploid row as `51,.`; a row of more than two GT alleles left out, counted) |
+| `hq` | `list[u16]` | no slot has a score. Parallel to `gt`: a phred-scaled confidence in each haplotype's call (VCF's reserved FORMAT `HQ`, haplotype qualities). From CGI's native files, `varScoreEAF` per haplotype, the lowest of a `var` haplotype's sub-rows (rule in "CGI's allele scores", below); from a VCF, FORMAT `HQ` per GT allele (rule in "A VCF's haplotype qualities", below). An element null on an uncalled (`.`, `?`) or partly called slot, where the source gave none, or outside 0..65535 (counted). `write_vcf` writes it as FORMAT `HQ` (`Number=2`; a haploid row as `51,.`; a row of more than two GT alleles left out, counted), `write_vcf_zarr` as `call_HQ` on the ploidy dimension |
 | `dp` | `u32` | not given |
 | `ad` | `list[u32]` | not given |
 | `qual` | `f32` | not given. It is the confidence in what ALT asserts: that the variant is there on a variant record, and that no variant is there on a monomorphic record (`alts = []`, where VCF defines it as `-10·log10 P(variant)`). The same threshold therefore works on both |
@@ -1819,7 +1819,12 @@ beside it and renamed into place.
   `call_genotype` and `call_genotype_phased` (true where every separator after the first slot is
   `|`, as `write_vcf` writes GT; false, counted in a warning, on a row phased by a CGI hapLink or with
   a slot in a VCF 4.5 PSL set: the spec has one phase flag per call, read as PS's set or the
-  chromosome's implicit one, and no field for either, so `true` would put the row in the wrong set); and, where any row has them, `call_GQ`, `call_DP`, `call_AD`,
+  chromosome's implicit one, and no field for either, so `true` would put the row in the wrong set); `call_HQ`
+  where any row has `hq`, on `call_genotype`'s `ploidy` dimension (VCF 4.4's `Number=P` reading of HQ,
+  one value per GT allele): `-1` on a slot with no score, `-2` past the row's ploidy, so a haploid
+  `[51]` is stored `51, -2` and a row of more than two alleles is written whole, where `write_vcf`'s
+  `Number=2` HQ cannot hold it; an `hq` not one per GT slot (no loader writes one) is left out,
+  counted; and, where any row has them, `call_GQ`, `call_DP`, `call_AD`,
   `call_GL`, `call_GP`, `call_DS`, `call_PS` (PS-kind sets as integers), `call_FT`, `call_CN`,
   `variant_SVTYPE` and `variant_JUST_VCF_SPLIT`. AD, GL and GP are written only where they are
   indexed over the written REF and ALTs. `cipos`, `ciend` and `alt_copy_numbers` are not written yet,
@@ -2264,6 +2269,7 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `write_vcf` writes `hq` as FORMAT `HQ`, declared `Number=2`, so a CGI `var` facet's scores survive
   its VCF export and a VCF with HQ round-trips; a haploid row is written `51,.`, which the loader
   reads back as `[51]`, and a row of more than two GT alleles has its `hq` left out, counted.
+  `write_vcf_zarr` writes `hq` as `call_HQ` on the ploidy dimension, a row of any ploidy whole.
 
 - **A calls column, landed in 0.0.19** (2026-10-24, layer 7, CGI `var` confidence): `calls.hq`
   (`list[u16]`, parallel to `gt`), each haplotype's score, filled from CGI's native files'

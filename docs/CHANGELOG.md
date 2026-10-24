@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf_zarr` writes `hq` as `call_HQ`, shaped (variants, samples, ploidy) like `call_genotype`:
+  `-1` on a slot with no score, `-2` past a row's ploidy (a haploid `[51]` is stored `51, -2`), and a
+  row of three or more alleles is written whole, which `write_vcf`'s `Number=2` HQ cannot hold.
+  polars-bio's `scan_vcf_zarr` reads it back as the `HQ` genotype field. An `hq` that is not one value
+  per GT slot is left out, counted in the warning `write_vcf` gives. Before, the export dropped `hq`.
+
 - `normalize` no longer leaves a split row's `hq` whole: a GT slot it writes `.` (the slot held
   another ALT) loses its haplotype quality too, and a row left with no score has `hq` null, so `1/2`
   with HQ `51,40` splits into `[51, null]` and `[null, 40]`. Before, both rows kept `[51, 40]`, and

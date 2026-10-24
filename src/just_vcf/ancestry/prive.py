@@ -74,7 +74,9 @@ def build_prive_reference(freq_csv: Path, proj_csv: Path, out_dir: Path) -> Priv
     """Join Privé's frequency and loading files into one parquet and a meta file under `out_dir`.
 
     Either file may be gzip-compressed. The parquet holds `chr, pos, a0, a1`, `load0..load15` and one
-    frequency column per group, in the frequency file's order; a site must be in both files.
+    frequency column per group, in the frequency file's order; a site must be in both files. Rows keep the
+    frequency file's order: the bootstrap's blocks are runs of rows, so an order the join chose would make
+    `proportion_errors` differ from one build of the same files to the next.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     work = out_dir / "work"
@@ -88,7 +90,7 @@ def build_prive_reference(freq_csv: Path, proj_csv: Path, out_dir: Path) -> Priv
     reference_path = out_dir / REFERENCE_FILE
     (
         freq.select(*_KEY, *groups)
-        .join(proj.select(*_KEY, *pcs).rename({c: f"load{i}" for i, c in enumerate(pcs)}), on=_KEY, how="inner")
+        .join(proj.select(*_KEY, *pcs).rename({c: f"load{i}" for i, c in enumerate(pcs)}), on=_KEY, how="inner", maintain_order="left")
         .with_columns(pl.col("chr").cast(pl.String), pl.col("pos").cast(pl.UInt32))
         .sink_parquet(reference_path)
     )

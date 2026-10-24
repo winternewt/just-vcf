@@ -448,6 +448,24 @@ def test_prive_proportions_of_each_group(prive, tmp_path: Path, group: str) -> N
     assert prive_proportions(loaded, reference) == result
 
 
+def test_a_built_reference_keeps_the_frequency_files_order(tmp_path: Path) -> None:
+    """The bootstrap's blocks are runs of the reference's rows, so the rows must come in one order on
+    every build: the frequency file's. An order the join chose made `proportion_errors` move between
+    builds of the same files, and EUR's error for a group it holds none of once fell to 0 (the flaky
+    `test_prive_proportions_of_each_group[EUR]`). Built several times, since one build can fall in
+    order by chance."""
+    sites, freqs, genotypes, _ = synthetic_panel(SEED)
+    loadings = build_reference_pca(genotypes, dim_ref=8).U[:, :16]
+    key = sites.select(pl.col("chrom").cast(pl.Int64).alias("chr"), "pos", pl.col("ref").alias("a0"), pl.col("alt").alias("a1"))
+    key.with_columns(**{PRIVE_NAMES[g]: pl.Series(freqs[g]) for g in POPULATIONS}).write_csv(tmp_path / "ref_freqs.csv")
+    # The loading file in another order than the frequency file, as two files from two sources can be.
+    key.with_columns(**{f"PC{i + 1}": pl.Series(loadings[:, i]) for i in range(16)}).reverse().write_csv(tmp_path / "projection.csv")
+    expected = key.select(pl.col("chr").cast(pl.String), pl.col("pos").cast(pl.UInt32))
+    for build in range(5):
+        built = build_prive_reference(tmp_path / "ref_freqs.csv", tmp_path / "projection.csv", tmp_path / f"reference{build}")
+        assert pl.read_parquet(built.reference_path, columns=["chr", "pos"]).equals(expected), build
+
+
 def test_prive_proportions_recover_a_two_way_mixture(prive, tmp_path: Path) -> None:
     """Each allele drawn from an even mix of two groups' frequencies: about half each, within the errors."""
     reference, sites, freqs = prive

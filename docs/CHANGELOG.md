@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `build_prive_reference` writes the reference's rows in the frequency file's order. The join chose an
+  order of its own, which moved from one build to the next; the bootstrap's blocks are runs of rows, so
+  `prive_proportions`' `proportion_errors` moved with it (an EUR test's error for a group it holds none
+  of once fell to 0, the flaky `test_prive_proportions_of_each_group[EUR]`). Proportions were not
+  affected. A reference built before this keeps its old order; rebuilding it gives stable errors.
+
 - Schema 0.0.19: `calls.hq`, each haplotype's phred-scaled score parallel to `gt`, filled from
   Complete Genomics `var` and masterVarBeta files (`varScoreEAF`, the lowest of a `var` haplotype's
   sub-rows; none on a `?` or partly called slot). `genotype_evidence` grades a fully called genotype

@@ -6,7 +6,7 @@ v3.6 regions. Everything here is an aggregate over the whole autosomal genome; n
 The rules are in docs/SCHEMA.md ("A consensus posterior"). The first check (2026-10-23, RM280) ran on
 the atlas as it stood before F21 and F22; the second (2026-10-24) on the atlas rebuilt with both
 rules, once with each method's average rate ("pooled") and once with its rates by confidence band
-("banded", `CONSENSUS_VERSION` 2).
+("banded", run at `CONSENSUS_VERSION` 2).
 
 ## The facets and their rates
 
@@ -254,8 +254,9 @@ people. Since schema 0.0.19 the `var` facet is banded and the pair fits (docs/ME
 
 **What changed in the library.** Nothing in the rule: a facet whose version the atlas lacks still
 borrows its caller's bands. `consensus` now names such facets in a warning, since a borrowed band was
-measured on another facet's confidence scale. Whether to borrow at all is the person's call (below);
-`CONSENSUS_VERSION` stays 2, no row changes.
+measured on another facet's confidence scale. Whether to borrow at all is the person's call (below).
+The warning changed no row, so it left `CONSENSUS_VERSION` at the 2 it was then (later changes have
+moved it since; `consensus.py` holds the current value).
 
 **For the person: bands of a caller measured at another version.**
 

@@ -13,7 +13,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceMismatchError, ReferenceStore, liftover, load, mint_vrs_ids, normalize, read_chain, resolve_ref, vrs_withheld, write_vcf
+from just_vcf import Loaded, ReferenceMismatchError, ReferenceStore, liftover, load, mint_vrs_ids, normalize, read_chain, resolve_ref, vrs_withheld, write_vcf
 from just_vcf.liftover import RELATION, REPORT, UNLIFTED_REASONS, _segments
 from just_vcf.schema import CALLS, FACETS
 
@@ -266,6 +266,25 @@ def test_strand_and_swaps(tmp_path: Path, setup) -> None:
 
     indel = calls["plus_deletion"]
     assert (indel["ref"], indel["alts"]) == (s1(450, 3), [s1(450)])
+
+
+def test_haplotype_scores_ride_along_per_slot(tmp_path: Path, setup) -> None:
+    """`hq` (a CGI facet's allele scores) is per GT slot, so it is carried as it was, swapped or not:
+    a swap renumbers the alleles, not the slots."""
+    store, _, _, chain = setup
+    cases = {
+        "plus_snv": row(201, s1(201), other(s1(201)), "0/1", rsid="plus_snv"),
+        "swap": row(SWAP_POS, s1(SWAP_POS), SWAP_BASE, "0/1", rsid="swap"),
+    }
+    resolved, _ = lifted_from_cases(tmp_path, store, chain, cases)
+    scores = pl.int_ranges(30, 32, dtype=pl.UInt16).alias("hq")
+    scored = Loaded(facets=resolved.facets, calls=resolved.calls.with_columns(scores + pl.int_range(pl.len(), dtype=pl.UInt16)), blocks=resolved.blocks)
+    source = by_case(scored.calls.collect())
+    lifted = liftover(scored, chain, store)
+    calls, report = by_case(lifted.loaded.calls.collect()), by_case(lifted.report.collect())
+    assert report["swap"]["lift_swapped"] and not report["plus_snv"]["lift_swapped"]
+    assert {case: calls[case]["hq"] for case in cases} == {case: source[case]["hq"] for case in cases}
+    assert all(source[case]["hq"] is not None for case in cases)
 
 
 def test_a_swapped_row_withholds_its_per_alt_copy_numbers(tmp_path: Path, setup) -> None:

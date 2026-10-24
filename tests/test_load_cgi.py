@@ -17,7 +17,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import Loaded, callset, load, sniff
+from just_vcf import Loaded, callset, genotype_evidence, load, sniff
 from just_vcf.loaders import cgi
 from just_vcf.schema import BLOCKS, CALLS, CallsetType, canonical_order
 from test_load_vcf import assert_gt_consistent
@@ -62,6 +62,14 @@ class Seg:
     xref: str = ""
     link: str = ""
     """hapLink: the id of the haplotype this row is on; empty when it is linked to nothing."""
+    score: str | None = None
+    """varScoreEAF; None writes 99 on a called row and nothing on a `?` one."""
+    vaf: str | None = None
+    """varScoreVAF where it differs from `score`."""
+
+    @property
+    def eaf(self) -> str:
+        return self.score if self.score is not None else ("" if self.seq == "?" else "99")
 
 
 @dataclass(frozen=True)
@@ -142,11 +150,11 @@ def var_text(loci: list[Locus], version: str = "2.5", title: bool = True) -> str
             continue
         for allele, segments in enumerate(locus.haps, 1):
             for seg in segments:
-                score = "" if seg.seq == "?" else "99"
+                score, vaf = seg.eaf, seg.vaf if seg.vaf is not None else seg.eaf
                 filt = seg.filter if version == "2.5" else ("VQHIGH" if seg.filter == "PASS" else seg.filter)
                 head = [str(number), str(locus.ploidy), str(allele), locus.chrom, str(seg.begin), str(seg.end), seg.var_type, seg.reference, seg.seq]
                 # 1.x: one totalScore, no filter column.
-                row = [*head, score, seg.link, seg.xref] if version.startswith("1.") else [*head, score, score, filt, seg.link, seg.xref]
+                row = [*head, score, seg.link, seg.xref] if version.startswith("1.") else [*head, vaf, score, filt, seg.link, seg.xref]
                 lines.append("\t".join(row + [""] * (len(columns) - len(row))))
     software = "1.11.0.16" if version.startswith("1.") else "2.5.0.48"
     return meta("VAR-ANNOTATION", version, title, software) + "\n".join(lines) + "\n"
@@ -174,8 +182,12 @@ def master_var_text(loci: list[Locus]) -> str:
             filters = [";".join(sorted({s.filter for s in h if s.filter})) for h in haps] + ([""] if locus.ploidy == 1 else [])
             links = [next((s.link for s in h if s.link), "") for h in haps] + ([""] if locus.ploidy == 1 else [])
             xrefs = [";".join(s.xref for s in h if s.xref) for h in haps] + ([""] if locus.ploidy == 1 else [])
+            pad = [""] if locus.ploidy == 1 else []
+            # A haplotype's score is the lowest of its sub-rows'; masterVarBeta scores a `?` slot too.
+            eafs = [str(min((int(s.eaf) for s in h if s.eaf), default=99)) for h in haps] + pad
+            vafs = [str(min((int(s.vaf if s.vaf is not None else s.eaf) for s in h if s.eaf), default=99)) for h in haps] + pad
             row = [str(number), str(locus.ploidy), locus.chrom, str(locus.begin), str(locus.end), "het-ref", "complex", reference,
-                   *seqs, "99", "99", "99", "99", *filters, *links, *xrefs, "", "", "", "", "1", "1", "1", "1", locus.total_reads]
+                   *seqs, *vafs, *eafs, *filters, *links, *xrefs, "", "", "", "", "1", "1", "1", "1", locus.total_reads]
         lines.append("\t".join(row + [""] * (len(MASTER_COLUMNS) - len(row))))
     return meta("VAR-OLPL") + "\n".join(lines) + "\n"
 
@@ -210,7 +222,7 @@ def test_facet(var) -> None:
     assert facet["sample"] == "GS000000001-ASM", "the assembly id, as CGI's own VCF names its sample column"
     assert (facet["assembly_label"], facet["assembly_label_basis"]) == ("GRCh37", "stated")
     assert (facet["callset_type"], facet["absence_means"]) == ("wgs", "blocks")
-    assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF", "alleleFreq", "alternativeCalls"]
+    assert facet["dropped_fields"] == ["varScoreVAF", "alleleFreq", "alternativeCalls"], "varScoreEAF is `hq`"
     assert {(m["source"], m["chrom"]) for m in facet["contig_map"]} == {("chr1", "1"), ("chrX", "X"), ("chrY", "Y"), ("chrM", "MT")}
     assert facet["vcf_version"] is None and facet["ploidy_statements"] is None
     assert "1 chrY stretch(es) called on chrX (PAR-called-in-X) kept as no-call blocks" in loaded.warnings
@@ -359,7 +371,7 @@ def test_format_2_0_and_no_title(tmp_path: Path) -> None:
     assert facet["callset_type"] is None, "no #TITLE says what the file is, and too few sites for the rows to"
     assert facet["absence_means"] == "blocks"
     assert by_pos(calls)[("1", 752566)]["sample_filters"] == ["VQHIGH"], "varQuality's vocabulary is kept, not mapped"
-    assert facet["dropped_fields"] == ["varScoreVAF", "varScoreEAF"]
+    assert facet["dropped_fields"] == ["varScoreVAF"]
 
 
 def test_format_1_x_reads_as_2_5_does_less_the_filters(tmp_path: Path, var) -> None:
@@ -454,6 +466,84 @@ def test_master_var_read_counts_are_ad_over_ref_and_alts(tmp_path: Path) -> None
     var_loaded, _, var_calls, _ = frames(write(tmp_path, var_text(LOCI), "var-GS000000003-ASM.tsv.bz2"))
     assert var_calls["ad"].null_count() == var_calls.height and var_calls["source_alleles"].null_count() == var_calls.height
     assert not [w for w in var_loaded.warnings if "without `ad`" in w]
+
+
+# --- allele scores as `hq`, and the grade they give ----------------------------------------------------
+
+# Each shape the score rule speaks to, with its own scores: a het SNV whose reference haplotype scores
+# lower; a haplotype of two sub-rows of different scores against a one-row one; a half-call; a partly
+# called haplotype (`?` then an inserted A); a reference genotype inside a variant locus; a haploid X
+# locus; a VAF score that differs from the EAF one; a score past u16.
+SCORED = [
+    Locus("chr1", 1000, 1001, haps=((Seg(1000, 1001, "snp", "G", "A", score="120"),), (Seg(1000, 1001, "ref", "G", "G", score="98"),))),
+    Locus(
+        "chr1", 2000, 2003,
+        haps=(
+            (Seg(2000, 2003, "sub", "TAG", "CAA", score="80"),),
+            (Seg(2000, 2002, "ref", "TA", "TA", score="60"), Seg(2002, 2003, "snp", "G", "A", score="35")),
+        ),
+    ),
+    Locus("chr1", 3000, 3001, haps=((Seg(3000, 3001, "snp", "T", "C", score="50"),), (Seg(3000, 3001, "no-call", "T", "?", filter=""),))),
+    Locus(
+        "chr1", 4000, 4001,
+        haps=((Seg(4000, 4001, "snp", "T", "A", score="40"),), (Seg(4000, 4001, "no-call", "T", "?", filter=""), Seg(4001, 4001, "ins", "", "A", score="70"))),
+    ),
+    Locus("chr1", 5000, 5001, haps=((Seg(5000, 5001, "ref", "C", "C", score="45"),), (Seg(5000, 5001, "ref", "C", "C", score="41"),))),
+    Locus("chrX", 2699520, 2699521, ploidy=1, haps=((Seg(2699520, 2699521, "snp", "A", "G", score="77"),),)),
+    Locus("chr1", 6000, 6001, haps=((Seg(6000, 6001, "snp", "A", "T", score="33", vaf="31"),), (Seg(6000, 6001, "ref", "A", "A", score="90"),))),
+    Locus("chr1", 7000, 7001, haps=((Seg(7000, 7001, "snp", "A", "T", score="70000"),), (Seg(7000, 7001, "ref", "A", "A", score="90"),))),
+]
+
+
+def _expected_hq(locus: Locus) -> list[tuple[str | None, int | None]]:
+    """Per haplotype, its called sequence (None for `?`) and its score by the rule: the lowest of its
+    sub-rows', none where any part of it is `?` (a half-call's or a partly called slot) or the score
+    does not fit u16."""
+    out = []
+    for segments in locus.haps:
+        sequence = "".join(seg.seq for seg in segments)
+        low = min(int(seg.eaf) for seg in segments) if all(seg.eaf for seg in segments) else None
+        out.append((None if sequence == "?" else sequence, None if "?" in sequence or low is None or low > 65535 else low))
+    return sorted(out, key=repr)
+
+
+@pytest.mark.parametrize("kind", ["var", "master_var"])
+def test_allele_scores_are_hq_per_slot_and_grade_the_genotype_by_the_lowest(tmp_path: Path, kind: str) -> None:
+    """`hq` is parallel to `gt`: each slot gets its haplotype's varScoreEAF (the lowest of a `var`
+    haplotype's sub-rows), none on a `?` or partly called slot. `genotype_evidence` grades a fully
+    called genotype whose every slot is scored by the lowest score (`hq` basis), reference genotypes
+    too; any other row keeps its old basis. Expected values come from the loci's own scores."""
+    text, name = (var_text(SCORED), "var-GS000000009-ASM.tsv.bz2") if kind == "var" else (master_var_text(SCORED), "masterVarBeta-GS000000009-ASM.tsv.bz2")
+    loaded, facet, calls, _ = frames(write(tmp_path, text, name))
+    assert calls.schema["hq"] == pl.List(pl.UInt16)
+    assert not [f for f in facet["dropped_fields"] if "ScoreEAF" in f] and [f for f in facet["dropped_fields"] if "ScoreVAF" in f]
+    graded = genotype_evidence(loaded).filter(pl.col("evidence_basis") == "assay").collect()
+    rows, grades = by_pos(calls), by_pos(graded)
+    for locus in SCORED:
+        key = (locus.chrom.removeprefix("chr"), locus.begin + 1)
+        row, grade = rows[key], grades[key]
+        expected = _expected_hq(locus)
+        scores = [score for _, score in expected]
+        hq = row["hq"] if row["hq"] is not None else [None] * len(row["gt_alleles"])
+        assert sorted(zip(row["gt_alleles"], hq), key=repr) == expected, locus
+        assert row["hq"] is not None or all(score is None for score in scores), "null only where no slot is scored"
+        if all(score is not None for score in scores):
+            assert (grade["grade_basis"], grade["confidence_kind"], grade["confidence"]) == ("hq", "quantified", float(min(scores))), locus
+            assert grade["genotype_probabilities"] is None and grade["prior"] is None, "one number per haplotype ranks no other genotype"
+        else:
+            assert grade["grade_basis"] == "gt_only" and grade["confidence"] is None, locus
+    assert grades[("1", 5001)]["grade_basis"] == "hq" and grades[("1", 5001)]["genotype_index"] == 0, "a reference genotype is graded too"
+    assert "1 haplotype score(s) outside 0..65535 left out of `hq`" in loaded.warnings
+    assert "1 haplotype(s) whose varScoreVAF differs from the varScoreEAF read into `hq`" in loaded.warnings
+
+
+def test_without_scores_hq_is_null_and_nothing_is_graded_by_it(tmp_path: Path) -> None:
+    """Format 1.x writes one `totalScore`, neither of 2.x's scores: `hq` stays null and the rows keep
+    the `gt_only` grade, never one read from another column."""
+    loaded, _, calls, _ = frames(write(tmp_path, var_text(SCORED, version="1.7"), "var-GS000000010-ASM.tsv.bz2"))
+    assert calls["hq"].null_count() == calls.height
+    graded = genotype_evidence(loaded).filter(pl.col("evidence_basis") == "assay").collect()
+    assert set(graded["grade_basis"].cast(pl.String)) <= {"gt_only", "no_call"}
 
 
 # --- hapLink as phase sets ---------------------------------------------------------------------------
@@ -682,6 +772,25 @@ def test_real_var_and_master_var_agree(real_assembly: dict[str, Loaded]) -> None
     only_var = sites(var).join(sites(master), on=keys, how="anti", nulls_equal=True).select(pl.len()).collect().item()
     only_master = sites(master).join(sites(var), on=keys, how="anti", nulls_equal=True).select(pl.len()).collect().item()
     assert (only_var, only_master) == (0, 0)
+
+
+def test_real_allele_scores_are_cgis_own_genotype_quality(real_assembly: dict[str, Loaded]) -> None:
+    """Counts only, on one chromosome: the lowest of a `var` row's haplotype scores is the GQ CGI's own
+    VCF of the assembly writes at that locus (vcfBeta), and masterVarBeta's slots carry the same scores
+    as `var`'s, slot sets compared per locus."""
+    chrom = "22"
+    var, master, vcf = (real_assembly[name].calls.filter(pl.col("chrom") == chrom) for name in ("var", "master_var", "vcf"))
+    graded = genotype_evidence(Loaded(facets=real_assembly["var"].facets, calls=var, blocks=real_assembly["var"].blocks.filter(pl.col("chrom") == chrom)))
+    lowest = graded.filter(pl.col("grade_basis") == "hq").select("pos", "confidence")
+    paired = lowest.join(vcf.filter(pl.col("gq").is_not_null()).select("pos", "gq"), on="pos", how="inner").collect()
+    assert paired.height > 1000
+    assert (paired["confidence"] == paired["gq"].cast(pl.Float64)).mean() > 0.999
+
+    def slots(calls: pl.LazyFrame) -> pl.LazyFrame:
+        return calls.filter(pl.col("hq").is_not_null()).select("pos", pl.col("hq").list.sort(nulls_last=True).alias("scores"))
+
+    both = slots(var).join(slots(master), on="pos", suffix="_master").collect()
+    assert both.height > 1000 and (both["scores"] == both["scores_master"]).mean() > 0.999
 
 
 def test_real_var_converges_with_its_vcf_beta(real_assembly: dict[str, Loaded]) -> None:

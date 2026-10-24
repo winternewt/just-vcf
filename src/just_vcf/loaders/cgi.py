@@ -44,8 +44,21 @@ What a `calls` row of a CGI locus holds (SCHEMA.md Decision 2):
   (`|` on 2,707,622 records). A `var` haplotype whose sub-rows name two ids gets no phase there,
   counted. A slot `?` or partly called keeps its link: the molecule is known, its sequence is not, and
   `cis_phased_blocks` withholds that set rather than shorten it.
-- The allele scores are no likelihood, so `gl` and `gq` stay null; the scores are listed in
-  `facets.dropped_fields`.
+- `hq` holds each haplotype's allele score, parallel to `gt`: CGI's `varScoreEAF` (`var`) or
+  `allele<n>VarScoreEAF` (masterVarBeta), a phred-scaled confidence in that haplotype's call. EAF is
+  the score of CGI's equal-allele-fraction (diploid) model, the one cgatools' `calldiff --diploid`
+  takes instead of the variable-allele-fraction `varScoreVAF`; in every PGP-HMS `var` measured
+  (CGA 2.5.0.33 and 2.5.0.44, 2026-10-24) the two are equal on every scored row, and a file where
+  they differ says how many haplotypes in a load warning. A `var` haplotype written as several sub-rows
+  takes the lowest of their scores, as cgatools builds masterVarBeta's ("for multi-call loci, this is
+  the minimum score across all calls", cgatools 1.8.0 command-line reference). A slot gets no score
+  where it is `?` or only partly called (`?A`: a score for a sequence not known; masterVarBeta writes
+  one on a half-call's `?` slot, which is not read), where a sub-row of it has none, or outside
+  0..65535 (counted); the row's `hq` is null where no slot has one, as on format 1.x's single
+  `totalScore`, which is neither score. Blocks carry no score. The scores are no likelihood, so `gl`
+  and `gq` stay null; `varScoreVAF` stays in `facets.dropped_fields`. CGI's own VCF of an assembly
+  writes `GQ` as the lowest of these per locus (chromosome 22 of a PGP-HMS assembly: 42,894 of
+  42,895 fully called loci), which is how `genotype_evidence` grades them (`GradeBasis.HQ`).
 """
 
 import logging
@@ -94,17 +107,23 @@ _FILTER_ALIASES = {"varQuality": "varFilter", "allele1VarQuality": "allele1VarFi
 
 _CARRIED = {
     VAR: frozenset(
-        {"locus", "ploidy", "allele", "chromosome", "begin", "end", "varType", "reference", "alleleSeq", "varFilter", "hapLink", "xRef"}
+        {"locus", "ploidy", "allele", "chromosome", "begin", "end", "varType", "reference", "alleleSeq", "varScoreEAF", "varFilter", "hapLink", "xRef"}
     ),
     MASTER_VAR: frozenset(
         {
             "locus", "ploidy", "chromosome", "begin", "end", "zygosity", "varType", "reference", "allele1Seq",
-            "allele2Seq", "allele1VarFilter", "allele2VarFilter", "allele1HapLink", "allele2HapLink", "allele1XRef",
+            "allele2Seq", "allele1VarScoreEAF", "allele2VarScoreEAF", "allele1VarFilter", "allele2VarFilter", "allele1HapLink", "allele2HapLink", "allele1XRef",
             "allele2XRef", "allele1ReadCount", "allele2ReadCount", "referenceAlleleReadCount", "totalReadCount",
         }
     ),
 }
 """The columns a frame carries; every other column of the file is listed in `dropped_fields`."""
+
+_SCORES = {VAR: (("varScoreEAF", "varScoreVAF"),), MASTER_VAR: (("allele1VarScoreEAF", "allele1VarScoreVAF"), ("allele2VarScoreEAF", "allele2VarScoreVAF"))}
+"""Per haplotype column set, the score read into `hq` (EAF) and the one only compared with it (VAF)."""
+
+HQ_MAX = 2**16 - 1
+"""The largest score `hq` (`u16`) holds; a larger one is left out and counted."""
 
 _READ_COUNTS = ("allele1ReadCount", "allele2ReadCount", "referenceAlleleReadCount", "totalReadCount")
 """masterVarBeta's read counts: per haplotype slot, for the reference sequence, and over the locus."""
@@ -205,10 +224,11 @@ def malformed(rows: pl.LazyFrame) -> pl.Expr:
 def prepare(rows: pl.LazyFrame, format_id: str) -> pl.LazyFrame:
     """`scan` output with the optional columns added (null) and the locus and coordinates typed.
     Rows that are then `malformed` are the caller's to count and leave out."""
+    scores = [name for pair in _SCORES[format_id] for name in pair]
     optional = (
-        ["varFilter", "hapLink", "xRef"]
+        ["varFilter", "hapLink", "xRef", *scores]
         if format_id == VAR
-        else [*_FILTER[MASTER_VAR], "allele1HapLink", "allele2HapLink", "allele1XRef", "allele2XRef", *_READ_COUNTS]
+        else [*_FILTER[MASTER_VAR], "allele1HapLink", "allele2HapLink", "allele1XRef", "allele2XRef", *_READ_COUNTS, *scores]
     )
     return _typed(_with_optional(rows, optional))
 
@@ -242,6 +262,16 @@ def _spelled(rows: pl.LazyFrame, sequences: list[str]) -> pl.LazyFrame:
     )
 
 
+def _number(column: pl.Expr) -> pl.Expr:
+    """A score field as a number, null where empty or not an integer."""
+    return column.cast(pl.Int64, strict=False)
+
+
+def _vaf_differs(eaf: pl.Expr, vaf: pl.Expr) -> pl.Expr:
+    """Whether a row writes both scores and they differ (the VAF score is not read, only compared)."""
+    return (_number(eaf) != _number(vaf)).fill_null(False)
+
+
 def _linked(column: pl.Expr) -> pl.Expr:
     """A hapLink field as its id, null where the field is empty (the slot is linked to nothing)."""
     return pl.when(column.str.len_chars() > 0).then(column)
@@ -265,12 +295,19 @@ def var_haplotypes(segments: pl.LazyFrame) -> pl.LazyFrame:
         pl.col("varFilter").filter(pl.col("alleleSeq") != NO_CALL).str.split(";").list.explode(keep_nulls=False, empty_as_null=False).alias("filters"),
         pl.col("xRef").str.join(";").alias("xref"),
         _linked(pl.col("hapLink")).drop_nulls().unique().alias("_links"),
+        _number(pl.col("varScoreEAF")).min().alias("_score_min"),
+        _number(pl.col("varScoreEAF")).is_null().any().alias("_score_missing"),
+        _vaf_differs(pl.col("varScoreEAF"), pl.col("varScoreVAF")).any().alias("vaf_differs"),
     )
     links = pl.col("_links").list.len()
+    # A haplotype's score is the lowest of its sub-rows' (cgatools' rule for masterVarBeta), and only
+    # where it is fully called and every sub-row is scored.
+    scored = ~pl.col("seq").str.contains(NO_CALL, literal=True) & ~pl.col("_score_missing")
     return joined.with_columns(
         pl.when(links == 1).then(pl.col("_links").list.first()).alias("link"),
         (links > 1).alias("link_conflict"),
-    ).drop("_links").with_columns(
+        pl.when(scored).then(pl.col("_score_min")).alias("score"),
+    ).drop("_links", "_score_min", "_score_missing").with_columns(
         pl.col("allele").cast(pl.Int64, strict=False).alias("allele"),
         pl.lit(None, dtype=pl.UInt32).alias("dp"),
         pl.lit(None, dtype=pl.UInt32).alias("reads"),
@@ -318,6 +355,11 @@ def master_var_parts(rows: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
                 pl.col(f"allele{number}ReadCount").cast(pl.UInt32, strict=False).alias("reads"),
                 pl.col("referenceAlleleReadCount").cast(pl.UInt32, strict=False).alias("ref_reads"),
                 pl.lit(True).alias("counted"),
+                # Not on a `?` or partly called slot: masterVarBeta scores a half-call's `?` too.
+                pl.when(~pl.col(f"allele{number}Seq").str.contains(NO_CALL, literal=True))
+                .then(_number(pl.col(f"allele{number}VarScoreEAF")))
+                .alias("score"),
+                _vaf_differs(pl.col(f"allele{number}VarScoreEAF"), pl.col(f"allele{number}VarScoreVAF")).alias("vaf_differs"),
             )
         )
     return blocks, pl.concat(alleles, how="vertical")
@@ -396,6 +438,7 @@ def call_rows(haplotypes: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
             pl.col("xref").str.join(";").alias("_xref"),
             pl.col("dp").first(),
             pl.col("link").alias("_links"),
+            pl.col("score").alias("_scores"),
             pl.col("counted").first().alias("_counted"),
             pl.col("ref_reads").first().alias("_ref_reads"),
             # One entry per distinct (allele, count) among the ALT slots, in `alts` order (sorted by
@@ -435,6 +478,8 @@ def call_rows(haplotypes: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
     ids = pl.col("_xref").str.extract_all(r"rs\d+").list.unique().list.sort()
     insertion = pl.col("end") == pl.col("begin")
     linked = pl.col("_links").list.drop_nulls().list.len() > 0
+    # Per GT slot, its haplotype's score in u16; null where the slot has none, or the whole row where no slot does.
+    scores = pl.col("_scores").list.eval(pl.when(pl.element().is_between(0, HQ_MAX)).then(pl.element()).cast(pl.UInt16))
     rows = loci.select(
         canonical_chrom_expr("chromosome").alias("chrom"),
         pl.col("chromosome").alias("source_chrom"),
@@ -452,6 +497,7 @@ def call_rows(haplotypes: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
         .then(pl.col("_links").list.eval(pl.when(pl.element().is_not_null()).then(pl.lit(PhaseSetKind.CGI_HAPLINK.value))))
         .alias("phase_set_kinds"),
         pl.when(not_pass.list.len() > 0).then(not_pass).when(tokens.list.len() > 0).then(tokens).otherwise(None).alias("sample_filters"),
+        pl.when(scores.list.drop_nulls().list.len() > 0).then(scores).alias("hq"),
         "dp",
         "ad",
         pl.when(pl.col("ad").is_not_null()).then(pl.concat_list(pl.col("source_ref"), pl.col("alts"))).alias("source_alleles"),

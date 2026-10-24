@@ -4,6 +4,36 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- docs/METHOD_ATLAS.md and docs/CONSENSUS.md: the two public CGI `var` pairs rebuilt, now banded
+  (hu1B2689, CGA 2.5.0.44; huAF3C63, CGA 2.5.0.33). A `var` facet's bands match its vcfBeta's (one
+  confidence scale), and on the odd/even check a banded `var` facet calibrates as the vcfBeta does
+  (from 0.37 to 0.85 of predicted disagreements seen, 10 phred and up). huAF3C63's freeBayes 0.9.15
+  bands run twice hu1B2689's, and its pair's even split leaves CGA 2.5.0.33's 40–100 phred bands on the
+  floor. The 10–30 phred underconfidence is measured: the region rule, the highest rate among nested
+  GIAB classes, over-predicts in `difficult` regions; with GIAB's `easy`/`difficult` partition alone
+  `easy` is calibrated in every bin and, with the `var` facet, every bin from 10 phred up is within a
+  tenth of 1 (1.01 overall). Which regions to pass is the person's call (four options there); the
+  library rule is unchanged. `scripts/consensus_check.py` gains `--no-regions`, `--classes` and a
+  `region` column in its calibration detail.
+
+- `build_prive_reference` writes the reference's rows in the frequency file's order. The join chose an
+  order of its own, which moved from one build to the next; the bootstrap's blocks are runs of rows, so
+  `prive_proportions`' `proportion_errors` moved with it (an EUR person's error for the group it holds none
+  of took values such as 0.0015 and 0.0027 from build to build, close to the test's `0 < e`: the likely cause of the flaky
+  `test_prive_proportions_of_each_group[EUR]`, whose failure message was not kept). Proportions were not
+  affected. A reference built before this keeps its old order; rebuilding it gives stable errors.
+
+- Schema 0.0.19: `calls.hq`, each haplotype's phred-scaled score parallel to `gt`, filled from
+  Complete Genomics `var` and masterVarBeta files (`varScoreEAF`, the lowest of a `var` haplotype's
+  sub-rows; none on a `?` or partly called slot). `genotype_evidence` grades a fully called genotype
+  whose every slot is scored by the lowest score, basis `hq` (`GradeBasis.HQ`), reference genotypes
+  included and no vector. CGI `var` rows were `gt_only` (band `none`) and can now be banded in the
+  method-error atlas; CGI's own VCF writes GQ as exactly that lowest score (42,894 of 42,895 loci on
+  one chromosome of hu1B2689). A load warns where a file's VAF and EAF scores differ, and counts a
+  score past u16. `varScoreEAF` leaves CGI's `dropped_fields`. `consensus` weighs such rows by their
+  band's rate (`CONSENSUS_VERSION` 3); `liftover` carries `hq` (`LIFT_VERSION` 7) and `rejoin_split`
+  keeps it where split rows agree (`REJOIN_VERSION` 4). A VCF's FORMAT HQ is not read yet.
+
 - `consensus(prior=)` takes an `AlleleFrequencyPrior`, a caller-supplied allele-frequency table keyed
   as consensus rows are (`chrom`, `pos`, `ref`, `alt`, `alt_frequency`; `ALLELE_FREQUENCIES`). An
   allele the table holds gets Hardy-Weinberg genotype priors over its row's ploidy; every other allele

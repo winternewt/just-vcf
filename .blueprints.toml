@@ -20,6 +20,11 @@ cmd = "sh kit:drivers/git/watch-file.sh docs/FEEDBACK.md"
 # triage's own in this checkout, are not said.
 cmd = "sh kit:drivers/git/watch-remote.sh --path docs/FEEDBACK.md"
 
+# The desk's answers to this seat's questions, each said once (D133); the desk files this repo's
+# questions under repo:just-vcf.
+[seat.triage.watch.desk]
+cmd = "sh kit:bin/py.sh kit:classes/desk/watch-answers.py just-vcf triage"
+
 [seat.triage.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"
 
@@ -28,6 +33,11 @@ pool = "~/.config/agent-seat-blueprints/zulip/pool"
 # and the lead hand it an upstream symptom; a desk's secretary relays the person's go for a filing.
 wake_from = "just-vcf/triage just-vcf/lead just-vcf/tooling */secretary"
 
+# The desk's answers to this seat's questions, each said once (D133); the desk files this repo's
+# questions under repo:just-vcf.
+[seat.upstream-liaison.watch.desk]
+cmd = "sh kit:bin/py.sh kit:classes/desk/watch-answers.py just-vcf upstream-liaison"
+
 [seat.upstream-liaison.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"
 
@@ -35,6 +45,11 @@ pool = "~/.config/agent-seat-blueprints/zulip/pool"
 # The person's own coding sessions here (docs/seats/LEAD.md): the roadmap, the design, the build.
 # Triage hands it a fix too big for a pass; the liaison, a mitigation to change at a pin bump.
 wake_from = "just-vcf/triage just-vcf/upstream-liaison just-vcf/tooling */secretary"
+
+# The desk's answers to this seat's questions, each said once (D133); the desk files this repo's
+# questions under repo:just-vcf.
+[seat.lead.watch.desk]
+cmd = "sh kit:bin/py.sh kit:classes/desk/watch-answers.py just-vcf lead"
 
 [seat.lead.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"
@@ -48,6 +63,11 @@ wake_from = "just-vcf/triage just-vcf/upstream-liaison just-vcf/lead agents-kit/
 # This repository's issues, where its tool requests live: each event a line.
 [seat.tooling.watch.issues]
 cmd = "sh kit:bin/py.sh kit:drivers/github/watch-issues.py --origin"
+
+# The desk's answers to this seat's questions, each said once (D133); the desk files this repo's
+# questions under repo:just-vcf.
+[seat.tooling.watch.desk]
+cmd = "sh kit:bin/py.sh kit:classes/desk/watch-answers.py just-vcf tooling"
 
 [seat.tooling.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"

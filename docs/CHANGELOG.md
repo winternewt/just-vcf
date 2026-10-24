@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Each of the four seats now hears the desk's answers to its own questions as a watcher line
+  (`[seat.<seat>.watch.desk]`, the kit's `classes/desk/watch-answers.py`, kit v0.1.88, D133), so an
+  answer no longer waits on a secretary's relay. The pin is at v0.1.88.
+
 - docs/METHOD_ATLAS.md and docs/CONSENSUS.md: the two public CGI `var` pairs rebuilt, now banded
   (hu1B2689, CGA 2.5.0.44; huAF3C63, CGA 2.5.0.33). A `var` facet's bands match its vcfBeta's (one
   confidence scale), and on the odd/even check a banded `var` facet calibrates as the vcfBeta does

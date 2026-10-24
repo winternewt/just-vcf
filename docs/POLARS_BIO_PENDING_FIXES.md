@@ -66,6 +66,10 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P14 fork after a polars-bio call hangs the child | inherent to native thread pools (plain Polars hangs too) | polars-bio (docs), low |
 | P15 haploid no-call GT `.` read as null (2026-10-22) | noodles maps `.` to missing before its GT parser; dbf writes null, same as no GT | datafusion-bio-formats |
 | P16 `import polars_bio` configures the root logger (2026-10-23) | `basicConfig()` plus a root level of WARNING at import; already open as pb #291 | polars-bio (comment on #291) |
+| P17 `depth()` wraps past 32,767 (2026-10-24) | an `i32` count cast `as i16` into an Int16 column | datafusion-bio-functions |
+| P18 `depth()` block mode drops a run that reaches a contig's last base, 1-based only (2026-10-24) | the end marker of a 1-based read lands one past the dense array | datafusion-bio-functions |
+| P19 `depth()` block mode builds every contig's batches before emitting (2026-10-24) | `merge_dense_results` fills one queue for the whole file | datafusion-bio-functions |
+| P20 an indexed BAM `depth()` reads the file twice (2026-10-24) | seen on real 30x BAMs, not reproduced on a 12 MB synthetic one | unconfirmed |
 
 ## Verdicts by kind (2026-09-30)
 
@@ -83,9 +87,11 @@ another path is named.
 | P6a | concurrent collects of one VCF panic on the stem-named table | polars-bio | register once under a unique name (done) |
 | P6b | `register_vcf` returns 0-based starts; docstring and global setting say 1-based | polars-bio | convert `start` and check the first record (done) |
 | P9 | a spec-legal POS 0 record fails the whole scan | datafusion-bio-formats | re-read without POS 0 rows, count them (done) |
-| P10 | spec-legal FORMAT `Number=LA/LR/LG/M` refuses the whole file | zaeleus/noodles | **none yet**: rewrite to `Number=.` and warn |
+| P10 | spec-legal FORMAT `Number=LA/LR/LG/M` refuses the whole file | zaeleus/noodles | `Number=P` read through a copy declaring `Number=.`, warned (`8b72a46`, text VCF only); **none yet** for LA/LR/LG/M or for BCF |
 | P15 | a haploid no-call GT `.` reads as null, the same as a sample with no GT | datafusion-bio-formats | a no-call block for CGI VCFs only (`518f796`); elsewhere `gt`, `gt_alleles`, `source_gt` stay null |
 | P16 | `import polars_bio` adds a stderr handler to the root logger and sets its level to WARNING; Python's logging HOWTO says a library adds only a `NullHandler` | polars-bio | the CLI turns logging off while a command runs (`cli.py:149-152`); a library user still gets the handler |
+| P17 | `depth()` returns a depth over 32,767 wrapped negative; mosdepth and samtools count in 32 bits | datafusion-bio-functions | a negative depth is left out of its window and counted in a warning (`coverage.py`) |
+| P18 | 1-based `depth()` in block mode emits nothing for a run of coverage that reaches a contig's last base; 0-based and per-base mode count it | datafusion-bio-functions | per-base mode, folded into windows here (`coverage.py`) |
 
 ### Feature requests: works as designed, we want more
 
@@ -94,6 +100,7 @@ another path is named.
 | P7 | `format_fields` and `samples` on `register_vcf`, as `register_bcf` has | polars-bio | call private `SQL._register_variant` (done; breaks on upgrade) |
 | P6b | `use_zero_based` on `register_vcf`, as `register_bcf` and `register_vcf_zarr` have (same issue as the bug fix) | polars-bio | as above |
 | P10 | move the noodles fork past 0.91.0, which parses `Number=P` | datafusion-bio-formats | as above |
+| P19 | block-mode `depth()` emits contig by contig, as per-base mode does (22.6 GB peak on a 27 GB BAM against per-base mode's 13.3 GB) | datafusion-bio-functions | per-base mode (`coverage.py`) |
 | P13 | warn or refuse when `write_vcf`/`sink_vcf` drop an undeclared column; see open pb #474 | polars-bio | nothing until we write VCF through polars-bio |
 | P5 | document the `fmt_` rename, and that one sample gives flat columns while several give a `genotypes` struct | polars-bio (docs) | map columns by the header's own namespace (done) |
 | P11 | document that FILTER `.` reads as `""` | polars-bio (docs) | `""` → null (done, `:455`) |
@@ -316,6 +323,14 @@ reserved key's declared `Number` against the spec's table, which runs after pars
 declaring `FORMAT=<ID=LAD,Number=LR,...>` still fails registration on 0.36.0 with `IO error: invalid
 record`. Verdict unchanged.
 
+*Mitigated for `P` (2026-10-24), from the lead seat's PSL work (merged as `8b72a46`).* polars-bio 0.36 still
+refuses a `Number=P` header (the PSL builder re-confirmed it). The text-VCF loader now reads any FORMAT
+key declared `Number=P` (PSL, PSO, PSQ in practice) through its rewritten copy, declared `Number=.`, and
+checks each value's count against GT (`READ_AS_ANY_NUMBER`, `loaders/vcf.py:83`; `REWRITE_VERSION` 9),
+with a warning naming the keys (`loading.py:712`). `LA`, `LR`, `LG` and `M` are not rewritten and still
+refuse the file, and a BCF declaring `Number=P` still refuses: the BCF path reads no rewritten copy. The
+filings are unchanged.
+
 ## P11 — FILTER `.` comes back as an empty string
 
 Recorded in just-prs (`src/just_prs/normalize.py:50`) and in our CLAUDE.md §5; reproduced on 0.36.0: a
@@ -420,6 +435,78 @@ the reporter asked again on 2026-09-17). It gives no cause and no fix. Upstream 
 leaves `logging.py` unchanged (0.36.2 is the newest tag). **Comment on pb #291**, not a new issue:
 name the two lines, and the fix: drop `basicConfig()` and the root level, give the `polars_bio`
 logger a `NullHandler`, and let `set_loglevel` set that logger's level alone.
+
+## P17 — `depth()` wraps a depth past 32,767
+
+Found by the lead seat building alignment coverage (`src/just_vcf/coverage.py`). polars-bio's
+`depth()` comes from datafusion-bio-functions' pileup crate (tag `v0.22.2`, which polars-bio 0.36.0
+pins). It counts in `i32` and writes the column as `Int16` with a wrapping cast: `prev_cov as i16` in
+block mode (`bio-function-pileup/src/coverage.rs:76`, `:144`, `:189`) and `self.cumulative_cov as i16`
+in per-base mode (`:374`), into the `Int16` field of both output schemas (`schema.rs:33`, `:52`). The
+type is documented (the crate README's tables, `polars_bio/pileup_op.py:98-100`), the wrap is not.
+Reproduced on 0.36.0 with a synthetic BAM: 32,770 reads over five bases come back as depth -32,766, in
+both modes. Amplicon panels, mitochondria and centromeric repeats pass 32,767 on real data; mosdepth
+and `samtools depth` count in 32 bits.
+
+Mitigation: a negative depth is left out of its window and the count of such bases is warned
+(`coverage.py`, `test_a_depth_past_int16_is_left_out_and_counted`). A depth past 65,535 would wrap back
+to a positive value and is not caught. Not filed.
+
+*Upstream (2026-10-24).* Not reported (polars-bio, datafusion-bio-functions and datafusion-bio-formats
+searched live for "depth", "coverage", "pileup" and "Int16"). The pileup source is unchanged on
+datafusion-bio-functions main after `v0.22.2` (newest tag `v0.23.1`). **File at
+datafusion-bio-functions:** an `Int32` (or `UInt32`) coverage column, or at least a saturating cast.
+
+## P18 — `depth()` block mode drops a run that reaches a contig's last base (1-based)
+
+Found by the lead seat (`test_coverage.py::test_a_read_on_a_contigs_last_base_is_counted`; on a real
+BAM the last window of 60 contigs read zero). Reproduced on 0.36.0 with a synthetic BAM (contigs of 100,
+50 and 40 bases): with reads on chrX 30–40 and 40–50 and one on all of chrY, 1-based block mode returns
+only chr1's block, nothing for chrX or chrY; `use_zero_based=True` returns all three, and
+`dense_mode="disable"` (the sparse path) returns all three in 1-based too. A contig whose reads stop
+one base short is fine.
+
+The cause: polars-bio builds the BAM provider in the caller's coordinate system (`src/pileup.rs:166-168`),
+so 1-based reads arrive with 1-based starts. The dense array is sized for 0-based ones, the contig's
+length plus one sentinel (`bio-function-pileup/src/events.rs:184`). A 1-based read ending on the last
+base puts its `-1` at length + 1, which `apply_binary_cigar_to_depth` skips as out of range
+(`cigar.rs:206-209`). The run never closes, and the block walk emits a block only when the depth
+changes and has no flush at the end (`coverage.rs:165-201`), so the whole run is lost, back to the
+last base where the depth was zero. Per-base mode does not need the closing delta. A related fix,
+datafusion-bio-functions #204 and pb #427 (0-based blocks made half-open), touched only the block ends.
+
+Mitigation: just-vcf uses per-base mode and folds it into windows (`coverage.py`). Not filed.
+
+*Upstream (2026-10-24).* Not reported (same searches as P17); the pileup source is unchanged after
+`v0.22.2`. **File at datafusion-bio-functions:** size the dense array for the coordinate system in use
+(or shift 1-based starts to 0-based before accumulating), with the repro. Also worth naming: the
+dense merge drops a contig whose batches fail to build without an error (`physical_exec.rs:420-430`,
+`if let Ok(...)`).
+
+## P19 — `depth()` block mode builds every contig's batches before emitting any
+
+Found by the lead seat on 30x BAMs: block mode peaks at 22.6 GB on a 27 GB BAM and 33.6 GB on a 48 GB
+one, per-base mode at 13.3 GB on the first. In the pileup crate's dense merge, block mode turns every
+contig into record batches and queues them all before it emits the first
+(`bio-function-pileup/src/physical_exec.rs:418-435`); per-base mode queues the contigs and builds each
+one's batches as it is emitted (`:406-416`). Both keep every contig's dense array, four bytes per base,
+until the input is read. Not reproduced here, since a synthetic BAM small enough to build is too small
+to show it; the code path is plain from the source.
+
+Mitigation: per-base mode (`coverage.py`, the comment at `:596-598`). Not filed.
+
+*Upstream (2026-10-24).* Not reported; datafusion-bio-functions #2 (closed) added the batch-size
+chunking that block mode now uses, but not streaming. **File at datafusion-bio-functions**, together
+with P18 if it is filed: emit block-mode batches contig by contig, as per-base mode does.
+
+## P20 — An indexed BAM `depth()` scan reads the file twice
+
+Found by the lead seat on real 30x BAMs: the bytes read come to about twice the file's size when it has
+an index. **Not reproduced**: on a 12 MB synthetic BAM (two 5 Mb contigs, 300,000 reads), `depth()` reads
+1.00–1.01 times the file, with or without its `.bai`, in both modes. The likely place is the BAM
+provider's index-driven partitioning in datafusion-bio-formats (`bio-format-core/src/partition_balancer.rs`
+splits a long contig into ranges), which a small file may not trigger. Owner unknown until it is
+reproduced; nothing to file yet. Mitigation: none needed for correctness.
 
 ## Harvested and closed without an entry (2026-09-30)
 

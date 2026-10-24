@@ -127,3 +127,6 @@ status lines say what exists. Schema at 0.0.4.
 - **2026-10-24 00:18 CEST, quota reset; building resumed** on layer 7 (82%), the one layer under 90%: one
   builder builds desk #94–#96 as non-default options (defaults unchanged, so an answer is a one-line
   change); one measures why the 60+ phred band is 2x overconfident and fixes it if no decision is needed.
+- **Flaky test, 2026-10-24:** `tests/test_ancestry.py::test_prive_proportions_of_each_group[EUR]` failed once
+  in a full run and passed alone and in the next full run. Its inputs are seeded (seed 11), so the
+  nondeterminism is elsewhere (solver, thread order, or another test's state). Unexplained; a builder's.

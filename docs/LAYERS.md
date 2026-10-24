@@ -74,6 +74,9 @@ meanwhile. The desk carries the ones filed there.
   whose confidence scale differs (0.9.15's GLs floor at -10); CGI and the array were ruled out, the even
   split is second order. Whether to borrow bands across versions at all is the person's call, three
   options there; meanwhile borrowed, with a warning naming the facet.
+- **Layer 7, open swings (no decision needed):** CGI `var` rows grade no confidence (band `none`) though the
+  format carries `varScoreVAF`/`varScoreEAF`, so a `var` facet is never banded; the 10-30 phred bands are
+  about 2x underconfident even with each facet's own bands (0.60, 0.56 observed/predicted), cause unmeasured.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

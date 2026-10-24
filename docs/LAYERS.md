@@ -14,7 +14,7 @@ usable for one person's facets, and say what they rest on.
 | 4 | A person | 90% | subject; Person with links and relatedness as its default check; a supplied GA4GH pedigree checked against measured bands (agrees/disagrees/cannot_tell, never corrected); exome variant-only sites read as unknown; the durable store; somalier waits on desk #88 |
 | 5 | Agreement measured | 90% | `concordance` (span-guarded VRS pairing, haploid vs a/a a match with ploidy flagged); the method-error atlas incl. the CGI pairs by VRS id and by each side's confidence band; the consensus posterior (RM280) |
 | 6 | Facet graph and liftover | 90% | links frame, liftover, normalize, rejoin_split |
-| 7 | Graded evidence across sources | 88% | `genotype_evidence` with the PL/GL source; the consensus posterior weighs each row by its confidence band's measured rate (held-out SNVs: 1.15x predicted against observed, from 1.9x; the 60+ band's 2x overconfidence was freeBayes 0.9.15 borrowing another facet's bands, and closes to 1.02 with its own, docs/CONSENSUS.md); desk #94–#96 built as options |
+| 7 | Graded evidence across sources | 90% | `genotype_evidence` with the PL/GL source and CGI's allele scores (`calls.hq`, so a CGI `var` facet is banded too); the consensus posterior weighs each row by its confidence band's measured rate (held-out SNVs from 10 phred up: 0.85 observed/predicted with the banded var facet, 1.01 with GIAB's easy/difficult partition as regions; docs/CONSENSUS.md); desk #94–#96 built as options; what is left is decisions |
 | 8 | Export | 92% | VCF/gVCF with tabix, VCF 4.5 PSL/PSO/PSQ, CisPhasedBlock export naming what withheld it, VCF Zarr |
 
 ## Blockers waiting for the person
@@ -74,9 +74,19 @@ meanwhile. The desk carries the ones filed there.
   whose confidence scale differs (0.9.15's GLs floor at -10); CGI and the array were ruled out, the even
   split is second order. Whether to borrow bands across versions at all is the person's call, three
   options there; meanwhile borrowed, with a warning naming the facet.
-- **Layer 7, open swings (no decision needed):** CGI `var` rows grade no confidence (band `none`) though the
-  format carries `varScoreVAF`/`varScoreEAF`, so a `var` facet is never banded; the 10-30 phred bands are
-  about 2x underconfident even with each facet's own bands (0.60, 0.56 observed/predicted), cause unmeasured.
+- **Layer 7, which regions weigh an allele (desk #100):** today an allele takes the highest rate among
+  every GIAB class holding it, and the classes nest, so the 10-30 phred bands read about 0.6 observed/predicted.
+  GIAB's easy/difficult partition (`giab_stratifications(..., classes=["easy", "difficult"])`) brings it to
+  0.86-1.01. The rule is written in SCHEMA, so changing the default is the person's. Meanwhile all classes.
+- **Layer 5/7, one caller version's bands differ between people (desk #101):** freeBayes 0.9.15's
+  bands run about 2x higher for huAF3C63 than for hu1B2689, and the atlas keys a pair by caller and version only,
+  so a rebuilt var pair and the vcfBeta pair of one person collide and would count that person twice if pooled.
+  Extends desk #99. Meanwhile the var atlas stays a separate file (`data/output/method_atlas_cgi_var.parquet`).
+- **Layer 5/7, CGI's sample-level VQLOW (desk #102):** `carried_pass` reads FILTER only; CGI puts its
+  low-quality mark in `sample_filters`, so CGI's 10-20 band holds VQLOW rows. Reading it moves every CGI rate.
+  Meanwhile FILTER only, as documented.
+- **Layer 7, a smaller cause left unmeasured:** the additive band fit does not hold for CGI's lowest band against
+  freeBayes's capped top band (11-12% disagreement there against about 1% elsewhere).
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

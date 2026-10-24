@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The CGI `var` and masterVarBeta warning that counts haplotypes whose varScoreVAF differs from the
+  varScoreEAF read into `hq` counts only haplotypes whose EAF is read. It counted a half-call's `?`
+  slot, a partly called haplotype and a score past u16 too, whose EAF never reaches `hq`.
+
 - An HQ value that is not a whole number is left out of `calls.hq` and counted, where it was
   truncated or lost without a word: a VCF 4.2 header declaring HQ `Type=Float` read `30.5,40.5` as
   `[30, 40]`, and one declaring it `String` read `30,x` as `[30, null]` silently. Now a number with

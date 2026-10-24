@@ -415,7 +415,8 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
             checks.filter(pl.col("problem").is_null()).select(pl.col("link_conflicts").sum()),
             good.select(
                 (pl.col("score").is_not_null() & ~pl.col("score").is_between(0, cgi.HQ_MAX)).sum().alias("hq_out"),
-                pl.col("vaf_differs").sum().alias("vaf_differs"),
+                # Only where the EAF score goes into `hq`: a `?`, partly called or out-of-range haplotype's is not read.
+                (pl.col("vaf_differs") & pl.col("score").is_between(0, cgi.HQ_MAX)).fill_null(False).sum().alias("vaf_differs"),
             ),
         ]
     )

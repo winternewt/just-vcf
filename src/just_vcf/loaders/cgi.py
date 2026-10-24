@@ -268,7 +268,8 @@ def _number(column: pl.Expr) -> pl.Expr:
 
 
 def _vaf_differs(eaf: pl.Expr, vaf: pl.Expr) -> pl.Expr:
-    """Whether a row writes both scores and they differ (the VAF score is not read, only compared)."""
+    """Whether a row writes both scores and they differ (the VAF score is not read, only compared). The
+    load warning counts it only on a haplotype whose `score` goes into `hq`."""
     return (_number(eaf) != _number(vaf)).fill_null(False)
 
 

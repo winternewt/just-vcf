@@ -705,7 +705,8 @@ haplotype's call: `varScoreVAF` and `varScoreEAF` per `var` sub-row, `allele<n>V
 masterVarBeta slot, phred-scaled, empty on blocks and on `?` stretches. The loader reads EAF, the
 equal-allele-fraction (diploid) model's score, which cgatools takes for germline comparison
 (`calldiff --diploid` uses it instead of VAF); VAF is only compared, and a file where any
-haplotype's two scores differ says how many in a load warning. In both PGP-HMS `var` files measured
+haplotype whose EAF is read into `hq` has two scores that differ says how many in a load warning (a
+`?`, partly called or out-of-range haplotype's EAF is not read, so its VAF is not compared). In both PGP-HMS `var` files measured
 (CGA 2.5.0.33 and 2.5.0.44, chromosome 22, 2026-10-24) the two are equal on every scored row, so the
 choice moves nothing there. Per haplotype:
 

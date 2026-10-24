@@ -20,10 +20,15 @@ Two runs per contig: the consensus over every facet, and one without `leave_out`
 often the consensus's most probable genotype matches the source's), `<out>.calibration.tsv` (the
 held-out facet against the consensus made without it, per confidence bin: the predicted rate of
 disagreement against the observed one), `<out>.calibration_detail.tsv` (the same per bin, band of the
-held-out facet's own row, and `rows_from`: which other facets wrote a row at the allele's position),
+held-out facet's own row, `rows_from`: which other facets wrote a row at the allele's position, and
+`region`: GIAB `easy`, `difficult` or `neither`),
 `<out>.support.tsv` (rows per supported / contradicted /
 silent count) and `<out>.rates.tsv` (the rates each method was weighted by). Aggregates only: no
-path, sample name or position is written. Autosomes by default.
+path, sample name or position is written. Autosomes by default. `--no-regions` weighs every facet,
+in the consensus and in the prediction alike, by its rates in the class `all`, not by the highest
+among the GIAB classes holding the allele: the two runs side by side show what the region rule does
+to the calibration. `--classes easy --classes difficult` weighs by those classes alone, GIAB's
+partition of the genome, so the highest rate among the classes holding an allele is its one class's.
 
 The prediction is the chance the held-out facet disagrees with the consensus's most probable genotype
 under the consensus's posterior, with the held-out facet erring at its own rate at that allele, taken
@@ -42,7 +47,8 @@ import polars as pl
 import typer
 
 from just_vcf import Loaded, ReferenceMismatchError, ReferenceStore, concordance, consensus, load, resolve_ref
-from just_vcf.atlas import ALL_BANDS, CONFIDENCE_BANDS, _confidence_at, confidence_band, giab_stratifications, wilson_interval
+from just_vcf.atlas import ALL, ALL_BANDS, CONFIDENCE_BANDS, RegionSet, _confidence_at, confidence_band, giab_stratifications, wilson_interval
+from just_vcf.concordance import _covered
 from just_vcf.consensus import _facet_rates, _site_rates
 
 logger = logging.getLogger("consensus_check")
@@ -86,6 +92,8 @@ def main(
     plan: Annotated[Path, typer.Argument(help="The plan JSON")],
     out: Annotated[Path, typer.Option(help="Output stem")] = Path("data/output/consensus_check"),
     contigs: Annotated[list[str] | None, typer.Option(help="Contigs (canonical names); autosomes by default")] = None,
+    no_regions: Annotated[bool, typer.Option(help="Weigh every facet by its `all` rates (no region classes), consensus and prediction alike")] = False,
+    classes: Annotated[list[str] | None, typer.Option(help="Weigh by these GIAB classes only (and `all`), consensus and prediction alike")] = None,
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s", force=True)
     for name in ("just_vcf.consensus", "just_vcf.concordance", "just_vcf.reference"):
@@ -96,7 +104,8 @@ def main(
     for pair in spec.get("hold_out", []):
         same = [pl.col(k).eq_missing(pl.lit(v, dtype=pl.String)) for k, v in pair.items()]
         atlas = atlas.filter(~pl.all_horizontal(same))
-    regions = giab_stratifications(spec["giab"], spec["assembly"])
+    strata = giab_stratifications(spec["giab"], spec["assembly"])
+    regions = None if no_regions else giab_stratifications(spec["giab"], spec["assembly"], classes) if classes else strata
     chroms = contigs or [str(n) for n in range(1, 23)]
 
     methods: dict[str, Loaded] = {}
@@ -134,7 +143,7 @@ def main(
         loo = consensus(others, atlas=atlas, regions=regions)
         held_part = _one(parts[held], ids[held][0])
         held_row = held_part.facets.collect().row(0, named=True)
-        held_rates = _facet_rates([held_row], atlas, regions.classes, None, "carried_pass")
+        held_rates = _facet_rates([held_row], atlas, regions.classes if regions is not None else (ALL,), None, "carried_pass")
         overall = held_rates.filter((pl.col("region_class") == "all") & (pl.col("confidence_band") == ALL_BANDS) & (pl.col("variant_class").cast(pl.String) == "snv"))
         e_snv = overall["genotype_error"].item()
         sites = concordance(loo, held_part).sites.collect()
@@ -167,6 +176,7 @@ def main(
             at_rows = part.calls.select("chrom", "pos").unique().collect().with_columns(pl.lit(True).alias(f"_row_{method}"))
             joined = joined.join(at_rows, on=["chrom", "pos"], how="left").with_columns(pl.col(f"_row_{method}").fill_null(False))
             rowed.append(pl.when(pl.col(f"_row_{method}")).then(pl.lit(method)))
+        joined = joined.with_columns(_region(joined, strata).alias("region"))
         calibration.append(
             joined.with_columns(
                 pl.col("confidence").cut(BINS[1:-1], left_closed=True).alias("bin"),
@@ -176,7 +186,7 @@ def main(
                 miss(pl.lit(e_snv)).alias("_predicted_flat"),
                 (1 - p_map).alias("_consensus_error"),
             )
-            .group_by("bin", "held_band", "rows_from")
+            .group_by("bin", "held_band", "rows_from", "region")
             .agg(
                 pl.len().alias("alleles"),
                 (pl.col("agreement") == "mismatch").sum().alias("mismatch"),
@@ -200,7 +210,7 @@ def main(
     out.parent.mkdir(parents=True, exist_ok=True)
     ag.write_csv(out.with_name(out.name + ".agreement.tsv"), separator="\t")
     cal.write_csv(out.with_name(out.name + ".calibration.tsv"), separator="\t")
-    _rated(detail, ["bin", "held_band", "rows_from"]).write_csv(out.with_name(out.name + ".calibration_detail.tsv"), separator="\t")
+    _rated(detail, ["bin", "held_band", "rows_from", "region"]).write_csv(out.with_name(out.name + ".calibration_detail.tsv"), separator="\t")
     sp.with_columns(pl.col("variant_class").cast(pl.String)).write_csv(out.with_name(out.name + ".support.tsv"), separator="\t")
     if rates is not None:
         names = {fid: method for method, fids in ids.items() for fid in fids}
@@ -212,9 +222,21 @@ def main(
         print(cal)
 
 
+def _region(sites: pl.DataFrame, strata: RegionSet) -> pl.Series:
+    """Per row of `sites`, in its order: `easy` or `difficult` by GIAB's two complementary classes,
+    `neither` where GIAB states neither (outside its coverage)."""
+    probe = sites.select("chrom", pl.col("pos").cast(pl.Int64).alias("_at")).with_row_index("_i").sort("chrom", "_at")
+    named = probe.with_columns(
+        pl.when(_covered(probe, strata.intervals["easy"])).then(pl.lit("easy"))
+        .when(_covered(probe, strata.intervals["difficult"])).then(pl.lit("difficult"))
+        .otherwise(pl.lit("neither")).alias("region")
+    )  # fmt: skip
+    return named.sort("_i")["region"]
+
+
 def _rated(detail: pl.DataFrame, keys: list[str]) -> pl.DataFrame:
     """The calibration sums per `keys`, with the rates and the observed rate's Wilson interval."""
-    cal = detail.group_by(keys).agg(pl.exclude("bin", "held_band", "rows_from").sum()).sort(keys)
+    cal = detail.group_by(keys).agg(pl.exclude("bin", "held_band", "rows_from", "region").sum()).sort(keys)
     cal = cal.with_columns(
         (pl.col("mismatch") / pl.col("alleles")).alias("observed"),
         (pl.col("predicted_sum") / pl.col("alleles")).alias("predicted"),

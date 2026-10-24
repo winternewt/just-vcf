@@ -1605,7 +1605,7 @@ Measured 2026-10-23 on PGP-HMS facets, each asked at the packaged relatedness pa
 |---|---|---|
 | 23andMe, AncestryDNA, Living DNA, Genes for Good (array and its 23andMe-layout imputed export, which writes no probabilities) | `gt_only`, `no_call` 0.0–1.9% | 26–51% `gt_only`, rest `absent_unknown` |
 | Genos exome VCF (GATK, gVCF-banded) | `gl` 44,784 (confidence p10/p50/p90 102/581/2,473), `no_call` blocks 259,070 | 46% `gl`, 25% `no_call` block, 29% `absent_unknown` |
-| CGI `var` (whole genome) | `gt_only` 4.2M, `block` 7.7M, `no_call` 3.1M blocks and 356k calls | 60% `gt_only`, 38% `block`, 2% `no_call`; none absent |
+| CGI `var` (whole genome, hu1B2689) | since 0.0.19 `hq` 4.02M (68/374/1,037 at p10/p50/p90), `gt_only` 205,177 (half-calls and partly called slots), `no_call` 356k calls; `block` 7.7M, `no_call` 3.1M blocks. Before 0.0.19 every call row was `gt_only` (4.2M) | 60% `gt_only` before 0.0.19 (not asked again since), 38% `block`, 2% `no_call`; none absent |
 | CGI VCF of the same genome | `gl` 4.16M (3/357/1,022 at p1/p50/p90), `gt_only` 48,655, `no_call` blocks | 60% `gl`, **5,763 `absent_reference`: the same 5,763 sites its `var` file calls with a `ref` block** |
 | DRAGEN `.snp.` half (GP) | `gp` 3.86M (41/48/175) | 62% `gp`, 38% `absent_unknown` (its `content_filter` holds absence back unless `force`) |
 | DRAGEN `.indel.` half | `gp` 956,057 | all `absent_unknown`: an SNV question, an indel-only cut |

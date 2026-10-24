@@ -4,6 +4,18 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- docs/METHOD_ATLAS.md and docs/CONSENSUS.md: the two public CGI `var` pairs rebuilt, now banded
+  (hu1B2689, CGA 2.5.0.44; huAF3C63, CGA 2.5.0.33). A `var` facet's bands match its vcfBeta's (one
+  confidence scale), and on the odd/even check a banded `var` facet calibrates as the vcfBeta does
+  (from 0.37 to 0.85 of predicted disagreements seen, 10 phred and up). huAF3C63's freeBayes 0.9.15
+  bands run twice hu1B2689's, and its pair's even split leaves CGA 2.5.0.33's 40–100 phred bands on the
+  floor. The 10–30 phred underconfidence is measured: the region rule, the highest rate among nested
+  GIAB classes, over-predicts in `difficult` regions; with GIAB's `easy`/`difficult` partition alone
+  `easy` is calibrated in every bin and, with the `var` facet, every bin from 10 phred up is within a
+  tenth of 1 (1.01 overall). Which regions to pass is the person's call (four options there); the
+  library rule is unchanged. `scripts/consensus_check.py` gains `--no-regions`, `--classes` and a
+  `region` column in its calibration detail.
+
 - `build_prive_reference` writes the reference's rows in the frequency file's order. The join chose an
   order of its own, which moved from one build to the next; the bootstrap's blocks are runs of rows, so
   `prive_proportions`' `proportion_errors` moved with it (an EUR person's error for the group it holds none

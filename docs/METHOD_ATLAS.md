@@ -223,3 +223,55 @@ rate per band of each side (docs/CONSENSUS.md has the rates).
 
 X and Y classes are in the full table only: for a private pair they would state an aggregate about
 the person's sex chromosomes.
+
+## The CGI `var` pairs, banded (2026-10-24)
+
+Until schema 0.0.19 a CGI `var` facet stated no confidence: its rows graded `gt_only`, every allele
+fell in band `none`, and `method_error_rates` could fit no band for either side of a `var` pair (the
+fit needs two graded bands on each). Since `calls.hq` carries CGI's allele scores and
+`genotype_evidence` grades a call by the lowest of them (docs/SCHEMA.md, "CGI's allele scores"),
+both public `var` pairs were built again with `scripts/method_atlas.py`, alleles met by VRS id:
+
+| Pair | Called both (SNV, `carried_pass`, `all`) | Discordance | One-sided |
+|---|---|---|---|
+| hu1B2689: CGA 2.5.0.44 `var` / freeBayes 0.9.15 | 3,278,880 | 0.50% | 24.9% |
+| huAF3C63: CGA 2.5.0.33 `var` / freeBayes 0.9.15 | 3,141,288 | 1.77% | 29.3% |
+
+hu1B2689's `var` file is the same assembly as its vcfBeta (above: 0.54%, 3,278,624 called both).
+Neither file writes a varScoreVAF that differs from its varScoreEAF, and none past u16 (no load warning
+in either). The output is `data/output/method_atlas_cgi_var.parquet` and `.tsv` beside the others,
+git-ignored.
+
+**SNV discordance by one side's band**, the other side pooled (% of the alleles both called in that
+band, region `all`; CGI's few rows below 10 phred are counted in `none`, which holds the 1,059 and
+1,301 alleles whose CGI row states no score):
+
+| Pair | Side | 0–10 | 10–20 | 20–30 | 30–40 | 40–60 | 60–100 | 100+ |
+|---|---|---|---|---|---|---|---|---|
+| hu1B2689 `var` | CGI | | 5.51 | 4.76 | 3.02 | 1.89 | 1.08 | 0.35 |
+| hu1B2689 `var` | freeBayes | 8.78 | 6.08 | 3.51 | 1.11 | 0.72 | 0.26 | |
+| huAF3C63 `var` | CGI | | 5.14 | 4.11 | 3.06 | 2.28 | 1.80 | 1.66 |
+| huAF3C63 `var` | freeBayes | 17.11 | 10.79 | 7.29 | 1.95 | 1.42 | 0.63 | |
+
+**A `var` facet's bands are its vcfBeta's.** On hu1B2689 the `var` pair's CGI bands (5.51, 4.76,
+3.02, 1.89, 1.08, 0.35) sit within a fifth of the vcfBeta pair's (6.17, 5.35, 3.29, 2.11, 1.18,
+0.37), and freeBayes's side of the two pairs is the same within a tenth. The two facets write one
+confidence scale: CGI's vcfBeta GQ is the lowest `var` haplotype score at 42,894 of 42,895 loci of a
+chromosome, and the `hq` confidence of the `var` file's 4.02M scored calls (p10/p50/p90 68/374/1,037)
+matches the vcfBeta's GL confidence (357 and 1,022 at p50 and p90). That is what makes it sound for
+a `var` and a vcfBeta facet of one CGA version to share an atlas key (`caller`, `caller_version`):
+the 60+ diagnosis (docs/CONSENSUS.md) found two facets of one freeBayes version that did not share a
+scale; these two do. Two such facets of one person are still one person's pair twice, and never both
+go into one atlas (the check below holds hu1B2689's vcfBeta pair out when it adds the `var` one).
+
+**The second person's fit is broken by the even split.** The one-pair fit fixes the two sides' band
+rates up to a constant and splits the top cell (CGI 100+ against freeBayes 60–100) evenly. On
+huAF3C63 that cell disagrees on 0.64%, so CGI's 100+ band takes 0.32%, and CGA 2.5.0.33's 40–60 and
+60–100 bands come out below it, on the Wilson floor (0.004% and 0.002%; 1.80, 1.60, 0.62% at 10 to
+40). The disagreement there is mostly freeBayes's: its own side runs about twice hu1B2689's at every
+band (16.7, 10.5, 7.0, 1.66, 1.13, 0.32% fitted at 0–10 to 60–100, against 8.1, 5.6, 3.1, 0.76,
+0.41, 0.081%). So one freeBayes version does not keep one error per band across people: PGP's merge
+for huAF3C63 is a noisier run, by its discordance with CGI (1.77% against 0.50%) as by its bands. A
+consensus weighing CGA 2.5.0.33 rows with these bands would take its 40–100 phred rows as nearly
+never wrong. The even split is first order on this pair, where docs/CONSENSUS.md found it second order
+on hu1B2689's; the rule stands, and the person's options are in docs/CONSENSUS.md.

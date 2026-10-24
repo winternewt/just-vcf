@@ -122,7 +122,9 @@ it stays calibrated. Two bands are still off, in opposite directions:
   person's CGA 2.5.0.24 against freeBayes 0.9.20, whose SNV discordance (1.02%) is nearly twice this
   person's pair's (0.54%): the same rate on another genome and another release. It stays when
   freeBayes and CGI take their own versions' bands (0.60 and 0.56 below), so it is not the borrowing
-  of the next point.
+  of the next point. Measured since (2026-10-24, "Where the underconfidence at 10 to 30 phred came
+  from", below): it is mostly the region rule, an allele weighted by the highest rate among the
+  nested GIAB classes holding it.
 - **60 phred and up, about twice overconfident** (296k alleles, all where CGI and the array agree).
   The prediction there is almost all freeBayes's own rate (the consensus's own error is below 1e-6),
   and freeBayes disagrees on 0.21% against 0.115% predicted. The cause is freeBayes 0.9.15's band
@@ -247,7 +249,8 @@ the right direction. It is not what made the 60+ band twice overconfident, and t
 band fit: the `var` facet states no confidence, so only freeBayes's side splits by band (10.7, 7.1,
 1.8, 1.3 and 0.48% at 10–20 to 60–100 in `easy`, each holding CGI's unbanded share of a pair whose
 SNVs disagree on 1.6% in `easy`). It cannot say whether one freeBayes version keeps one scale across
-people.
+people. Since schema 0.0.19 the `var` facet is banded and the pair fits (docs/METHOD_ATLAS.md, "The CGI
+`var` pairs"): it does not keep one; huAF3C63's freeBayes bands run about twice hu1B2689's.
 
 **What changed in the library.** Nothing in the rule: a facet whose version the atlas lacks still
 borrows its caller's bands. `consensus` now names such facets in a warning, since a borrowed band was
@@ -273,3 +276,94 @@ measured on another facet's confidence scale. Whether to borrow at all is the pe
 Recommended: 1, and measure each facet's own version wherever the person has a partner facet for it,
 which is the normal use (an atlas with the person's own pairs: in-sample 1.14 overall). The odd/even
 split above is the honest way to check that use, and it is calibrated at 30 phred and up.
+
+## The CGI `var` facet banded (2026-10-24)
+
+Schema 0.0.19 reads CGI's allele scores into `calls.hq`, and `genotype_evidence` grades a `var` row
+by the lowest of them (docs/SCHEMA.md, "CGI's allele scores"), so a `var` facet speaks with its
+confidence band where it spoke with its method's average. The check, as the odd/even split above:
+hu1B2689's facets with the **`var` file** in place of the vcfBeta (CGI `var`, freeBayes, VarScan2,
+23andMe; freeBayes held out), the atlas being main's without hu1B2689's CGI/freeBayes pair plus the
+`var` pair built on the odd autosomes, the consensus checked on the even ones. "Before" is the code
+before 0.0.19 (a copy of it, run on the same files): the `var` pair then fitted no band on either
+side, so CGI spoke with its average and freeBayes 0.9.15 borrowed 0.9.20's bands. Both runs also
+held huAF3C63's `var` pair whole-genome (unbanded before, banded after), which gives freeBayes 0.9.15 a
+second partner; a third run leaves it out.
+
+| Confidence (phred) | Before: alleles | Predicted | Observed | Ratio | After: alleles | Predicted | Observed | Ratio | After, without huAF3C63: ratio |
+|---|---|---|---|---|---|---|---|---|---|
+| below 10 | 11,698 | 64.8% | 96.9% | 1.50 | 11,593 | 65.0% | 97.1% | 1.49 | 1.49 |
+| 10 to 20 | 504,960 | 1.89% | 0.79% | 0.42 | 66,802 | 4.30% | 3.26% | 0.76 | 0.82 |
+| 20 to 30 | 882,447 | 1.07% | 0.30% | 0.28 | 198,706 | 1.25% | 0.77% | 0.62 | 0.76 |
+| 30 to 40 | 58,361 | 0.257% | 0.192% | 0.75 | 1,101,077 | 0.448% | 0.255% | 0.57 | 0.92 |
+| 40 to 60 | 156,093 | 0.131% | 0.211% | 1.62 | 231,135 | 0.434% | 0.242% | 0.56 | 0.85 |
+| 60 and up | | | | | 4,246 | 0.575% | 0.141% | 0.25 | 1.02 |
+| 10 and up | 1,601,861 | 1.21% | 0.44% | 0.37 | 1,601,966 | 0.71% | 0.44% | 0.63 | 0.85 |
+
+- **Banded, the `var` facet calibrates as the vcfBeta does.** Without huAF3C63 the `var` run is
+  0.82, 0.76, 0.92, 0.85, 1.02 from 10 phred up, against the vcfBeta's 0.60, 0.56, 0.90, 0.83, 1.02
+  (above): the same shape, the two facets sharing one confidence scale (docs/METHOD_ATLAS.md). Before,
+  1.39M alleles sat at 10 to 30 phred, mostly CGI rows weighted by CGI's average rate, predicted at
+  two and a half to three and a half times the disagreement seen.
+- **huAF3C63 makes it worse, through freeBayes.** Its pair gives freeBayes 0.9.15 a second partner
+  whose bands are about twice hu1B2689's (docs/METHOD_ATLAS.md), and a method's band rate is the mean
+  over its partners, so freeBayes's predicted error rises with it, and at 30 phred and up, where the
+  prediction is mostly freeBayes's own, the run sees 0.57 and 0.56 of it. A
+  version's bands measured on one person's facet do not carry to another's facet of that version.
+- **Below 10 phred is no calibration signal.** Those 11.6k alleles are where no facet in the
+  consensus spoke (`speaking` 0: the `var` file has a row at the position but over another span, or a
+  half-call), so the posterior is flat, its top genotype the tie's zero copies, and freeBayes,
+  carrying the allele, disagrees by construction. The rows "10 and up" leave them out.
+
+## Where the underconfidence at 10 to 30 phred came from (2026-10-24)
+
+With each facet's own bands the consensus still saw about 0.6 of the disagreements it predicted at
+10 to 30 phred (0.60, 0.56 above). `scripts/consensus_check.py` now splits its detail by GIAB region
+(`region`: `easy`, `difficult`, or neither) and runs two variants of the region rule (`--no-regions`,
+every facet weighted by its `all` rates; `--classes easy --classes difficult`, by GIAB's partition of
+the genome alone), all on the vcfBeta odd/even split above:
+
+| Rule | 10–20 | 20–30 | 30–40 | 40–60 | 60+ | 10+ | `easy` | `difficult` |
+|---|---|---|---|---|---|---|---|---|
+| highest rate among all GIAB classes holding the allele (the rule) | 0.60 | 0.56 | 0.90 | 0.83 | 1.02 | 0.71 | 0.99 | 0.80 |
+| `all` rates only (`--no-regions`) | 0.85 | 0.80 | 0.87 | 0.84 | | 0.86 | 0.80 | 1.17 |
+| `easy` / `difficult` only (`--classes`) | 0.80 | 0.71 | 0.98 | 0.89 | 1.00 | 0.86 | 1.06 | 0.91 |
+| the same, the `var` facet banded | 1.00 | 1.04 | 1.00 | 0.91 | 1.00 | 1.01 | | |
+
+(observed over predicted; the region columns are over every bin, the one below 10 phred included.)
+
+**It is the region rule.** 224k of the 265k alleles at 10 to 30 phred lie in GIAB's `difficult`
+regions, almost all CGI rows speaking alone, and there the rule weighs each by the highest rate among
+the classes holding it. The classes nest and overlap: `difficult` is the union of the rest, and an
+allele in a mild class (a 7–11 bp homopolymer, a short tandem repeat) also sits in `difficult`, whose rate is the
+union's average, raised by low mappability and segmental duplications. The highest of overlapping
+averages overstates the error of most alleles it is applied to: `difficult` alleles were predicted
+1.25 times the disagreement seen, the 10 to 30 phred ones almost twice. `easy`, which nests nothing,
+was right (0.99). Taking `all` alone swings the other way, `easy` over-predicted and `difficult`
+under (0.80, 1.17), and agrees overall only by cancelling. GIAB's partition, each allele in exactly
+one of `easy` and `difficult`, makes `easy` calibrated in every bin (1.00, 1.00, 0.99, 0.89, 1.00 from
+10 phred up) and with the banded `var` facet every bin from 10 phred up lies within a tenth of 1.
+
+**What is left** is the vcfBeta run's `difficult` 10 to 30 phred alleles under the partition (0.77,
+0.67): mostly CGI rows of 100+ phred alone, at the band's `difficult` rate, which the even split of the
+pair's top cell sets at 0.39% (the `var` pair's, where the partition calibrates, at 0.30%). The cells
+also say the additive fit does not hold for CGI's lowest band: CGI rows at 10 to 20 phred disagree
+with freeBayes on 0.6 to 1.4% where freeBayes is at 30 to 60 phred and on 11 to 12% where freeBayes
+is at its 60–100 cap, so no one rate fits the band; it is a second, smaller cause, and not chased here.
+
+**For the person: which regions weigh an allele.** The library rule (`consensus(regions=)`: the
+highest rate among the classes of the `RegionSet` holding the allele) is unchanged; the choice is
+which `RegionSet` a caller passes, and what the docs and checks recommend.
+
+1. **Every GIAB class (as run until now).** Conservative: no allele is weighted below any class it
+   sits in. Costs calibration in difficult regions, 0.71 overall from 10 phred up, about 0.6 at 10 to
+   30 phred.
+2. **GIAB's partition, `easy` and `difficult` (recommended).** `giab_stratifications(..., classes=
+   ["easy", "difficult"])`. Calibrated in `easy` in every bin, 0.86 (vcfBeta) and 1.01 (`var`) from
+   10 phred up. Gives up the finer classes' rates, so a low-mappability allele is weighted as an
+   average difficult one; within `difficult` the remaining gap is the top cell's even split.
+3. **A finer partition built from the classes** (each allele in one class: low mappability first,
+   then segmental duplications, and so on, by a stated precedence). Keeps the hard classes' rates
+   without the overlap; not built, and each class then holds fewer alleles per band
+   (`MIN_BAND_ALLELES`).
+4. **`all` only.** Calibrated overall by cancellation; wrong in both directions by region.

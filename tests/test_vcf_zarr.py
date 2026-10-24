@@ -20,7 +20,7 @@ from just_vcf.loading import Loaded
 from just_vcf.vcf_zarr import write_vcf_zarr
 from test_load_cgi import LINKED, master_var_text
 from test_load_cgi import write as write_cgi
-from test_write_vcf import RICH, RICH_FORMAT, loaded_from, psl_loaded
+from test_write_vcf import HQ_RECORDS, RICH, RICH_FORMAT, hq_loaded, loaded_from, psl_loaded
 
 GVCF = [
     "1\t100\t.\tG\t<NON_REF>\t.\t.\tEND=113\tGT:GQ:MIN_DP:PL\t0/0:60:23:0,60,900",
@@ -233,3 +233,60 @@ def test_a_facet_without_psl_says_vcf_43_as_write_vcf_does(tmp_path: Path) -> No
     attrs = json.loads((written.path / ".zattrs").read_text())
     vcf_header = gzip.decompress(write_vcf(loaded, tmp_path / "out.vcf.gz", resolved_only=True).path.read_bytes()).decode().splitlines()[0]
     assert attrs["vcf_meta_information"] == [["fileformat", vcf_header.removeprefix("##fileformat=")]]
+
+
+# A triploid row beside HQ_RECORDS' diploid and haploid ones: the ploidy dimension holds it, where
+# write_vcf's Number=2 HQ cannot.
+HQ_ZARR_RECORDS = [*HQ_RECORDS, "2\t100\t.\tA\tG\t50\tPASS\t.\tGT:HQ\t1/1/0:5,.,7"]
+
+
+def expected_hq(calls: pl.DataFrame, ploidy: int) -> list[list[int]]:
+    """call_HQ per row as stored: each GT slot's score, `-1` where it has none (or the row's `hq` is
+    null), `-2` past the row's ploidy; a row without a genotype missing throughout."""
+    out = []
+    for gt, hq in zip(calls["gt"].to_list(), calls["hq"].to_list()):
+        if gt is None:
+            out.append([-1] * ploidy)
+            continue
+        values = hq if hq is not None else [None] * len(gt)
+        out.append([-1 if v is None else v for v in values] + [-2] * (ploidy - len(gt)))
+    return out
+
+
+def test_haplotype_qualities_are_written_per_ploidy_slot(tmp_path: Path) -> None:
+    loaded = hq_loaded(tmp_path, HQ_ZARR_RECORDS, number=".")
+    calls = loaded.calls.collect()
+    ploidy = calls["gt"].list.len().max()
+    assert ploidy == 3 and calls["hq"].null_count() >= 1 and any(None in hq for hq in calls["hq"].drop_nulls().to_list())
+    written = write_vcf_zarr(loaded, tmp_path / "out.vcz", variants_chunk_size=4)
+    assert "call_HQ" in written.arrays and written.warnings == ()
+    root = written.path
+    assert json.loads((root / "call_HQ" / ".zattrs").read_text())["_ARRAY_DIMENSIONS"] == ["variants", "samples", "ploidy"]
+    meta = json.loads((root / "call_HQ" / ".zarray").read_text())
+    assert meta["shape"] == [calls.height, 1, ploidy] and meta["dtype"] == "<i4" and meta["fill_value"] == -2
+    # On the bytes: the spec's missing (-1) and fill (-2), the last chunk padded past the variants.
+    want = expected_hq(calls, ploidy)
+    chunks = sorted(root.joinpath("call_HQ").glob("[0-9]*"), key=lambda p: int(p.name.split(".")[0]))
+    stored = [v for chunk in chunks for v in struct.unpack(f"<{4 * ploidy}i", gzip.decompress(chunk.read_bytes()))]
+    assert stored[: calls.height * ploidy] == [v for row in want for v in row]
+    assert set(stored[calls.height * ploidy :]) == {-2}
+    # polars-bio reads back the same values, row by row.
+    back = read_back(root).select(pl.col("genotypes").struct.unnest())
+    assert [row[0] for row in back["HQ"].to_list()] == want
+    # A facet with no haplotype qualities writes no call_HQ.
+    assert "call_HQ" not in write_vcf_zarr(loaded_from(tmp_path, RICH, fmt=RICH_FORMAT), tmp_path / "rich.vcz").arrays
+
+
+def test_haplotype_qualities_not_one_per_gt_slot_are_left_out(tmp_path: Path) -> None:
+    """A frame whose `hq` is not parallel to `gt` (no loader writes one) says nowhere which slot each
+    value speaks for: written missing and counted, as write_vcf leaves it out of HQ."""
+    loaded = hq_loaded(tmp_path)
+    calls = loaded.calls.collect()
+    odd = pl.col("pos") == 100
+    longer = pl.when(odd).then(pl.lit([1, 2, 3], dtype=pl.List(pl.UInt16))).otherwise(pl.col("hq")).alias("hq")
+    loaded = loaded.model_copy(update={"calls": loaded.calls.with_columns(longer)})
+    written = write_vcf_zarr(loaded, tmp_path / "out.vcz")
+    assert "1 row(s) had haplotype qualities that are not one per GT allele; left out of HQ" in written.warnings
+    back = read_back(written.path).select(pl.col("genotypes").struct.unnest())
+    want = expected_hq(calls.with_columns(pl.when(odd).then(None).otherwise(pl.col("hq")).alias("hq")), calls["gt"].list.len().max())
+    assert [row[0] for row in back["HQ"].to_list()] == want

@@ -19,15 +19,16 @@ from just_vcf.links import SPLIT_REJOINED, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck, canonical_order_per_contig
 
-REJOIN_VERSION = 4
+REJOIN_VERSION = 5
 """Part of the derived `facet_id`: bumped whenever the join rule changes what it emits (2: the SV
 columns kept, RM282; 3: schema 0.0.15's `phase_set_ordinals` and `phase_set_qualities` kept where
-the split rows agree; 4: schema 0.0.19's `hq` kept where they agree)."""
+the split rows agree; 4: schema 0.0.19's `hq` kept where they agree; 5: `hq` joined per GT slot, so
+the rows `normalize` splits, which keep a score only on their own slots, give it back)."""
 
 RELATION = SPLIT_REJOINED
 """The derived facet's `relation`."""
 
-_KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "hq", "dp", "qual", "sv_type", "copy_number")
+_KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "dp", "qual", "sv_type", "copy_number")
 """Columns a joined row keeps only when every row of its group agrees; otherwise null (not known)."""
 
 _PER_ALT = {"cipos": 2, "ciend": 2, "alt_copy_numbers": 1}
@@ -166,9 +167,22 @@ def _join(rows: list[dict]) -> dict | str:
     for name in _KEPT_WHEN_EQUAL:
         values = [row[name] for row in rows]
         joined[name] = values[0] if all(value == values[0] for value in values) else None
+    joined["hq"] = _per_slot_hq(rows, gt)
     for name, width in _PER_ALT.items():
         joined[name] = _per_alt(rows, extended, alts, name, width)
     return joined
+
+
+def _per_slot_hq(rows: list[dict], gt: list[int | None]) -> list[int | None] | None:
+    """Each joined GT slot's haplotype quality: the one value the rows give there, null where they give
+    none or two, and null on an uncalled slot (no sequence for a score to speak for). A tool that
+    splits a site copies HQ whole to every row (bcftools), or keeps it on a row's own slots only
+    (`normalize`, vt's `.`); both read alike. Null when no slot is left with a score."""
+    hq: list[int | None] = []
+    for slot, index in enumerate(gt):
+        given = {row["hq"][slot] for row in rows if row["hq"] is not None and slot < len(row["hq"]) and row["hq"][slot] is not None}
+        hq.append(given.pop() if index is not None and len(given) == 1 else None)
+    return hq if any(value is not None for value in hq) else None
 
 
 def _per_alt(rows: list[dict], extended: list[list[str]], alts: list[str], name: str, width: int) -> list | None:

@@ -194,3 +194,31 @@ def test_the_sv_columns_survive_the_join(tmp_path: Path) -> None:
     assert second["sv_type"] is None and second["copy_number"] is None
     assert second["cipos"] is None and second["ciend"] is None
     assert second["alt_copy_numbers"] == [2.0, 1.0]
+
+
+def test_haplotype_qualities_join_per_slot(tmp_path: Path) -> None:
+    """HQ joins slot by slot, as GT does: a value copied to every row (bcftools) and a value kept on a
+    row's own slot only (vt's `.`, `normalize`) read alike; two values for one slot leave that slot
+    unknown; a slot the joined GT leaves uncalled has none."""
+    header = HEADER[:-1] + ['##FORMAT=<ID=HQ,Number=2,Type=Integer,Description="Haplotype qualities">', HEADER[-1]]
+    pairs = {
+        100: ("1/0:51,40", "0/1:51,40"),  # bcftools: HQ copied whole
+        200: ("1/.:51,.", "./1:.,40"),  # vt: each row scores its own slot
+        300: ("1/0:51,40", "0/1:52,40"),  # the rows disagree on the first slot
+        400: ("1/.:51,.", "./.:.,."),  # the second slot is called by no row
+    }
+    records = [
+        f"1\t{pos}\t.\tA\t{alt}\t50\tPASS\tOLD_MULTIALLELIC=1:{pos}:A/G/T\tGT:HQ\t{call}"
+        for pos, calls in pairs.items()
+        for alt, call in zip("GT", calls)
+    ]
+    path = tmp_path / "hq_split.vcf"
+    path.write_text("\n".join([*header, *records]) + "\n")
+    parent = {(row["pos"], row["alts"][0]): row["hq"] for row in load(path).calls.collect().iter_rows(named=True)}
+    # What the loader read per row, which the join starts from.
+    assert parent[(200, "G")] == [51, None] and parent[(200, "T")] == [None, 40] and parent[(400, "T")] is None
+    joined = {row["pos"]: row for row in rejoin_split(load(path)).calls.collect().iter_rows(named=True)}
+    assert set(joined) == set(pairs) and all(row["split_signal"] is None for row in joined.values())
+    assert joined[100]["hq"] == joined[200]["hq"] == [51, 40]
+    assert joined[300]["hq"] == [None, 40]
+    assert joined[400]["gt"] == [1, None] and joined[400]["hq"] == [51, None]

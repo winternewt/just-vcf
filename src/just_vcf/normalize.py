@@ -7,7 +7,8 @@ The rules are in docs/SCHEMA.md ("Normalizing"); in short:
 
 1. **Split.** A row with two or more ALTs becomes one row per ALT, as `bcftools norm -m-any
    --multi-overlaps .`, vt decompose and Glow do: a GT slot holding another ALT is written null
-   (`.`), never `0`, so a split row never claims a REF haplotype the person does not have. Each split
+   (`.`), never `0`, so a split row never claims a REF haplotype the person does not have, and its
+   `hq` slot goes with it (a row left with no score has `hq` null). Each split
    row carries `split_signal = marker`. `ad` is sliced to `[REF, ALT]`; `gl` is sliced to the
    genotypes over `[REF, ALT]` (haploid or diploid) only where no GT slot holds another ALT, because
    otherwise the slice leaves out the genotype the caller chose; `gp` and `dosage` are withheld (a
@@ -60,9 +61,10 @@ from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, Re
 
 logger = logging.getLogger(__name__)
 
-NORMALIZE_VERSION = 7
+NORMALIZE_VERSION = 8
 """Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits (6: RM282's
-per-ALT SV columns split with their ALT, the intervals of a moved row cleared; 7: F19's scaffold aliases)."""
+per-ALT SV columns split with their ALT, the intervals of a moved row cleared; 7: F19's scaffold aliases;
+8: a split row's `hq` null on each GT slot it writes `.`)."""
 
 RELATION = NORMALIZED
 """The derived facet's `relation`."""
@@ -274,11 +276,18 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
         if slots
         else pl.col("gt_alleles")
     )
+    # A haplotype quality speaks for the allele in its GT slot: it goes where that slot is nulled, and
+    # a row left with no score has none, as the loaders write it.
+    hq = pl.col("hq")
+    if slots:
+        slot_hq = _per_slot([pl.when((g == 0) | (g == k)).then(hq.list.get(s, null_on_oob=True)) for s, g in enumerate(slots)])
+        hq = pl.when(hq.is_not_null() & slot_hq.list.drop_nulls().list.len().gt(0)).then(slot_hq)
     pieces = pieces.with_columns(
         pl.concat_list(alt).alias("alts"),
         (pl.col("pos").cast(pl.Int64) + ref.str.len_chars().cast(pl.Int64) - 1).cast(pl.UInt32).alias("end_pos"),
         gt.alias("gt"),
         gt_alleles.alias("gt_alleles"),
+        hq.alias("hq"),
         pair("vrs_allele_ids").alias("vrs_allele_ids"),
         pair("vrs_errors").alias("vrs_errors"),
         pl.when(pl.col("_indexable")).then(pair("ad")).alias("ad"),
@@ -484,7 +493,8 @@ def _warnings(counts: Counter[str]) -> list[str]:
     if counts["split_sites"]:
         lines.append(
             f"{counts['split_sites']} multi-allelic site(s) split into {counts['split_rows']} row(s), one per ALT; "
-            "a GT slot holding another ALT is written `.`, and each row carries split_signal = marker"
+            "a GT slot holding another ALT is written `.`, its haplotype quality with it, and each row carries "
+            "split_signal = marker"
         )
     if counts["star_sites"]:
         lines.append(

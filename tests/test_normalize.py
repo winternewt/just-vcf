@@ -499,6 +499,65 @@ def test_written_output_reloads_as_held(tmp_path: Path, store: ReferenceStore) -
     assert site.height == 1 and len(site["alts"].item()) == 3
 
 
+# --- haplotype qualities through the split -------------------------------------------------------
+
+HQ_LINE = '##FORMAT=<ID=HQ,Number=2,Type=Integer,Description="Haplotype qualities">'
+
+
+def hq_normalized(tmp_path: Path, store: ReferenceStore) -> tuple[Loaded, Loaded]:
+    """Sites with FORMAT HQ: a het of two ALTs, a hom-alt beside an uncarried ALT, a phased REF/ALT
+    at three ALTs, a half-call scored on its one called slot, and a biallelic row."""
+
+    def rec(pos: int, n_alts: int, gt: str, hq: str) -> str:
+        ref = at("1", pos)
+        alts = ",".join([b for b in "ACGT" if b != ref][:n_alts])
+        return f"1\t{pos}\t.\t{ref}\t{alts}\t50\tPASS\t.\tGT:HQ\t{gt}:{hq}"
+
+    records = [rec(400, 2, "1/2", "51,40"), rec(410, 2, "1/1", "48,47"), rec(420, 3, "0|2", "30,20"), rec(430, 2, "./1", ".,33"), rec(440, 1, "0/1", "25,26")]
+    path = tmp_path / "hq.vcf"
+    path.write_text("\n".join([*HEADER[:-1], HQ_LINE, HEADER[-1], *records]) + "\n")
+    parent = resolve_ref(load(path), store)
+    return parent, normalize(parent, store)
+
+
+def split_hq(row: dict) -> dict[str, list | None]:
+    """The test's own reading of the rule: per ALT `k`, a slot's score stays where its GT slot is REF
+    or `k`, and a row left with no score has none."""
+    if len(row["alts"]) < 2:
+        return {row["alts"][0]: row["hq"]}
+    out = {}
+    for k, alt in enumerate(row["alts"], 1):
+        kept = [h if g in (0, k) else None for g, h in zip(row["gt"], row["hq"] or [None] * len(row["gt"]))]
+        out[alt] = kept if any(v is not None for v in kept) else None
+    return out
+
+
+def test_a_split_slot_nulled_in_gt_loses_its_haplotype_quality(tmp_path: Path, store: ReferenceStore) -> None:
+    parent, out = hq_normalized(tmp_path, store)
+    expected = {(row["pos"], alt): hq for row in parent.calls.collect().iter_rows(named=True) for alt, hq in split_hq(row).items()}
+    calls = out.calls.collect()
+    assert {(row["pos"], row["alts"][0]): row["hq"] for row in calls.iter_rows(named=True)} == expected
+    # One score per called GT slot: no slot that is `.` keeps a score.
+    for row in calls.iter_rows(named=True):
+        assert all(h is None for g, h in zip(row["gt"], row["hq"] or []) if g is None), row
+    # The fixture exercises the rule: some parent score sat on a slot the split nulls, and some row
+    # loses every score.
+    assert sum(1 for hq in expected.values() if hq is None) >= 2
+    assert any(hq is not None and None in hq for hq in expected.values())
+
+
+def test_split_haplotype_qualities_survive_write_vcf_and_rejoin(tmp_path: Path, store: ReferenceStore) -> None:
+    """The split rows' HQ is what the file says back: `write_vcf` writes `51,.` on `1/.`, and the loader
+    reads a value on an uncalled allele as none. Re-joined, each site has its parent's scores again."""
+    parent, out = hq_normalized(tmp_path, store)
+    held = {(row["pos"], row["alts"][0]): row["hq"] for row in out.calls.collect().iter_rows(named=True)}
+    back = load(write_vcf(out, tmp_path / "out.vcf.gz").path)
+    assert {(row["pos"], row["alts"][0]): row["hq"] for row in back.calls.collect().iter_rows(named=True)} == held
+    want = {row["pos"]: row["hq"] for row in parent.calls.collect().iter_rows(named=True)}
+    for rejoined in (rejoin_split(out), rejoin_split(back)):
+        assert {row["pos"]: row["hq"] for row in rejoined.calls.collect().iter_rows(named=True)} == want
+
+
 # --- against bcftools norm (htslib's, bundled in pysam) -----------------------------------------
 
 

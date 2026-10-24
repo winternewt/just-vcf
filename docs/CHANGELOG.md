@@ -4,6 +4,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Schema 0.0.19: `calls.hq`, each haplotype's phred-scaled score parallel to `gt`, filled from
+  Complete Genomics `var` and masterVarBeta files (`varScoreEAF`, the lowest of a `var` haplotype's
+  sub-rows; none on a `?` or partly called slot). `genotype_evidence` grades a fully called genotype
+  whose every slot is scored by the lowest score, basis `hq` (`GradeBasis.HQ`), reference genotypes
+  included and no vector. CGI `var` rows were `gt_only` (band `none`) and can now be banded in the
+  method-error atlas; CGI's own VCF writes GQ as exactly that lowest score (42,894 of 42,895 loci on
+  one chromosome of hu1B2689). A load warns where a file's VAF and EAF scores differ, and counts a
+  score past u16. `varScoreEAF` leaves CGI's `dropped_fields`. `consensus` weighs such rows by their
+  band's rate (`CONSENSUS_VERSION` 3); `liftover` carries `hq` (`LIFT_VERSION` 7) and `rejoin_split`
+  keeps it where split rows agree (`REJOIN_VERSION` 4). A VCF's FORMAT HQ is not read yet.
+
 - `consensus(prior=)` takes an `AlleleFrequencyPrior`, a caller-supplied allele-frequency table keyed
   as consensus rows are (`chrom`, `pos`, `ref`, `alt`, `alt_frequency`; `ALLELE_FREQUENCIES`). An
   allele the table holds gets Hardy-Weinberg genotype priors over its row's ploidy; every other allele

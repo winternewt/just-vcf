@@ -81,9 +81,9 @@ __all__ = [
     "method_error_rates",
 ]
 
-CONSENSUS_VERSION = 2
+CONSENSUS_VERSION = 3
 """Part of the consensus `facet_id` and its links' `step_version`: bumped whenever the rule changes
-what it emits."""
+what it emits (3: a CGI row graded by its allele scores, `hq`, speaks with its confidence band)."""
 
 CALLER = "just-vcf consensus"
 """The consensus facet's `caller`: the rule that made its rows, versioned by `CONSENSUS_VERSION`."""

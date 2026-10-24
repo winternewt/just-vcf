@@ -17,7 +17,7 @@ import polars as pl
 from just_vcf.contig_names import PRIMARY_ACCESSIONS
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.18"
+SCHEMA_VERSION = "0.0.19"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -277,6 +277,7 @@ CALLS = pl.Schema(
         "dosage": pl.Float32,
         "evidence_basis": enum_dtype(EvidenceBasis),
         "gq": pl.UInt16,
+        "hq": pl.List(pl.UInt16),
         "dp": pl.UInt32,
         "ad": pl.List(pl.UInt32),
         "qual": pl.Float32,

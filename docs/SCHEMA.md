@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.18.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.19.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -687,6 +687,7 @@ With Decisions 1–5 as recommended:
 | `dosage` | `f32` | no dosage given |
 | `evidence_basis` | `Enum` | never null. Origin only: `assay`, `ref_block`, `absence` (Decision 3) |
 | `gq` | `u16` | not given, or outside 0..65535 (counted in the warnings) |
+| `hq` | `list[u16]` | no slot has a score. Parallel to `gt`: a phred-scaled confidence in each haplotype's call (VCF's reserved FORMAT `HQ`, haplotype qualities). From CGI's native files only: `varScoreEAF` per haplotype, the lowest of a `var` haplotype's sub-rows (rule in "CGI's allele scores", below); an element null on a `?` or partly called slot, or outside 0..65535 (counted). A VCF's FORMAT `HQ` is not read into it yet (it stays in `dropped_fields`), and `write_vcf` does not write it |
 | `dp` | `u32` | not given |
 | `ad` | `list[u32]` | not given |
 | `qual` | `f32` | not given. It is the confidence in what ALT asserts: that the variant is there on a variant record, and that no variant is there on a monomorphic record (`alts = []`, where VCF defines it as `-10·log10 P(variant)`). The same threshold therefore works on both |
@@ -698,6 +699,31 @@ With Decisions 1–5 as recommended:
 | `ciend` | `list[i32]` | as `cipos`, from INFO `CIEND`: offsets from the end. Never filled from `cipos`, though VCF 4.5 says a missing CIEND matches it |
 | `copy_number` | `f32` | the source wrote no FORMAT `CN`: this sample's copy number of the segment |
 | `alt_copy_numbers` | `list[f32]` | the source wrote no INFO `CN`, or not one value per ALT. Parallel to `alts`: VCF 4.5's copy number of each ALT allele; a VCF 4.2 INFO CN (`Number=1`, the copy number of the segment) is the one-ALT list |
+
+**CGI's allele scores (`hq`, 0.0.19).** A Complete Genomics `var` or masterVarBeta file scores each
+haplotype's call: `varScoreVAF` and `varScoreEAF` per `var` sub-row, `allele<n>VarScoreVAF/EAF` per
+masterVarBeta slot, phred-scaled, empty on blocks and on `?` stretches. The loader reads EAF, the
+equal-allele-fraction (diploid) model's score, which cgatools takes for germline comparison
+(`calldiff --diploid` uses it instead of VAF); VAF is only compared, and a file where any
+haplotype's two scores differ says how many in a load warning. In both PGP-HMS `var` files measured
+(CGA 2.5.0.33 and 2.5.0.44, chromosome 22, 2026-10-24) the two are equal on every scored row, so the
+choice moves nothing there. Per haplotype:
+
+- a `var` haplotype of several sub-rows takes the lowest of their scores, cgatools' rule for the
+  masterVarBeta it builds ("for multi-call loci, this is the minimum score across all calls",
+  cgatools 1.8.0 command-line reference). 52% and 56% of the multi-row haplotypes in those files carry
+  differing scores, and every called sub-row has one;
+- a slot written `?`, or only partly called (`?A`), gets none: there is no one sequence for the score
+  to speak for. masterVarBeta writes a score on a half-call's `?` slot too, which is not read;
+- format 1.x's one `totalScore` is neither score, so those files leave `hq` null.
+
+CGI's own VCF of an assembly writes `GQ` as the lowest of these per locus: on chromosome 22 of a
+PGP-HMS assembly (hu1B2689), vcfBeta's GQ equals the lowest `var` haplotype score at 42,894 of the
+42,895 fully called loci where both write one. Rejected: writing that lowest score into `gq`, which
+VCF defines for a variant site's genotype and which `genotype_evidence` does not read for a reference
+genotype, where CGI scores reference haplotypes as it does any other; and keeping the scores out of
+the frame, which left every CGI `var` row unquantified (`gt_only`), so a `var` facet could never be
+banded in the method-error atlas.
 
 **`split_signal`.** A file split one row per ALT (bcftools `norm -m-`, Hail, GATK) can write the
 other ALT of a genotype as `0`, so `1/2` at `A>G,T` becomes `1/0` at `A>G` and `0/1` at `A>T`, and
@@ -1535,6 +1561,14 @@ reading) into every cache spill and need a version bump each time they move.
   genotype gets `1 - 10^(-GQ/10)` and the rest is spread evenly over the other genotypes, which the
   source did not rank (`prior = even_remainder`); `confidence` is GQ. No vector beyond diploid, or for a
   block, whose ploidy the frame does not keep without its likelihoods.
+- `hq`: a fully called genotype whose every slot has a haplotype score (`hq`, CGI's allele scores,
+  "CGI's allele scores" above), of any ploidy, reference genotypes included: CGI scores a reference
+  haplotype's call as it does an ALT's, so the `gq` basis's restriction to genotypes carrying an ALT
+  does not apply. `confidence` is the lowest score, since the genotype is wrong where any haplotype is
+  (CGI's own VCF writes GQ so, above). No vector and no `prior`: one number per haplotype ranks no
+  other genotype, and Decision 3 rejects a made-up distribution. `genotype_alleles` and
+  `genotype_index` name the called genotype. A half-call or a partly called slot has no score, so the
+  row stays `gt_only`.
 - `dosage`: only a dosage. One number gives no vector (Decision 3), so no vector and no number.
 - `gt_only`: a genotype with at least one allele called and no quantity: asserted, unquantified. A
   half-call (`0/.`) is here even with a GQ: there is no one genotype for GQ to grade.
@@ -2033,7 +2067,7 @@ each with the other parent silent or reading `other_span`. `normalize` both, or 
 
 | Reading | When | Its distribution over copies `q` |
 |---|---|---|
-| `stated` | a row states the allele | its vector (`genotype_evidence`'s `gl`, under a flat prior, or `gq`) summed by copies; else its genotype, a point mass. A `gp` row is read as its genotype unless `gp_as = likelihood` |
+| `stated` | a row states the allele | its vector (`genotype_evidence`'s `gl`, under a flat prior, or `gq`) summed by copies; else its genotype, a point mass. A `gp` row is read as its genotype unless `gp_as = likelihood`; an `hq` row (CGI's allele scores) has no vector and is read as its genotype, its confidence placing it in a band (`CONSENSUS_VERSION` 3) |
 | `site` | one row at the position over the same REF span, without the allele (a hom-ref record, another ALT) | zero copies, a point mass: its vector indexes other alleles |
 | `ref_block` | a `ref` block covers the position | by `block_grade` (above, "The block rule"): under the default, the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; graded by its GQ, zero copies at `1 − 10^(−GQ/10)` and the rest spread evenly over the other copies, at the ploidy its likelihoods give, else the site's; lacking what the rule reads, zero copies |
 | `absence` | nothing covers it and `absence_is_reference(facet, class, force=force)` is True on a contig the facet declared or wrote | zero copies |
@@ -2168,6 +2202,16 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **A calls column, landed in 0.0.19** (2026-10-24, layer 7, CGI `var` confidence): `calls.hq`
+  (`list[u16]`, parallel to `gt`), each haplotype's score, filled from CGI's native files'
+  `varScoreEAF` ("CGI's allele scores", Decision 6); null from every other loader. Additive. Rules
+  changed: `genotype_evidence` grades a fully called genotype whose every slot is scored by the lowest
+  score (basis `hq`), so a CGI `var` or masterVarBeta row is `quantified` where it was `gt_only`, and
+  the method-error atlas bands it; `consensus` weighs such a row by its band's rate where the atlas
+  measured one (`CONSENSUS_VERSION` 3). `liftover` carries `hq` (`LIFT_VERSION` 7) and `rejoin_split`
+  keeps it where the split rows agree (`REJOIN_VERSION` 4). `varScoreEAF` and
+  `allele<n>VarScoreEAF` leave CGI's `dropped_fields`.
 
 - **No version change** (2026-10-24, layer 7, the options for desk #94–#96): no column of `facets`,
   `calls` or `blocks` changes, and no default output does. `BlockGrade` (`block_grade=` on
@@ -2386,6 +2430,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   the rule above is a minor bump, 0.0.10. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.19** (2026-10-24, CGI's allele scores): `calls.hq` (`list[u16]` or null). Additive.
 
 - **0.0.18** (2026-10-23, the PL/GL source): `facets.gl_source` (`gl`, `pl`, `gl_over_pl` or null). Additive.
 

@@ -60,11 +60,11 @@ from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceM
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 6
+LIFT_VERSION = 7
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
 row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
 `phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
-6: the lifted facet's `reference` is null, since it named the source's file)."""
+6: the lifted facet's `reference` is null, since it named the source's file; 7: schema 0.0.19's `hq` carried)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -105,7 +105,7 @@ REASON_TEXT: dict[str, str] = {
     "ref_mismatch_after_lift": "the target's REF equals none of the row's alleles",
 }
 
-PARENT_COLUMNS_KEPT = ("ids", "phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "gl", "gp", "dosage", "evidence_basis", "gq", "dp", "ad", "qual", "filters", "sample_filters", "split_signal")
+PARENT_COLUMNS_KEPT = ("ids", "phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "gl", "gp", "dosage", "evidence_basis", "gq", "hq", "dp", "ad", "qual", "filters", "sample_filters", "split_signal")
 """`calls` columns a lifted row carries from its parent as they were (phase sets and dosage aside, below)."""
 
 REPORT = pl.Schema(

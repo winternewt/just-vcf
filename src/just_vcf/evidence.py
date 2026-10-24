@@ -49,6 +49,10 @@ class GradeBasis(str, Enum):
     quantity on two scales), normalized under a flat prior. The row's `gl_source` says which key."""
     GQ = "gq"
     """The source's phred confidence of the genotype it called (`gq`), and nothing more."""
+    HQ = "hq"
+    """The source's phred confidence in each haplotype's call (`hq`, CGI's allele scores), on a fully
+    called genotype whose every slot has one: `confidence` is the lowest, the genotype being wrong
+    where any haplotype is. No vector: one number per haplotype ranks no other genotype."""
     DOSAGE = "dosage"
     """Only an expected allele count (`dosage`): no genotype vector follows from one number."""
     GT_ONLY = "gt_only"
@@ -114,6 +118,7 @@ _KIND = {
     GradeBasis.GP: ConfidenceKind.QUANTIFIED,
     GradeBasis.GL: ConfidenceKind.QUANTIFIED,
     GradeBasis.GQ: ConfidenceKind.QUANTIFIED,
+    GradeBasis.HQ: ConfidenceKind.QUANTIFIED,
     GradeBasis.DOSAGE: ConfidenceKind.ASSERTED,
     GradeBasis.GT_ONLY: ConfidenceKind.ASSERTED,
     GradeBasis.BLOCK: ConfidenceKind.ASSERTED,
@@ -263,6 +268,12 @@ def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, facets: pl.LazyF
     called_alleles = pl.concat_list(pl.coalesce(pl.col("source_ref"), pl.col("ref")), pl.col("alts"))
     called_genotypes = _genotype_count(called_alleles.list.len(), gt.list.len().cast(pl.Int64))
     gq_applies = pl.col("gq").is_not_null() & fully_called & (pl.lit(True) if gq_on_reference else carries_alt)
+    # One score per GT slot, none missing. Unlike GQ it grades a reference genotype as well: each
+    # haplotype's score is the confidence in that haplotype's call, reference or not.
+    hq = pl.col("hq")
+    hq_applies = (
+        fully_called & hq.is_not_null() & (hq.list.len() == gt.list.len()) & ~hq.list.eval(pl.element().is_null()).list.any()
+    ).fill_null(False)
 
     rows = _with_gl_source(calls, facets).select(
         "facet_id", "chrom", "pos", "end_pos", "evidence_basis", "gt", "gq", *keep,
@@ -276,6 +287,7 @@ def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, facets: pl.LazyF
         _called_index(gt).alias("_called_index"),
         called_any.alias("_called_any"),
         gq_applies.alias("_gq_applies"),
+        pl.when(hq_applies).then(hq.list.min().cast(pl.Float64)).alias("_hq_min"),
     )  # fmt: skip
     gp_ok = _usable(pl.col("_gp"), pl.col("_vector_genotypes"), probabilities=True)
     gl_ok = _usable(pl.col("_gl"), pl.col("_vector_genotypes"), probabilities=False)
@@ -283,6 +295,7 @@ def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, facets: pl.LazyF
         pl.when(gp_ok).then(pl.lit(GradeBasis.GP.value))
         .when(gl_ok).then(pl.lit(GradeBasis.GL.value))
         .when(pl.col("_gq_applies")).then(pl.lit(GradeBasis.GQ.value))
+        .when(pl.col("_hq_min").is_not_null()).then(pl.lit(GradeBasis.HQ.value))
         .when(pl.col("dosage").is_not_null()).then(pl.lit(GradeBasis.DOSAGE.value))
         .when(pl.col("_called_any")).then(pl.lit(GradeBasis.GT_ONLY.value))
         .otherwise(pl.lit(GradeBasis.NO_CALL.value))
@@ -309,6 +322,7 @@ def _blocks_evidence(blocks: pl.LazyFrame, gq_on_reference: bool, facets: pl.Laz
         "_gl_source",
         block_alleles.alias("_alleles"),
         pl.when(genotypes.is_in([2, 3])).then(genotypes).otherwise(None).alias("_vector_genotypes"),
+        pl.lit(None, dtype=pl.Float64).alias("_hq_min"),
     )  # fmt: skip
     gl_ok = _usable(pl.col("_gl"), pl.col("_vector_genotypes"), probabilities=False)
     # A `ref` block by the rule (`BlockGrade`); a `no_call` block by its likelihoods under every rule.
@@ -339,7 +353,9 @@ def _graded(rows: pl.LazyFrame, *, called_index: pl.Expr, called_genotypes: pl.E
         pl.concat_list(spread.repeat_by(called_index), 1.0 - error, spread.repeat_by(called_genotypes - called_index - 1))
     )
     is_gp, is_gl, is_gq = basis == GradeBasis.GP.value, basis == GradeBasis.GL.value, basis == GradeBasis.GQ.value
-    asserted_genotype = basis.is_in([GradeBasis.GT_ONLY.value, GradeBasis.DOSAGE.value, GradeBasis.BLOCK.value])
+    is_hq = basis == GradeBasis.HQ.value
+    # A genotype the row names without a vector: asserted, or quantified by its haplotypes' scores.
+    asserted_genotype = basis.is_in([GradeBasis.GT_ONLY.value, GradeBasis.DOSAGE.value, GradeBasis.BLOCK.value, GradeBasis.HQ.value])
     kind = basis.replace_strict({b.value: k.value for b, k in _KIND.items()}, return_dtype=pl.String)
     return rows.with_columns(
         kind.cast(enum_dtype(ConfidenceKind)).alias("confidence_kind"),
@@ -356,6 +372,7 @@ def _graded(rows: pl.LazyFrame, *, called_index: pl.Expr, called_genotypes: pl.E
         pl.when(is_gp).then(_phred_of_top(gp.list.eval(pl.element().log(10))))
         .when(is_gl).then(_phred_of_top(gl))
         .when(is_gq).then(pl.col("gq").cast(pl.Float64))
+        .when(is_hq).then(pl.col("_hq_min"))
         .alias("confidence"),
         basis.cast(enum_dtype(GradeBasis)).alias("grade_basis"),
         # The key the likelihoods were read from, on the rows they grade; every other row rests on neither.
@@ -375,6 +392,8 @@ def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False, block_gr
       site being variant, so by default it grades no reference genotype and no reference block;
       `gq_on_reference=True` lets it, as single-sample callers compute it. The called genotype gets
       `1 - 10^(-GQ/10)`, the rest is spread evenly (`prior = even_remainder`), and `confidence` is GQ;
+    - `hq`: a fully called genotype whose every slot has a haplotype score (`hq`, CGI's allele scores),
+      reference genotypes included: `confidence` is the lowest score, no vector;
     - `dosage`: a dosage and nothing above. No vector, no number;
     - `gt_only` (a call) or `block` (a `ref` block): asserted, unquantified;
     - `no_call`: nothing was called and no vector given.

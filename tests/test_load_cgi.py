@@ -537,6 +537,36 @@ def test_allele_scores_are_hq_per_slot_and_grade_the_genotype_by_the_lowest(tmp_
     assert "1 haplotype(s) whose varScoreVAF differs from the varScoreEAF read into `hq`" in loaded.warnings
 
 
+# VAF differing from EAF on haplotypes whose score is not read (a half-call's `?`, a partly called
+# `?A`, a score past u16) and on one whose score is.
+VAF_DIFFERS = [
+    Locus("chr1", 1000, 1001, haps=((Seg(1000, 1001, "snp", "A", "G", score="50"),), (Seg(1000, 1001, "no-call", "A", "?", filter="", score="40", vaf="30"),))),
+    Locus(
+        "chr1", 2000, 2001,
+        haps=((Seg(2000, 2001, "snp", "T", "A", score="40"),), (Seg(2000, 2001, "no-call", "T", "?", filter=""), Seg(2001, 2001, "ins", "", "A", score="70", vaf="60"))),
+    ),
+    Locus("chr1", 3000, 3001, haps=((Seg(3000, 3001, "snp", "A", "T", score="70000", vaf="69999"),), (Seg(3000, 3001, "ref", "A", "A", score="90"),))),
+    Locus("chr1", 4000, 4001, haps=((Seg(4000, 4001, "snp", "A", "T", score="33", vaf="31"),), (Seg(4000, 4001, "ref", "A", "A", score="90"),))),
+]
+
+
+@pytest.mark.parametrize("kind", ["var", "master_var"])
+def test_vaf_is_compared_only_where_the_eaf_is_read(tmp_path: Path, kind: str) -> None:
+    """The VAF≠EAF warning counts the haplotypes whose EAF goes into `hq`: a `?`, partly called or
+    out-of-range haplotype's score is not read, so its VAF is compared with nothing."""
+    text, name = (var_text(VAF_DIFFERS), "var-GS000000011-ASM.tsv.bz2") if kind == "var" else (master_var_text(VAF_DIFFERS), "masterVarBeta-GS000000011-ASM.tsv.bz2")
+    loaded, _, calls, _ = frames(write(tmp_path, text, name))
+    expected = 0
+    for locus in VAF_DIFFERS:
+        for segments in locus.haps:
+            sequence = joined(segments)
+            read = "?" not in sequence and all(seg.eaf for seg in segments) and min(int(seg.eaf) for seg in segments) <= 65535
+            expected += read and any(seg.vaf is not None and seg.vaf != seg.eaf for seg in segments)
+    assert expected == 1 and calls["hq"].list.drop_nulls().list.len().sum() == 5, "four read scores and the one past u16 left out"
+    vaf_warnings = [w for w in loaded.warnings if "varScoreVAF" in w]
+    assert vaf_warnings == [f"{expected} haplotype(s) whose varScoreVAF differs from the varScoreEAF read into `hq`"]
+
+
 def test_without_scores_hq_is_null_and_nothing_is_graded_by_it(tmp_path: Path) -> None:
     """Format 1.x writes one `totalScore`, neither of 2.x's scores: `hq` stays null and the rows keep
     the `gt_only` grade, never one read from another column."""

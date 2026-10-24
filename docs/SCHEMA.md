@@ -705,7 +705,8 @@ haplotype's call: `varScoreVAF` and `varScoreEAF` per `var` sub-row, `allele<n>V
 masterVarBeta slot, phred-scaled, empty on blocks and on `?` stretches. The loader reads EAF, the
 equal-allele-fraction (diploid) model's score, which cgatools takes for germline comparison
 (`calldiff --diploid` uses it instead of VAF); VAF is only compared, and a file where any
-haplotype's two scores differ says how many in a load warning. In both PGP-HMS `var` files measured
+haplotype whose EAF is read into `hq` has two scores that differ says how many in a load warning (a
+`?`, partly called or out-of-range haplotype's EAF is not read, so its VAF is not compared). In both PGP-HMS `var` files measured
 (CGA 2.5.0.33 and 2.5.0.44, chromosome 22, 2026-10-24) the two are equal on every scored row, so the
 choice moves nothing there. Per haplotype:
 
@@ -732,8 +733,10 @@ other key:
 
 - **The Number.** `2`, VCF 4.4's `P` (one per GT allele, read through the `Number=.` copy, P10) and `.`
   are read. Any other declaration (`1`, `A`, `R`, `G`, another count) names another quantity under the
-  key: not carried, listed in `dropped_fields`, with the load warning that names keys declared so. An
-  undeclared HQ the rows use is declared `Number=2`, as for any carried key.
+  key: not carried, listed in `dropped_fields`, with the load warning that names keys declared so,
+  and a row writing more values than that Number allows (`51,40` under `Number=1`) does not fail the
+  load. An HQ declared with a Type other than Integer in a VCF 4.3+ header is not carried either
+  (Decision 9). An undeclared HQ the rows use is declared `Number=2`, as for any carried key.
 - **Per row.** Values are read where there is one per GT allele. VCF's fixed count makes a writer pad
   a haploid row to two: `51,.`, as CGI's vcfBeta does on every haploid row (90,251 of 90,251 with HQ
   in a PGP-HMS vcfBeta, hu1B2689, whole genome, 2026-10-24), so values past the GT's alleles are allowed
@@ -742,7 +745,11 @@ other key:
   which allele each value speaks for is unknown; so does a record with no GT. Counted in one warning.
 - **Per value.** `.` is no value. A value on an uncalled allele (`./1:20,30`) speaks for no sequence
   and is not read, the rule CGI's native `?` slots follow; counted. A value outside 0..65535 is left out,
-  counted. A row left with no value is null (`.` and `.,.` alike).
+  counted. A VCF 4.2 header can declare HQ `Float` or `String` (polars-bio holds only 4.3+ to the
+  reserved Integer, Decision 9): a whole number is read as it is (`30.0` is 30), a number with a
+  fraction (`30.5`) is left out, never truncated or rounded, since that would be a score the file did
+  not write, and text that is no finite number (`x`, `nan`) is left out too, each reason counted in
+  its own warning. A row left with no value is null (`.` and `.,.` alike).
 - **Blocks** hold no `hq`; an HQ on a reference-block record is not read.
 
 CGI's vcfBeta (`vcf_cgi`) writes HQ beside `EHQ`, "haplotype quality, equal allele fraction
@@ -1153,6 +1160,21 @@ designs it.
 
 **Recommendation: B.** Under P1, a key missing from the header never reaches the loader at all. The
 loader builds complete headers for the formats it synthesises (`vcf_no_meta`, the key=value table).
+
+**A carried key the reader cannot follow is not carried** (2026-10-24), in two cases, each with a load
+warning that names the key and with the key in `dropped_fields`:
+
+- declared with a Number it is not read under: a vector over the alleles or genotypes with a fixed
+  count (`AD`, `PL`, `GL`, `GP`, `PP`), or HQ with any Number but `2`, `P` or `.`;
+- declared with a Type other than the one its VCF version reserves, in a 4.3, 4.4 or 4.5 header
+  (`HQ` `Type=Float`; `CN` `Type=Float` under 4.3, which reserves it Integer). polars-bio's reader
+  holds a definition per version and refuses the whole header for such a line; it checks only the
+  Type, and nothing under 4.2. A key it has no definition for in that version (`DS`, `MIN_DP`, `LEN`
+  before 4.5, `PSL`/`PSO`/`PSQ` before 4.4) is read under any Type.
+
+polars-bio parses every key its header declares, requested or not, so a value that does not parse
+under such a declaration (`51,40` under HQ `Number=1`) would fail the load. The loader's retry reads a
+copy whose header leaves both kinds out, and the rows' values under them are skipped unread.
 
 ## Decision 10: multi-sample files
 

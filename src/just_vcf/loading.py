@@ -415,7 +415,8 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
             checks.filter(pl.col("problem").is_null()).select(pl.col("link_conflicts").sum()),
             good.select(
                 (pl.col("score").is_not_null() & ~pl.col("score").is_between(0, cgi.HQ_MAX)).sum().alias("hq_out"),
-                pl.col("vaf_differs").sum().alias("vaf_differs"),
+                # Only where the EAF score goes into `hq`: a `?`, partly called or out-of-range haplotype's is not read.
+                (pl.col("vaf_differs") & pl.col("score").is_between(0, cgi.HQ_MAX)).fill_null(False).sum().alias("vaf_differs"),
             ),
         ]
     )
@@ -705,9 +706,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             + ", ".join(f"{key} (Number={number})" for key, number in sorted(unfit.items()))
         )
     if refused := vcf.refused_types(header):
+        version = header.version_tuple
+        reserved = vcf.RESERVED_TYPES[version]
         warnings.append(
-            "key(s) declared with a Type VCF 4.3 reserves otherwise, which polars-bio refuses, not carried: "
-            + ", ".join(f"{name} (Type={kind}, 4.3 reserves {vcf.V43_RESERVED_TYPES[name]})" for name, kind in sorted(refused.items()))
+            f"key(s) declared with a Type VCF {version[0]}.{version[1]} reserves otherwise, which polars-bio refuses, not carried: "
+            + ", ".join(f"{name} (Type={kind}, {version[0]}.{version[1]} reserves {reserved[name]})" for name, kind in sorted(refused.items()))
         )
     if any_number := vcf.any_number_keys(header):
         warnings.append(

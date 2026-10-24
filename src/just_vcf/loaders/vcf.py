@@ -114,8 +114,26 @@ as redundant with ALT; it is read because callers write a type ALT does not say 
 
 V43_RESERVED_TYPES: dict[str, str] = {"FORMAT/CN": "Integer", "INFO/CN": "Integer"}
 """The carried keys whose Type VCF 4.3 reserves differently from VCF 4.5 (CN is Float from 4.4 on).
-polars-bio's reader (noodles) refuses a VCF 4.3 header declaring one of them with another Type, so
-such a key is not carried (`refused_types`), and the loader declares an undeclared one so."""
+The loader declares an undeclared one so in a 4.3 file, and `write_vcf`, which writes 4.3, too."""
+
+_RESERVED_43 = ("GT", "GQ", "HQ", "DP", "AD", "PL", "GL", "GP", "PP", "FT", "PS", "CN")
+_RESERVED_44 = (*_RESERVED_43, "PSL", "PSO", "PSQ")
+_RESERVED_INFO = ("END", "SVLEN", "SVTYPE", "CIPOS", "CIEND", "CN")
+
+RESERVED_TYPES: dict[tuple[int, int], dict[str, str]] = {
+    version: {
+        **{f"FORMAT/{key}": FORMAT_KEYS[key][1] for key in keys},
+        **{f"INFO/{key}": INFO_KEYS[key][1] for key in _RESERVED_INFO},
+        **(V43_RESERVED_TYPES if version == (4, 3) else {}),
+    }
+    for version, keys in (((4, 3), _RESERVED_43), ((4, 4), _RESERVED_44), ((4, 5), (*_RESERVED_44, "LEN")))
+}
+"""Per VCF version, the carried keys polars-bio's reader (noodles) holds a reserved definition for →
+the Type it requires. It refuses the whole header when one of them is declared with another Type
+(noodles-vcf `validate_format_definition` and `validate_info_definition`; only the Type is checked,
+and only for 4.3, 4.4 and 4.5, so a VCF 4.2 header is never refused so). Such a key is not carried
+(`refused_types`). The keys not listed here (DS, MIN_DP, LEN before 4.5, the phase-set lists before
+4.4) have no definition in that version and are read under any Type."""
 
 _LIST_INFO = ("SVLEN", "CIPOS", "CIEND", "CN")
 """INFO keys read as lists. One declared `Number=1` (VCF 4.2's INFO CN, an older caller's SVLEN) is
@@ -159,7 +177,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 10
+REWRITE_VERSION = 11
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -168,7 +186,10 @@ and polars-bio panics on a requested key its header does not declare.
 9: a FORMAT key declared `Number=P` (PSL, PSO, PSQ) is declared `Number=.` in the copy (P10), and the
 phase-set-list keys are carried, so a structural copy keeps them.
 10: FORMAT HQ is carried, so a copy declares it where the rows use it undeclared, and a structural
-copy keeps it."""
+copy keeps it.
+11: a structural copy leaves out a carried key declared with a Number it is not read under, and one of
+a Type VCF 4.3, 4.4 or 4.5 reserves otherwise (`left_out_of_copy`); a copy from 10 kept their lines,
+so a file with one fails its retry there."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -195,7 +216,9 @@ _STRUCTURAL_META = ("##fileformat=", "##FILTER=", "##ALT=", "##contig=")
 Everything else is read by `read_header`, not by polars-bio."""
 
 
-def _keep_in_structural_copy(line: str, refused: dict[str, str]) -> bool:
+def _keep_in_structural_copy(line: str, left_out: set[str]) -> bool:
+    """Whether a structural copy keeps a meta line; `left_out` holds the carried keys it drops
+    (`left_out_of_copy`)."""
     if line.startswith(_STRUCTURAL_META):
         return True
     declared = re.match(r"^##(INFO|FORMAT)=<(.*)>$", line)
@@ -203,7 +226,7 @@ def _keep_in_structural_copy(line: str, refused: dict[str, str]) -> bool:
         return False
     kind, body = declared.groups()
     attrs = _attrs(body)
-    if f"{kind}/{attrs.get('ID')}" in refused:
+    if f"{kind}/{attrs.get('ID')}" in left_out:
         return False
     if kind == "INFO":
         return attrs.get("ID") in INFO_KEYS or attrs.get("ID") in SELECTION_INFO or _split_marker_kind(attrs) is not None
@@ -478,24 +501,27 @@ def declare(header: Header, missing: list[str]) -> None:
 
 
 def declared_type(header: Header, name: str) -> str:
-    """The Type the loader declares an undeclared carried key with (`INFO/CN`): VCF 4.5's, except where
-    the file's VCF 4.3 reserves another one (`V43_RESERVED_TYPES`)."""
+    """The Type the loader declares an undeclared carried key with (`INFO/CN`): the one the file's VCF
+    version reserves (`RESERVED_TYPES`; only 4.3's CN differs), else VCF 4.5's."""
     namespace, key = name.split("/", 1)
-    if header.version_tuple == (4, 3) and name in V43_RESERVED_TYPES:
-        return V43_RESERVED_TYPES[name]
-    return (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key][1]
+    reserved = RESERVED_TYPES.get(header.version_tuple or (0, 0), {})
+    return reserved.get(name) or (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key][1]
 
 
 def refused_types(header: Header) -> dict[str, str]:
-    """Carried keys a VCF 4.3 header declares with a Type its reserved definition does not have
-    (`V43_RESERVED_TYPES`) → that Type. polars-bio refuses the header, so they are not carried."""
-    if header.version_tuple != (4, 3):
-        return {}
-    return {
-        name: header.types[name]
-        for name, reserved in V43_RESERVED_TYPES.items()
-        if name in header.types and header.types[name] != reserved
-    }
+    """Carried keys a VCF 4.3+ header declares with a Type its version's reserved definition does not
+    have (`RESERVED_TYPES`) → that Type. polars-bio refuses the header, so they are not carried."""
+    reserved = RESERVED_TYPES.get(header.version_tuple or (0, 0), {})
+    return {name: header.types[name] for name, kind in reserved.items() if name in header.types and header.types[name] != kind}
+
+
+def left_out_of_copy(header: Header) -> set[str]:
+    """Carried keys, namespaced, whose declaration a structural copy leaves out: those of a Type
+    polars-bio refuses (`refused_types`) and those declared with a Number they are not read under
+    (`unfit_keys`). Neither is requested from polars-bio, but it parses every key its header declares,
+    so a value that does not parse under such a declaration (`51,40` under `Number=1`) would fail the
+    retry too; left undeclared, it is skipped (P1)."""
+    return set(refused_types(header)) | {f"FORMAT/{key}" for key in unfit_keys(header)}
 
 
 @dataclass
@@ -663,11 +689,11 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
         return target
     cache.mkdir(parents=True, exist_ok=True)
     declared: set[tuple[str, str]] = set()
-    refused = refused_types(header)
+    left_out = left_out_of_copy(header)
     with opener() as source, target.open("wb") as raw, BgzfWriter(raw) as out:
         out.write(f"##fileformat={header.version or 'VCFv4.2'}\n".encode())
         for line in header.meta:
-            if line.startswith("##fileformat=") or (structural_only and not _keep_in_structural_copy(line, refused)):
+            if line.startswith("##fileformat=") or (structural_only and not _keep_in_structural_copy(line, left_out)):
                 continue
             key = re.match(r"^##(\w+)=<ID=([^,>]+)", line)
             if structural_only and key:
@@ -749,8 +775,10 @@ def scan(path: Path, info_fields: list[str], format_fields: list[str], sample: s
     modification time and the fields and sample read, and queried by that name. Ported from just-prs
     `vcf.scan_vcf` (docs/PROVENANCE.md).
 
-    Only the carried FORMAT keys and the chosen sample are parsed, so a malformed field the frames do
-    not carry cannot fail the load. The public `register_vcf` takes neither, so polars-bio's own
+    Only the carried FORMAT keys and the chosen sample are requested. polars-bio still parses every
+    key the header declares, so a malformed value in a key the frames do not carry fails the read; the
+    structural copy (`readable_path`), which declares only the carried keys, is what keeps it out.
+    The public `register_vcf` takes neither the fields nor the sample, so polars-bio's own
     `SQL._register_variant` is called (P7). A named registration returns 0-based `start`; it is
     converted to the 1-based `POS` here, and `read_records` checks it against the first record.
     """
@@ -913,13 +941,14 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
         for key, top in _BOUNDED.items()
     ]
     alts = _alts_expr()
-    hq = _hq_slots()
-    head = pl.when(~hq.unfit).then(pl.col("fmt_HQ").cast(pl.List(pl.Int64), strict=False).list.head(_gt_expr().list.len().fill_null(0)))
+    hq = _hq_slots(hq_is_integer(records))
     plan = records.select(
         *out_of_range,
         hq.unfit.sum().alias("unfit_HQ"),
         hq.read.list.eval(((pl.element() < 0) | (pl.element() > HQ_MAX)).cast(pl.Int64)).list.sum().fill_null(0).sum().alias("out_HQ"),
-        (head.list.drop_nulls().list.len().fill_null(0) - hq.read.list.drop_nulls().list.len().fill_null(0)).sum().alias("uncalled_HQ"),
+        hq.uncalled.sum().alias("uncalled_HQ"),
+        hq.not_whole.sum().alias("not_whole_HQ"),
+        hq.not_number.sum().alias("not_number_HQ"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.max().max().alias("gp_max"),
         *_end_stats(alts, pl.col("ref")),
         _is_block_record(alts).any().alias("any_block"),
@@ -975,32 +1004,62 @@ def _fits(vector: pl.Expr, key: str, alts: pl.Expr) -> pl.Expr:
 
 @dataclass(frozen=True)
 class _HqSlots:
-    """FORMAT HQ read against the row's GT alleles (`_hq_slots`)."""
+    """FORMAT HQ read against the row's GT alleles (`_hq_slots`). The counts are per row."""
 
-    stated: pl.Expr
-    """True where HQ holds at least one value (`.` and `.,.` hold none)."""
     unfit: pl.Expr
     """True where it holds a value but not one per GT allele, nor a Number=2 pair on a haploid row whose
     second value is missing: the slot each value speaks for is unknown, so the row's HQ is withheld."""
     read: pl.Expr
-    """One value per GT allele where the row fits, null on an uncalled allele; null where it does not fit."""
+    """One whole number per GT allele where the row fits, null on an uncalled allele and where the value
+    is not a whole number; null where the row does not fit."""
+    uncalled: pl.Expr
+    """Values given on an uncalled allele, where the row fits: not read."""
+    not_whole: pl.Expr
+    """Values on a called allele that are numbers with a fraction (`30.5`): left out, never truncated."""
+    not_number: pl.Expr
+    """Values on a called allele that are no finite number (`x`, `nan`): left out."""
 
 
-def _hq_slots() -> _HqSlots:
+def hq_is_integer(frame: pl.LazyFrame) -> bool:
+    """Whether `fmt_HQ` comes back as integers, as VCF's `Type=Integer` declares it. A VCF 4.2 header,
+    which polars-bio does not hold to the reserved Type, may declare it Float or String."""
+    return frame.collect_schema()["fmt_HQ"].inner.is_integer()
+
+
+def _hq_slots(integer: bool = True) -> _HqSlots:
     """HQ per GT allele. The values beyond the GT's alleles are allowed only where missing: a haploid
     row under VCF's `Number=2` writes `51,.` (CGI does, on every haploid row). A value on an uncalled
-    allele (`./1:20,30`) speaks for no allele and is not read; out-of-range values are left to the caller."""
-    values = pl.col("fmt_HQ").cast(pl.List(pl.Int64), strict=False)
+    allele (`./1:20,30`) speaks for no allele and is not read; out-of-range values are left to the caller.
+
+    `integer` is False where HQ was declared Float or String (`hq_is_integer`): the values are read
+    through Float64, and only a whole number is kept, so a score is never cut to fit (`30.5` is not 30)."""
+    raw = pl.col("fmt_HQ")
+    values = raw.cast(pl.List(pl.Int64)) if integer else raw.cast(pl.List(pl.Float64), strict=False)
     gt = _gt_expr()
     # A record without GT has no alleles for a value to speak for (slice and head take no null length).
     slots = gt.list.len().fill_null(0)
-    stated = values.list.eval(pl.element().is_not_null()).list.any().fill_null(False)
-    beyond_missing = values.list.slice(slots).list.eval(pl.element().is_null()).list.all()
-    fits = (gt.is_not_null() & ((values.list.len() == slots) | ((values.list.len() > slots) & beyond_missing))).fill_null(False)
+    stated = raw.list.eval(pl.element().is_not_null()).list.any().fill_null(False)
+    beyond_missing = raw.list.slice(slots).list.eval(pl.element().is_null()).list.all()
+    fits = (gt.is_not_null() & ((raw.list.len() == slots) | ((raw.list.len() > slots) & beyond_missing))).fill_null(False)
     # Nulled before the list arithmetic, which is evaluated on every row and needs equal lengths.
-    head = pl.when(fits).then(values.list.head(slots))
     called = gt.list.eval(pl.when(pl.element().is_not_null()).then(pl.lit(1, dtype=pl.Int64)))
-    return _HqSlots(stated=stated, unfit=stated & ~fits, read=head * called)
+    given = pl.when(fits).then(raw.list.head(slots).list.eval(pl.element().is_not_null().cast(pl.Int64)))
+    on_called = given * called
+    uncalled = given.list.sum().fill_null(0) - on_called.list.sum().fill_null(0)
+    head = pl.when(fits).then(values.list.head(slots)) * called
+    if integer:
+        zero = pl.lit(0, dtype=pl.Int64)
+        return _HqSlots(unfit=stated & ~fits, read=head, uncalled=uncalled, not_whole=zero, not_number=zero)
+    finite = head.list.eval(pl.element().is_finite().cast(pl.Int64)).list.sum().fill_null(0)
+    whole = head.list.eval(pl.when(pl.element().is_finite() & (pl.element() == pl.element().floor())).then(pl.element()))
+    # Kept in Float64: a whole number past i64 (`1e30`) would not cast, and the range check reads floats.
+    return _HqSlots(
+        unfit=stated & ~fits,
+        read=whole,
+        uncalled=uncalled,
+        not_whole=finite - whole.list.drop_nulls().list.len().fill_null(0),
+        not_number=on_called.list.sum().fill_null(0) - finite,
+    )
 
 
 def _gt_body() -> pl.Expr:
@@ -1150,6 +1209,10 @@ def to_rows(
         warnings.append(f"{stats['out_HQ']} HQ value(s) outside 0..{HQ_MAX} set to null")
     if stats.get("uncalled_HQ"):
         warnings.append(f"{stats['uncalled_HQ']} HQ value(s) on an uncalled GT allele not read")
+    if stats.get("not_whole_HQ"):
+        warnings.append(f"{stats['not_whole_HQ']} HQ value(s) not a whole number left out")
+    if stats.get("not_number_HQ"):
+        warnings.append(f"{stats['not_number_HQ']} HQ value(s) not a number left out")
     if stats.get("sv_end_disagrees"):
         warnings.append(f"{stats['sv_end_disagrees']} symbolic SV record(s) whose INFO END disagrees with POS + |SVLEN|: end_pos follows END")
     if stats.get("end_not_read"):
@@ -1244,7 +1307,7 @@ def to_rows(
         .otherwise(None)
         .alias("dosage"),
         _bounded("GQ", pl.UInt16).alias("gq"),
-        _hq(),
+        _hq(hq_is_integer(records)),
         _bounded("DP", pl.UInt32).alias("dp"),
         _bounded("MIN_DP", pl.UInt32).alias("dp_min"),
         pl.col("fmt_AD").cast(pl.List(pl.UInt32), strict=False).alias("ad"),
@@ -1555,9 +1618,9 @@ def _bounded(key: str, dtype: pl.DataType) -> pl.Expr:
     return pl.when((value >= 0) & (value <= _BOUNDED[key])).then(value).otherwise(None).cast(dtype)
 
 
-def _hq() -> pl.Expr:
+def _hq(integer: bool = True) -> pl.Expr:
     """`hq`: HQ per GT allele (`_hq_slots`), a value outside 0..`HQ_MAX` null, the row null where no value is left."""
-    scores = _hq_slots().read.list.eval(pl.when(pl.element().is_between(0, HQ_MAX)).then(pl.element()).cast(pl.UInt16))
+    scores = _hq_slots(integer).read.list.eval(pl.when(pl.element().is_between(0, HQ_MAX)).then(pl.element()).cast(pl.UInt16))
     return pl.when(scores.list.drop_nulls().list.len() > 0).then(scores).alias("hq")
 
 

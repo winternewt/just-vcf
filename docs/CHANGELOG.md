@@ -4,6 +4,25 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The CGI `var` and masterVarBeta warning that counts haplotypes whose varScoreVAF differs from the
+  varScoreEAF read into `hq` counts only haplotypes whose EAF is read. It counted a half-call's `?`
+  slot, a partly called haplotype and a score past u16 too, whose EAF never reaches `hq`.
+
+- An HQ value that is not a whole number is left out of `calls.hq` and counted, where it was
+  truncated or lost without a word: a VCF 4.2 header declaring HQ `Type=Float` read `30.5,40.5` as
+  `[30, 40]`, and one declaring it `String` read `30,x` as `[30, null]` silently. Now a number with
+  a fraction is left out (never truncated or rounded), text that is no number is left out, and each
+  reason has its own warning with its count. A whole number written as a float (`30.0`) reads as 30.
+
+- A VCF whose HQ the loader does not carry loads again: HQ declared with another Number and a row
+  writing more values than it allows (`Number=1` with `30,40`), or declared `Type=Float` under VCF
+  4.3+, failed with `HeaderRefused` since HQ became carried, where it loaded before. The structural
+  copy the loader retries on now leaves out every carried key declared with a Number it is not read
+  under, which covers AD, PL, GL, GP and PP declared `Number=1` too. And a carried FORMAT or INFO key
+  declared with a Type its VCF 4.3, 4.4 or 4.5 version reserves otherwise (GQ, DP, PS, END, SVLEN
+  and the rest) is not carried, with a warning and the key in `dropped_fields`, as 4.3's CN already
+  was; those files failed to load before. `REWRITE_VERSION` 11.
+
 - `write_vcf_zarr` writes `hq` as `call_HQ`, shaped (variants, samples, ploidy) like `call_genotype`:
   `-1` on a slot with no score, `-2` past a row's ploidy (a haploid `[51]` is stored `51, -2`), and a
   row of three or more alleles is written whole, which `write_vcf`'s `Number=2` HQ cannot hold.

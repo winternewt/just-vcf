@@ -203,6 +203,40 @@ def test_genotypes_without_a_quantity_are_asserted_or_unknown_never_zero(tmp_pat
     assert half["genotype_index"] is None
 
 
+HQ_LINE = '##FORMAT=<ID=HQ,Number=2,Type=Integer,Description="Haplotype quality">'
+
+
+def test_a_vcf_rows_haplotype_qualities_grade_it_after_likelihoods_and_gq(tmp_path: Path) -> None:
+    """FORMAT HQ grades a row only where GP, GL and GQ do not (the order in `genotype_evidence`): a
+    likelihood row stays `gl`, a GQ on an ALT genotype stays `gq`, and a reference genotype, which GQ
+    does not grade by default, is graded by its lowest haplotype quality."""
+    records = {
+        100: "GT:PL:GQ:HQ\t0/1:40,0,300:39:50,45",
+        101: "GT:GQ:HQ\t0/1:39:50,45",
+        102: "GT:GQ:HQ\t0/0:39:50,45",
+        103: "GT:HQ\t1|1:60,58",
+        104: "GT:HQ\t1:51,.",
+        105: "GT:HQ\t./1:.,30",
+        106: "GT:HQ\t0/1:.,30",
+    }
+    lines = [f"1\t{pos}\t.\tA\tG\t50\t.\t.\t{text}" for pos, text in records.items()]
+    loaded = _vcf(tmp_path, lines, fmt=("GT", "GQ", "PL"), extra=(HQ_LINE,))
+    graded = _graded(loaded)
+    hq = dict(loaded.calls.select("pos", "hq").collect().iter_rows())
+
+    def basis(pos: int) -> tuple[str, float | None]:
+        row = _row(graded, pos)
+        return row["grade_basis"], row["confidence"]
+
+    assert basis(100)[0] == GradeBasis.GL.value
+    assert basis(101) == (GradeBasis.GQ.value, 39.0)
+    for pos in (102, 103, 104):
+        assert basis(pos) == (GradeBasis.HQ.value, float(min(hq[pos]))), pos
+    assert _row(_graded(loaded, gq_on_reference=True), 102)["grade_basis"] == GradeBasis.GQ.value
+    # A half-call has no one genotype to grade, and a slot without a score leaves the genotype unscored.
+    assert basis(105) == (GradeBasis.GT_ONLY.value, None) and basis(106) == (GradeBasis.GT_ONLY.value, None)
+
+
 def test_a_dosage_alone_has_its_own_basis(tmp_path: Path) -> None:
     loaded = _vcf(tmp_path, ["1\t100\t.\tA\tG\t50\t.\t.\tGT:DS\t0/1:0.98"], fmt=("GT",), extra=(DS_LINE,))
     row = _row(_graded(loaded), 100)

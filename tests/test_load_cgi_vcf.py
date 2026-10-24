@@ -184,3 +184,29 @@ def test_real_cgi_vcf(pgp_participants: Path) -> None:
     assert no_genotype == 0, "every ALT . record without a called allele is a no-call block"
     facet = loaded.facets.collect().row(0, named=True)
     assert (facet["callset_type"], facet["absence_means"]) == ("wgs", "reference"), "what CGI omits it called reference"
+
+
+def test_cgi_vcf_haplotype_qualities_are_hq(tmp_path: Path) -> None:
+    """CGAPipeline 2.5's vcfBeta declares HQ and EHQ `Number=2` and writes a haploid row's HQ as
+    `<score>,.` (90,251 of 90,251 haploid rows with HQ in a PGP-HMS vcfBeta, hu1B2689, 2026-10-24, counts
+    only). HQ is VCF's reserved key and is read; EHQ, the equal-allele-fraction score, is not, and is
+    listed among the dropped fields."""
+    lines = [
+        '##FORMAT=<ID=HQ,Number=2,Type=Integer,Description="Haplotype Quality">',
+        '##FORMAT=<ID=EHQ,Number=2,Type=Integer,Description="Haplotype Quality, Equal Allele Fraction Assumption">',
+    ]
+    header = [*HEADER[:-1], *lines, HEADER[-1]]
+    fmt = "GT:PS:FT:GQ:HQ:EHQ:GL"
+    records = [
+        f"1\t752566\trs3094315\tG\tA\t.\t.\tNS=1;AN=2;AC=1\t{fmt}\t1|0:752566:PASS:253:253,260:250,262:-253,0,-253",
+        f"1\t752721\trs3131972\tA\tG\t.\t.\tNS=1;AN=1;AC=1\t{fmt}\t1|.:752566:PASS:.:102,.:101,.:-102,0,0",
+        f"X\t2700000\t.\tC\tT\t.\t.\tNS=1;AN=1;AC=1\t{fmt}\t1:.:PASS:51:51,.:52,.:-51,0",
+    ]
+    loaded = load(write(tmp_path, "\n".join([*header, *records]) + "\n", "vcfBeta-GS000040194-ASM.vcf"))
+    calls = loaded.calls.collect().sort("chrom", "pos")
+    written = [record.split("\t")[9].split(":")[4] for record in records]
+    expected = [[int(v) for v in text.split(",") if v != "."] for text in written]
+    expected[1] = [102, None]  # the half-call's `.` slot keeps its place, with no score
+    assert calls["hq"].to_list() == expected
+    facet = loaded.facets.collect().row(0, named=True)
+    assert "FORMAT/EHQ" in facet["dropped_fields"] and "FORMAT/HQ" not in facet["dropped_fields"]

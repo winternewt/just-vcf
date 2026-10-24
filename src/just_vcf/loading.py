@@ -701,7 +701,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         vcf.declare(header, missing)
     if unfit := vcf.unfit_keys(header):
         warnings.append(
-            "FORMAT key(s) declared with a Number that is not one value per allele or genotype, not carried: "
+            "FORMAT key(s) declared with a Number that is not one value per allele, genotype or GT allele, not carried: "
             + ", ".join(f"{key} (Number={number})" for key, number in sorted(unfit.items()))
         )
     if refused := vcf.refused_types(header):

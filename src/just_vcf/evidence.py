@@ -50,9 +50,10 @@ class GradeBasis(str, Enum):
     GQ = "gq"
     """The source's phred confidence of the genotype it called (`gq`), and nothing more."""
     HQ = "hq"
-    """The source's phred confidence in each haplotype's call (`hq`, CGI's allele scores), on a fully
-    called genotype whose every slot has one: `confidence` is the lowest, the genotype being wrong
-    where any haplotype is. No vector: one number per haplotype ranks no other genotype."""
+    """The source's phred confidence in each haplotype's call (`hq`: CGI's allele scores, a VCF's
+    FORMAT HQ), on a fully called genotype whose every slot has one: `confidence` is the lowest, the
+    genotype being wrong where any haplotype is. No vector: one number per haplotype ranks no other
+    genotype."""
     DOSAGE = "dosage"
     """Only an expected allele count (`dosage`): no genotype vector follows from one number."""
     GT_ONLY = "gt_only"
@@ -392,8 +393,8 @@ def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False, block_gr
       site being variant, so by default it grades no reference genotype and no reference block;
       `gq_on_reference=True` lets it, as single-sample callers compute it. The called genotype gets
       `1 - 10^(-GQ/10)`, the rest is spread evenly (`prior = even_remainder`), and `confidence` is GQ;
-    - `hq`: a fully called genotype whose every slot has a haplotype score (`hq`, CGI's allele scores),
-      reference genotypes included: `confidence` is the lowest score, no vector;
+    - `hq`: a fully called genotype whose every slot has a haplotype score (`hq`: CGI's allele scores,
+      a VCF's FORMAT HQ), reference genotypes included: `confidence` is the lowest score, no vector;
     - `dosage`: a dosage and nothing above. No vector, no number;
     - `gt_only` (a call) or `block` (a `ref` block): asserted, unquantified;
     - `no_call`: nothing was called and no vector given.

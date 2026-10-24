@@ -6,8 +6,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 - `build_prive_reference` writes the reference's rows in the frequency file's order. The join chose an
   order of its own, which moved from one build to the next; the bootstrap's blocks are runs of rows, so
-  `prive_proportions`' `proportion_errors` moved with it (an EUR test's error for a group it holds none
-  of once fell to 0, the flaky `test_prive_proportions_of_each_group[EUR]`). Proportions were not
+  `prive_proportions`' `proportion_errors` moved with it (an EUR person's error for the group it holds none
+  of took values such as 0.0015 and 0.0027 from build to build, close to the test's `0 < e`: the likely cause of the flaky
+  `test_prive_proportions_of_each_group[EUR]`, whose failure message was not kept). Proportions were not
   affected. A reference built before this keeps its old order; rebuilding it gives stable errors.
 
 - Schema 0.0.19: `calls.hq`, each haplotype's phred-scaled score parallel to `gt`, filled from

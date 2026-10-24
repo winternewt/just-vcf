@@ -451,8 +451,8 @@ def test_prive_proportions_of_each_group(prive, tmp_path: Path, group: str) -> N
 def test_a_built_reference_keeps_the_frequency_files_order(tmp_path: Path) -> None:
     """The bootstrap's blocks are runs of the reference's rows, so the rows must come in one order on
     every build: the frequency file's. An order the join chose made `proportion_errors` move between
-    builds of the same files, and EUR's error for a group it holds none of once fell to 0 (the flaky
-    `test_prive_proportions_of_each_group[EUR]`). Built several times, since one build can fall in
+    builds of the same files, and EUR's error for a group it holds none of sat near 0 (the flaky
+    `test_prive_proportions_of_each_group[EUR]`, most likely). Built several times, since one build can fall in
     order by chance."""
     sites, freqs, genotypes, _ = synthetic_panel(SEED)
     loadings = build_reference_pca(genotypes, dim_ref=8).U[:, :16]

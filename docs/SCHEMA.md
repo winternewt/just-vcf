@@ -732,8 +732,10 @@ other key:
 
 - **The Number.** `2`, VCF 4.4's `P` (one per GT allele, read through the `Number=.` copy, P10) and `.`
   are read. Any other declaration (`1`, `A`, `R`, `G`, another count) names another quantity under the
-  key: not carried, listed in `dropped_fields`, with the load warning that names keys declared so. An
-  undeclared HQ the rows use is declared `Number=2`, as for any carried key.
+  key: not carried, listed in `dropped_fields`, with the load warning that names keys declared so,
+  and a row writing more values than that Number allows (`51,40` under `Number=1`) does not fail the
+  load. An HQ declared with a Type other than Integer in a VCF 4.3+ header is not carried either
+  (Decision 9). An undeclared HQ the rows use is declared `Number=2`, as for any carried key.
 - **Per row.** Values are read where there is one per GT allele. VCF's fixed count makes a writer pad
   a haploid row to two: `51,.`, as CGI's vcfBeta does on every haploid row (90,251 of 90,251 with HQ
   in a PGP-HMS vcfBeta, hu1B2689, whole genome, 2026-10-24), so values past the GT's alleles are allowed
@@ -1153,6 +1155,21 @@ designs it.
 
 **Recommendation: B.** Under P1, a key missing from the header never reaches the loader at all. The
 loader builds complete headers for the formats it synthesises (`vcf_no_meta`, the key=value table).
+
+**A carried key the reader cannot follow is not carried** (2026-10-24), in two cases, each with a load
+warning that names the key and with the key in `dropped_fields`:
+
+- declared with a Number it is not read under: a vector over the alleles or genotypes with a fixed
+  count (`AD`, `PL`, `GL`, `GP`, `PP`), or HQ with any Number but `2`, `P` or `.`;
+- declared with a Type other than the one its VCF version reserves, in a 4.3, 4.4 or 4.5 header
+  (`HQ` `Type=Float`; `CN` `Type=Float` under 4.3, which reserves it Integer). polars-bio's reader
+  holds a definition per version and refuses the whole header for such a line; it checks only the
+  Type, and nothing under 4.2. A key it has no definition for in that version (`DS`, `MIN_DP`, `LEN`
+  before 4.5, `PSL`/`PSO`/`PSQ` before 4.4) is read under any Type.
+
+polars-bio parses every key its header declares, requested or not, so a value that does not parse
+under such a declaration (`51,40` under HQ `Number=1`) would fail the load. The loader's retry reads a
+copy whose header leaves both kinds out, and the rows' values under them are skipped unread.
 
 ## Decision 10: multi-sample files
 

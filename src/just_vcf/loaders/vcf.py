@@ -114,8 +114,26 @@ as redundant with ALT; it is read because callers write a type ALT does not say 
 
 V43_RESERVED_TYPES: dict[str, str] = {"FORMAT/CN": "Integer", "INFO/CN": "Integer"}
 """The carried keys whose Type VCF 4.3 reserves differently from VCF 4.5 (CN is Float from 4.4 on).
-polars-bio's reader (noodles) refuses a VCF 4.3 header declaring one of them with another Type, so
-such a key is not carried (`refused_types`), and the loader declares an undeclared one so."""
+The loader declares an undeclared one so in a 4.3 file, and `write_vcf`, which writes 4.3, too."""
+
+_RESERVED_43 = ("GT", "GQ", "HQ", "DP", "AD", "PL", "GL", "GP", "PP", "FT", "PS", "CN")
+_RESERVED_44 = (*_RESERVED_43, "PSL", "PSO", "PSQ")
+_RESERVED_INFO = ("END", "SVLEN", "SVTYPE", "CIPOS", "CIEND", "CN")
+
+RESERVED_TYPES: dict[tuple[int, int], dict[str, str]] = {
+    version: {
+        **{f"FORMAT/{key}": FORMAT_KEYS[key][1] for key in keys},
+        **{f"INFO/{key}": INFO_KEYS[key][1] for key in _RESERVED_INFO},
+        **(V43_RESERVED_TYPES if version == (4, 3) else {}),
+    }
+    for version, keys in (((4, 3), _RESERVED_43), ((4, 4), _RESERVED_44), ((4, 5), (*_RESERVED_44, "LEN")))
+}
+"""Per VCF version, the carried keys polars-bio's reader (noodles) holds a reserved definition for →
+the Type it requires. It refuses the whole header when one of them is declared with another Type
+(noodles-vcf `validate_format_definition` and `validate_info_definition`; only the Type is checked,
+and only for 4.3, 4.4 and 4.5, so a VCF 4.2 header is never refused so). Such a key is not carried
+(`refused_types`). The keys not listed here (DS, MIN_DP, LEN before 4.5, the phase-set lists before
+4.4) have no definition in that version and are read under any Type."""
 
 _LIST_INFO = ("SVLEN", "CIPOS", "CIEND", "CN")
 """INFO keys read as lists. One declared `Number=1` (VCF 4.2's INFO CN, an older caller's SVLEN) is
@@ -159,7 +177,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 10
+REWRITE_VERSION = 11
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -168,7 +186,10 @@ and polars-bio panics on a requested key its header does not declare.
 9: a FORMAT key declared `Number=P` (PSL, PSO, PSQ) is declared `Number=.` in the copy (P10), and the
 phase-set-list keys are carried, so a structural copy keeps them.
 10: FORMAT HQ is carried, so a copy declares it where the rows use it undeclared, and a structural
-copy keeps it."""
+copy keeps it.
+11: a structural copy leaves out a carried key declared with a Number it is not read under, and one of
+a Type VCF 4.3, 4.4 or 4.5 reserves otherwise (`left_out_of_copy`); a copy from 10 kept their lines,
+so a file with one fails its retry there."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -195,7 +216,9 @@ _STRUCTURAL_META = ("##fileformat=", "##FILTER=", "##ALT=", "##contig=")
 Everything else is read by `read_header`, not by polars-bio."""
 
 
-def _keep_in_structural_copy(line: str, refused: dict[str, str]) -> bool:
+def _keep_in_structural_copy(line: str, left_out: set[str]) -> bool:
+    """Whether a structural copy keeps a meta line; `left_out` holds the carried keys it drops
+    (`left_out_of_copy`)."""
     if line.startswith(_STRUCTURAL_META):
         return True
     declared = re.match(r"^##(INFO|FORMAT)=<(.*)>$", line)
@@ -203,7 +226,7 @@ def _keep_in_structural_copy(line: str, refused: dict[str, str]) -> bool:
         return False
     kind, body = declared.groups()
     attrs = _attrs(body)
-    if f"{kind}/{attrs.get('ID')}" in refused:
+    if f"{kind}/{attrs.get('ID')}" in left_out:
         return False
     if kind == "INFO":
         return attrs.get("ID") in INFO_KEYS or attrs.get("ID") in SELECTION_INFO or _split_marker_kind(attrs) is not None
@@ -478,24 +501,27 @@ def declare(header: Header, missing: list[str]) -> None:
 
 
 def declared_type(header: Header, name: str) -> str:
-    """The Type the loader declares an undeclared carried key with (`INFO/CN`): VCF 4.5's, except where
-    the file's VCF 4.3 reserves another one (`V43_RESERVED_TYPES`)."""
+    """The Type the loader declares an undeclared carried key with (`INFO/CN`): the one the file's VCF
+    version reserves (`RESERVED_TYPES`; only 4.3's CN differs), else VCF 4.5's."""
     namespace, key = name.split("/", 1)
-    if header.version_tuple == (4, 3) and name in V43_RESERVED_TYPES:
-        return V43_RESERVED_TYPES[name]
-    return (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key][1]
+    reserved = RESERVED_TYPES.get(header.version_tuple or (0, 0), {})
+    return reserved.get(name) or (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key][1]
 
 
 def refused_types(header: Header) -> dict[str, str]:
-    """Carried keys a VCF 4.3 header declares with a Type its reserved definition does not have
-    (`V43_RESERVED_TYPES`) → that Type. polars-bio refuses the header, so they are not carried."""
-    if header.version_tuple != (4, 3):
-        return {}
-    return {
-        name: header.types[name]
-        for name, reserved in V43_RESERVED_TYPES.items()
-        if name in header.types and header.types[name] != reserved
-    }
+    """Carried keys a VCF 4.3+ header declares with a Type its version's reserved definition does not
+    have (`RESERVED_TYPES`) → that Type. polars-bio refuses the header, so they are not carried."""
+    reserved = RESERVED_TYPES.get(header.version_tuple or (0, 0), {})
+    return {name: header.types[name] for name, kind in reserved.items() if name in header.types and header.types[name] != kind}
+
+
+def left_out_of_copy(header: Header) -> set[str]:
+    """Carried keys, namespaced, whose declaration a structural copy leaves out: those of a Type
+    polars-bio refuses (`refused_types`) and those declared with a Number they are not read under
+    (`unfit_keys`). Neither is requested from polars-bio, but it parses every key its header declares,
+    so a value that does not parse under such a declaration (`51,40` under `Number=1`) would fail the
+    retry too; left undeclared, it is skipped (P1)."""
+    return set(refused_types(header)) | {f"FORMAT/{key}" for key in unfit_keys(header)}
 
 
 @dataclass
@@ -663,11 +689,11 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
         return target
     cache.mkdir(parents=True, exist_ok=True)
     declared: set[tuple[str, str]] = set()
-    refused = refused_types(header)
+    left_out = left_out_of_copy(header)
     with opener() as source, target.open("wb") as raw, BgzfWriter(raw) as out:
         out.write(f"##fileformat={header.version or 'VCFv4.2'}\n".encode())
         for line in header.meta:
-            if line.startswith("##fileformat=") or (structural_only and not _keep_in_structural_copy(line, refused)):
+            if line.startswith("##fileformat=") or (structural_only and not _keep_in_structural_copy(line, left_out)):
                 continue
             key = re.match(r"^##(\w+)=<ID=([^,>]+)", line)
             if structural_only and key:
@@ -749,8 +775,10 @@ def scan(path: Path, info_fields: list[str], format_fields: list[str], sample: s
     modification time and the fields and sample read, and queried by that name. Ported from just-prs
     `vcf.scan_vcf` (docs/PROVENANCE.md).
 
-    Only the carried FORMAT keys and the chosen sample are parsed, so a malformed field the frames do
-    not carry cannot fail the load. The public `register_vcf` takes neither, so polars-bio's own
+    Only the carried FORMAT keys and the chosen sample are requested. polars-bio still parses every
+    key the header declares, so a malformed value in a key the frames do not carry fails the read; the
+    structural copy (`readable_path`), which declares only the carried keys, is what keeps it out.
+    The public `register_vcf` takes neither the fields nor the sample, so polars-bio's own
     `SQL._register_variant` is called (P7). A named registration returns 0-based `start`; it is
     converted to the 1-based `POS` here, and `read_records` checks it against the first record.
     """

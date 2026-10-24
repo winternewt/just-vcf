@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF whose HQ the loader does not carry loads again: HQ declared with another Number and a row
+  writing more values than it allows (`Number=1` with `30,40`), or declared `Type=Float` under VCF
+  4.3+, failed with `HeaderRefused` since HQ became carried, where it loaded before. The structural
+  copy the loader retries on now leaves out every carried key declared with a Number it is not read
+  under, which covers AD, PL, GL, GP and PP declared `Number=1` too. And a carried FORMAT or INFO key
+  declared with a Type its VCF 4.3, 4.4 or 4.5 version reserves otherwise (GQ, DP, PS, END, SVLEN
+  and the rest) is not carried, with a warning and the key in `dropped_fields`, as 4.3's CN already
+  was; those files failed to load before. `REWRITE_VERSION` 11.
+
 - `write_vcf_zarr` writes `hq` as `call_HQ`, shaped (variants, samples, ploidy) like `call_genotype`:
   `-1` on a slot with no score, `-2` past a row's ploidy (a haploid `[51]` is stored `51, -2`), and a
   row of three or more alleles is written whole, which `write_vcf`'s `Number=2` HQ cannot hold.

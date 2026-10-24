@@ -705,9 +705,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             + ", ".join(f"{key} (Number={number})" for key, number in sorted(unfit.items()))
         )
     if refused := vcf.refused_types(header):
+        version = header.version_tuple
+        reserved = vcf.RESERVED_TYPES[version]
         warnings.append(
-            "key(s) declared with a Type VCF 4.3 reserves otherwise, which polars-bio refuses, not carried: "
-            + ", ".join(f"{name} (Type={kind}, 4.3 reserves {vcf.V43_RESERVED_TYPES[name]})" for name, kind in sorted(refused.items()))
+            f"key(s) declared with a Type VCF {version[0]}.{version[1]} reserves otherwise, which polars-bio refuses, not carried: "
+            + ", ".join(f"{name} (Type={kind}, {version[0]}.{version[1]} reserves {reserved[name]})" for name, kind in sorted(refused.items()))
         )
     if any_number := vcf.any_number_keys(header):
         warnings.append(

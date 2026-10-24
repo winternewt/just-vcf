@@ -10,7 +10,7 @@ import polars as pl
 import pytest
 
 from just_vcf import MultiSampleError, NoSampleError, load, rejoin_split, vcf_samples, write_vcf
-from just_vcf.loaders.vcf import undo_resave
+from just_vcf.loaders.vcf import FORMAT_KEYS, undo_resave
 from just_vcf.schema import BLOCKS, CALLS
 
 FORMAT_LINES = {
@@ -854,17 +854,101 @@ def test_hq_declared_with_any_number_or_one_per_allele_is_read(tmp_path: Path, n
     assert "1 HQ value(s) not one per GT allele set to null" in loaded.warnings
 
 
-@pytest.mark.parametrize("number", ["1", "G", "R", "3"])
-def test_hq_declared_with_another_number_is_not_carried(tmp_path: Path, number: str) -> None:
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.3", "VCFv4.5"])
+@pytest.mark.parametrize(("number", "value"), [("1", "51"), ("1", "51,40"), ("G", "51,40,7"), ("R", "51,40,7"), ("3", "51,40,7")])
+def test_hq_declared_with_another_number_is_not_carried(tmp_path: Path, number: str, value: str, version: str) -> None:
     """A fixed count other than VCF's 2, or a per-allele or per-genotype one, is another quantity under
-    the name: not read into `hq`, listed in `dropped_fields`, and the load does not fail on it."""
-    value = "51" if number == "1" else "51,40,7"
-    path = write(tmp_path, vcf_text([f"1\t100\t.\tA\tG\t50\t.\t.\tGT:HQ\t0/1:{value}"], extra_meta=(HQ_LINE.format(number=number),)))
+    the name: not read into `hq`, listed in `dropped_fields`, and the load does not fail on it, even
+    where the row holds more values than the Number allows (`Number=1` with `51,40`), which polars-bio
+    cannot parse under that declaration."""
+    record = f"1\t100\t.\tA\tG\t50\t.\t.\tGT:HQ\t0/1:{value}"
+    path = write(tmp_path, vcf_text([record], version=version, extra_meta=(HQ_LINE.format(number=number),)))
     loaded = load(path)
     calls, facet = loaded.calls.collect(), loaded.facets.collect().row(0, named=True)
     assert calls["hq"].to_list() == [None] and calls["gt"].to_list() == [[0, 1]]
     assert "FORMAT/HQ" in facet["dropped_fields"]
     assert any(f"HQ (Number={number})" in w and "not carried" in w for w in loaded.warnings)
+
+
+@pytest.mark.parametrize("version", ["VCFv4.3", "VCFv4.4", "VCFv4.5"])
+def test_hq_declared_with_a_type_its_version_reserves_otherwise_is_not_carried(tmp_path: Path, version: str) -> None:
+    """VCF 4.3 on reserves HQ as Integer, and polars-bio refuses a header of those versions declaring it
+    Float: the file loads without HQ, says so, and lists it in `dropped_fields`. Under 4.2, where
+    nothing is reserved, the same declaration is read (a whole number as it is)."""
+    meta = ('##FORMAT=<ID=HQ,Number=2,Type=Float,Description="Haplotype quality">',)
+    records = ["1\t100\t.\tA\tG\t50\t.\t.\tGT:HQ\t0/1:30.5,40.5", "1\t200\t.\tA\tG\t50\t.\t.\tGT:HQ\t0/1:30,40"]
+    loaded = load(write(tmp_path, vcf_text(records, version=version, extra_meta=meta)))
+    calls, facet = loaded.calls.collect(), loaded.facets.collect().row(0, named=True)
+    assert calls["hq"].to_list() == [None, None] and calls["gt"].to_list() == [[0, 1], [0, 1]]
+    assert "FORMAT/HQ" in facet["dropped_fields"]
+    reserved = version.removeprefix("VCFv")
+    assert any(f"not carried: FORMAT/HQ (Type=Float, {reserved} reserves Integer)" in w for w in loaded.warnings), loaded.warnings
+    older = load(write(tmp_path, vcf_text(records[1:], version="VCFv4.2", extra_meta=meta), "v42.vcf"))
+    assert older.calls.collect()["hq"].to_list() == [[30, 40]]
+
+
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.3", "VCFv4.5"])
+@pytest.mark.parametrize(("key", "value", "column"), [("AD", "5,5", "ad"), ("PL", "0,10,20", "gl"), ("GL", "0,-1,-2", "gl"), ("GP", "0,0,1", "gp"), ("PP", "0,10,20", "gp")])
+def test_a_vector_declared_one_value_with_several_is_not_carried(tmp_path: Path, key: str, value: str, column: str, version: str) -> None:
+    """A carried vector declared `Number=1` names another quantity (`VECTOR_NUMBERS`), and a row writing
+    several values there cannot be parsed under that declaration: the file still loads, without the key."""
+    kind = "Float" if key in ("GL", "GP") else "Integer"
+    meta = (f'##FORMAT=<ID={key},Number=1,Type={kind},Description="x">',)
+    loaded = load(write(tmp_path, vcf_text([f"1\t100\t.\tA\tG\t50\t.\t.\tGT:{key}\t0/1:{value}"], version=version, extra_meta=meta)))
+    calls, facet = loaded.calls.collect(), loaded.facets.collect().row(0, named=True)
+    assert calls[column].to_list() == [None] and calls["gt"].to_list() == [[0, 1]]
+    assert f"FORMAT/{key}" in facet["dropped_fields"]
+    assert any(f"{key} (Number=1)" in w and "not carried" in w for w in loaded.warnings), loaded.warnings
+
+
+# Each carried numeric FORMAT key, a value it reads, and the `calls` column that holds it. Declared
+# with the other numeric Type below, the value still parses, so only the header can refuse it.
+_TYPED_KEYS = [
+    ("GQ", "1", "30", "gq"),
+    ("HQ", "2", "30,40", "hq"),
+    ("DP", "1", "10", "dp"),
+    ("AD", "R", "5,5", "ad"),
+    ("PL", "G", "0,10,20", "gl"),
+    ("GL", "G", "0,-1,-2", "gl"),
+    ("GP", "G", "0,0,1", "gp"),
+    ("PP", "G", "0,10,20", "gp"),
+    ("DS", "A", "1", "dosage"),
+    ("PS", "1", "7", "phase_sets"),
+    ("CN", "1", "2", "copy_number"),
+]
+
+
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.3", "VCFv4.4", "VCFv4.5"])
+@pytest.mark.parametrize(("key", "number", "value", "column"), _TYPED_KEYS)
+def test_a_carried_key_declared_with_another_type_loads(tmp_path: Path, key: str, number: str, value: str, column: str, version: str) -> None:
+    """polars-bio refuses a VCF 4.3+ header declaring a key its version reserves with another Type. The
+    file loads all the same: the key is either read or not carried and listed in `dropped_fields`, never
+    both, never neither. VCF 4.2 reserves nothing, so there every key is read."""
+    other = "Integer" if FORMAT_KEYS[key][1] == "Float" else "Float"
+    meta = (f'##FORMAT=<ID={key},Number={number},Type={other},Description="x">',)
+    record = f"1\t100\t.\tA\tG\t50\t.\t.\tGT:{key}\t0|1:{value}"
+    loaded = load(write(tmp_path, vcf_text([record], version=version, extra_meta=meta)))
+    calls, facet = loaded.calls.collect(), loaded.facets.collect().row(0, named=True)
+    dropped = f"FORMAT/{key}" in (facet["dropped_fields"] or [])
+    (value,) = calls[column].to_list()
+    read = value is not None and (not isinstance(value, list) or any(v is not None for v in value))
+    assert dropped != read, (value, facet["dropped_fields"])
+    assert dropped == any(f"FORMAT/{key} (Type={other}" in w for w in loaded.warnings), loaded.warnings
+    if version == "VCFv4.2":
+        assert not dropped
+
+
+@pytest.mark.parametrize("version", ["VCFv4.3", "VCFv4.4", "VCFv4.5"])
+@pytest.mark.parametrize(("key", "number", "value"), [("END", "1", "200"), ("SVLEN", "A", "-100"), ("CIPOS", ".", "-1,1"), ("CIEND", ".", "-1,1")])
+def test_a_carried_info_key_declared_with_another_type_loads(tmp_path: Path, key: str, number: str, value: str, version: str) -> None:
+    """As for FORMAT: an INFO key the version reserves as Integer, declared Float, is not carried, and
+    the file loads."""
+    meta = (f'##INFO=<ID={key},Number={number},Type=Float,Description="x">',)
+    record = f"1\t100\t.\tA\t<DEL>\t50\t.\t{key}={value}\tGT\t0/1"
+    loaded = load(write(tmp_path, vcf_text([record], version=version, extra_meta=meta)))
+    assert loaded.calls.collect()["gt"].to_list() == [[0, 1]]
+    assert f"INFO/{key}" in loaded.facets.collect()["dropped_fields"][0]
+    assert any(f"INFO/{key} (Type=Float" in w and "not carried" in w for w in loaded.warnings), loaded.warnings
 
 
 def test_an_undeclared_hq_the_rows_use_is_read(tmp_path: Path) -> None:

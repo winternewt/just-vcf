@@ -91,8 +91,10 @@ meanwhile. The desk carries the ones filed there.
   reserves, not its EHQ (equal on all 4.2M scored rows of the public hu1B2689 file, so nothing moves today); a score on
   an uncalled allele is dropped, as the native CGI loader drops `?` slots; HQ grades only where GP, GL and GQ do not;
   a row with more than two GT alleles is written without HQ (counted in a warning) rather than declaring `Number=.`.
-- **Layer 6/8, built next (no decision):** `normalize` leaves a split-off allele's HQ in place after nulling its GT
-  slot; `vcf_zarr` exports GQ but not HQ.
+- **Layer 6/8, the lead's calls on hq through normalize and Zarr (built, listed for veto):** `rejoin_split` joins
+  `hq` per slot, as it joins GT (the old keep-when-equal rule lost `hq` at every split heterozygous site); rows that
+  disagree on one slot null only that slot; `call_HQ` sits on the `ploidy` dimension, unconfirmed against the VCF
+  Zarr 0.4 spec (not on this machine), a one-string rename if wrong.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

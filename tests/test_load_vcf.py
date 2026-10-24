@@ -789,3 +789,92 @@ def test_a_derived_facet_keeps_its_parents_gl_source(tmp_path: Path) -> None:
     derived = rejoin_split(loaded).facets.collect()
     assert derived["relation"].to_list() == ["split_rejoined"]
     assert derived["gl_source"].to_list() == loaded.facets.collect()["gl_source"].to_list() == ["pl"]
+
+
+# --- FORMAT HQ, haplotype qualities, as `hq` -------------------------------------------------------
+
+HQ_LINE = '##FORMAT=<ID=HQ,Number={number},Type=Integer,Description="Haplotype quality">'
+
+# (GT:HQ as the file writes it, the `hq` the frame holds, what the row adds to the counts). One row
+# per rule in SCHEMA.md's "A VCF's haplotype qualities": as written where one value per GT allele; a
+# Number=2 field on a haploid row with its second value missing (CGI writes `51,.`) read for the one
+# allele; every other count withheld; a value outside u16 or on an uncalled allele left out; null
+# where no value is left.
+HQ_ROWS = [
+    ("0/1:51,40", [51, 40], None),
+    ("0|0:48,47", [48, 47], None),
+    ("1:51,.", [51], None),
+    ("1:51", [51], None),
+    ("1/1:.", None, None),
+    ("1/1:.,.", None, None),
+    ("1/1:.,33", [None, 33], None),
+    ("1/1:70000,-3", None, "out"),
+    ("0/1:70000,30", [None, 30], "out"),
+    ("./1:20,30", [None, 30], "uncalled"),
+    ("1:51,40", None, "unfit"),
+    ("0/1:30", None, "unfit"),
+    ("1/1/1:5,6,7", [5, 6, 7], None),
+]
+
+
+def _hq_records(rows: list[tuple]) -> list[str]:
+    return [f"1\t{100 + i}\t.\tA\tG\t50\t.\t.\tGT:HQ\t{row[0]}" for i, row in enumerate(rows)]
+
+
+def test_hq_is_read_per_gt_allele(tmp_path: Path) -> None:
+    extra = (HQ_LINE.format(number=2),)
+    path = write(tmp_path, vcf_text([*_hq_records(HQ_ROWS), "1\t200\t.\tA\tG\t50\t.\t.\tGT\t1/1"], extra_meta=extra))
+    loaded = load(path)
+    calls, facet = loaded.calls.collect(), loaded.facets.collect().row(0, named=True)
+    assert calls.schema["hq"] == pl.List(pl.UInt16)
+    by_pos = dict(zip(calls["pos"].to_list(), calls["hq"].to_list()))
+    assert [by_pos[100 + i] for i in range(len(HQ_ROWS))] == [hq for _, hq, _ in HQ_ROWS]
+    assert by_pos[200] is None, "a row without HQ has no score"
+    # Every element left is on a called allele: the frame never scores a `.`.
+    for row in calls.filter(pl.col("hq").is_not_null()).iter_rows(named=True):
+        assert len(row["hq"]) == len(row["gt"])
+        assert all(score is None for score, allele in zip(row["hq"], row["gt"]) if allele is None)
+    values = [v for sample, _, kind in HQ_ROWS if kind == "out" for v in sample.split(":")[1].split(",")]
+    out = sum(not 0 <= int(v) <= 2**16 - 1 for v in values if v != ".")
+    unfit = sum(kind == "unfit" for *_, kind in HQ_ROWS)
+    assert set(loaded.warnings) == {
+        f"{unfit} HQ value(s) not one per GT allele set to null",
+        f"{out} HQ value(s) outside 0..65535 set to null",
+        "1 HQ value(s) on an uncalled GT allele not read",
+    }
+    assert "FORMAT/HQ" not in (facet["dropped_fields"] or [])
+
+
+@pytest.mark.parametrize(("number", "version"), [(".", "VCFv4.2"), ("P", "VCFv4.4")])
+def test_hq_declared_with_any_number_or_one_per_allele_is_read(tmp_path: Path, number: str, version: str) -> None:
+    rows = [("0/1:51,40", [51, 40]), ("1:51", [51]), ("1/1/1:5,6,7", [5, 6, 7]), ("1:51,40", None)]
+    path = write(tmp_path, vcf_text(_hq_records(rows), version=version, extra_meta=(HQ_LINE.format(number=number),)))
+    loaded = load(path)
+    assert loaded.calls.collect().sort("pos")["hq"].to_list() == [hq for _, hq in rows]
+    assert "1 HQ value(s) not one per GT allele set to null" in loaded.warnings
+
+
+@pytest.mark.parametrize("number", ["1", "G", "R", "3"])
+def test_hq_declared_with_another_number_is_not_carried(tmp_path: Path, number: str) -> None:
+    """A fixed count other than VCF's 2, or a per-allele or per-genotype one, is another quantity under
+    the name: not read into `hq`, listed in `dropped_fields`, and the load does not fail on it."""
+    value = "51" if number == "1" else "51,40,7"
+    path = write(tmp_path, vcf_text([f"1\t100\t.\tA\tG\t50\t.\t.\tGT:HQ\t0/1:{value}"], extra_meta=(HQ_LINE.format(number=number),)))
+    loaded = load(path)
+    calls, facet = loaded.calls.collect(), loaded.facets.collect().row(0, named=True)
+    assert calls["hq"].to_list() == [None] and calls["gt"].to_list() == [[0, 1]]
+    assert "FORMAT/HQ" in facet["dropped_fields"]
+    assert any(f"HQ (Number={number})" in w and "not carried" in w for w in loaded.warnings)
+
+
+def test_an_undeclared_hq_the_rows_use_is_read(tmp_path: Path) -> None:
+    path = write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:HQ\t0|1:51,40"]))
+    loaded = load(path)
+    assert loaded.calls.collect()["hq"].to_list() == [[51, 40]]
+    assert any("FORMAT/HQ" in w and "not declared" in w for w in loaded.warnings)
+
+
+def test_hq_is_never_filled_from_gq(tmp_path: Path) -> None:
+    path = write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:GQ\t0/1:40"], fmt=("GT", "GQ"), extra_meta=(HQ_LINE.format(number=2),)))
+    calls = load(path).calls.collect()
+    assert calls["gq"].to_list() == [40] and calls["hq"].to_list() == [None]

@@ -4,6 +4,21 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf` writes `hq` as FORMAT `HQ` (`Number=2`, as VCF reserves it), so a CGI `var` or
+  masterVarBeta facet keeps its allele scores in its VCF export, graded alike on both sides, and a
+  VCF with HQ round-trips. A haploid row is written `51,.`, which `load` reads back as `[51]`; a row
+  with more than two GT alleles cannot be written under `Number=2` and has its `hq` left out, counted
+  in a warning.
+
+- The VCF loaders read FORMAT `HQ` (haplotype qualities) into `calls.hq`, one value per GT allele, so
+  a VCF row with HQ and no GP, GL or GQ that grades it is graded by its lowest HQ (basis `hq`), a
+  reference genotype included. A haploid row's `Number=2` pair with its second value missing (`51,.`,
+  as CGI's vcfBeta writes every haploid row) reads `[51]`; any other count withholds the row's `hq`,
+  and a value on an uncalled allele or outside 0..65535 is left out, each counted in one warning. HQ
+  declared with a Number other than `2`, `P` or `.` is not carried and stays in `dropped_fields`.
+  CGI's vcfBeta EHQ is not read (equal to HQ on all 4.21M rows of one PGP-HMS genome). No schema
+  version change; `CONSENSUS_VERSION` 4, `REWRITE_VERSION` 10.
+
 - Each of the four seats now hears the desk's answers to its own questions as a watcher line
   (`[seat.<seat>.watch.desk]`, the kit's `classes/desk/watch-answers.py`, kit v0.1.88, D133), so an
   answer no longer waits on a secretary's relay. The pin is at v0.1.88.
@@ -36,7 +51,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   one chromosome of hu1B2689). A load warns where a file's VAF and EAF scores differ, and counts a
   score past u16. `varScoreEAF` leaves CGI's `dropped_fields`. `consensus` weighs such rows by their
   band's rate (`CONSENSUS_VERSION` 3); `liftover` carries `hq` (`LIFT_VERSION` 7) and `rejoin_split`
-  keeps it where split rows agree (`REJOIN_VERSION` 4). A VCF's FORMAT HQ is not read yet.
+  keeps it where split rows agree (`REJOIN_VERSION` 4).
 
 - `consensus(prior=)` takes an `AlleleFrequencyPrior`, a caller-supplied allele-frequency table keyed
   as consensus rows are (`chrom`, `pos`, `ref`, `alt`, `alt_frequency`; `ALLELE_FREQUENCIES`). An

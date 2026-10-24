@@ -60,6 +60,7 @@ merge's `##sourceFiles` line records them."""
 FORMAT_KEYS: dict[str, tuple[str, str]] = {
     "GT": ("1", "String"),
     "GQ": ("1", "Integer"),
+    "HQ": ("2", "Integer"),
     "DP": ("1", "Integer"),
     "AD": ("R", "Integer"),
     "PL": ("G", "Integer"),
@@ -88,6 +89,15 @@ VECTOR_NUMBERS: dict[str, str] = {"AD": "R", "PL": "G", "GL": "G", "GP": "G", "P
 """Carried vectors that are parallel to the alleles (R) or the genotypes (G). A file declaring one of
 them with a fixed count is using the name for something else: VarScan2's AD (Number=1) is the ALT
 depth only, CGI's AD (Number=2) counts reads per GT slot, not per allele. Those are not carried."""
+
+SLOT_NUMBERS: dict[str, frozenset[str]] = {"HQ": frozenset({"2", "P", "."})}
+"""Carried keys with one value per GT allele, and the Numbers they are read under: VCF's reserved
+`Number=2` for HQ (diploid by definition; a haploid row writes its second value missing), VCF 4.4's
+`P`, and `.`. Any other Number names another quantity under the key (one per genotype, a single
+value), which is not carried; each row's count is checked against its GT (`_hq_slots`)."""
+
+HQ_MAX = 2**16 - 1
+"""The largest haplotype quality `hq` (`u16`) holds; a larger one, or a negative one, is left out and counted."""
 
 INFO_KEYS: dict[str, tuple[str, str]] = {
     "END": ("1", "Integer"),
@@ -149,14 +159,16 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 9
+REWRITE_VERSION = 10
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
 them undeclared, and a structural copy keeps them (RM282); an older copy lacks the declarations,
 and polars-bio panics on a requested key its header does not declare.
 9: a FORMAT key declared `Number=P` (PSL, PSO, PSQ) is declared `Number=.` in the copy (P10), and the
-phase-set-list keys are carried, so a structural copy keeps them."""
+phase-set-list keys are carried, so a structural copy keeps them.
+10: FORMAT HQ is carried, so a copy declares it where the rows use it undeclared, and a structural
+copy keeps it."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -582,12 +594,15 @@ def _readable_number(line: str) -> str:
 
 
 def unfit_keys(header: Header) -> dict[str, str]:
-    """Carried vector keys the header declares with a Number they cannot be read under → that Number."""
-    return {
+    """Carried vector keys the header declares with a Number they cannot be read under → that Number:
+    a vector over the alleles or genotypes (`VECTOR_NUMBERS`) or over the GT alleles (`SLOT_NUMBERS`)."""
+    vectors = {
         key: header.format[key]
         for key, number in VECTOR_NUMBERS.items()
         if key in header.format and header.format[key] not in (number, ".")
     }
+    slots = {key: header.format[key] for key, numbers in SLOT_NUMBERS.items() if key in header.format and header.format[key] not in numbers}
+    return {**vectors, **slots}
 
 
 def gl_source(header: Header) -> GlSource | None:
@@ -898,8 +913,13 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
         for key, top in _BOUNDED.items()
     ]
     alts = _alts_expr()
+    hq = _hq_slots()
+    head = pl.when(~hq.unfit).then(pl.col("fmt_HQ").cast(pl.List(pl.Int64), strict=False).list.head(_gt_expr().list.len().fill_null(0)))
     plan = records.select(
         *out_of_range,
+        hq.unfit.sum().alias("unfit_HQ"),
+        hq.read.list.eval(((pl.element() < 0) | (pl.element() > HQ_MAX)).cast(pl.Int64)).list.sum().fill_null(0).sum().alias("out_HQ"),
+        (head.list.drop_nulls().list.len().fill_null(0) - hq.read.list.drop_nulls().list.len().fill_null(0)).sum().alias("uncalled_HQ"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.max().max().alias("gp_max"),
         *_end_stats(alts, pl.col("ref")),
         _is_block_record(alts).any().alias("any_block"),
@@ -951,6 +971,36 @@ def _fits(vector: pl.Expr, key: str, alts: pl.Expr) -> pl.Expr:
         pl.when(ploidy == 1).then(alleles).when(ploidy == 2).then(alleles * (alleles + 1) // 2).otherwise(None)
     )
     return (vector.list.len() == genotypes).fill_null(True)
+
+
+@dataclass(frozen=True)
+class _HqSlots:
+    """FORMAT HQ read against the row's GT alleles (`_hq_slots`)."""
+
+    stated: pl.Expr
+    """True where HQ holds at least one value (`.` and `.,.` hold none)."""
+    unfit: pl.Expr
+    """True where it holds a value but not one per GT allele, nor a Number=2 pair on a haploid row whose
+    second value is missing: the slot each value speaks for is unknown, so the row's HQ is withheld."""
+    read: pl.Expr
+    """One value per GT allele where the row fits, null on an uncalled allele; null where it does not fit."""
+
+
+def _hq_slots() -> _HqSlots:
+    """HQ per GT allele. The values beyond the GT's alleles are allowed only where missing: a haploid
+    row under VCF's `Number=2` writes `51,.` (CGI does, on every haploid row). A value on an uncalled
+    allele (`./1:20,30`) speaks for no allele and is not read; out-of-range values are left to the caller."""
+    values = pl.col("fmt_HQ").cast(pl.List(pl.Int64), strict=False)
+    gt = _gt_expr()
+    # A record without GT has no alleles for a value to speak for (slice and head take no null length).
+    slots = gt.list.len().fill_null(0)
+    stated = values.list.eval(pl.element().is_not_null()).list.any().fill_null(False)
+    beyond_missing = values.list.slice(slots).list.eval(pl.element().is_null()).list.all()
+    fits = (gt.is_not_null() & ((values.list.len() == slots) | ((values.list.len() > slots) & beyond_missing))).fill_null(False)
+    # Nulled before the list arithmetic, which is evaluated on every row and needs equal lengths.
+    head = pl.when(fits).then(values.list.head(slots))
+    called = gt.list.eval(pl.when(pl.element().is_not_null()).then(pl.lit(1, dtype=pl.Int64)))
+    return _HqSlots(stated=stated, unfit=stated & ~fits, read=head * called)
 
 
 def _gt_body() -> pl.Expr:
@@ -1094,6 +1144,12 @@ def to_rows(
         for name, count in stats.items()
         if name.startswith("_multi_") and count
     ]
+    if stats.get("unfit_HQ"):
+        warnings.append(f"{stats['unfit_HQ']} HQ value(s) not one per GT allele set to null")
+    if stats.get("out_HQ"):
+        warnings.append(f"{stats['out_HQ']} HQ value(s) outside 0..{HQ_MAX} set to null")
+    if stats.get("uncalled_HQ"):
+        warnings.append(f"{stats['uncalled_HQ']} HQ value(s) on an uncalled GT allele not read")
     if stats.get("sv_end_disagrees"):
         warnings.append(f"{stats['sv_end_disagrees']} symbolic SV record(s) whose INFO END disagrees with POS + |SVLEN|: end_pos follows END")
     if stats.get("end_not_read"):
@@ -1188,6 +1244,7 @@ def to_rows(
         .otherwise(None)
         .alias("dosage"),
         _bounded("GQ", pl.UInt16).alias("gq"),
+        _hq(),
         _bounded("DP", pl.UInt32).alias("dp"),
         _bounded("MIN_DP", pl.UInt32).alias("dp_min"),
         pl.col("fmt_AD").cast(pl.List(pl.UInt32), strict=False).alias("ad"),
@@ -1496,6 +1553,12 @@ def _bounded(key: str, dtype: pl.DataType) -> pl.Expr:
     """FORMAT `key` cast to `dtype`; values outside it become null (counted by `scan_stats`)."""
     value = pl.col(f"fmt_{key}").cast(pl.Int64, strict=False)
     return pl.when((value >= 0) & (value <= _BOUNDED[key])).then(value).otherwise(None).cast(dtype)
+
+
+def _hq() -> pl.Expr:
+    """`hq`: HQ per GT allele (`_hq_slots`), a value outside 0..`HQ_MAX` null, the row null where no value is left."""
+    scores = _hq_slots().read.list.eval(pl.when(pl.element().is_between(0, HQ_MAX)).then(pl.element()).cast(pl.UInt16))
+    return pl.when(scores.list.drop_nulls().list.len() > 0).then(scores).alias("hq")
 
 
 def dropped_fields(header: Header, data: list[bytes] = ()) -> list[str]:

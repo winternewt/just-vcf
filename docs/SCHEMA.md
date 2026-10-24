@@ -687,7 +687,7 @@ With Decisions 1–5 as recommended:
 | `dosage` | `f32` | no dosage given |
 | `evidence_basis` | `Enum` | never null. Origin only: `assay`, `ref_block`, `absence` (Decision 3) |
 | `gq` | `u16` | not given, or outside 0..65535 (counted in the warnings) |
-| `hq` | `list[u16]` | no slot has a score. Parallel to `gt`: a phred-scaled confidence in each haplotype's call (VCF's reserved FORMAT `HQ`, haplotype qualities). From CGI's native files only: `varScoreEAF` per haplotype, the lowest of a `var` haplotype's sub-rows (rule in "CGI's allele scores", below); an element null on a `?` or partly called slot, or outside 0..65535 (counted). A VCF's FORMAT `HQ` is not read into it yet (it stays in `dropped_fields`), and `write_vcf` does not write it |
+| `hq` | `list[u16]` | no slot has a score. Parallel to `gt`: a phred-scaled confidence in each haplotype's call (VCF's reserved FORMAT `HQ`, haplotype qualities). From CGI's native files, `varScoreEAF` per haplotype, the lowest of a `var` haplotype's sub-rows (rule in "CGI's allele scores", below); from a VCF, FORMAT `HQ` per GT allele (rule in "A VCF's haplotype qualities", below). An element null on an uncalled (`.`, `?`) or partly called slot, where the source gave none, or outside 0..65535 (counted). `write_vcf` writes it as FORMAT `HQ` (`Number=2`; a haploid row as `51,.`; a row of more than two GT alleles left out, counted) |
 | `dp` | `u32` | not given |
 | `ad` | `list[u32]` | not given |
 | `qual` | `f32` | not given. It is the confidence in what ALT asserts: that the variant is there on a variant record, and that no variant is there on a monomorphic record (`alts = []`, where VCF defines it as `-10·log10 P(variant)`). The same threshold therefore works on both |
@@ -724,6 +724,33 @@ VCF defines for a variant site's genotype and which `genotype_evidence` does not
 genotype, where CGI scores reference haplotypes as it does any other; and keeping the scores out of
 the frame, which left every CGI `var` row unquantified (`gt_only`), so a `var` facet could never be
 banded in the method-error atlas.
+
+**A VCF's haplotype qualities (`hq`, 2026-10-24).** VCF reserves FORMAT `HQ` (`Number=2`,
+`Integer`): "haplotype qualities, two comma separated phred qualities", one per haplotype of a diploid
+genotype. The loader reads it into `hq`, value `i` for GT allele `i`, and never fills it from GQ or any
+other key:
+
+- **The Number.** `2`, VCF 4.4's `P` (one per GT allele, read through the `Number=.` copy, P10) and `.`
+  are read. Any other declaration (`1`, `A`, `R`, `G`, another count) names another quantity under the
+  key: not carried, listed in `dropped_fields`, with the load warning that names keys declared so. An
+  undeclared HQ the rows use is declared `Number=2`, as for any carried key.
+- **Per row.** Values are read where there is one per GT allele. VCF's fixed count makes a writer pad
+  a haploid row to two: `51,.`, as CGI's vcfBeta does on every haploid row (90,251 of 90,251 with HQ
+  in a PGP-HMS vcfBeta, hu1B2689, whole genome, 2026-10-24), so values past the GT's alleles are allowed
+  where they are missing, and the row reads `[51]`. Any other count (a haploid `51,40`, a diploid `30`,
+  a polyploid row under `Number=2` with fewer values than alleles) leaves the row's `hq` null, since
+  which allele each value speaks for is unknown; so does a record with no GT. Counted in one warning.
+- **Per value.** `.` is no value. A value on an uncalled allele (`./1:20,30`) speaks for no sequence
+  and is not read, the rule CGI's native `?` slots follow; counted. A value outside 0..65535 is left out,
+  counted. A row left with no value is null (`.` and `.,.` alike).
+- **Blocks** hold no `hq`; an HQ on a reference-block record is not read.
+
+CGI's vcfBeta (`vcf_cgi`) writes HQ beside `EHQ`, "haplotype quality, equal allele fraction
+assumption"; the native loader reads the equal-allele-fraction score (`varScoreEAF`, above). The VCF
+loader reads HQ, the key VCF reserves, in every dialect, and EHQ stays in `dropped_fields`. In the
+hu1B2689 vcfBeta the two are equal on all 4,210,685 rows with HQ (2026-10-24), so the choice moves
+nothing there. A row with likelihoods, or with a GQ on a genotype carrying an ALT, is graded by those
+first (`genotype_evidence`, below): HQ grades a VCF row only where neither does.
 
 **`split_signal`.** A file split one row per ALT (bcftools `norm -m-`, Hail, GATK) can write the
 other ALT of a genotype as `0`, so `1/2` at `A>G,T` becomes `1/0` at `A>G` and `0/1` at `A>T`, and
@@ -1568,7 +1595,12 @@ reading) into every cache spill and need a version bump each time they move.
   (CGI's own VCF writes GQ so, above). No vector and no `prior`: one number per haplotype ranks no
   other genotype, and Decision 3 rejects a made-up distribution. `genotype_alleles` and
   `genotype_index` name the called genotype. A half-call or a partly called slot has no score, so the
-  row stays `gt_only`.
+  row stays `gt_only`. A VCF's FORMAT HQ ("A VCF's haplotype qualities" above) grades the same way,
+  and keeps its place in this order: a VCF row with usable GP or GL is graded by them and one with a
+  GQ on a genotype carrying an ALT by GQ, whatever its HQ; HQ grades the rest, which by default
+  includes a reference genotype with a GQ (`gq` grades none, unless `gq_on_reference=True`, which
+  puts GQ first there too). Rejected: HQ before GQ, which would rank a per-haplotype score above the
+  caller's own score of the genotype it called.
 - `dosage`: only a dosage. One number gives no vector (Decision 3), so no vector and no number.
 - `gt_only`: a genotype with at least one allele called and no quantity: asserted, unquantified. A
   half-call (`0/.`) is here even with a GQ: there is no one genotype for GQ to grade.
@@ -2067,7 +2099,7 @@ each with the other parent silent or reading `other_span`. `normalize` both, or 
 
 | Reading | When | Its distribution over copies `q` |
 |---|---|---|
-| `stated` | a row states the allele | its vector (`genotype_evidence`'s `gl`, under a flat prior, or `gq`) summed by copies; else its genotype, a point mass. A `gp` row is read as its genotype unless `gp_as = likelihood`; an `hq` row (CGI's allele scores) has no vector and is read as its genotype, its confidence placing it in a band (`CONSENSUS_VERSION` 3) |
+| `stated` | a row states the allele | its vector (`genotype_evidence`'s `gl`, under a flat prior, or `gq`) summed by copies; else its genotype, a point mass. A `gp` row is read as its genotype unless `gp_as = likelihood`; an `hq` row (CGI's allele scores, a VCF's FORMAT HQ) has no vector and is read as its genotype, its confidence placing it in a band (`CONSENSUS_VERSION` 3; 4 for a VCF's HQ) |
 | `site` | one row at the position over the same REF span, without the allele (a hom-ref record, another ALT) | zero copies, a point mass: its vector indexes other alleles |
 | `ref_block` | a `ref` block covers the position | by `block_grade` (above, "The block rule"): under the default, the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; graded by its GQ, zero copies at `1 − 10^(−GQ/10)` and the rest spread evenly over the other copies, at the ploidy its likelihoods give, else the site's; lacking what the rule reads, zero copies |
 | `absence` | nothing covers it and `absence_is_reference(facet, class, force=force)` is True on a contig the facet declared or wrote | zero copies |
@@ -2202,6 +2234,19 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-24, layer 7, a VCF's haplotype qualities): the VCF loaders read
+  FORMAT `HQ` into `calls.hq` ("A VCF's haplotype qualities"), a column 0.0.19 defined as VCF's HQ
+  and filled from CGI's native files only. No column's shape or meaning changes, so `SCHEMA_VERSION`
+  stays; a VCF facet with HQ now has `hq` where it was null, and `FORMAT/HQ` leaves its
+  `dropped_fields` (an HQ declared with a Number other than `2`, `P` or `.` stays there). Rules
+  changed: `genotype_evidence` grades such a row by its lowest HQ where GP, GL and GQ do not
+  (basis `hq`, unchanged), so a VCF reference genotype with HQ is `quantified` where it was
+  `gt_only`; `consensus` weighs it by its band (`CONSENSUS_VERSION` 4). `REWRITE_VERSION` 10: the
+  rewritten copy declares and keeps HQ.
+  `write_vcf` writes `hq` as FORMAT `HQ`, declared `Number=2`, so a CGI `var` facet's scores survive
+  its VCF export and a VCF with HQ round-trips; a haploid row is written `51,.`, which the loader
+  reads back as `[51]`, and a row of more than two GT alleles has its `hq` left out, counted.
 
 - **A calls column, landed in 0.0.19** (2026-10-24, layer 7, CGI `var` confidence): `calls.hq`
   (`list[u16]`, parallel to `gt`), each haplotype's score, filled from CGI's native files'

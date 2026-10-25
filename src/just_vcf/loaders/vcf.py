@@ -96,6 +96,35 @@ SLOT_NUMBERS: dict[str, frozenset[str]] = {"HQ": frozenset({"2", "P", "."})}
 `P`, and `.`. Any other Number names another quantity under the key (one per genotype, a single
 value), which is not carried; each row's count is checked against its GT (`_hq_slots`)."""
 
+WHOLE_COLUMNS: dict[str, str] = {
+    "fmt_GQ": "GQ",
+    "fmt_DP": "DP",
+    "fmt_MIN_DP": "MIN_DP",
+    "fmt_LEN": "LEN",
+    "fmt_PS": "PS",
+    "fmt_AD": "AD",
+    "fmt_PSO": "PSO",
+    "fmt_PSQ": "PSQ",
+    "info_END": "INFO END",
+    "info_SVLEN": "INFO SVLEN",
+    "info_CIPOS": "INFO CIPOS",
+    "info_CIEND": "INFO CIEND",
+}
+"""Columns of the carried keys VCF types Integer that the frames read as whole numbers → the name the
+warnings give them. A VCF 4.2 header (and a later one for a key its version holds no definition of,
+such as MIN_DP) can declare one Float or String, and polars-bio then hands back floats or text: only a
+whole number is read from those (`_whole_numbers`). HQ has its own rule (`_hq_slots`); PL and PP are
+read as the numbers they are, since a fraction there is a likelihood, not a count cut short."""
+
+UNREAD_REASONS: dict[str, str] = {
+    "not_whole": "not a whole number",
+    "not_number": "not a number",
+    "inexact": "too large to read exactly as a whole number",
+}
+"""Why `_whole_numbers` leaves a value out → the warning's words. `inexact`: polars-bio reads a Float
+as a 32-bit float, exact for whole numbers only up to 2^24 (123456789 comes back 123456792), and text
+is read through a 64-bit one, exact up to 2^53; past that the number read may not be the file's."""
+
 HQ_MAX = 2**16 - 1
 """The largest haplotype quality `hq` (`u16`) holds; a larger one, or a negative one, is left out and counted."""
 
@@ -956,7 +985,7 @@ def read_records(
         for name in (f"info_{key}" for key in extra_info)
         if name in present
     )
-    return frame.with_columns(
+    frame = frame.with_columns(
         [pl.lit(None, dtype=_dtype(number, kind)).alias(f"fmt_{key}") for key, (number, kind) in FORMAT_KEYS.items() if f"fmt_{key}" not in present]
         + [
             pl.lit(None, dtype=pl.List(_dtype("1", kind)) if key in _LIST_INFO else _dtype("1", kind)).alias(f"info_{key}")
@@ -964,6 +993,40 @@ def read_records(
             if f"info_{key}" not in present
         ]
     ).with_columns(pl.col("fmt_GT").cast(pl.String), pl.col("fmt_FT").cast(pl.String))
+    return _whole_numbers(frame)
+
+
+def _whole_numbers(frame: pl.LazyFrame) -> pl.LazyFrame:
+    """`frame` with each `WHOLE_COLUMNS` column polars-bio handed back as floats or text (the key was
+    declared Float or String) read as whole numbers: a whole number is kept as it is (`30.0` is 30), and
+    every other value is left out, never truncated or rounded, which would be a number the file did not
+    write. Each value left out is counted per row in `_unread_<reason>:<column>` (`UNREAD_REASONS`),
+    which `scan_stats` sums. A column of integers is left as it is."""
+    schema = frame.collect_schema()
+    columns: list[pl.Expr] = []
+    for name in WHOLE_COLUMNS:
+        dtype = schema.get(name)
+        listed = isinstance(dtype, pl.List)
+        inner = dtype.inner if listed else dtype
+        if inner is None or inner.is_integer() or inner == pl.Null:
+            continue
+        exact = 2**24 if inner == pl.Float32 else 2**53
+        raw = pl.element() if listed else pl.col(name)
+        value = raw.cast(pl.Float64, strict=False)
+        stated = raw.is_not_null()
+        finite = value.is_finite().fill_null(False)
+        whole = finite & (value == value.floor())
+        flags = {
+            "not_whole": stated & finite & ~whole,
+            "not_number": stated & ~finite,
+            "inexact": stated & whole & (value.abs() >= exact),
+        }
+        kept = pl.when(whole & (value.abs() < exact)).then(value).cast(pl.Int64)
+        columns.append((pl.col(name).list.eval(kept) if listed else kept).alias(name))
+        for reason, flag in flags.items():
+            count = pl.col(name).list.eval(flag.cast(pl.Int64)).list.sum().fill_null(0) if listed else flag.cast(pl.Int64)
+            columns.append(count.alias(f"_unread_{reason}:{name}"))
+    return frame.with_columns(columns) if columns else frame
 
 
 _BOUNDED = {"GQ": 2**16 - 1, "DP": 2**32 - 1, "MIN_DP": 2**32 - 1}
@@ -1011,7 +1074,7 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
         pl.col("fmt_GT").null_count().alias("gt_missing"),
         (_gt_body().str.count_matches(r"[/|]").max() + 1).alias("ploidy_max"),
         *_psl_stats(),
-        *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith("_multi_")],
+        *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith(("_multi_", "_unread_"))],
         *[
             (pl.col(f"fmt_{key}").is_not_null() & ~_fits(pl.col(f"fmt_{key}"), key, alts)).sum().alias(f"unfit_{key}")
             for key in VECTOR_NUMBERS
@@ -1245,6 +1308,12 @@ def to_rows(
         f"{count} {name.removeprefix('_multi_')} value(s) held more than one number; the first was kept"
         for name, count in stats.items()
         if name.startswith("_multi_") and count
+    ] + [
+        f"{count} {WHOLE_COLUMNS[column]} value(s) {UNREAD_REASONS[reason]} left out"
+        + (": a phased record among them has its phase withheld, since the set it is in is unknown" if column == "fmt_PS" else "")
+        for name, count in stats.items()
+        if name.startswith("_unread_") and count
+        for reason, column in [name.removeprefix("_unread_").split(":", 1)]
     ]
     if stats.get("unfit_HQ"):
         warnings.append(f"{stats['unfit_HQ']} HQ value(s) not one per GT allele set to null")
@@ -1303,6 +1372,11 @@ def to_rows(
         _gt_expr().alias("gt"),
         pl.when(gt_text.is_null()).then(None).otherwise(pl.concat_list(first_phased, seps.list.eval(pl.element() == "|"))).alias("phased"),
     )
+    if ps_unread := [name for name in rows.collect_schema().names() if name.startswith("_unread_") and name.endswith(":fmt_PS")]:
+        # A PS left out (`_whole_numbers`) must not put a phased record in its chromosome's implicit set,
+        # where a phased record without PS is: the set it named is unknown, so its phase is withheld.
+        unknown = pl.col("phased").list.eval(pl.when(pl.element()).then(pl.lit(None, dtype=pl.Boolean)).otherwise(pl.element()))
+        rows = rows.with_columns(pl.when(pl.sum_horizontal(ps_unread) > 0).then(unknown).otherwise(pl.col("phased")).alias("phased"))
     allele_list = pl.concat_list(pl.col("source_ref"), pl.col("alts"))
     rows = rows.with_columns(allele_list.list.gather(pl.col("gt"), null_on_oob=True).alias("gt_alleles"))
     # A record is a block only when it asserts reference or nothing: a GT calling `<*>` stays a call.

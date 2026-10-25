@@ -949,6 +949,90 @@ def test_hq_that_is_not_a_whole_number_is_left_out_and_counted(tmp_path: Path, k
     }
 
 
+_PSL_LINE = '##FORMAT=<ID=PSL,Number=P,Type=String,Description="Phase set list">'
+_END_LINE = INFO_LINES["END"]
+
+# Each carried key VCF types Integer that the frames read as whole numbers, other than HQ: (key, its
+# namespace and Number, other meta lines the record needs, the record with value `v` at `pos`, the frame
+# and column it lands in, the value read for a whole `n`, and the value there when `v` is left out).
+_WHOLE_KEYS = [
+    ("GQ", "FORMAT", "1", (), lambda p, v: f"1\t{p}\t.\tA\tG\t50\t.\t.\tGT:GQ\t0/1:{v}", "calls", "gq", lambda p, n: n, lambda p: None),
+    ("DP", "FORMAT", "1", (), lambda p, v: f"1\t{p}\t.\tA\tG\t50\t.\t.\tGT:DP\t0/1:{v}", "calls", "dp", lambda p, n: n, lambda p: None),
+    ("AD", "FORMAT", "R", (), lambda p, v: f"1\t{p}\t.\tA\tG\t50\t.\t.\tGT:AD\t0/1:{v},4", "calls", "ad", lambda p, n: [n, 4], lambda p: [None, 4]),
+    ("PSO", "FORMAT", "P", (_PSL_LINE,), lambda p, v: f"1\t{p}\t.\tA\tG\t50\t.\t.\tGT:PSL:PSO\t0|1:a,a:{v},4", "calls", "phase_set_ordinals",
+     lambda p, n: [n, 4], lambda p: [None, 4]),
+    ("MIN_DP", "FORMAT", "1", (_END_LINE,), lambda p, v: f"1\t{p}\t.\tA\t<*>\t.\t.\tEND={p + 5}\tGT:MIN_DP\t0/0:{v}", "blocks", "dp_min",
+     lambda p, n: n, lambda p: None),
+    ("LEN", "FORMAT", "1", (), lambda p, v: f"1\t{p}\t.\tA\t<*>\t.\t.\t.\tGT:LEN\t0/0:{v}", "blocks", "end_pos", lambda p, n: p + n - 1, lambda p: p),
+    ("END", "INFO", "1", (), lambda p, v: f"1\t{p}\t.\tA\t<DEL>\t50\t.\tEND={p}{v}\tGT\t0/1", "calls", "end_pos", lambda p, n: int(f"{p}{n}"), lambda p: p),
+    ("SVLEN", "INFO", "A", (), lambda p, v: f"1\t{p}\t.\tA\t<DEL>\t50\t.\tSVLEN=-{v}\tGT\t0/1", "calls", "end_pos", lambda p, n: p + n, lambda p: p),
+    ("CIPOS", "INFO", ".", (), lambda p, v: f"1\t{p}\t.\tA\t<DEL>\t50\t.\tCIPOS={v},5\tGT\t0/1", "calls", "cipos", lambda p, n: [n, 5], lambda p: [None, 5]),
+]
+
+# (Type, the values written, each one's whole number or the reason it is left out). polars-bio parses a
+# Float, so text there fails the read; under String, text reaches the loader.
+_WHOLE_VALUES = {
+    "Float": [("30.5", "not a whole number"), ("30.0", 30), ("31", 31)],
+    "String": [("30.5", "not a whole number"), ("x", "not a number"), ("31", 31)],
+}
+
+
+@pytest.mark.parametrize("kind", ["Float", "String"])
+@pytest.mark.parametrize(("key", "namespace", "number", "meta", "record", "frame", "column", "read", "unread"), _WHOLE_KEYS)
+def test_an_integer_key_declared_float_or_string_keeps_only_whole_numbers(
+    tmp_path: Path, kind: str, key: str, namespace: str, number: str, meta: tuple, record, frame: str, column: str, read, unread
+) -> None:
+    """VCF 4.2 reserves no Type, so a file can declare GQ, DP, AD and the other integer keys Float or
+    String. A whole number is read as it is (`30.0` is 30); a number with a fraction is left out, never
+    truncated, and text that is no number is left out too, each reason one warning with its count."""
+    declared = f'##{namespace}=<ID={key},Number={number},Type={kind},Description="x">'
+    values = _WHOLE_VALUES[kind]
+    positions = [1000 + 100 * i for i in range(len(values))]
+    records = [record(p, v) for p, (v, _) in zip(positions, values)]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=(*meta, declared))))
+    rows = (loaded.calls if frame == "calls" else loaded.blocks).collect().sort("pos")
+    assert rows["pos"].to_list() == positions
+    expected = [read(p, n) if isinstance(n, int) else unread(p) for p, (_, n) in zip(positions, values)]
+    assert rows[column].to_list() == expected
+    label = key if namespace == "FORMAT" else f"INFO {key}"
+    reasons = [n for _, n in values if isinstance(n, str)]
+    stated = {w for w in loaded.warnings if w.startswith(tuple(f"{i} {label} value(s) not a" for i in range(1, 9)))}
+    assert stated == {f"{reasons.count(r)} {label} value(s) {r} left out" for r in set(reasons)}, loaded.warnings
+
+
+@pytest.mark.parametrize(("namespace", "key", "record", "column"), [
+    ("FORMAT", "PS", "1\t100\t.\tA\tG\t50\t.\t.\tGT:PS\t0|1:123456789", "phase_sets"),
+    ("INFO", "END", "1\t100\t.\tA\t<DEL>\t50\t.\tEND=123456789\tGT\t0/1", "end_pos"),
+])
+def test_a_whole_number_a_float_cannot_hold_exactly_is_left_out(tmp_path: Path, namespace: str, key: str, record: str, column: str) -> None:
+    """polars-bio reads a Float as a 32-bit float, which holds every whole number only up to 2^24:
+    123456789 comes back 123456792. A position or a phase set read so would be one the file did not
+    write, so such a value is left out and counted."""
+    declared = f'##{namespace}=<ID={key},Number=1,Type=Float,Description="x">'
+    loaded = load(write(tmp_path, vcf_text([record], extra_meta=(declared,))))
+    (value,) = loaded.calls.collect()[column].to_list()
+    assert value != 123456792 and value != ["123456792", "123456792"]
+    label = key if namespace == "FORMAT" else f"INFO {key}"
+    assert any(w.startswith(f"1 {label} value(s) too large to read exactly as a whole number left out") for w in loaded.warnings), loaded.warnings
+
+
+@pytest.mark.parametrize(("kind", "value", "reason"), [("String", "abc", "not a number"), ("Float", "7.5", "not a whole number"), ("String", "7", None)])
+def test_a_phase_set_that_is_not_read_withholds_the_phase(tmp_path: Path, kind: str, value: str, reason: str | None) -> None:
+    """A PS left out does not put the record in its chromosome's implicit phase set, which a phased
+    record without PS is in: the set it named is unknown, so its phase is withheld. An unphased record
+    keeps its `phased` as written."""
+    meta = (f'##FORMAT=<ID=PS,Number=1,Type={kind},Description="Phase set">',)
+    records = [f"1\t100\t.\tA\tG\t50\t.\t.\tGT:PS\t0|1:{value}", f"1\t200\t.\tA\tG\t50\t.\t.\tGT:PS\t0/1:{value}"]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=meta)))
+    calls = loaded.calls.collect().sort("pos")
+    if reason is None:
+        assert calls["phased"].to_list() == [[True, True], [False, False]] and calls["phase_sets"].to_list()[0] == ["7", "7"]
+        return
+    assert calls["phased"].to_list() == [[None, None], [False, False]]
+    assert calls["phase_sets"].to_list() == [None, None]
+    assert any(w.startswith(f"2 PS value(s) {reason} left out") and "phase" in w for w in loaded.warnings), loaded.warnings
+
+
 @pytest.mark.parametrize("version", ["VCFv4.3", "VCFv4.4", "VCFv4.5"])
 def test_hq_declared_with_a_type_its_version_reserves_otherwise_is_not_carried(tmp_path: Path, version: str) -> None:
     """VCF 4.3 on reserves HQ as Integer, and polars-bio refuses a header of those versions declaring it

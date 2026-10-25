@@ -1185,6 +1185,19 @@ the retries end. polars-bio names the key only for a list-valued field (HQ, AD, 
 single-value one (GQ `30.5` under `Integer`, an INFO END) fails inside the reader with no key named,
 and the load is refused as before, since which key failed would be a guess.
 
+**A carried integer key declared `Float` or `String` keeps only whole numbers** (2026-10-25). VCF 4.2
+reserves no Type, and a later version none for a key it holds no definition of (MIN_DP; LEN before
+4.5; PSO and PSQ before 4.4), so such a header can declare GQ, DP, MIN_DP, LEN, PS, AD, PSO, PSQ or
+INFO END, SVLEN, CIPOS or CIEND `Float` or `String`. The loader reads those values as HQ's (above): a
+whole number as it is (`30.0` is 30); a number with a fraction (`30.7`) left out, never truncated or
+rounded; text that is no finite number (`x`, `nan`) left out; and a whole number past what the value
+was read through holds exactly left out too: polars-bio reads a Float as a 32-bit float, exact only up
+to 2^24, so a PS or END of 123456789 comes back 123456792, a set or a position the file did not write.
+Each key and reason is one warning with its count. A PS left out withholds the phase of a phased
+record (`phased` null where it was true): a phased record without PS is in its chromosome's implicit
+set, and saying so would be a claim the file did not make. PL and PP declared `Float` are read as the
+numbers they are; a fraction there is a likelihood, not a count cut short.
+
 ## Decision 10: multi-sample files
 
 The charter is about one person. A trio VCF or a PGP two-column merge has more than one sample column.

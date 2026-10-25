@@ -4,6 +4,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A carried integer key declared `Float` or `String` (a VCF 4.2 header, or MIN_DP, LEN, PSO or PSQ in
+  a version that holds no definition of them) keeps only whole numbers, where it was truncated or
+  lost without a word: GQ `30.7` read as 30, AD `3.5,4` as `[3, 4]`, END `200.5` as 200, and GQ `x`
+  as null. A whole number reads as it is (`30.0` is 30); a fraction, text that is no number, and a
+  whole number a 32-bit float cannot hold exactly are left out, one warning per key and reason with
+  its count. The last mattered: polars-bio reads a Float as a 32-bit float, so a PS or END of
+  123456789 came back 123456792. A PS left out withholds a phased record's phase rather than putting
+  it in the chromosome's implicit set. A PS, LEN or INFO END declared `String` with text that is no
+  integer no longer fails the load with `InvalidOperationError`. Covers GQ, DP, MIN_DP, LEN, PS, AD,
+  PSO, PSQ and INFO END, SVLEN, CIPOS, CIEND.
+
 - A VCF with a carried key declared as VCF reserves it but holding a value polars-bio cannot parse
   under that declaration (HQ `Integer` with `30.5,40` or `x,40`, AD with `x,4`, INFO SVLEN with `x`)
   loads without that key, where it failed with `HeaderRefused`: when the structural retry is refused

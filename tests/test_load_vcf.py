@@ -992,8 +992,8 @@ _WHOLE_KEYS = [
     ("CIPOS", "INFO", ".", (), lambda p, v: f"1\t{p}\t.\tA\t<DEL>\t50\t.\tCIPOS={v},5\tGT\t0/1", "calls", "cipos", lambda p, n: [n, 5], lambda p: [None, 5]),
 ]
 
-# (Type, the values written, each one's whole number or the reason it is left out). polars-bio parses a
-# Float, so text there fails the read; under String, text reaches the loader.
+# (Type, the values written, each one's whole number or the reason it is left out). Both are read as
+# text (a Float through the copy, declared String there).
 _WHOLE_VALUES = {
     "Float": [("30.5", "not a whole number"), ("30.0", 30), ("31", 31)],
     "String": [("30.5", "not a whole number"), ("x", "not a number"), ("31", 31)],
@@ -1023,20 +1023,71 @@ def test_an_integer_key_declared_float_or_string_keeps_only_whole_numbers(
     assert stated == {f"{reasons.count(r)} {label} value(s) {r} left out" for r in set(reasons)}, loaded.warnings
 
 
-@pytest.mark.parametrize(("namespace", "key", "record", "column"), [
-    ("FORMAT", "PS", "1\t100\t.\tA\tG\t50\t.\t.\tGT:PS\t0|1:123456789", "phase_sets"),
-    ("INFO", "END", "1\t100\t.\tA\t<DEL>\t50\t.\tEND=123456789\tGT\t0/1", "end_pos"),
+@pytest.mark.parametrize(("namespace", "key", "record", "column", "expected"), [
+    ("FORMAT", "PS", "1\t100\t.\tA\tG\t50\t.\t.\tGT:PS\t0|1:123456789", "phase_sets", ["123456789", "123456789"]),
+    ("INFO", "END", "1\t100\t.\tA\t<DEL>\t50\t.\tEND=123456789\tGT\t0/1", "end_pos", 123456789),
 ])
-def test_a_whole_number_a_float_cannot_hold_exactly_is_left_out(tmp_path: Path, namespace: str, key: str, record: str, column: str) -> None:
+def test_a_whole_number_past_a_32_bit_float_is_read_as_written(
+    tmp_path: Path, namespace: str, key: str, record: str, column: str, expected
+) -> None:
     """polars-bio reads a Float as a 32-bit float, which holds every whole number only up to 2^24:
-    123456789 comes back 123456792. A position or a phase set read so would be one the file did not
-    write, so such a value is left out and counted."""
+    123456789 came back 123456792, a position or a phase set the file did not write. The copy it reads
+    declares such a key String, so the value is read from its digits, exactly, with no warning."""
     declared = f'##{namespace}=<ID={key},Number=1,Type=Float,Description="x">'
     loaded = load(write(tmp_path, vcf_text([record], extra_meta=(declared,))))
-    (value,) = loaded.calls.collect()[column].to_list()
-    assert value != 123456792 and value != ["123456792", "123456792"]
-    label = key if namespace == "FORMAT" else f"INFO {key}"
-    assert any(w.startswith(f"1 {label} value(s) too large to read exactly as a whole number left out") for w in loaded.warnings), loaded.warnings
+    assert loaded.calls.collect()[column].to_list() == [expected]
+    assert not any(f"{key} value(s)" in w for w in loaded.warnings), loaded.warnings
+
+
+# (key and its record with value `v`, the column, the value written, what is read). Each fraction here
+# rounds away in a 32-bit float, the first three before 2^22 or near it, so no magnitude rule could tell.
+_FLOAT_FRACTIONS = [
+    ("DP", "1", lambda v: f"1\t100\t.\tA\tG\t50\t.\t.\tGT:DP\t0/1:{v}", "dp", "30.0000001", None),
+    ("GQ", "1", lambda v: f"1\t100\t.\tA\tG\t50\t.\t.\tGT:GQ\t0/1:{v}", "gq", "99.00000001", None),
+    ("HQ", "2", lambda v: f"1\t100\t.\tA\tG\t50\t.\t.\tGT:HQ\t0/1:{v},20", "hq", "30.0000001", [None, 20]),
+    ("PS", "1", lambda v: f"1\t100\t.\tA\tG\t50\t.\t.\tGT:PS\t0|1:{v}", "phase_sets", "10000000.5", None),
+    ("END", "1", lambda v: f"1\t100\t.\tA\t<DEL>\t50\t.\tEND={v}\tGT\t0/1", "end_pos", "5000000.1", 100),
+]
+
+
+@pytest.mark.parametrize(("key", "number", "record", "column", "value", "expected"), _FLOAT_FRACTIONS)
+def test_a_fraction_a_32_bit_float_rounds_away_is_left_out(
+    tmp_path: Path, key: str, number: str, record, column: str, value: str, expected
+) -> None:
+    """`30.0000001` read as a 32-bit float is 30.0, so a Float key read so cannot say the file wrote a
+    whole number, whatever its magnitude. Read from the copy as text, the fraction is seen and the
+    value left out and counted, never rounded; a PS so left out withholds the phase."""
+    namespace = "INFO" if key == "END" else "FORMAT"
+    declared = f'##{namespace}=<ID={key},Number={number},Type=Float,Description="x">'
+    loaded = load(write(tmp_path, vcf_text([record(value)], extra_meta=(declared,))))
+    row = loaded.calls.collect().row(0, named=True)
+    assert row[column] == expected
+    if key == "PS":
+        assert row["phased"] == [None, None]
+    label = f"INFO {key}" if key == "END" else key
+    assert any(w.startswith(f"1 {label} value(s) not a whole number left out") for w in loaded.warnings), loaded.warnings
+
+
+# Text judged by its digits: (written, read or the reason it is left out).
+_TEXT_FORMS = [
+    ("30", 30), ("+30", 30), ("30.000", 30), ("1e2", 100), ("1.5E1", 15), ("120e-1", 12), ("5.", 5), ("-0.0", 0),
+    ("30.00000000000000001", "not a whole number"),  # 30.0 in a 64-bit float too
+    ("1.25e1", "not a whole number"), ("1e-400", "not a whole number"), (".5", "not a whole number"),
+    ("x", "not a number"), ("nan", "not a number"), ("inf", "not a number"),
+]
+
+
+def test_an_integer_key_read_as_text_is_judged_by_its_digits(tmp_path: Path) -> None:
+    """A whole number is one whose fraction digits, past the exponent's shift, are all zeros; a float
+    parse would read `30.00000000000000001` as 30. Each value left out is counted by reason."""
+    meta = ('##FORMAT=<ID=GQ,Number=1,Type=String,Description="x">',)
+    records = [f"1\t{1000 + 10 * i}\t.\tA\tG\t50\t.\t.\tGT:GQ\t0/1:{v}" for i, (v, _) in enumerate(_TEXT_FORMS)]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=meta)))
+    expected = [read if isinstance(read, int) else None for _, read in _TEXT_FORMS]
+    assert loaded.calls.collect().sort("pos")["gq"].to_list() == expected
+    reasons = [read for _, read in _TEXT_FORMS if isinstance(read, str)]
+    stated = {w for w in loaded.warnings if w.startswith(tuple(f"{i} GQ value(s)" for i in range(1, 20)))}
+    assert stated == {f"{reasons.count(r)} GQ value(s) {r} left out" for r in set(reasons)}, loaded.warnings
 
 
 @pytest.mark.parametrize(("kind", "value", "reason"), [("String", "abc", "not a number"), ("Float", "7.5", "not a whole number"), ("String", "7", None)])
@@ -1054,6 +1105,61 @@ def test_a_phase_set_that_is_not_read_withholds_the_phase(tmp_path: Path, kind: 
     assert calls["phased"].to_list() == [[None, None], [False, False]]
     assert calls["phase_sets"].to_list() == [None, None]
     assert any(w.startswith(f"2 PS value(s) {reason} left out") and "phase" in w for w in loaded.warnings), loaded.warnings
+
+
+@pytest.mark.parametrize(("version", "line", "value"), [
+    ("VCFv4.3", '##FORMAT=<ID=PS,Number=1,Type=String,Description="Phase set">', "{pos}"),  # a Type 4.3 refuses
+    ("VCFv4.5", '##FORMAT=<ID=PS,Number=1,Type=Float,Description="Phase set">', "{pos}"),
+    ("VCFv4.2", '##FORMAT=<ID=PS,Number=.,Type=Integer,Description="Phase set">', "{pos},x"),  # the retry leaves it out
+])
+def test_a_phase_set_declared_but_not_carried_withholds_the_phase(tmp_path: Path, version: str, line: str, value: str) -> None:
+    """A PS the header declares but the loader does not carry is skipped unread, so which records wrote
+    one, and which set each named, is unknown. Read as written, the two blocks below were one phased set
+    across the chromosome (the implicit set of records with no PS): each phased record has its phase
+    withheld instead, counted in one warning; an unphased record keeps `phased` as written."""
+    records = [f"1\t{pos}\t.\tA\tG\t50\t.\t.\tGT:PS\t{gt}:{value.format(pos=pos)}" for pos, gt in ((100, "0|1"), (200, "1|0"), (300, "0/1"))]
+    loaded = load(write(tmp_path, vcf_text(records, version=version, extra_meta=(line,))))
+    calls, facet = loaded.calls.collect().sort("pos"), loaded.facets.collect().row(0, named=True)
+    first = None if version >= "VCFv4.4" else False
+    assert calls["phased"].to_list() == [[None, None], [None, None], [first, False]]
+    assert calls["phase_sets"].to_list() == [None, None, None] and calls["phase_set_kinds"].to_list() == [None, None, None]
+    assert "FORMAT/PS" in facet["dropped_fields"]
+    assert any(w.startswith("2 phased record(s) have their phase withheld") and "FORMAT/PS" in w for w in loaded.warnings), loaded.warnings
+
+
+def test_a_psl_set_is_read_where_ps_is_not_carried(tmp_path: Path) -> None:
+    """VCF 4.5 ignores PS on a record whose PSL names a set, so a PS that is not carried withholds only
+    the phase of the records without one; and a file that declares no PS keeps VCF's rule, a phased
+    record in its chromosome's implicit set."""
+    meta = (_PSL_LINE, '##FORMAT=<ID=PS,Number=1,Type=String,Description="Phase set">')
+    records = ["1\t100\t.\tA\tG\t50\t.\t.\tGT:PSL:PS\t0|1:a,a:5", "1\t200\t.\tA\tG\t50\t.\t.\tGT:PSL:PS\t0|1:.,.:6"]
+    loaded = load(write(tmp_path, vcf_text(records, version="VCFv4.5", extra_meta=meta)))
+    calls = loaded.calls.collect().sort("pos")
+    assert calls["phased"].to_list() == [[True, True], [None, None]]
+    assert calls["phase_sets"].to_list() == [["a", "a"], None] and calls["phase_set_kinds"].to_list() == [["psl", "psl"], None]
+    assert any(w.startswith("1 phased record(s) have their phase withheld") for w in loaded.warnings), loaded.warnings
+    undeclared = load(write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT\t0|1", "1\t200\t.\tA\tG\t50\t.\t.\tGT\t1"]), "no_ps.vcf"))
+    calls = undeclared.calls.collect().sort("pos")
+    assert calls["phased"].to_list() == [[True, True], [True]]
+    assert calls["phase_sets"].to_list() == [[None, None], [None]] and calls["phase_set_kinds"].to_list() == [["ps", "ps"], ["ps"]]
+    assert not any("withheld" in w for w in undeclared.warnings), undeclared.warnings
+
+
+@pytest.mark.parametrize("kind", ["Integer", "Float", "String"])
+def test_a_negative_phase_set_withholds_the_phase(tmp_path: Path, kind: str) -> None:
+    """VCF's PS is a non-negative integer, so `-5` and `-1` name no set. Read as they were, the list
+    arithmetic put both records in the chromosome's implicit set (`phased` true, `phase_sets` null):
+    each is left out and counted, and the record's phase withheld. PS 0 is a set like any other."""
+    meta = (f'##FORMAT=<ID=PS,Number=1,Type={kind},Description="Phase set">',)
+    values = {100: "-5", 200: "-1", 300: "0", 400: "7"}
+    records = [f"1\t{pos}\t.\tA\tG\t50\t.\t.\tGT:PS\t0|1:{ps}" for pos, ps in values.items()]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=meta)))
+    calls = loaded.calls.collect().sort("pos")
+    assert calls["phased"].to_list() == [[None, None], [None, None], [True, True], [True, True]]
+    assert calls["phase_sets"].to_list() == [None, None, ["0", "0"], ["7", "7"]]
+    assert calls["phase_set_kinds"].to_list() == [None, None, ["ps", "ps"], ["ps", "ps"]]
+    negative = [w for w in loaded.warnings if "negative" in w]
+    assert len(negative) == 1 and negative[0].startswith("2 PS value(s) negative") and "phase withheld" in negative[0], loaded.warnings
 
 
 @pytest.mark.parametrize("version", ["VCFv4.3", "VCFv4.4", "VCFv4.5"])

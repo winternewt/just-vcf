@@ -311,6 +311,18 @@ its own phase set. So:
 - A phased haplotype with no PS or PSL has `phased = true` and `phase_set` null (kind `ps`). It belongs
   to its chromosome's one implicit set (VCF 4.5: "All phased genotypes that do not contain a PS
   subfield are assumed to belong to the same phased set"), key `(facet_id, chrom, ps, null)`.
+- **A PS the loader cannot read withholds the phase** (`phased` null where it was true, the phase-set
+  lists null), never the implicit set: that set is for a record that wrote no PS, and one whose PS was
+  not read did write one. The cases, each counted in a warning that says the phase was withheld: a PS
+  value left out as not a whole number (Decision 9), and a negative PS (`-5`, `-1`), since VCF's PS is
+  a non-negative integer (2026-10-25; the list arithmetic read `-1` as the implicit set). PS `0` is a
+  set like any other. And a PS the header declares but the loader does not carry (a Type its version
+  refuses, `PS Type=String` under 4.3; a key the retry left out, Decision 9): its values are skipped
+  unread, so which records wrote one is unknown, and every phased record has its phase withheld
+  (2026-10-25; it read `0|1:100` and `1|0:200` as one set across the chromosome). That includes a
+  haploid call, phased by VCF's reading, which may have written a PS too. A record whose PSL names a
+  set keeps it, since PS is ignored there. A file that declares no PS keeps VCF's rule: its phased
+  records are in the implicit set.
 - **How the VCF loader reads PSL** (VCF 4.4+, `Number=P`: one value per allele in GT). On a record
   whose PSL names a set, each slot is read from its own entry: a phased slot with a name is in that
   set (kind `psl`); a phased slot with `.` is in the implicit set above (kind `ps`, set null), since it
@@ -1209,16 +1221,34 @@ and the load is refused as before, since which key failed would be a guess.
 
 **A carried integer key declared `Float` or `String` keeps only whole numbers** (2026-10-25). VCF 4.2
 reserves no Type, and a later version none for a key it holds no definition of (MIN_DP; LEN before
-4.5; PSO and PSQ before 4.4), so such a header can declare GQ, DP, MIN_DP, LEN, PS, AD, PSO, PSQ or
-INFO END, SVLEN, CIPOS or CIEND `Float` or `String`. The loader reads those values as HQ's (above): a
-whole number as it is (`30.0` is 30); a number with a fraction (`30.7`) left out, never truncated or
-rounded; text that is no finite number (`x`, `nan`) left out; and a whole number past what the value
-was read through holds exactly left out too: polars-bio reads a Float as a 32-bit float, exact only up
-to 2^24, so a PS or END of 123456789 comes back 123456792, a set or a position the file did not write.
-Each key and reason is one warning with its count. A PS left out withholds the phase of a phased
-record (`phased` null where it was true): a phased record without PS is in its chromosome's implicit
-set, and saying so would be a claim the file did not make. PL and PP declared `Float` are read as the
-numbers they are; a fraction there is a likelihood, not a count cut short.
+4.5; PSO and PSQ before 4.4), so such a header can declare GQ, DP, MIN_DP, LEN, PS, AD, PSO, PSQ, HQ or
+INFO END, SVLEN, CIPOS or CIEND `Float` or `String`. A whole number is read as it is (`30.0` is 30); a
+number with a fraction (`30.7`) is left out, never truncated or rounded; text that is no finite number
+(`x`, `nan`) is left out; and a whole number past what the value was read through holds exactly
+(2^53, a 64-bit float) is left out too. Each key and reason is one warning with its count. A PS left out
+withholds the phase of a phased record (`phased` null where it was true): a phased record without PS
+is in its chromosome's implicit set, and saying so would be a claim the file did not make. A PS not
+carried at all (any of the cases above) withholds the phase of every phased record (Decision 2). PL and
+PP declared `Float` are read as the numbers they are; a fraction there is a likelihood, not a count cut
+short.
+
+**Whole is decided from the digits the file wrote, never from a float** (2026-10-25). polars-bio reads
+a `Float` as a 32-bit float, and no value it hands back can be certified whole, at any magnitude: a
+32-bit float has 24 significant bits, so `30.0000001` (30 + 1e-7, under half the step of 1.9e-6 at
+30) and `5000000.1` (under half the step of 0.5 above 2^22) both come back whole, and above 2^24 the
+whole numbers themselves are rounded (PS 123456789 came back 123456792). A threshold such as 2^22,
+from which the step is 0.5 or more, catches the large values only: below it a fraction finer than half
+the step still rounds away (`30.0000001`), and a file can write as many digits as it likes. 64 bits
+only moves the problem (`30.00000000000000001` is 30.0 there).
+So every copy polars-bio reads declares these keys `Type=String` where the file says `Float` and its
+version lets polars-bio read the line (`retyped_whole`; `REWRITE_VERSION` 15), and the text is judged
+by its digits (`_whole_value`): whole when the fraction digits, past the exponent's shift, are all
+zeros (`30.000`, `1e2`, `120e-1`), its number then the 64-bit parse, exact below 2^53. Rejected: a
+magnitude threshold on the 32-bit value (2^22, 2^24), which keeps `30.0000001` as 30, a value the file
+did not write; and leaving every Float-declared integer key out, which drops the whole numbers most such
+files write. A BCF stores a `Float` as a 32-bit float, so its value is the file's own; whole where it
+has no fraction, and left out from 2^24 as before. A key its version refuses as `Float` (PS under 4.3)
+is not carried (above).
 
 ## Decision 10: multi-sample files
 
@@ -1510,7 +1540,7 @@ panel's shape). The field defaults to null, so nothing changes without coverage.
 
 An array facet (`callset_type = array`) gets its own lines, on the result's `array` field
 (`just_vcf.karyotype.ArrayLines`, null for every other facet), read from `gt_alleles` as the export
-wrote them, so no REF and no `gt` are needed: rows, called rows, one-letter rows, two-letter base
+wrote them, so no REF and no `gt` are needed: rows, called rows, written no-calls, one-letter rows, two-letter base
 calls and their hets, per autosomes, non-PAR X and the X-degenerate Y. X copies come from the het
 share of two-letter base calls on non-PAR X over the autosomes' het share (`x_het_ratio`): one X at
 most 0.1875, two or more from 0.5625, the central half of the gap between 0 (one X, genotyping errors
@@ -1522,7 +1552,10 @@ with one letter on most called rows is the vendor's decision (23andMe), counted,
 makes the line its own sex call, and the file cannot tell that mask from a chip that saw no Y.
 Without it `y_reason` is `vendor_asserted` and the karyotype unknown. An export with no no-call row
 on the autosomes drops its no-calls, so its rows are not its probes and its Y share says nothing:
-`y_call_ratio` is null and `y_reason` `no_calls_not_written`. Arrays never count copies, so
+`y_call_ratio` is null and `y_reason` `no_calls_not_written`. A no-call row is one written so (`--`,
+a letter null, `autosome_no_calls`); a row whose genotype could not be read (`gt_alleles` null, a
+code no loader reads) is not called but says nothing of the export's no-calls (2026-10-25: one such
+row read a no-call-dropping export's Y). Arrays never count copies, so
 they name at most `XO`, `XY`, `XX` and `XXY`. Computed, not stored: no schema change.
 
 The build is the facet's `assembly_label` as the frames carry it, whatever in the library filled it:

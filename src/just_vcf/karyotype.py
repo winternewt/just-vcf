@@ -454,6 +454,9 @@ class ArrayLines(BaseModel):
 
     autosome_rows: int
     autosome_called: int
+    autosome_no_calls: int
+    """Rows written as no-calls (`--`, a letter null): what says the export writes its no-calls. A row
+    whose genotype could not be read at all (`gt_alleles` null) is neither called nor one."""
     autosome_base_pairs: int
     """Called two-letter rows whose letters are both bases (A, C, G, T)."""
     autosome_hets: int
@@ -704,6 +707,7 @@ def measure(calls: pl.LazyFrame, assembly_label: str | None) -> dict:
     # lists alleles and none is null; a two-letter base call is het when its letters differ.
     letters = pl.col("gt_alleles")
     called = (n_haplotypes > 0) & letters.list.eval(pl.element().is_not_null()).list.all().fill_null(False)
+    no_call = ((n_haplotypes > 0) & letters.list.eval(pl.element().is_null()).list.any()).fill_null(False)
     base_pair = called & (n_haplotypes == 2) & letters.list.eval(pl.element().is_in(_BASES)).list.all().fill_null(False)
     letter_het = base_pair & (letters.list.get(0, null_on_oob=True) != letters.list.get(1, null_on_oob=True))
 
@@ -731,6 +735,7 @@ def measure(calls: pl.LazyFrame, assembly_label: str | None) -> dict:
             (balance_row & xdeg).sum().alias("xdeg_balance_sites"),
             (ad_alt / (ad_ref + ad_alt)).filter(balance_row & xdeg).median().alias("xdeg_balance"),
             called.sum().alias("called"),
+            no_call.sum().alias("no_calls"),
             (called & (n_haplotypes == 1)).sum().alias("called_one"),
             base_pair.sum().alias("base_pairs"),
             letter_het.sum().alias("letter_hets"),
@@ -1028,6 +1033,7 @@ def _array_lines(groups: dict) -> ArrayLines:
     auto, x, y = groups.get("autosomes", {}), groups.get("x_nonpar", {}), groups.get("y_nonpar", {})
     count = {
         "autosome_rows": int(auto.get("rows", 0)), "autosome_called": int(auto.get("called", 0)),
+        "autosome_no_calls": int(auto.get("no_calls", 0)),
         "autosome_base_pairs": int(auto.get("base_pairs", 0)), "autosome_hets": int(auto.get("letter_hets", 0)),
         "x_rows": int(x.get("rows", 0)), "x_called": int(x.get("called", 0)), "x_called_one_letter": int(x.get("called_one", 0)),
         "x_base_pairs": int(x.get("base_pairs", 0)), "x_hets": int(x.get("letter_hets", 0)),
@@ -1038,8 +1044,9 @@ def _array_lines(groups: dict) -> ArrayLines:
     written_two = count["x_base_pairs"] >= MIN_X_SITES and count["x_base_pairs"] > count["x_called_one_letter"]
     x_ratio = count["x_hets"] / count["x_base_pairs"] / auto_share if written_two and auto_share else None
     # Rows count the probes only where the export writes its no-calls; one that drops them has nothing
-    # but called Y rows, and a woman's cross-hybridising calls would read as a Y.
-    writes_no_calls = count["autosome_called"] < count["autosome_rows"]
+    # but called Y rows, and a woman's cross-hybridising calls would read as a Y. A written no-call says
+    # so; a row that is merely not called (its genotype unreadable, `gt_alleles` null) does not.
+    writes_no_calls = count["autosome_no_calls"] > 0
     y_ratio = count["y_called"] / count["y_rows"] / auto_called if count["y_rows"] >= MIN_Y_SITES and auto_called and writes_no_calls else None
     return ArrayLines(**count, x_het_ratio=x_ratio, y_call_ratio=y_ratio)
 
@@ -1064,7 +1071,7 @@ def _array_y(lines: ArrayLines, array_y: bool) -> tuple[Copies | None, str | Non
     """Y from the called share of X-degenerate Y probes, read only when `array_y` is set."""
     said = f"call ratio {_fmt(lines.y_call_ratio)} ({lines.y_called:,} of {lines.y_rows:,} X-degenerate Y rows called)"
     if lines.y_call_ratio is None:
-        if lines.y_rows >= MIN_Y_SITES and lines.autosome_rows >= MIN_REFERENCE_SITES and lines.autosome_called == lines.autosome_rows:
+        if lines.y_rows >= MIN_Y_SITES and lines.autosome_rows >= MIN_REFERENCE_SITES and lines.autosome_no_calls == 0:
             return None, "no_calls_not_written", said + "; the export writes no no-call, so its rows are not its probes"
         return None, "too_few_sites", said
     if not array_y:

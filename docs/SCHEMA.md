@@ -1208,7 +1208,9 @@ GT is never left out (2026-10-25): a facet without genotypes is not a calls face
 genotype text whatever its line says. Declared `Integer`, `Float` or `Character`, it is read as written
 through a copy whose header declares it `Type=String`, in every version, with a warning naming the Type.
 Under 4.2 polars-bio read it so already; under 4.3, 4.4 and 4.5 it refused the header, and the retry
-that left GT out had no row with a genotype.
+that left GT out had no row with a genotype. A BCF is read as stored, with no copy, and polars-bio
+refuses a BCF header whose GT is not String in every version, so such a BCF is refused with
+`HeaderRefused` naming GT and its Type.
 
 One more case is found only by reading (2026-10-25): a carried key declared as its version reserves it,
 with a value that does not parse under that declaration (HQ `Integer` with `30.5,40` or `x,40` under

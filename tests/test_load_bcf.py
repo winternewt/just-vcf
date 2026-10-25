@@ -1,5 +1,7 @@
 """BCF loads into the same frames as the text VCF it was written from (pysam writes the fixtures)."""
 
+import gzip
+import struct
 import zipfile
 from pathlib import Path
 
@@ -7,6 +9,8 @@ import polars as pl
 import pytest
 
 from just_vcf import load, sniff, vcf_samples
+from just_vcf.bgzf import BgzfWriter
+from just_vcf.loaders.vcf import HeaderRefused
 from test_load_vcf import FORMAT_LINES, INFO_LINES, assert_gt_consistent, vcf_text, write
 
 pysam = pytest.importorskip("pysam", reason="pysam (the [reference] extra) writes the BCF fixtures")
@@ -109,3 +113,29 @@ def test_a_bcf_header_states_its_build_as_a_text_header_does(tmp_path: Path) -> 
     assert sniff(bcf).build is None, "the binary head carries no build hint"
     facets = [load(path).facets.collect().row(0, named=True) for path in (text, bcf)]
     assert [(f["assembly_label"], f["assembly_label_basis"]) for f in facets] == [("GRCh37", "stated")] * 2
+
+
+def _retype_bcf_gt(bcf: Path, kind: str) -> None:
+    """Rewrite a BCF's header text to declare GT `Type=kind`: htslib will not write such a BCF (it
+    cannot parse a GT `0/1` under Integer), but a BCF's records encode GT the same way whatever the line."""
+    payload = gzip.decompress(bcf.read_bytes())
+    (length,) = struct.unpack("<I", payload[5:9])
+    text = payload[9 : 9 + length].replace(b"ID=GT,Number=1,Type=String", f"ID=GT,Number=1,Type={kind}".encode())
+    with bcf.open("wb") as raw, BgzfWriter(raw) as out:
+        out.write(payload[:5] + struct.pack("<I", len(text)) + text + payload[9 + length :])
+
+
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.3"])
+def test_a_bcf_declaring_gt_another_type_is_refused_naming_it(tmp_path: Path, version: str) -> None:
+    """A text VCF whose GT is declared `Integer` is read through a copy declaring it String, and its
+    warning says so. A BCF is read as stored, with no copy, and polars-bio refuses its header (under
+    4.3 with "invalid record", naming nothing), so the load refuses it naming GT and its Type."""
+    record = ["1\t100\t.\tA\tG\t50\t.\t.\tGT\t0/1"]
+    bcf = to_bcf(write(tmp_path, vcf_text(record, version=version), "gt.vcf"), tmp_path / "gt.bcf")
+    _retype_bcf_gt(bcf, "Integer")
+    with pytest.raises(HeaderRefused, match=r"BCF declaring FORMAT/GT Type=Integer"):
+        load(bcf)
+    meta = ('##FORMAT=<ID=GT,Number=1,Type=Integer,Description="x">',)
+    text = load(write(tmp_path, vcf_text(record, fmt=(), extra_meta=meta, version=version), "gt_integer.vcf"))
+    assert text.calls.collect()["gt"].to_list() == [[0, 1]]
+    assert [w for w in text.warnings if w.startswith("FORMAT/GT declared Type=Integer")], text.warnings

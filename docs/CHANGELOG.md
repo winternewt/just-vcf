@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A BCF whose header declares GT with a Type other than String is refused with `HeaderRefused` naming
+  GT and its Type, where polars-bio's own refusal named nothing under 4.3 ("invalid record"). The text
+  VCF's warning that such a GT is read through a copy declaring it String no longer applies to a BCF,
+  which has no copy.
+
 - `sex_chromosome_evidence` on an array facet tells a written no-call from an unreadable row (RM269):
   the check that the export writes its no-calls counted every autosomal row not called, so one row
   whose genotype no loader could read (`gt_alleles` null) let an export that drops its no-calls read

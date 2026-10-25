@@ -120,6 +120,22 @@ def test_positions_without_a_genotype_load_with_the_genotype_unknown(tmp_path: P
     assert any(f"{len(positions)} position(s) whose sample has no genotype" in w for w in loaded.warnings)
 
 
+def test_an_unreadable_genotype_is_kept_with_a_null_in_each_slot_that_is_no_index(tmp_path: Path) -> None:
+    """A genotype that is not allele indices keeps its text in `source_gt`, and `gt` is a list with one
+    slot per haplotype the text separates, never a null list: a slot that is not an index is null, and
+    one that is (the `0` of `0/x`) is read. The warning says what the row holds."""
+    genotypes = ["N/A", "0/x", "x", "-"]
+    positions = [_position("chr1", 100 + i, "A", ["G"], [{"totalDepth": 10, "genotype": gt}]) for i, gt in enumerate(genotypes)]
+    loaded = load(_write(tmp_path / "s1.json", positions))
+    calls = loaded.calls.collect().sort("pos")
+    expected = [[int(part) if part.isdigit() else None for part in gt.split("/")] for gt in genotypes]
+    assert calls["source_gt"].to_list() == genotypes
+    assert calls["gt"].to_list() == expected
+    assert calls["gt_alleles"].to_list() == [[None if i is None else ["A", "G"][i] for i in gt] for gt in expected]
+    unreadable = "not readable as allele indices kept with a null in gt and gt_alleles for each slot that is not an index"
+    assert f"{len(genotypes)} genotype(s) {unreadable}, and the text in source_gt" in loaded.warnings, loaded.warnings
+
+
 def test_real_nirvana_json(pgp_participants: Path) -> None:
     found: Sniffed | None = None
     for path in sorted(pgp_participants.glob("*/upload-*/*")):

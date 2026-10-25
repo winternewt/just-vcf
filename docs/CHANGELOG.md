@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The key=value table's and Nirvana JSON's warning for a genotype that is not allele indices says what
+  the row holds: a null in `gt` and `gt_alleles` for each slot that is not an index, and the text in
+  `source_gt`. It said "gt and gt_alleles null", but `gt` is a list of one slot per haplotype the text
+  separates (`N/A` reads `[null, null]`), and a slot that is an index is read (`0/x` reads `[0, null]`).
+  Wording only.
+
 - A VCF read through a copy that declares its `Float` integer keys `Type=String` (`retyped_whole`)
   says so: one load warning names each key so read and its declared Type (`FORMAT/DP (Type=Float)`),
   as the GT retype's warning does. A key not carried is named by its own warning instead, and a BCF,

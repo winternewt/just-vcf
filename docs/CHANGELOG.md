@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF whose records carry no GT (a FORMAT of `DP` alone, whether GT is declared or not) loads with
+  `gt` and `gt_alleles` null, the genotype unknown, where a run of such records failed the spill with
+  polars' `InvalidOperationError` (`list.gather` over a batch of all-null indices makes a list of a
+  Null inner type, which the parquet sink cannot write). A file that declares no GT and whose records
+  read ahead use none says so in a warning (`no GT: …`).
+
 - A VCF 4.2 file declaring FT, PSL or INFO SVTYPE with a Type other than String (`Integer`, `Float`,
   `Character`) loads, where the first value (`PASS`, `DEL`) failed the whole read: the key is not
   carried, with a warning that names it and its Type, and it is in `dropped_fields`, as a 4.3+ header

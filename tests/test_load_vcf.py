@@ -1157,6 +1157,19 @@ def test_a_text_key_declared_as_a_number_is_not_carried(
     assert sum(f"{namespace}/{key} (Type={kind}" in w and "not carried" in w for w in loaded.warnings) == 1, loaded.warnings
 
 
+@pytest.mark.parametrize("fmt", [("DP",), ("GT", "DP")])
+def test_records_without_gt_load_with_the_genotype_unknown(tmp_path: Path, fmt: tuple[str, ...]) -> None:
+    """A sample column that carries no GT (none declared, or declared and unused) leaves every record's
+    genotype unknown: the rows load with `gt` and `gt_alleles` null, never a guessed call. A run of such
+    records once failed the spill (polars' `list.gather` over all-null indices). Without a GT declared,
+    a warning says no genotype is read."""
+    records = ["1\t100\t.\tA\tG\t50\t.\t.\tDP\t12", "1\t200\t.\tC\tT\t50\t.\t.\tDP\t13"]
+    calls, _, warnings = frames(write(tmp_path, vcf_text(records, fmt=fmt)))
+    assert calls["pos"].to_list() == [100, 200] and calls["dp"].to_list() == [12, 13]
+    assert calls["gt"].to_list() == [None, None] and calls["gt_alleles"].to_list() == [None, None]
+    assert any(w.startswith("no GT:") for w in warnings) == ("GT" not in fmt), warnings
+
+
 def test_an_undeclared_hq_the_rows_use_is_read(tmp_path: Path) -> None:
     path = write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:HQ\t0|1:51,40"]))
     loaded = load(path)

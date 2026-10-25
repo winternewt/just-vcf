@@ -1421,7 +1421,12 @@ def to_rows(
         unknown = pl.col("phased").list.eval(pl.when(pl.element()).then(pl.lit(None, dtype=pl.Boolean)).otherwise(pl.element()))
         rows = rows.with_columns(pl.when(pl.sum_horizontal(ps_unread) > 0).then(unknown).otherwise(pl.col("phased")).alias("phased"))
     allele_list = pl.concat_list(pl.col("source_ref"), pl.col("alts"))
-    rows = rows.with_columns(allele_list.list.gather(pl.col("gt"), null_on_oob=True).alias("gt_alleles"))
+    # Guarded, not only for meaning: polars 1.44's `list.gather` over a batch whose every index list is
+    # null makes a list of a Null inner type, which the spill's parquet sink cannot write (a record
+    # without GT, many in a row, failed the load with InvalidOperationError).
+    rows = rows.with_columns(
+        pl.when(pl.col("gt").is_not_null()).then(allele_list.list.gather(pl.col("gt"), null_on_oob=True)).alias("gt_alleles")
+    )
     # A record is a block only when it asserts reference or nothing: a GT calling `<*>` stays a call.
     reference_or_nothing = pl.col("gt").is_null() | pl.col("gt").list.eval(pl.element().is_null() | (pl.element() == 0)).list.all()
     rows = rows.with_columns((pl.col("_block") & reference_or_nothing).alias("_block"))

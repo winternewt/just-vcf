@@ -350,7 +350,9 @@ one of `easy` and `difficult`, makes `easy` calibrated in every bin (1.00, 1.00,
 pair's top cell sets at 0.39% (the `var` pair's, where the partition calibrates, at 0.30%). The cells
 also say the additive fit does not hold for CGI's lowest band: CGI rows at 10 to 20 phred disagree
 with freeBayes on 0.6 to 1.4% where freeBayes is at 30 to 60 phred and on 11 to 12% where freeBayes
-is at its 60–100 cap, so no one rate fits the band; it is a second, smaller cause, and not chased here.
+is at its 60–100 cap, so no one rate fits the band. That was named a second, smaller cause; measured
+since (below, "What CGI's lowest band holds"), it is no cause of miscalibration: the cell selects a
+pair of genotypes, and the band's fitted rate is its average error.
 
 **For the person: which regions weigh an allele.** The library rule (`consensus(regions=)`: the
 highest rate among the classes of the `RegionSet` holding the allele) is unchanged; the choice is
@@ -368,3 +370,85 @@ which `RegionSet` a caller passes, and what the docs and checks recommend.
    without the overlap; not built, and each class then holds fewer alleles per band
    (`MIN_BAND_ALLELES`).
 4. **`all` only.** Calibrated overall by cancellation; wrong in both directions by region.
+
+## What CGI's lowest band holds (2026-10-25)
+
+The cells of the two public `var` pairs (hu1B2689, CGA 2.5.0.44, and huAF3C63, CGA 2.5.0.33, each
+against PGP's freeBayes 0.9.15; SNV alleles both called, `carried_pass`, region `all`, as in
+docs/METHOD_ATLAS.md) put CGI's 10–20 phred rows at a disagreement no sum of two band rates gives:
+
+| freeBayes band | 0–10 | 10–20 | 20–30 | 30–40 | 40–60 | 60–100 |
+|---|---|---|---|---|---|---|
+| hu1B2689: alleles | 284 | 410 | 638 | 1,710 | 4,738 | 4,967 |
+| hu1B2689: discordance | 2.11% | 0.24% | 0.47% | 0.94% | 0.63% | 12.95% |
+| huAF3C63: alleles | 469 | 1,403 | 3,544 | 6,782 | 5,634 | 1,736 |
+| huAF3C63: discordance | 1.07% | 0.14% | 0.11% | 0.29% | 1.22% | 52.02% |
+
+CGI's rows at 100 phred or more disagree with freeBayes's 30–60 rows about as often (0.90% and
+0.61% on hu1B2689) as its 10–20 rows do, and with freeBayes's 60–100 rows on 0.13%. Measured allele
+by allele with `scripts/band_cells.py` (each allele's two bands, the copies each side called, CGI's
+VQLOW, GIAB `easy`/`difficult`, freeBayes's depth, the person's 23andMe export as a third reading),
+counts only:
+
+**Each side's band says which genotype it called.**
+
+- **CGI's 10–20 SNV band is its weak hom-ALT calls, all VQLOW.** 12,870 of its 12,888 rows on
+  hu1B2689 call two copies (19,695 of 19,711 on huAF3C63), and all 12,888 (19,711) carry VQLOW. VQLOW
+  sorts by genotype in both files: every VQLOW hom-ALT row is at 10–20 phred, every graded VQLOW het
+  at 20–40 (8,690 and 9,361 at 20–30 and 30–40; 12,959 and 13,374), and the rows below 40 phred
+  without it are hom-ALT calls at 20–40. None of CGI's 10–20 rows is a het.
+- **freeBayes's 60–100 band is mostly its het calls, its 30–60 bands its hom-ALT calls.** 78% of
+  hu1B2689's 2.52M rows at 60–100 are het (97% of huAF3C63's 1.88M), and 99.1% of its 0.65M rows at
+  30–60 are hom-ALT (96.9% of 0.92M). PGP's merge floors every GL entry at -10 (above, "Where the
+  overconfidence at 60 phred came from"): a het's two homozygote entries both sit on the floor, so a
+  het reaches the cap at any depth, while a hom-ALT's het entry at depth 10 to 20 does not, so it sits
+  at 30–60.
+
+So the cell "CGI 10–20 × freeBayes 60–100" is mostly the cell "CGI hom-ALT × freeBayes het", which is
+a disagreement by its genotypes: 638 of its 643 mismatches on hu1B2689 (896 of 903 on huAF3C63) are
+exactly that, and where CGI's weak hom-ALT meets freeBayes at 30–60 the two agree, freeBayes calling
+hom-ALT too (6,406 of 6,448; 12,331 of 12,416), and disagree on 46 (89). huAF3C63's 52% is the same
+cell with fewer of freeBayes's hom-ALT calls reaching the cap (62,750 against hu1B2689's 562,780).
+
+**It is not a few loci or one region.** The 643 mismatches lie in 461 windows of 1 Mb on 22
+chromosomes, half of them within 140, no window holding more than 9 (huAF3C63: 903 in 564 windows,
+half within 135, at most 16). The cell is 7.65% discordant in `easy` and 17.7% in `difficult` (46.7
+and 56.9% on huAF3C63). Its mismatches lean to freeBayes's shallow rows: 398 of the 1,156 alleles at
+depth 20 or less, 245 of the 3,811 deeper (800 of 1,086 and 103 of 650).
+
+**Where the array speaks, freeBayes is right.** hu1B2689's 23andMe export calls a genotype at 18 of
+the cell's 638 CGI hom-ALT / freeBayes het mismatches (and no-calls 2): 17 het, 1 hom-ALT; and at all 310 of the cell's
+alleles the two call hom-ALT, hom-ALT. The array probes common SNPs, and most of the cell's mismatches
+are shallow or in difficult regions where it has no row, so this says nothing of the rest.
+huAF3C63's 2012 export has no row at any of its 896: who is right there is not checked.
+
+**The band's rate is its average error.** The additive fit gives CGI's 10–20 band 4.70% on
+hu1B2689, against a 5.51% share of its alleles in disagreement, which includes freeBayes's own share;
+the cell's residual (+406 mismatches) is offset across the rest of its row (-407). A CGI 10–20 row
+speaking alone is weighted by about its measured error, and where freeBayes speaks too, a het at the
+cap (0.081%) outweighs CGI's VQLOW hom-ALT (4.70%), which is what the array says where it can. The
+cell shows only in a prediction made from the partner's band, and it is not what left the 10 to 30
+phred `difficult` bins underconfident (above: those are mostly CGI rows at 100 phred or more speaking
+alone). huAF3C63's fitted 1.80% against its 5.14% share is the even split of its top cell
+(docs/METHOD_ATLAS.md, "The second person's fit is broken by the even split"), not this cell.
+
+The cap is not the cause either: on the vcfBeta pair whose freeBayes 0.9.20 is not capped
+(huF06AD0), CGI's 10–20 row disagrees on 32.3% of 997 alleles where freeBayes is at 100 phred or more
+and on 4.81% at 60–100 (CGI's 0–10 row on 95.8% there). What its bands hold by genotype was not
+measured.
+
+**What changed in the library.** Nothing: no default moved, `CONSENSUS_VERSION` stays.
+
+**For the person.**
+
+1. **Leave the band rule as is (recommended).** The band's fitted rate is its average error, and
+   where both facets speak the genotype the array supports wins.
+2. **Read CGI's VQLOW in `carried_pass` (desk #102), now with its size.** It removes the whole 10–20
+   SNV band (12,888 and 19,711 rows) and the VQLOW hets at 20–40 (18,051 and 26,333): about 31k and
+   46k SNVs both called, every one of CGI's rows below 20 phred, and it moves every CGI rate.
+
+Rejected, so not built: **bands split by the genotype each side called**, since two diploid SNV
+genotypes match where their copies are equal and mismatch where not, so every such cell is 0% or 100%
+and there is nothing left to fit; and **a rate for one facet's band that depends on the other
+facet's band**, since the posterior multiplies each facet's likelihood on its own, and such a rate has
+no place in it.

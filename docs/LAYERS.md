@@ -83,10 +83,15 @@ meanwhile. The desk carries the ones filed there.
   so a rebuilt var pair and the vcfBeta pair of one person collide and would count that person twice if pooled.
   Extends desk #99. Meanwhile the var atlas stays a separate file (`data/output/method_atlas_cgi_var.parquet`).
 - **Layer 5/7, CGI's sample-level VQLOW (desk #102):** `carried_pass` reads FILTER only; CGI puts its
-  low-quality mark in `sample_filters`, so CGI's 10-20 band holds VQLOW rows. Reading it moves every CGI rate.
+  low-quality mark in `sample_filters`. Measured 2026-10-25 on both public `var` pairs: every CGI SNV row at
+  10-20 phred is a VQLOW hom-ALT call (12,888 and 19,711 rows), and the VQLOW hets sit at 20-40 (18,051 and
+  26,333), so reading it removes CGI's whole 10-20 band and about 31k and 46k SNVs, and moves every CGI rate.
   Meanwhile FILTER only, as documented.
-- **Layer 7, a smaller cause left unmeasured:** the additive band fit does not hold for CGI's lowest band against
-  freeBayes's capped top band (11-12% disagreement there against about 1% elsewhere).
+- **Layer 7, CGI's lowest band against freeBayes's top band (measured, no decision):** the 11-13% (52% on
+  huAF3C63) disagreement there is genotype selection: CGI's 10-20 band is its VQLOW hom-ALT calls, freeBayes's
+  60-100 band mostly its het calls (78% and 97%), so the cell is mostly "CGI hom-ALT, freeBayes het" (638 of 643
+  mismatches). The fitted band rate is the band's average error (4.70% against a 5.51% mismatch share), so the
+  rule stays; the bands-by-genotype and partner-conditional alternatives are rejected in docs/CONSENSUS.md.
 - **Layer 7/8, the lead's calls on a VCF's HQ (built, listed for veto):** CGI's vcfBeta is read by its HQ, the key VCF
   reserves, not its EHQ (equal on all 4.2M scored rows of the public hu1B2689 file, so nothing moves today); a score on
   an uncalled allele is dropped, as the native CGI loader drops `?` slots; HQ grades only where GP, GL and GQ do not;

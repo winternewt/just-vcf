@@ -722,6 +722,12 @@ choice moves nothing there. Per haplotype:
   differing scores, and every called sub-row has one;
 - a slot written `?`, or only partly called (`?A`), gets none: there is no one sequence for the score
   to speak for. masterVarBeta writes a score on a half-call's `?` slot too, which is not read;
+- a score is a whole phred number, the rule a VCF's HQ follows (below): `30.0` reads as 30, a
+  number with a fraction (`30.5`) is left out, never truncated or rounded, and text that is no finite
+  number (`x`, `nan`) is left out too, each reason counted per value on a called haplotype in its own
+  warning. A `var` haplotype one of whose sub-rows is left out so has a sub-row without a score, and
+  gets none. Both PGP-HMS `var` files write only digits there (8,249,694 and 8,154,926 EAF fields,
+  the VAF fields alike, counted 2026-10-25), so nothing moves on them;
 - format 1.x's one `totalScore` is neither score, so those files leave `hq` null.
 
 CGI's own VCF of an assembly writes `GQ` as the lowest of these per locus: on chromosome 22 of a

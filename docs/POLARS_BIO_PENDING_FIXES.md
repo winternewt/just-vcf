@@ -71,6 +71,7 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P19 `depth()` block mode builds every contig's batches before emitting (2026-10-24) | `merge_dense_results` fills one queue for the whole file | datafusion-bio-functions |
 | P20 an indexed BAM `depth()` reads the file twice (2026-10-24) | seen on real 30x BAMs, not reproduced on a 12 MB synthetic one | unconfirmed |
 | P21 a scalar INFO/FORMAT value that fails to parse is refused without its key (2026-10-25) | noodles parses scalars inside its iterator and drops the key with the error; dbf wraps it bare, while its list paths name the key | datafusion-bio-formats |
+| P22 an undeclared key's bad value fails the scan though the key is dropped; an unparsable GT fails it too (2026-10-26) | the first: noodles reads an undeclared reserved key by its reserved type, and dbf parses every key before it drops the undeclared ones; the second is dbf's stated choice | datafusion-bio-formats (the first, with P21); the second by design |
 
 ## Verdicts by kind (2026-09-30)
 
@@ -93,6 +94,7 @@ another path is named.
 | P16 | `import polars_bio` adds a stderr handler to the root logger and sets its level to WARNING; Python's logging HOWTO says a library adds only a `NullHandler` | polars-bio | the CLI turns logging off while a command runs (`cli.py:149-152`); a library user still gets the handler |
 | P17 | `depth()` returns a depth over 32,767 wrapped negative; mosdepth and samtools count in 32 bits | datafusion-bio-functions | a negative depth is left out of its window and counted in a warning (`coverage.py`) |
 | P18 | 1-based `depth()` in block mode emits nothing for a run of coverage that reaches a contig's last base; 0-based and per-base mode count it | datafusion-bio-functions | per-base mode, folded into windows here (`coverage.py`) |
+| P22 | a key the scan drops for being undeclared (P1) still fails the whole scan when its value does not parse as the type the spec reserves for its name | datafusion-bio-formats | the copy declares such a key `Number=.`, read as text and not carried (`7c37f1a`) |
 
 ### Feature requests: works as designed, we want more
 
@@ -538,6 +540,39 @@ reading each selected key with `info.get(header, key)` / `sample.get(header, key
 on a good record, and name it as the list paths do. A noodles change (the key in the iterator's error)
 would be the deeper fix, and could be mentioned. Goes well in one batch with P15, also
 datafusion-bio-formats.
+
+## P22 — An undeclared key's bad value fails the scan; so does one unparsable GT
+
+Found by the lead seat fixing genotype reading, the noodles half traced by the seat-builder. Two
+behaviours, reproduced on 0.36.0 with synthetic two-record VCFs (VCF 4.3, one good record first):
+
+- **An undeclared key that the scan drops can still fail it.** FORMAT `GQ` used but not declared, with
+  the value `30.5`, fails the load (`Error reading FORMAT field: invalid digit found in string`, no key
+  named, as in P21), although an undeclared key is never a column (P1). An undeclared INFO `END=10.5`
+  fails it the same way once any INFO key is declared; with none declared the INFO pass is skipped and
+  the file loads. An undeclared key the spec does not reserve (`FOO=30.5`) loads, read as a String and
+  dropped. The cause: noodles takes an undeclared key's Number and Type from the definition the file's
+  VCF version reserves for that name (`.or_else(|| definition(header.file_format(), key))`,
+  `noodles-vcf/src/record/samples/series/value.rs:36`, `record/info/field.rs:23`, fork `42a3c01`), which
+  is reasonable; datafusion-bio-formats iterates every key of a sample or an INFO column, parsing each,
+  and only then skips the ones it has no column for (`bio-format-vcf/src/physical_exec.rs:736`, `:1846`
+  and `:2474` against the `field_to_index` lookup after them). It iterates once on purpose, to avoid a
+  `get` per key (the comment at `:666-667`), so the unselected keys are parsed too.
+- **One unparsable GT fails the whole scan.** `GT=0/x` gives `Error reading FORMAT field 'GT': invalid
+  digit found in string`. noodles parses GT lazily; datafusion-bio-formats refuses the scan on the first
+  allele that does not decode, and says why in its own comments: mapping undecodable data to null "would
+  present corrupt data as merely absent" (`:667-685`). By design, not a defect. just-vcf's text loaders
+  withhold such a genotype instead (`loaders/text.py:123`); the VCF loader cannot, since the refusal comes
+  before any row and GT is never left out (`can_leave_out`, `loaders/vcf.py:609`).
+
+Mitigation: the structural copy declares a key the version refuses `Number=.`, so it is read as text and
+not carried (`7c37f1a`). The GT case still refuses the file. Not filed.
+
+*Upstream (2026-10-26).* Neither is reported (the searches of P21). **File the first at
+datafusion-bio-formats, with P21**: one change covers both. On an error from the key iterator, find the
+failing key with `get` (cost only on a bad record); if it has no column, skip it and go on; if it has,
+fail naming it. The GT case is their stated choice; at most a wish for an opt-in lenient read that nulls
+an undecodable value and counts it. Not worth filing on its own.
 
 ## Harvested and closed without an entry (2026-09-30)
 

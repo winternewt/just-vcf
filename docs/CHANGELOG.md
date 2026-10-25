@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The tooling seat signs what it posts on this repository's issues with `Seat: just-vcf/tooling`, so its
+  issues watcher no longer wakes it for its own comments and closes (kit v0.1.94, #165). The pin is at
+  v0.1.94.
+
 - The key=value table's and Nirvana JSON's warning for a genotype that is not allele indices says what
   the row holds: a null in `gt` and `gt_alleles` for each slot that is not an index, and the text in
   `source_gt`. It said "gt and gt_alleles null", but `gt` is a list of one slot per haplotype the text

@@ -417,6 +417,8 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
                 (pl.col("score").is_not_null() & ~pl.col("score").is_between(0, cgi.HQ_MAX)).sum().alias("hq_out"),
                 # Only where the EAF score goes into `hq`: a `?`, partly called or out-of-range haplotype's is not read.
                 (pl.col("vaf_differs") & pl.col("score").is_between(0, cgi.HQ_MAX)).fill_null(False).sum().alias("vaf_differs"),
+                pl.col("score_not_whole").sum().alias("not_whole"),
+                pl.col("score_not_number").sum().alias("not_number"),
             ),
         ]
     )
@@ -430,6 +432,10 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
     scores = counts[6].row(0, named=True)
     if scores["hq_out"]:
         warnings.append(f"{scores['hq_out']} haplotype score(s) outside 0..{cgi.HQ_MAX} left out of `hq`")
+    if scores["not_whole"]:
+        warnings.append(f"{scores['not_whole']} haplotype score value(s) not a whole number left out of `hq`")
+    if scores["not_number"]:
+        warnings.append(f"{scores['not_number']} haplotype score value(s) not a number left out of `hq`")
     if scores["vaf_differs"]:
         warnings.append(f"{scores['vaf_differs']} haplotype(s) whose varScoreVAF differs from the varScoreEAF read into `hq`")
     by_type = dict(counts[2].iter_rows())

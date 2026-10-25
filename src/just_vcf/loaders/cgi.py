@@ -54,7 +54,10 @@ What a `calls` row of a CGI locus holds (SCHEMA.md Decision 2):
   the minimum score across all calls", cgatools 1.8.0 command-line reference). A slot gets no score
   where it is `?` or only partly called (`?A`: a score for a sequence not known; masterVarBeta writes
   one on a half-call's `?` slot, which is not read), where a sub-row of it has none, or outside
-  0..65535 (counted); the row's `hq` is null where no slot has one, as on format 1.x's single
+  0..65535 (counted). A score is a whole phred number: one written `30.0` reads as 30, one with a
+  fraction (`30.5`) is left out, never truncated or rounded, and text that is no number (`x`) is left
+  out, each reason counted per value in its own load warning (a `var` haplotype with such a sub-row
+  then has a sub-row without a score, so it gets none); the row's `hq` is null where no slot has one, as on format 1.x's single
   `totalScore`, which is neither score. Blocks carry no score. The scores are no likelihood, so `gl`
   and `gq` stay null; `varScoreVAF` stays in `facets.dropped_fields`. CGI's own VCF of an assembly
   writes `GQ` as the lowest of these per locus (chromosome 22 of a PGP-HMS assembly: 42,894 of
@@ -263,8 +266,29 @@ def _spelled(rows: pl.LazyFrame, sequences: list[str]) -> pl.LazyFrame:
 
 
 def _number(column: pl.Expr) -> pl.Expr:
-    """A score field as a number, null where empty or not an integer."""
-    return column.cast(pl.Int64, strict=False)
+    """A score field read as a number (Float64), null where it is empty or no number."""
+    return column.cast(pl.Float64, strict=False)
+
+
+def _whole(column: pl.Expr) -> pl.Expr:
+    """A score field where it is a whole number (`30`, `30.0`), null otherwise: empty, a number with a
+    fraction (`30.5`), never truncated or rounded into a score the file did not write, or text that is
+    no finite number. Kept in Float64: a whole number past i64 (`1e30`) would not cast, and the range
+    check that leaves it out of `hq` reads floats."""
+    value = _number(column)
+    return pl.when(value.is_finite() & (value == value.floor())).then(value)
+
+
+def _not_whole(column: pl.Expr) -> pl.Expr:
+    """Whether a score field is a finite number with a fraction: left out of `hq`, counted."""
+    value = _number(column)
+    return (value.is_finite() & (value != value.floor())).fill_null(False)
+
+
+def _not_number(column: pl.Expr) -> pl.Expr:
+    """Whether a score field holds text that is no finite number (`x`, `nan`): left out, counted. An
+    empty field is no score, not a malformed one."""
+    return ((column.str.len_chars() > 0) & ~_number(column).is_finite().fill_null(False)).fill_null(False)
 
 
 def _vaf_differs(eaf: pl.Expr, vaf: pl.Expr) -> pl.Expr:
@@ -296,19 +320,25 @@ def var_haplotypes(segments: pl.LazyFrame) -> pl.LazyFrame:
         pl.col("varFilter").filter(pl.col("alleleSeq") != NO_CALL).str.split(";").list.explode(keep_nulls=False, empty_as_null=False).alias("filters"),
         pl.col("xRef").str.join(";").alias("xref"),
         _linked(pl.col("hapLink")).drop_nulls().unique().alias("_links"),
-        _number(pl.col("varScoreEAF")).min().alias("_score_min"),
-        _number(pl.col("varScoreEAF")).is_null().any().alias("_score_missing"),
+        _whole(pl.col("varScoreEAF")).min().alias("_score_min"),
+        _whole(pl.col("varScoreEAF")).is_null().any().alias("_score_missing"),
+        _not_whole(pl.col("varScoreEAF")).sum().alias("_not_whole"),
+        _not_number(pl.col("varScoreEAF")).sum().alias("_not_number"),
         _vaf_differs(pl.col("varScoreEAF"), pl.col("varScoreVAF")).any().alias("vaf_differs"),
     )
     links = pl.col("_links").list.len()
     # A haplotype's score is the lowest of its sub-rows' (cgatools' rule for masterVarBeta), and only
-    # where it is fully called and every sub-row is scored.
-    scored = ~pl.col("seq").str.contains(NO_CALL, literal=True) & ~pl.col("_score_missing")
+    # where it is fully called and every sub-row has a whole-number score.
+    called = ~pl.col("seq").str.contains(NO_CALL, literal=True)
+    scored = called & ~pl.col("_score_missing")
     return joined.with_columns(
         pl.when(links == 1).then(pl.col("_links").list.first()).alias("link"),
         (links > 1).alias("link_conflict"),
         pl.when(scored).then(pl.col("_score_min")).alias("score"),
-    ).drop("_links", "_score_min", "_score_missing").with_columns(
+        # Counted only where the score would be read: a `?` or partly called haplotype's is not.
+        pl.when(called).then(pl.col("_not_whole")).otherwise(0).cast(pl.UInt32).alias("score_not_whole"),
+        pl.when(called).then(pl.col("_not_number")).otherwise(0).cast(pl.UInt32).alias("score_not_number"),
+    ).drop("_links", "_score_min", "_score_missing", "_not_whole", "_not_number").with_columns(
         pl.col("allele").cast(pl.Int64, strict=False).alias("allele"),
         pl.lit(None, dtype=pl.UInt32).alias("dp"),
         pl.lit(None, dtype=pl.UInt32).alias("reads"),
@@ -333,6 +363,8 @@ def master_var_parts(rows: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
     loci =_spelled(rows.filter(~uniform), ["allele1Seq", "allele2Seq"])
     alleles = []
     for number in (1, 2):
+        called = ~pl.col(f"allele{number}Seq").str.contains(NO_CALL, literal=True)
+        eaf = pl.col(f"allele{number}VarScoreEAF")
         alleles.append(
             loci.filter(pl.lit(number == 1) | ~haploid).select(
                 "locus",
@@ -357,9 +389,9 @@ def master_var_parts(rows: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
                 pl.col("referenceAlleleReadCount").cast(pl.UInt32, strict=False).alias("ref_reads"),
                 pl.lit(True).alias("counted"),
                 # Not on a `?` or partly called slot: masterVarBeta scores a half-call's `?` too.
-                pl.when(~pl.col(f"allele{number}Seq").str.contains(NO_CALL, literal=True))
-                .then(_number(pl.col(f"allele{number}VarScoreEAF")))
-                .alias("score"),
+                pl.when(called).then(_whole(eaf)).alias("score"),
+                pl.when(called).then(_not_whole(eaf)).otherwise(False).cast(pl.UInt32).alias("score_not_whole"),
+                pl.when(called).then(_not_number(eaf)).otherwise(False).cast(pl.UInt32).alias("score_not_number"),
                 _vaf_differs(pl.col(f"allele{number}VarScoreEAF"), pl.col(f"allele{number}VarScoreVAF")).alias("vaf_differs"),
             )
         )

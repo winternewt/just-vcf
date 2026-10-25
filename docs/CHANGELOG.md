@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A CGI `var` or masterVarBeta score that is not a whole number is left out of `calls.hq` and
+  counted, where it was lost without a word: the score was cast to an integer leniently, so `30.0`
+  and `30.5` alike became no score, silently. Now a whole number written as a float reads as it is
+  (`30.0` is 30), a number with a fraction is left out (never truncated), text that is no number is
+  left out, each reason with its own warning and count: the rule a VCF's HQ follows (below). A `?`
+  slot's score is still not read, so not counted.
+
 - The CGI `var` and masterVarBeta warning that counts haplotypes whose varScoreVAF differs from the
   varScoreEAF read into `hq` counts only haplotypes whose EAF is read. It counted a half-call's `?`
   slot, a partly called haplotype and a score past u16 too, whose EAF never reaches `hq`.

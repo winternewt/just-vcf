@@ -9,6 +9,7 @@ male X; `PAR-called-in-X` on chrY; format 2.0's `varQuality`.
 """
 
 import bz2
+import math
 import os
 import random
 from dataclasses import dataclass
@@ -165,6 +166,18 @@ def joined(segments: tuple[Seg, ...]) -> str:
     return "".join(seg.seq for seg in segments)
 
 
+def lowest(scores: list[str]) -> str:
+    """A masterVarBeta slot's score from its `var` sub-rows' scores: the lowest, as written (99 where
+    none writes one); a score that is no number is written as it is, so a test can put one there."""
+    numbers = []
+    for score in (s for s in scores if s):
+        try:
+            numbers.append((float(score), score))
+        except ValueError:
+            return score
+    return min(numbers)[1] if numbers else "99"
+
+
 def master_var_text(loci: list[Locus]) -> str:
     lines = [">" + "\t".join(MASTER_COLUMNS)]
     for number, locus in enumerate(loci, 1):
@@ -184,8 +197,8 @@ def master_var_text(loci: list[Locus]) -> str:
             xrefs = [";".join(s.xref for s in h if s.xref) for h in haps] + ([""] if locus.ploidy == 1 else [])
             pad = [""] if locus.ploidy == 1 else []
             # A haplotype's score is the lowest of its sub-rows'; masterVarBeta scores a `?` slot too.
-            eafs = [str(min((int(s.eaf) for s in h if s.eaf), default=99)) for h in haps] + pad
-            vafs = [str(min((int(s.vaf if s.vaf is not None else s.eaf) for s in h if s.eaf), default=99)) for h in haps] + pad
+            eafs = [lowest([s.eaf for s in h]) for h in haps] + pad
+            vafs = [lowest([s.vaf if s.vaf is not None else s.eaf for s in h if s.eaf]) for h in haps] + pad
             row = [str(number), str(locus.ploidy), locus.chrom, str(locus.begin), str(locus.end), "het-ref", "complex", reference,
                    *seqs, *vafs, *eafs, *filters, *links, *xrefs, "", "", "", "", "1", "1", "1", "1", locus.total_reads]
         lines.append("\t".join(row + [""] * (len(MASTER_COLUMNS) - len(row))))
@@ -565,6 +578,76 @@ def test_vaf_is_compared_only_where_the_eaf_is_read(tmp_path: Path, kind: str) -
     assert expected == 1 and calls["hq"].list.drop_nulls().list.len().sum() == 5, "four read scores and the one past u16 left out"
     vaf_warnings = [w for w in loaded.warnings if "varScoreVAF" in w]
     assert vaf_warnings == [f"{expected} haplotype(s) whose varScoreVAF differs from the varScoreEAF read into `hq`"]
+
+
+# Scores that are not whole numbers, each on its own haplotype: a fraction on a het's ALT; a whole
+# number written as a float; text; a hom ALT with no whole score on either slot; a fraction on a
+# half-call's `?` slot (not read); a fraction on one sub-row of a two-row haplotype; a whole number
+# past i64.
+NOT_WHOLE = [
+    Locus("chr1", 1000, 1001, haps=((Seg(1000, 1001, "snp", "G", "A", score="30.5"),), (Seg(1000, 1001, "ref", "G", "G", score="98"),))),
+    Locus("chr1", 2000, 2001, haps=((Seg(2000, 2001, "snp", "C", "T", score="30.0"),), (Seg(2000, 2001, "ref", "C", "C", score="41"),))),
+    Locus("chr1", 3000, 3001, haps=((Seg(3000, 3001, "snp", "A", "G", score="x"),), (Seg(3000, 3001, "ref", "A", "A", score="50"),))),
+    Locus("chr1", 4000, 4001, haps=((Seg(4000, 4001, "snp", "T", "C", score="nan"),), (Seg(4000, 4001, "snp", "T", "C", score="45.25"),))),
+    Locus("chr1", 5000, 5001, haps=((Seg(5000, 5001, "snp", "T", "C", score="50"),), (Seg(5000, 5001, "no-call", "T", "?", filter="", score="12.5"),))),
+    Locus(
+        "chr1", 6000, 6003,
+        haps=(
+            (Seg(6000, 6003, "sub", "TAG", "CAA", score="80"),),
+            (Seg(6000, 6002, "ref", "TA", "TA", score="60"), Seg(6002, 6003, "snp", "G", "A", score="35.5")),
+        ),
+    ),
+    Locus("chr1", 7000, 7001, haps=((Seg(7000, 7001, "snp", "A", "T", score="1e30"),), (Seg(7000, 7001, "ref", "A", "A", score="90"),))),
+]
+
+
+def _as_score(written: str) -> float | None:
+    """A score field by the rule: a whole number as it is, anything else none."""
+    try:
+        value = float(written)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and value == math.floor(value) else None
+
+
+@pytest.mark.parametrize("kind", ["var", "master_var"])
+def test_a_score_that_is_not_a_whole_number_is_left_out_and_counted(tmp_path: Path, kind: str) -> None:
+    """A CGI score is a whole phred number. One written `30.0` reads as 30; one with a fraction is left
+    out, never truncated (`30.5` is not 30); text that is no number is left out; each reason is
+    counted per value on a called haplotype in its own warning, and a `?` slot's score is not read,
+    so not counted. Expected values and counts come from the loci's own scores."""
+    text, name = (var_text(NOT_WHOLE), "var-GS000000012-ASM.tsv.bz2") if kind == "var" else (master_var_text(NOT_WHOLE), "masterVarBeta-GS000000012-ASM.tsv.bz2")
+    loaded, _, calls, _ = frames(write(tmp_path, text, name))
+    rows = by_pos(calls)
+    fraction = text_values = beyond = 0
+    for locus in NOT_WHOLE:
+        expected = []
+        for segments in locus.haps:
+            sequence = joined(segments)
+            values = [_as_score(seg.eaf) for seg in segments]
+            if "?" not in sequence:
+                fraction += sum(1 for seg, v in zip(segments, values) if v is None and math.isfinite(_float_or_nan(seg.eaf)))
+                text_values += sum(1 for seg in segments if seg.eaf and not math.isfinite(_float_or_nan(seg.eaf)))
+            low = None if "?" in sequence or None in values else min(values)
+            beyond += low is not None and low > 65535
+            expected.append((None if sequence == "?" else sequence, None if low is None or low > 65535 else int(low)))
+        row = rows[(locus.chrom.removeprefix("chr"), locus.begin + 1)]
+        hq = row["hq"] if row["hq"] is not None else [None] * len(row["gt_alleles"])
+        assert sorted(zip(row["gt_alleles"], hq), key=repr) == sorted(expected, key=repr), locus
+    assert (fraction, text_values, beyond) == (3, 2, 1), "the fixture holds each shape"
+    score_warnings = {w for w in loaded.warnings if "left out of `hq`" in w}
+    assert score_warnings == {
+        f"{fraction} haplotype score value(s) not a whole number left out of `hq`",
+        f"{text_values} haplotype score value(s) not a number left out of `hq`",
+        f"{beyond} haplotype score(s) outside 0..65535 left out of `hq`",
+    }
+
+
+def _float_or_nan(written: str) -> float:
+    try:
+        return float(written)
+    except ValueError:
+        return math.nan
 
 
 def test_without_scores_hq_is_null_and_nothing_is_graded_by_it(tmp_path: Path) -> None:

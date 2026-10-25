@@ -1519,6 +1519,22 @@ on the autosomes drops its no-calls, so its rows are not its probes and its Y sh
 `y_call_ratio` is null and `y_reason` `no_calls_not_written`. Arrays never count copies, so
 they name at most `XO`, `XY`, `XX` and `XXY`. Computed, not stored: no schema change.
 
+The build is the facet's `assembly_label` as the frames carry it, whatever in the library filled it:
+the source's own statement at load, the header's `##contig` lengths at load (RM4), an array's rows
+scored against the reference by `resolve_ref` (F9), or a liftover's target. The estimate never infers
+or defaults one, and a facet without one answers `no_build`. An array table that states no build
+(FTDNA, a bare rsid table, a Final Report) therefore answers `no_build` as `load` returns it and is
+estimated on `resolve_ref`'s output, which carries the build its rows gave. The result says where its
+build came from: `assembly_label_basis` (the facet's column verbatim), `assembly_label_source`
+(`stated`, `contig_lengths`, `rows`, `liftover`; `just_vcf.karyotype.ASSEMBLY_LABEL_SOURCES`), read
+off the facet's columns by Decision 5's rule (`relation = liftover_to`, then a length in
+`header_contigs`, then `ref_seqcol_digest` on a facet that is no VCF), and null for a label no rule
+accounts for (one a caller wrote into the frame, which is still used), and `ref_seqcol_digest`, the
+collection REF was read from. These three are carried and decide nothing. Rejected: a `reference`
+argument that runs F9's inference inside the estimate (a REF read hidden in a karyotype call, and a
+second path to a build `resolve_ref` already records), and widening `assembly_label_basis` to name the
+three inferred sources (a dtype change and a schema bump for what the columns already tell apart).
+
 ## CisPhasedBlock export: computed on demand, not stored (RM284)
 
 The person chose columns with an export on demand: phase sets stay the three `calls` columns of

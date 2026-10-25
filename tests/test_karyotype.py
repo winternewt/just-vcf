@@ -1,5 +1,6 @@
 """Sex-chromosome evidence and the karyotype estimate it supports (RM269)."""
 
+import random
 from pathlib import Path
 
 import polars as pl
@@ -13,13 +14,16 @@ from just_vcf import (
     CoverageFormat,
     KaryotypicSex,
     Loaded,
+    ReferenceStore,
     Resolution,
     XCopies,
     load,
+    resolve_ref,
     sex_chromosome_evidence,
 )
 from just_vcf.coverage import COVERAGE_INTERVALS
 from just_vcf.karyotype import (
+    ASSEMBLY_LABEL_SOURCES,
     COVERAGE_X_BANDS,
     COVERAGE_Y_BANDS,
     MIN_X_SITES,
@@ -34,10 +38,12 @@ from just_vcf.karyotype import (
     UNKNOWN_REASONS,
     X_DEGENERATE_Y,
     SexChromosomeEvidence,
+    assembly_label_source,
     estimate,
     measure,
 )
 from just_vcf.schema import CALLS, AssemblyLabelBasis, CallsetType, conform, empty
+from test_reference import write_fasta
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 GIAB = ASSETS / "giab_stratifications_v3.6_xy"
@@ -794,3 +800,96 @@ def test_array_rows_without_two_bases_are_not_het_evidence() -> None:
 
 def test_a_genome_carries_no_array_lines() -> None:
     assert evidence(frame(chr20(), *XY)).array is None
+
+
+# --- The build: whatever in the library filled `assembly_label`, and which source that was ----------
+
+NON_PAR_X_GRCH37 = 2_700_001  # just past GRCh37's PAR1 (ends 2,699,520)
+
+
+def drawn(rng: random.Random, chrom: str, seq: str, start: int, n: int, het_share: float) -> list[tuple[str, str, int, str]]:
+    """FTDNA rows around `seq`'s bases, every 10th base from `start`: hets at `het_share`, the rest hom-ref."""
+    out = []
+    for i in range(n):
+        pos = start + 10 * i
+        ref = seq[pos - 1]
+        alt = rng.choice([b for b in "ACGT" if b != ref])
+        out.append((f"rs{chrom}{pos}", chrom, pos, "".join(sorted(ref + alt)) if rng.random() < het_share else ref * 2))
+    return out
+
+
+def test_an_array_table_without_a_build_is_estimated_on_the_build_resolve_ref_inferred(tmp_path: Path) -> None:
+    """An FTDNA table states no build: as loaded it is `no_build`; `resolve_ref` infers GRCh37 from its rows
+    (F9), and the estimate reads that build and says it came from the rows."""
+    rng = random.Random(5)
+    lengths = {"1": 25_000, "X": NON_PAR_X_GRCH37 + 25_000}
+    grch37 = {name: "".join(rng.choices("ACGT", k=length)) for name, length in lengths.items()}
+    other = {name: "".join(rng.choices("ACGT", k=length)) for name, length in lengths.items()}
+    store = ReferenceStore.open(tmp_path / "store")
+    digest = store.add_fasta(write_fasta(tmp_path / "a.fa", grch37), assembly_label="GRCh37")
+    store.add_fasta(write_fasta(tmp_path / "b.fa", other), assembly_label="GRCh38")
+    table = drawn(rng, "1", grch37["1"], 1, 2000, 0.3) + drawn(rng, "X", grch37["X"], NON_PAR_X_GRCH37, 2000, 0.25)
+    path = tmp_path / "ftdna.csv"
+    path.write_text("RSID,CHROMOSOME,POSITION,RESULT\n" + "".join(f'"{r}","{c}","{p}","{g}"\n' for r, c, p, g in table))
+    loaded = load(path)
+
+    (as_loaded,) = sex_chromosome_evidence(loaded)
+    assert (as_loaded.assembly_label, as_loaded.assembly_label_basis, as_loaded.assembly_label_source) == (None, None, None)
+    assert as_loaded.reason == "no_build" and "resolve_ref" in as_loaded.detail
+
+    resolved = resolve_ref(loaded, store)
+    (found,) = sex_chromosome_evidence(resolved)
+    assert (found.assembly_label, found.assembly_label_basis, found.assembly_label_source) == ("GRCh37", AssemblyLabelBasis.INFERRED, "rows")
+    assert found.ref_seqcol_digest == digest
+    # The letters are read as written: the same lines as on the loaded rows placed on GRCh37 by hand.
+    by_hand = estimate(measure(loaded.calls, "GRCh37"), found.facet_id, "GRCh37", CallsetType.ARRAY)
+    assert found.array == by_hand.array
+    hets = {chrom: sum(g[0] != g[1] for _, c, _, g in table if c == chrom) for chrom in ("1", "X")}
+    assert found.array.x_het_ratio == pytest.approx((hets["X"] / 2000) / (hets["1"] / 2000))
+    assert found.x_copies is XCopies.TWO_OR_MORE  # ratio about 0.83
+    assert (found.y_reason, found.inferred_karyotypic_sex) == ("too_few_sites", KaryotypicSex.UNKNOWN_KARYOTYPE)
+
+
+def test_a_vcfs_build_says_whether_the_header_stated_it_or_its_contig_lengths_gave_it(tmp_path: Path) -> None:
+    parts = [chr20(), *XY]
+    (from_lengths,) = sex_chromosome_evidence(load(write_vcf(tmp_path / "lengths.vcf", parts)))
+    assert (from_lengths.assembly_label, from_lengths.assembly_label_basis, from_lengths.assembly_label_source) == (
+        "GRCh38", AssemblyLabelBasis.INFERRED, "contig_lengths",
+    )  # fmt: skip
+    (stated,) = sex_chromosome_evidence(load(write_vcf(tmp_path / "stated.vcf", parts, meta=("##reference=hg38.fa",))))
+    assert (stated.assembly_label, stated.assembly_label_basis, stated.assembly_label_source) == ("GRCh38", AssemblyLabelBasis.STATED, "stated")
+    assert from_lengths.ref_seqcol_digest is None and stated.ref_seqcol_digest is None  # REF not read
+
+
+def facet_row(**columns: object) -> dict:
+    """One `facets` row with every column null but those given."""
+    return conform(pl.LazyFrame({name: [value] for name, value in columns.items()}), FACETS).collect().row(0, named=True)
+
+
+LENGTH_37 = [{"name": "1", "length": 249_250_621, "md5": None}]
+
+
+@pytest.mark.parametrize(
+    ("columns", "source"),
+    [
+        ({"assembly_label_basis": "stated", "header_contigs": LENGTH_37}, "stated"),
+        ({"assembly_label_basis": "inferred", "header_contigs": LENGTH_37, "vcf_version": "VCFv4.2"}, "contig_lengths"),
+        ({"assembly_label_basis": "inferred", "ref_seqcol_digest": "d"}, "rows"),
+        ({"assembly_label_basis": "inferred", "relation": "liftover_to", "ref_seqcol_digest": "d"}, "liftover"),
+        # A VCF's REF read on a label its rows did not give: resolve_ref infers no build for a VCF.
+        ({"assembly_label_basis": "inferred", "ref_seqcol_digest": "d", "vcf_version": "VCFv4.2"}, None),
+        # A label a caller wrote into the frame, with no basis: used, its source unknown.
+        ({}, None),
+    ],
+)
+def test_the_label_source_follows_schema_decision_5(columns: dict, source: str | None) -> None:
+    facet = facet_row(facet_id="f", assembly_label="GRCh37", **columns)
+    assert assembly_label_source(facet) == source
+    assert assembly_label_source({**facet, "assembly_label": None}) is None
+    assert source is None or source in ASSEMBLY_LABEL_SOURCES
+
+
+def test_the_label_source_is_a_closed_list_checked_on_the_model() -> None:
+    found = evidence(frame(chr20(), *XY))
+    with pytest.raises(ValueError, match="unknown assembly label source"):
+        SexChromosomeEvidence(**{**found.model_dump(), "assembly_label_source": "guessed"})

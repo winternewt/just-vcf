@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `SexChromosomeEvidence` says where its build came from (RM269): `assembly_label_basis` (the
+  facet's column), `assembly_label_source` (`stated`, `contig_lengths`, `rows` for a build
+  `resolve_ref` inferred from an array's rows, `liftover`; null for a label no rule accounts for) and
+  `ref_seqcol_digest`. All three are new nullable fields, carried and deciding nothing. The estimate
+  already read a build `resolve_ref` inferred: an array table that states no build (FTDNA, an rsid
+  table, a Final Report) answers `no_build` as loaded and is estimated on `resolve_ref`'s output, and
+  `no_build`'s detail now says so. Nothing infers or defaults a build in the estimate.
+
 - A VCF 4.2 file declaring FT, PSL or INFO SVTYPE with a Type other than String (`Integer`, `Float`,
   `Character`) loads, where the first value (`PASS`, `DEL`) failed the whole read: the key is not
   carried, with a warning that names it and its Type, and it is in `dropped_fields`, as a 4.3+ header

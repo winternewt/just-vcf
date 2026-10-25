@@ -67,6 +67,16 @@ The estimate:
   (docs/ROADMAP.md RM269). So the Y line is read only with `array_y=True`; otherwise `y_reason` is
   `vendor_asserted` and the karyotype unknown. Arrays cannot count copies.
 
+**The build** places the PARs and the X-degenerate Y, and it is the facet's `assembly_label`, whatever
+in the library filled it: stated by the source at load, inferred at load from the header's `##contig`
+lengths (RM4), inferred by `resolve_ref` from an array's own rows scored against a reference (F9), or
+a liftover's target collection. The result says which (`assembly_label_basis`, the facet's column,
+and `assembly_label_source`, the finer source read off the facet's other columns by SCHEMA.md
+Decision 5's rule), and carries `ref_seqcol_digest`, the collection REF was read from, where it was.
+Nothing here infers a build or falls back to one: an array table that states no build answers
+`no_build` as loaded, and is estimated on the `resolve_ref` output, which carries the build the rows
+gave it.
+
 The estimate names a karyotype, not a sex: a person with an XX karyotype and a male phenotype has
 `x_copies = two_or_more`, and `XX` where a coverage facet shows no Y. It is read from variant calls
 and read depth; it is not a cytogenetic result and not a diagnosis.
@@ -83,8 +93,9 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from just_vcf.coverage import Coverage
+from just_vcf.links import LIFTOVER_TO
 from just_vcf.loading import Loaded
-from just_vcf.schema import CallsetType
+from just_vcf.schema import AssemblyLabelBasis, CallsetType
 
 # --- Regions -----------------------------------------------------------------------------------
 # Derived from GIAB genome stratifications v3.6, `XY` group, and for T2T-CHM13's X-degenerate Y from the
@@ -282,7 +293,8 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
 )
 """Why an answer is unknown. An open vocabulary: a new kind of evidence brings new reasons.
 
-- `no_build`: the facet has no `assembly_label`, so the PARs cannot be placed.
+- `no_build`: the facet has no `assembly_label`, so the PARs cannot be placed. An array table that
+  states none gets one from `resolve_ref`, which infers it from the rows (F9); pass its output.
 - `unsupported_build`: a label with no region set here (GRCh36).
 - `uncalibrated_build`: a build with a region set but no measured thresholds (T2T-CHM13): the
   measurements are reported, the estimate is withheld.
@@ -313,6 +325,42 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
   X depth above two copies' band, with no coverage line): `x_copies` is `two_or_more`, the karyotype
   unknown.
 """
+
+
+ASSEMBLY_LABEL_SOURCES: frozenset[str] = frozenset({"stated", "contig_lengths", "rows", "liftover"})
+"""Where a facet's `assembly_label` came from (`assembly_label_source`). An open vocabulary: a new way
+of filling the label brings a new value.
+
+- `stated`: the source stated it, read at load (`assembly_label_basis = stated`).
+- `contig_lengths`: inferred at load from the header's `##contig` lengths (RM4).
+- `rows`: inferred by `resolve_ref` from an array's own rows, scored against each reference collection
+  (F9); `ref_seqcol_digest` names the collection that fitted.
+- `liftover`: a lifted facet's target collection (`relation = liftover_to`).
+"""
+
+
+def assembly_label_source(facet: dict) -> str | None:
+    """Which of `ASSEMBLY_LABEL_SOURCES` filled the facet's `assembly_label`, from its own columns.
+
+    SCHEMA.md Decision 5's rule: `inferred` is a liftover's where `relation = liftover_to`, else the
+    contig lengths' where `header_contigs` gives a length (only a VCF read at load has them), else the
+    rows' where REF was read (`ref_seqcol_digest`) for a facet that is no VCF, the only kind
+    `resolve_ref` infers a build for. None without a label, and for a label no rule accounts for (one a
+    caller wrote into the frame): the label is still used, its source is unknown.
+    """
+    if facet["assembly_label"] is None:
+        return None
+    if facet["assembly_label_basis"] == AssemblyLabelBasis.STATED.value:
+        return "stated"
+    if facet["assembly_label_basis"] != AssemblyLabelBasis.INFERRED.value:
+        return None
+    if facet["relation"] == LIFTOVER_TO:
+        return "liftover"
+    if any(entry["length"] is not None for entry in facet["header_contigs"] or []):
+        return "contig_lengths"
+    if facet["ref_seqcol_digest"] is not None and facet["vcf_version"] is None:
+        return "rows"
+    return None
 
 
 class GtPloidyCounts(BaseModel):
@@ -439,6 +487,14 @@ class SexChromosomeEvidence(BaseModel):
 
     facet_id: str
     assembly_label: str | None
+    """The facet's build, as the frames carry it (module docstring): never inferred or defaulted here."""
+    assembly_label_basis: AssemblyLabelBasis | None = None
+    """`facets.assembly_label_basis`, verbatim: `stated` or `inferred`."""
+    assembly_label_source: str | None = None
+    """Which of `ASSEMBLY_LABEL_SOURCES` filled the label (`assembly_label_source`); None without one."""
+    ref_seqcol_digest: str | None = None
+    """`facets.ref_seqcol_digest`, verbatim: the collection `resolve_ref` read REF from, which the
+    facet's contigs were checked against (by length, or by label); None before REF is read."""
     callset_type: CallsetType | None
     caller: str | None
     """`facets.caller`, carried for context."""
@@ -489,6 +545,13 @@ class SexChromosomeEvidence(BaseModel):
             raise ValueError(f"unknown reason {value!r}")
         return value
 
+    @field_validator("assembly_label_source")
+    @classmethod
+    def _known_source(cls, value: str | None) -> str | None:
+        if value is not None and value not in ASSEMBLY_LABEL_SOURCES:
+            raise ValueError(f"unknown assembly label source {value!r}")
+        return value
+
     def __bool__(self) -> bool:
         return self.inferred_karyotypic_sex is not KaryotypicSex.UNKNOWN_KARYOTYPE
 
@@ -496,8 +559,11 @@ class SexChromosomeEvidence(BaseModel):
 def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None, *, array_y: bool = False) -> tuple[SexChromosomeEvidence, ...]:
     """Measure each loaded facet's sex-chromosome evidence and estimate its karyotype (module docstring).
 
-    `loaded` is what `just_vcf.load` (or `rejoin_split`) returns. The result has one entry per row of
-    `loaded.facets`, in that order: a freeBayes+VarScan2 merge loads as two facets and gets two
+    `loaded` is what `just_vcf.load` (or `rejoin_split`, `resolve_ref`, `liftover`) returns. The build
+    is the facet's `assembly_label` as those wrote it; an array table that states none answers
+    `no_build` until `resolve_ref` has inferred one from its rows, so pass that output.
+
+    The result has one entry per row of `loaded.facets`, in that order: a freeBayes+VarScan2 merge loads as two facets and gets two
     answers, never one blended from both callers. The calls are read lazily, a few columns at a time.
 
     `coverage` is a coverage facet of the same person (`read_coverage`, `alignment_coverage`); pairing
@@ -514,7 +580,10 @@ def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None, *,
     shows no Y), never `XY` for his phenotype. It is an estimate from variant calls and read depth,
     never a cytogenetic or clinical result.
     """
-    facets = loaded.facets.select("facet_id", "assembly_label", "callset_type", "caller", "ploidy_statements").collect()
+    facets = loaded.facets.select(
+        "facet_id", "assembly_label", "assembly_label_basis", "relation", "header_contigs", "vcf_version", "ref_seqcol_digest",
+        "callset_type", "caller", "ploidy_statements",
+    ).collect()
     measured = measure_coverage(coverage) if coverage is not None else None
     return tuple(
         estimate(
@@ -526,6 +595,9 @@ def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None, *,
             facet["ploidy_statements"],
             measured if measured is None else _paired(measured, coverage.facet.assembly_label, facet["assembly_label"]),
             array_y,
+            assembly_label_basis=AssemblyLabelBasis(facet["assembly_label_basis"]) if facet["assembly_label_basis"] is not None else None,
+            assembly_label_source=assembly_label_source(facet),
+            ref_seqcol_digest=facet["ref_seqcol_digest"],
         )
         for facet in facets.iter_rows(named=True)
     )
@@ -712,12 +784,18 @@ def estimate(
     ploidy_statements: list[str] | None = None,
     coverage: CoverageRatios | None = None,
     array_y: bool = False,
+    *,
+    assembly_label_basis: AssemblyLabelBasis | None = None,
+    assembly_label_source: str | None = None,
+    ref_seqcol_digest: str | None = None,
 ) -> SexChromosomeEvidence:
     """Turn `measure`'s numbers into the evidence and the estimate (rules in the module docstring).
 
     `caller` and `ploidy_statements` are the facet's own columns, carried through unread: what the
     caller said about ploidy is its assertion, kept beside the evidence and never counted in it.
-    `coverage` is a coverage facet's line (`measure_coverage`); it counts only without a `reason`."""
+    `coverage` is a coverage facet's line (`measure_coverage`); it counts only without a `reason`.
+    `assembly_label_basis`, `assembly_label_source` and `ref_seqcol_digest` say where `assembly_label`
+    came from; they are carried, and decide nothing."""
     groups = measured["groups"]
     empty = {"rows": 0, "one": 0, "two": 0, "more": 0}
     names = ["autosomes", "x_nonpar", "y_nonpar", "par", "mt"] if measured["supported"] else ["autosomes", "mt"]
@@ -725,6 +803,9 @@ def estimate(
     base = {
         "facet_id": facet_id,
         "assembly_label": assembly_label,
+        "assembly_label_basis": assembly_label_basis,
+        "assembly_label_source": assembly_label_source,
+        "ref_seqcol_digest": ref_seqcol_digest,
         "callset_type": callset_type,
         "caller": caller,
         "ploidy_statements": ploidy_statements,
@@ -758,7 +839,11 @@ def estimate(
         return SexChromosomeEvidence(**base, **known, **lines, inferred_karyotypic_sex=KARYOTYPES[(x_read, y_read)], reason=None, detail=detail)
 
     if assembly_label is None:
-        return unknown("no_build", "the facet has no assembly label, so the pseudo-autosomal regions cannot be placed")
+        return unknown(
+            "no_build",
+            "the facet has no assembly label, so the pseudo-autosomal regions cannot be placed "
+            "(resolve_ref infers an array table's build from its rows; estimate its output)",
+        )
     if not measured["supported"]:
         return unknown("unsupported_build", f"no PAR bounds or Y region set for {assembly_label} (only {', '.join(sorted(REGION_BUILDS))})")
 

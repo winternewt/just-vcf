@@ -217,7 +217,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 15
+REWRITE_VERSION = 16
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -238,7 +238,11 @@ copy from 11 kept `Number=1`, under which a diploid row's two values fail the re
 structural copy from 13 left a VCF 4.3+ file's GT out, and no row had a genotype.
 15: an integer key declared `Type=Float` is declared `Type=String` in every copy (`retyped_whole`), and a
 file with one is always read through a copy; a copy from 14 kept Float, under which polars-bio rounds a
-value's fraction away in 32 bits."""
+value's fraction away in 32 bits.
+16: a structural copy declares a key it leaves out `Number=.` with the Type the file's version reserves
+(`skipped_declarations`), where it dropped the line; a copy from 15 left a refused single-value key
+undeclared, its values were parsed under the version's definition, and `DP=30.5` under 4.3 failed the
+read."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -620,15 +624,37 @@ def left_out_of_copy(header: Header) -> set[str]:
     polars-bio refuses (`refused_types`) and those declared with a Number they are not read under
     (`unfit_keys`). Neither is requested from polars-bio, but it parses every key its header declares,
     so a value that does not parse under such a declaration (`51,40` under `Number=1`) would fail the
-    retry too; left undeclared, it is skipped (P1). And text keys declared as numbers
-    (`text_keys_typed_otherwise`), and those polars-bio named as holding a value it cannot parse
-    (`Header.unparsed`)."""
+    retry too; left undeclared, it is skipped (P1), or, where the file's version holds a definition of
+    the key, declared so that its values are never parsed (`skipped_declarations`). And text keys
+    declared as numbers (`text_keys_typed_otherwise`), and those polars-bio named as holding a value it
+    cannot parse (`Header.unparsed`)."""
     return (
         set(refused_types(header))
         | {f"FORMAT/{key}" for key in unfit_keys(header)}
         | set(text_keys_typed_otherwise(header))
         | set(header.unparsed)
     )
+
+
+def skipped_declarations(header: Header) -> list[str]:
+    """The lines a structural copy declares a key it leaves out (`left_out_of_copy`) with, where the
+    file's VCF version holds a definition of the key (`RESERVED_TYPES`): `Number=.` and the Type that
+    version reserves. Undeclared, polars-bio's reader (noodles) reads such a key's values under that
+    definition, and it parses a single value (DP, GQ, PS, CN, INFO END) as the record is read, requested
+    or not, so `30.5` under DP's reserved Integer failed the whole load, naming no key. A list it
+    parses only when the value is requested, and a key left out never is, so declared `Number=.` its
+    values are skipped unread. The reader checks only a line's Type against its definition, so the line
+    is accepted. Under VCF 4.2 it holds no definitions, and an undeclared key is read as text, which
+    never fails: no line is needed."""
+    reserved = RESERVED_TYPES.get(header.version_tuple or (0, 0), {})
+    lines = []
+    for name in sorted(left_out_of_copy(header) & set(reserved)):
+        namespace, key = name.split("/", 1)
+        lines.append(
+            f'##{namespace}=<ID={key},Number=.,Type={reserved[name]},'
+            'Description="Declared by just-vcf: not carried, so its values are skipped unread">'
+        )
+    return lines
 
 
 def can_leave_out(header: Header, name: str | None) -> bool:
@@ -819,7 +845,10 @@ def readable_path(
     the plain size, and polars-bio reads it as fast as plain text. `structural_only` keeps only the meta
     lines polars-bio needs and the INFO and FORMAT keys the frames carry, for a file it refused (P7, P8):
     polars-bio skips a key its header does not declare (P1), so a malformed value in a key the frames
-    do not carry is never parsed.
+    do not carry is never parsed. Not so for a key a VCF 4.3+ version reserves: the reader parses an
+    undeclared one under its own definition, so a carried key the copy leaves out is declared so that
+    it is skipped (`skipped_declarations`); a reserved key the frames never carry (INFO DP, FORMAT MQ)
+    is still parsed so.
 
     `cache` is the entry (`vcf/<key>`); it is written, or reused, under its lock, with `origin` in its
     manifest (`just_vcf.cache.writing`).
@@ -872,6 +901,9 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
                 f'##{namespace}=<ID={key},Number={number},Type={kind},'
                 f'Description="Declared by just-vcf: used by the rows, missing from the header">\n'.encode()
             )
+        if structural_only:
+            for line in skipped_declarations(header):
+                out.write(f"{line}\n".encode())
         out.write(("#" + "\t".join(header.columns) + "\n").encode())
         if structural_only:
             # polars-bio refuses POS 0 ("Missing variant start"); Illumina array exports put unmapped

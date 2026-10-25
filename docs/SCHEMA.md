@@ -1211,7 +1211,19 @@ warning that names the key and with the key in `dropped_fields`:
 
 polars-bio parses every key its header declares, requested or not, so a value that does not parse
 under such a declaration (`51,40` under HQ `Number=1`) would fail the load. The loader's retry reads a
-copy whose header leaves all three out, and the rows' values under them are skipped unread.
+copy whose header leaves all three out, and the rows' values under them are skipped unread, whatever
+they are (2026-10-25). Under VCF 4.3, 4.4 and 4.5 leaving the line out is not enough: polars-bio's
+reader applies its own definition of the version's reserved keys to one the header does not declare,
+and parses a single value (DP, GQ, PS, CN, INFO END) as the record is read, requested or not, so DP
+`Type=Float` under 4.3 loaded with `30` and failed the whole load with `30.5` ("invalid digit found in
+string", naming no key). So where the version holds a definition of a key left out, the copy declares
+it `Number=.` with the Type the version reserves (`skipped_declarations`, `REWRITE_VERSION` 16): the
+reader checks only a line's Type, and it parses a list value only when the value is requested, which
+a key not carried never is. Rejected: declaring it `Type=String`, which the reader refuses as it
+refused the file's own line; removing the key's slot from every record, which rewrites the data
+polars-bio reads and costs a pass over each sample column; and writing the copy as VCF 4.2, whose
+reader holds no definitions, which would read the whole file under another version (GT's leading
+phase indicator, P4).
 
 GT is never left out (2026-10-25): a facet without genotypes is not a calls facet, and GT's values are
 genotype text whatever its line says. Declared `Integer`, `Float` or `Character`, it is read as written

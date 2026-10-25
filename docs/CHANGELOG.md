@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF 4.3+ key its version refuses under the declared Type (DP, GQ or PS `Type=Float`, CN `Float`
+  under 4.3, INFO END `Float`) is skipped unread whatever its values, as Decision 9 says: `30` loaded
+  with the key not carried, but `30.5` failed the whole load with `HeaderRefused` ("invalid digit found
+  in string"), because polars-bio's reader parsed the key, left undeclared in the copy, under the
+  version's own definition. The structural copy now declares such a key `Number=.` with the reserved
+  Type, which the reader never parses for a key not requested (`REWRITE_VERSION` 16). A reserved key
+  the frames never carry (INFO DP, FORMAT MQ) is still parsed so where the copy drops its line.
+
 - Nirvana JSON counts a genotype indexing past the row's ALT list from the genotype text, as the
   key=value table does: `1/300` reads `gt [1, null]` (a `u8` list) and was counted from `gt`, so it
   went unwarned. Each genotype is counted under one reason there too (`1:2` is unreadable only).

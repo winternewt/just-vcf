@@ -1061,7 +1061,14 @@ def read_records(
             if f"info_{key}" not in present
         ]
     ).with_columns(pl.col("fmt_GT").cast(pl.String), pl.col("fmt_FT").cast(pl.String))
-    return _negative_ps(_whole_numbers(frame))
+    frame = _negative_ps(_whole_numbers(frame))
+    if "PS" in header.format and "FORMAT/PS" in left_out:
+        # Declared but not carried (a refused Type, a retry that left it out): which records wrote a PS is
+        # unknown, since its values are skipped unread, so no phased record can be read as having none.
+        v44 = (header.version_tuple or (0, 0)) >= (4, 4)
+        withheld = _phased_expr(v44).list.eval(pl.element().fill_null(False)).list.any().fill_null(False) & ~_psl_present()
+        frame = frame.with_columns(withheld.cast(pl.Int64).alias("_unread_not_carried:fmt_PS"))
+    return frame
 
 
 def _whole_numbers(frame: pl.LazyFrame) -> pl.LazyFrame:
@@ -1266,6 +1273,15 @@ def _gt_expr() -> pl.Expr:
     )
 
 
+def _phased_expr(v44: bool) -> pl.Expr:
+    """`phased` from the GT text: one entry per allele, true after `|`, false after `/`. The first
+    allele of a VCF 4.4+ record is null (polars-bio drops the leading indicator, P4); before 4.4 it
+    is phased unless a `/` follows, so a haploid call (no separator) is phased. Null with no GT."""
+    seps = _gt_body().str.extract_all(r"[/|]")
+    first = pl.lit(None, dtype=pl.Boolean) if v44 else pl.when(seps.list.contains("/")).then(pl.lit(False)).otherwise(pl.lit(True))
+    return pl.when(pl.col("fmt_GT").is_null()).then(None).otherwise(pl.concat_list(first, seps.list.eval(pl.element() == "|")))
+
+
 def _tagged(key: str, kind: str) -> pl.Expr:
     """True on a record INFO `key` tags as split off a multi-allelic site: any vt or just-vcf value, or
     a bcftools value with its fifth, `USED_ALT_IDX`, field."""
@@ -1394,7 +1410,14 @@ def to_rows(
         for name, count in stats.items()
         if name.startswith("_unread_") and count
         for reason, column in [name.removeprefix("_unread_").split(":", 1)]
+        if reason != "not_carried"
     ]
+    if stats.get("_unread_not_carried:fmt_PS"):
+        warnings.append(
+            f"{stats['_unread_not_carried:fmt_PS']} phased record(s) have their phase withheld (phased null): FORMAT/PS "
+            "is declared but not carried, so whether each wrote a PS, and which set it named, is unknown, and a "
+            "phased record is not read as one in its chromosome's implicit set"
+        )
     if stats.get("unfit_HQ"):
         warnings.append(f"{stats['unfit_HQ']} HQ value(s) not one per GT allele set to null")
     if stats.get("out_HQ"):
@@ -1445,18 +1468,14 @@ def to_rows(
         _is_block_record(pl.col("alts")).alias("_block"),
     )
 
-    gt_text = pl.col("fmt_GT")
-    seps = _gt_body().str.extract_all(r"[/|]")
-    first_phased = pl.lit(None, dtype=pl.Boolean) if v44 else pl.when(seps.list.contains("/")).then(pl.lit(False)).otherwise(pl.lit(True))
-    rows = rows.with_columns(
-        _gt_expr().alias("gt"),
-        pl.when(gt_text.is_null()).then(None).otherwise(pl.concat_list(first_phased, seps.list.eval(pl.element() == "|"))).alias("phased"),
-    )
+    rows = rows.with_columns(_gt_expr().alias("gt"), _phased_expr(v44).alias("phased"))
     if ps_unread := [name for name in rows.collect_schema().names() if name.startswith("_unread_") and name.endswith(":fmt_PS")]:
-        # A PS left out (`_whole_numbers`) must not put a phased record in its chromosome's implicit set,
-        # where a phased record without PS is: the set it named is unknown, so its phase is withheld.
+        # A PS left out (`_whole_numbers`, `_negative_ps`) or not carried at all must not put a phased
+        # record in its chromosome's implicit set, where a phased record without PS is: the set it named
+        # is unknown, so its phase is withheld. A record whose PSL names a set ignores PS (`_phase_sets`).
         unknown = pl.col("phased").list.eval(pl.when(pl.element()).then(pl.lit(None, dtype=pl.Boolean)).otherwise(pl.element()))
-        rows = rows.with_columns(pl.when(pl.sum_horizontal(ps_unread) > 0).then(unknown).otherwise(pl.col("phased")).alias("phased"))
+        withheld = (pl.sum_horizontal(ps_unread) > 0) & ~_psl_present()
+        rows = rows.with_columns(pl.when(withheld).then(unknown).otherwise(pl.col("phased")).alias("phased"))
     allele_list = pl.concat_list(pl.col("source_ref"), pl.col("alts"))
     # Guarded, not only for meaning: polars 1.44's `list.gather` over a batch whose every index list is
     # null makes a list of a Null inner type, which the spill's parquet sink cannot write (a record
@@ -1517,7 +1536,7 @@ def to_rows(
         pl.when(pl.col("filter") == "").then(None).otherwise(pl.col("filter").str.split(";")).alias("filters"),
         pl.when(pl.col("fmt_FT").is_in(["", "."])).then(None).otherwise(pl.col("fmt_FT").str.split(";")).alias("sample_filters"),
         pl.col("qual").cast(pl.Float32).alias("qual"),
-        (pl.lit(None, dtype=pl.String) if v44 or not text_gt else gt_text).alias("source_gt"),
+        (pl.lit(None, dtype=pl.String) if v44 or not text_gt else pl.col("fmt_GT")).alias("source_gt"),
         canonical_chrom_expr("chrom").alias("chrom"),
         pl.col("start").alias("pos"),
         pl.when(pl.col("info_SVTYPE").is_in(["", "."])).then(None).otherwise(pl.col("info_SVTYPE")).alias("sv_type"),

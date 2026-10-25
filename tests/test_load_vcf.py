@@ -1056,6 +1056,44 @@ def test_a_phase_set_that_is_not_read_withholds_the_phase(tmp_path: Path, kind: 
     assert any(w.startswith(f"2 PS value(s) {reason} left out") and "phase" in w for w in loaded.warnings), loaded.warnings
 
 
+@pytest.mark.parametrize(("version", "line", "value"), [
+    ("VCFv4.3", '##FORMAT=<ID=PS,Number=1,Type=String,Description="Phase set">', "{pos}"),  # a Type 4.3 refuses
+    ("VCFv4.5", '##FORMAT=<ID=PS,Number=1,Type=Float,Description="Phase set">', "{pos}"),
+    ("VCFv4.2", '##FORMAT=<ID=PS,Number=.,Type=Integer,Description="Phase set">', "{pos},x"),  # the retry leaves it out
+])
+def test_a_phase_set_declared_but_not_carried_withholds_the_phase(tmp_path: Path, version: str, line: str, value: str) -> None:
+    """A PS the header declares but the loader does not carry is skipped unread, so which records wrote
+    one, and which set each named, is unknown. Read as written, the two blocks below were one phased set
+    across the chromosome (the implicit set of records with no PS): each phased record has its phase
+    withheld instead, counted in one warning; an unphased record keeps `phased` as written."""
+    records = [f"1\t{pos}\t.\tA\tG\t50\t.\t.\tGT:PS\t{gt}:{value.format(pos=pos)}" for pos, gt in ((100, "0|1"), (200, "1|0"), (300, "0/1"))]
+    loaded = load(write(tmp_path, vcf_text(records, version=version, extra_meta=(line,))))
+    calls, facet = loaded.calls.collect().sort("pos"), loaded.facets.collect().row(0, named=True)
+    first = None if version >= "VCFv4.4" else False
+    assert calls["phased"].to_list() == [[None, None], [None, None], [first, False]]
+    assert calls["phase_sets"].to_list() == [None, None, None] and calls["phase_set_kinds"].to_list() == [None, None, None]
+    assert "FORMAT/PS" in facet["dropped_fields"]
+    assert any(w.startswith("2 phased record(s) have their phase withheld") and "FORMAT/PS" in w for w in loaded.warnings), loaded.warnings
+
+
+def test_a_psl_set_is_read_where_ps_is_not_carried(tmp_path: Path) -> None:
+    """VCF 4.5 ignores PS on a record whose PSL names a set, so a PS that is not carried withholds only
+    the phase of the records without one; and a file that declares no PS keeps VCF's rule, a phased
+    record in its chromosome's implicit set."""
+    meta = (_PSL_LINE, '##FORMAT=<ID=PS,Number=1,Type=String,Description="Phase set">')
+    records = ["1\t100\t.\tA\tG\t50\t.\t.\tGT:PSL:PS\t0|1:a,a:5", "1\t200\t.\tA\tG\t50\t.\t.\tGT:PSL:PS\t0|1:.,.:6"]
+    loaded = load(write(tmp_path, vcf_text(records, version="VCFv4.5", extra_meta=meta)))
+    calls = loaded.calls.collect().sort("pos")
+    assert calls["phased"].to_list() == [[True, True], [None, None]]
+    assert calls["phase_sets"].to_list() == [["a", "a"], None] and calls["phase_set_kinds"].to_list() == [["psl", "psl"], None]
+    assert any(w.startswith("1 phased record(s) have their phase withheld") for w in loaded.warnings), loaded.warnings
+    undeclared = load(write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT\t0|1", "1\t200\t.\tA\tG\t50\t.\t.\tGT\t1"]), "no_ps.vcf"))
+    calls = undeclared.calls.collect().sort("pos")
+    assert calls["phased"].to_list() == [[True, True], [True]]
+    assert calls["phase_sets"].to_list() == [[None, None], [None]] and calls["phase_set_kinds"].to_list() == [["ps", "ps"], ["ps"]]
+    assert not any("withheld" in w for w in undeclared.warnings), undeclared.warnings
+
+
 @pytest.mark.parametrize("kind", ["Integer", "Float", "String"])
 def test_a_negative_phase_set_withholds_the_phase(tmp_path: Path, kind: str) -> None:
     """VCF's PS is a non-negative integer, so `-5` and `-1` name no set. Read as they were, the list

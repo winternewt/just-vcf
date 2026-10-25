@@ -316,7 +316,13 @@ its own phase set. So:
   not read did write one. The cases, each counted in a warning that says the phase was withheld: a PS
   value left out as not a whole number (Decision 9), and a negative PS (`-5`, `-1`), since VCF's PS is
   a non-negative integer (2026-10-25; the list arithmetic read `-1` as the implicit set). PS `0` is a
-  set like any other.
+  set like any other. And a PS the header declares but the loader does not carry (a Type its version
+  refuses, `PS Type=String` under 4.3; a key the retry left out, Decision 9): its values are skipped
+  unread, so which records wrote one is unknown, and every phased record has its phase withheld
+  (2026-10-25; it read `0|1:100` and `1|0:200` as one set across the chromosome). That includes a
+  haploid call, phased by VCF's reading, which may have written a PS too. A record whose PSL names a
+  set keeps it, since PS is ignored there. A file that declares no PS keeps VCF's rule: its phased
+  records are in the implicit set.
 - **How the VCF loader reads PSL** (VCF 4.4+, `Number=P`: one value per allele in GT). On a record
   whose PSL names a set, each slot is read from its own entry: a phased slot with a name is in that
   set (kind `psl`); a phased slot with `.` is in the implicit set above (kind `ps`, set null), since it
@@ -1223,7 +1229,8 @@ was read through holds exactly left out too: polars-bio reads a Float as a 32-bi
 to 2^24, so a PS or END of 123456789 comes back 123456792, a set or a position the file did not write.
 Each key and reason is one warning with its count. A PS left out withholds the phase of a phased
 record (`phased` null where it was true): a phased record without PS is in its chromosome's implicit
-set, and saying so would be a claim the file did not make. PL and PP declared `Float` are read as the
+set, and saying so would be a claim the file did not make. A PS not carried at all (any of the cases
+above) withholds the phase of every phased record (Decision 2). PL and PP declared `Float` are read as the
 numbers they are; a fraction there is a likelihood, not a count cut short.
 
 ## Decision 10: multi-sample files

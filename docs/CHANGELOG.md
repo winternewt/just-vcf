@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF that declares PS but whose PS the loader does not carry (a Type its version refuses, such as
+  `PS Type=String` under 4.3; a PS the retry left out) withholds the phase of every phased record,
+  with one warning counting them, where `0|1:100` and `1|0:200` read as phased in one set across the
+  chromosome, the implicit set of records that wrote no PS: the values are skipped unread, so which
+  records wrote one is unknown. A record whose PSL names a set keeps it, here and where a PS value is
+  left out, since PS is ignored there (it was withheld). A file that declares no PS is unchanged.
+
 - A negative PS (`0|1:-5`, `0|1:-1`) withholds the record's phase (`phased` null where it was true),
   with a warning counting the values (`… PS value(s) negative …`), where the record landed in its
   chromosome's implicit phase set: VCF's PS is a non-negative integer, so the value names no set.

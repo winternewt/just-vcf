@@ -261,7 +261,9 @@ chromosome, and the `hq` confidence of the `var` file's 4.02M scored calls (p10/
 matches the vcfBeta's GL confidence (357 and 1,022 at p50 and p90). That is what makes it sound for
 a `var` and a vcfBeta facet of one CGA version to share an atlas key (`caller`, `caller_version`):
 the 60+ diagnosis (docs/CONSENSUS.md) found two facets of one freeBayes version that did not share a
-scale; these two do. Two such facets of one person are still one person's pair twice, and never both
+scale; these two do. A band also says which genotype a row called: CGI's 10–20 SNV band is its VQLOW
+hom-ALT calls, freeBayes 0.9.15's 60–100 band mostly its hets, so the cell of the two is mostly a
+genotype disagreement (docs/CONSENSUS.md, "What CGI's lowest band holds"). Two such facets of one person are still one person's pair twice, and never both
 go into one atlas (the check below holds hu1B2689's vcfBeta pair out when it adds the `var` one).
 
 **The second person's fit is broken by the even split.** The one-pair fit fixes the two sides' band

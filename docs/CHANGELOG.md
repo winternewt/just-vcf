@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- docs/CONSENSUS.md measures why CGI's 10–20 phred band disagrees with freeBayes's capped top band on
+  13% (hu1B2689) and 52% (huAF3C63) and with its 30–60 rows on about 1%: each side's band says which
+  genotype it called (CGI's 10–20 SNVs are all VQLOW hom-ALT calls, freeBayes's 60–100 rows mostly
+  hets), so the cell is mostly a genotype disagreement, and the fitted band rate is still the band's
+  average error. No rule or default changed. `scripts/band_cells.py` counts the cells by genotype,
+  VQLOW, region, depth and an optional third facet, aggregates only.
+
 - A CGI `var` or masterVarBeta score that is not a whole number is left out of `calls.hq` and
   counted, where it was lost without a word: the score was cast to an integer leniently, so `30.0`
   and `30.5` alike became no score, silently. Now a whole number written as a float reads as it is

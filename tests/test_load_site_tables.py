@@ -13,6 +13,7 @@ import pytest
 from just_vcf import load
 from just_vcf.formats import get_spec
 from just_vcf.loaders.site_tables import FORMATS as SITE_FORMATS
+from just_vcf.loaders.site_tables import read_site_table, spec_for
 from just_vcf.loading import LOADABLE_FORMATS
 from just_vcf.schema import CALLS, canonical_chrom
 from just_vcf.sniff import Sniffed, open_payload, sniff
@@ -259,9 +260,12 @@ def test_color_variant_set_unknown_zygosity_keeps_gt_null(tmp_path: Path) -> Non
 
 
 # --- rows with no genotype ---------------------------------------------------------------------------
-# polars' `list.gather` over a batch whose every index list is null makes a list of a Null inner type,
-# which a parquet sink cannot write. Each table below has a gather indexed by a column that can be null;
-# a file where it is null on every row loads, and its calls sink to parquet, with the schema's types.
+# polars' `list.gather` over index lists that are all null makes a list of a Null inner type. In a lazy
+# plan that type is the batch's, not the schema's, and a parquet sink fails; these readers build eager
+# frames, which carry `List(Null)` in their own schema, and `conform` casts it to the schema's type.
+# So through `load` no input reaches a failure, with the guard or without it: the sink tests below pass
+# on the unguarded readers too, and pin only that such a file loads and sinks with the schema's types.
+# The guard's effect is the reader's own frame, typed rather than Null, which the dtype tests check.
 
 
 def _sunk(loaded, tmp_path: Path) -> pl.DataFrame:
@@ -273,7 +277,8 @@ def _sunk(loaded, tmp_path: Path) -> pl.DataFrame:
 
 def test_color_variant_set_without_a_readable_zygosity_sinks(tmp_path: Path) -> None:
     """Every row's Zygosity unread (or its Alt not a sequence): `gt` is null on every row, and so is
-    `gt_alleles`, gathered from it."""
+    `gt_alleles`, gathered from it. A regression shape test: it passes without the gather's guard,
+    since `conform`'s cast absorbs the eager frame's Null type (above)."""
     rows = [("1", 55523033, "A", "G", "Hemizygous"), ("13", 32906729, "CA", "C", "Hemizygous"), ("17", 41245466, "G", "<DEL>", "Heterozygous")]
     path = tmp_path / "v.csv"
     path.write_text(COLOR_HEAD_NEW + "".join(f"K1,{c},{p},{r},{a},G,SNV,c.1,p.1,ENST1,,{z},,Benign,,T,GRCh37,2025-06-23\r\n" for c, p, r, a, z in rows))
@@ -287,7 +292,8 @@ def test_color_variant_set_without_a_readable_zygosity_sinks(tmp_path: Path) -> 
 
 def test_casava_snps_without_a_readable_call_sink(tmp_path: Path) -> None:
     """Every Call unreadable: `alts` and `gt` null on every row, so the per-allele base count `ad` is
-    gathered by indices that are all null."""
+    gathered by indices that are all null. A regression shape test, like the Color one: it passes
+    without the guard."""
     rows = [(str(i), "1", str(900000 + i), 5, 0, 5, 0, "GAT", 10, 10, "G", "Other", "") for i in range(3)]
     path = tmp_path / "s_1_snps.txt"
     path.write_bytes(_casava(rows).encode())
@@ -296,6 +302,25 @@ def test_casava_snps_without_a_readable_call_sink(tmp_path: Path) -> None:
     assert calls.schema == CALLS
     assert calls["source_gt"].to_list() == ["GAT"] * len(rows)
     assert calls["gt"].null_count() == calls["gt_alleles"].null_count() == calls["ad"].null_count() == len(rows)
+
+
+def test_the_color_readers_own_frame_is_typed_where_no_genotype_was_read() -> None:
+    """The guard on the gather gives the reader's frame the typed list, not `List(Null)`, before
+    `conform` sees it: the one place the unguarded gather differs, and where a `list.contains` on the
+    result (as `normalize`'s on the VCF loader's alleles) would raise."""
+    color = [("1", 55523033, "A", "G"), ("13", 32906729, "CA", "C")]
+    data = COLOR_HEAD_NEW + "".join(f"K1,{c},{p},{r},{a},G,SNV,c.1,p.1,ENST1,,Hemizygous,,Benign,,T,GRCh37,2025-06-23\r\n" for c, p, r, a in color)
+    table = read_site_table(data.encode(), spec_for("color_variant_set"))
+    assert table.calls["gt_alleles"].null_count() == len(color)
+    assert table.calls.schema["gt_alleles"] == pl.List(pl.String)
+
+
+def test_the_casava_readers_own_frame_is_typed_where_no_call_was_read() -> None:
+    """As for Color: `ad`, gathered by base indices that are all null, is a typed list in the reader's frame."""
+    casava = [(str(i), "1", str(900000 + i), 5, 0, 5, 0, "GAT", 10, 10, "G", "Other", "") for i in range(3)]
+    table = read_site_table(_casava(casava).encode(), spec_for("casava_snp_table"))
+    assert table.calls["ad"].null_count() == len(casava)
+    assert table.calls.schema["ad"].inner != pl.Null
 
 
 def test_casava_indels_never_gather_without_a_genotype(tmp_path: Path) -> None:

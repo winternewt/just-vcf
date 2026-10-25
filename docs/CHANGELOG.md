@@ -39,8 +39,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   `normalize` splits a contig whose every record has no GT, where its `<*>` check raised
   `InvalidOperationError` on the same Null-typed gather. Every `list.gather` indexed by a column that
   can be null is now guarded on that column, also in the CASAVA SNP (`ad`) and Color (`gt_alleles`)
-  readers, whose all-null gathers the frame's own cast had absorbed. The key=value table and CASAVA
-  indels never reach one: a row without a genotype is dropped before `gt` is read.
+  readers. Those two build eager frames, which carry the Null type in their own schema, and the
+  frame's cast to the calls schema absorbed it: no input fails through `load` without their guard,
+  and their sink tests, which pass on the unguarded readers too, are regression shape tests only. What
+  the guard changes there is the reader's own frame, typed instead of `List(Null)`, which two tests
+  check on `read_site_table`. The key=value table and CASAVA indels never reach one: a row without a
+  genotype is dropped before `gt` is read.
 
 - The forge gate keeps checking every session's GitHub writes (issues, comments, pull request bodies)
   against `.leak_words`, not only a seated session's: `[repo] forge_gate_unseated = true` in

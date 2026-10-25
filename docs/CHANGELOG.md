@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF whose INFO holds a value polars-bio cannot parse reaches the loader's retry, as a FORMAT one
+  does, in every version: INFO DP `Type=Integer` holding `30.5` beside a carried SVTYPE or a split
+  marker failed the load with polars' raw `ComputeError` from the spill, since the pass the retry wraps
+  read no INFO column. It now reads every INFO column the spill reads, and the file loads with DP not
+  carried under VCF 4.2 (under 4.3+ the retry still refuses it with `HeaderRefused`, naming no key).
+
 - The VCF loader counts a genotype indexing past the row's ALT list, with the warning the key=value
   table and Nirvana JSON give (`… genotype(s) index an allele past the row's ALT list; gt_alleles has a
   null there`), counted from the GT text's digits: `0/300` loaded as `gt [0, null]` and `0/2` over one

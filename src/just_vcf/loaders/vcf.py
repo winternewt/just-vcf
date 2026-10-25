@@ -1222,7 +1222,8 @@ _BOUNDED = {"GQ": 2**16 - 1, "DP": 2**32 - 1, "MIN_DP": 2**32 - 1}
 def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> dict:
     """One streaming pass for what the warnings and the facet need: out-of-range counts, GP's
     largest value, the source contig names, and whether any record is a reference block. It reads
-    GT, which makes polars-bio parse the sample column, so a field value it cannot parse fails here.
+    GT, which makes polars-bio parse the sample column, and every INFO column the frames read, which
+    makes it parse INFO, so a field value it cannot parse fails here, where the loader retries.
 
     `unsourced` (`Part.unsourced`, a merge's first part only) is counted in the same collect, as
     `unsourced`: the merge's records no part takes, which `records`, already one part's, no longer
@@ -1262,6 +1263,10 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
         # From the text, as the other loaders count it: `gt` is UInt8, so `0/300` reads `[0, null]` there.
         past_alts(_gt_body(), alts.list.len()).fill_null(False).sum().alias("past_alts"),
         (_gt_body().str.count_matches(r"[/|]").max() + 1).alias("ploidy_max"),
+        # polars-bio parses a record's INFO only when an INFO column is read, so every one the spill reads
+        # is read here too: a value it cannot parse then fails this pass, which the retry wraps (P7), and
+        # not the spill, which escaped as polars' raw ComputeError (INFO DP `30.5` beside SVTYPE).
+        *[pl.col(name).null_count().alias(f"_read:{name}") for name in records.collect_schema().names() if name.startswith("info_")],
         *_psl_stats(),
         *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith(("_multi_", "_unread_"))],
         *[

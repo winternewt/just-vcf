@@ -1256,6 +1256,15 @@ the retries end. polars-bio names the key only for a list-valued field (HQ, AD, 
 single-value one (GQ `30.5` under `Integer`, an INFO END) fails inside the reader with no key named,
 and the load is refused as before, since which key failed would be a guess.
 
+An INFO value takes the same path as a FORMAT one, in every version (2026-10-26). polars-bio parses a
+record's INFO only when an INFO column is read, and the pass the retry wraps read none where the
+carried INFO keys were ones it counts nothing of (SVTYPE, a split marker), so the first read of INFO
+was the spill's, after the retry: INFO DP `Type=Integer` holding `30.5` beside SVTYPE failed the load
+with polars' raw `ComputeError`. That pass now reads every INFO column the spill reads, in the same
+pass over the file. The value is in a key not carried, so the structural copy, which leaves DP's line
+out, loads the file with DP in `dropped_fields`; one in a carried key is left out by name or refused
+as above.
+
 **A carried integer key declared `Float` or `String` keeps only whole numbers** (2026-10-25). VCF 4.2
 reserves no Type, and a later version none for a key it holds no definition of (MIN_DP; LEN before
 4.5; PSO and PSQ before 4.4), so such a header can declare GQ, DP, MIN_DP, LEN, PS, AD, PSO, PSQ, HQ or

@@ -1411,3 +1411,25 @@ def test_a_genotype_past_the_alts_is_counted_from_the_gt_text(tmp_path: Path, ve
     assert (by_pos[200]["gt"], by_pos[200]["gt_alleles"]) == ([0, 2], ["A", None])
     assert (by_pos[500]["gt"], by_pos[500]["gt_alleles"]) == ([0, 1], ["A", None])
     assert by_pos[400]["gt_alleles"] == ["G", "T"]
+
+
+@pytest.mark.parametrize(("neighbour", "value"), [
+    ('##INFO=<ID=SVTYPE,Number=1,Type=String,Description="x">', "SVTYPE=SNV"),
+    ('##INFO=<ID=OLD_MULTIALLELIC,Number=1,Type=String,Description="x">', "OLD_MULTIALLELIC=1:200:A/G/T"),
+])
+def test_an_info_value_that_does_not_parse_reaches_the_retry(tmp_path: Path, neighbour: str, value: str) -> None:
+    """An INFO value polars-bio cannot parse fails the read the retry wraps, as a FORMAT one does, not
+    the spill after it. polars-bio parses INFO only when an INFO column is read, and the stats pass read
+    none where the carried INFO keys were ones it does not count (SVTYPE, a split marker), so INFO DP
+    `30.5` under `Type=Integer` escaped as polars' raw `ComputeError` from the spill. Under VCF 4.2 the
+    structural copy, which leaves DP's line out, reads it as undeclared text, so the file loads as its
+    whole-valued twin does, with DP not carried."""
+    def loaded_with(dp: str, name: str):
+        records = [f"1\t{pos}\t.\tA\tG\t50\t.\tDP={dp};{value}\tGT\t0/1" for pos in (100, 200)]
+        meta = (INFO_LINES["DP"], neighbour)
+        return load(write(tmp_path, vcf_text(records, version="VCFv4.2", extra_meta=meta), name))
+
+    reference, refused = loaded_with("30", "whole.vcf"), loaded_with("30.5", "other.vcf")
+    assert refused.calls.collect().drop("facet_id").equals(reference.calls.collect().drop("facet_id"))
+    assert any("polars-bio refused the file" in w and "Error reading INFO field" in w for w in refused.warnings), refused.warnings
+    assert "INFO/DP" in refused.facets.collect()["dropped_fields"][0]

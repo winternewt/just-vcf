@@ -573,8 +573,8 @@ def refused_types(header: Header) -> dict[str, str]:
 
 
 TEXT_KEYS = ("FORMAT/FT", "FORMAT/PSL", "INFO/SVTYPE")
-"""The carried keys whose values are text (`PASS`, a phase-set name, `DEL`). GT, text too, is read by
-polars-bio as a genotype whatever its declaration."""
+"""The carried keys whose values are text (`PASS`, a phase-set name, `DEL`). GT, text too, is not one:
+under VCF 4.2 polars-bio reads it as a genotype whatever its declared Type (probed 2026-10-25)."""
 
 
 def text_keys_typed_otherwise(header: Header) -> dict[str, str]:

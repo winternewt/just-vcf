@@ -1180,11 +1180,11 @@ warning that names the key and with the key in `dropped_fields`:
 - a text key (`FT`, `PSL`, INFO `SVTYPE`) declared with a Type other than String, in any version
   (2026-10-25): no value it holds (`PASS`, a set name, `DEL`) parses as a number, and under VCF 4.2,
   where polars-bio refuses no Type, the first one failed the whole read. The warning names the key
-  and its Type. GT is read as a genotype whatever its declaration.
+  and its Type. Under 4.2, polars-bio reads GT as a genotype whatever its declared Type.
 
 polars-bio parses every key its header declares, requested or not, so a value that does not parse
 under such a declaration (`51,40` under HQ `Number=1`) would fail the load. The loader's retry reads a
-copy whose header leaves both kinds out, and the rows' values under them are skipped unread.
+copy whose header leaves all three out, and the rows' values under them are skipped unread.
 
 One more case is found only by reading (2026-10-25): a carried key declared as its version reserves it,
 with a value that does not parse under that declaration (HQ `Integer` with `30.5,40` or `x,40` under

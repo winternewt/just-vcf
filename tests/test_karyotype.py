@@ -773,6 +773,19 @@ def test_an_array_that_drops_its_no_calls_gives_no_y_line() -> None:
     assert found.x_copies is XCopies.TWO_OR_MORE
 
 
+def test_an_unreadable_autosomal_row_is_not_a_written_no_call() -> None:
+    # A row whose genotype no loader could read (`gt_alleles` null) is not called, but it is no no-call
+    # the export wrote: one such row must not make a no-call-dropping export's Y rows read as its probes.
+    unreadable = letters("4", 1_000_000, 1, None)
+    found = on_array(autosomes(no_calls=0), unreadable, array_x(500, 1500), array_y(700, 0), read_y=True)
+    assert (found.array.y_call_ratio, found.y_present, found.y_reason) == (None, None, "no_calls_not_written")
+    assert (found.array.autosome_rows, found.array.autosome_called, found.array.autosome_no_calls) == (2001, 2000, 0)
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+    # With the export's own no-calls written beside it, the Y line reads.
+    written = on_array(autosomes(no_calls=40), unreadable, array_x(500, 1500), array_y(700, 0), read_y=True)
+    assert written.array.autosome_no_calls == 40 and written.y_present is True
+
+
 @pytest.mark.parametrize(
     ("x", "y", "x_reason", "y_reason"),
     [

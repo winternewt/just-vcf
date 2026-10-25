@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `sex_chromosome_evidence` on an array facet tells a written no-call from an unreadable row (RM269):
+  the check that the export writes its no-calls counted every autosomal row not called, so one row
+  whose genotype no loader could read (`gt_alleles` null) let an export that drops its no-calls read
+  its Y line with `array_y=True` (700 called Y rows of 700 read as a Y). It now counts the rows written
+  as no-calls (`--`, a letter null), on `ArrayLines`' new `autosome_no_calls`, and both the Y ratio
+  and `no_calls_not_written` read that count. Additive field.
+
 - An integer key declared `Float` (GQ, DP, MIN_DP, LEN, PS, AD, PSO, PSQ, HQ, INFO END, SVLEN, CIPOS,
   CIEND) is read from its text, where polars-bio's 32-bit float rounded the fraction away and the value
   read as whole: DP `30.0000001` read 30, END `5000000.1` read 5000000, PS `10000000.5` read set

@@ -331,7 +331,13 @@ its own phase set. So:
   counterpart of PSQ, is not carried.
 - polars-bio refuses a header that declares `Number=P` (P10), so the loader reads such a file
   through its rewritten copy with those keys declared `Number=.` (`REWRITE_VERSION` 9), with a warning;
-  the count is checked against GT here.
+  the count is checked against GT here. A PSL, PSO or PSQ declared `Number=1` is read the same way
+  (`REWRITE_VERSION` 12, 2026-10-25): VCF 4.4 and 4.5 define all three as one value per GT allele, and
+  a diploid row's two values do not parse under a single-value declaration, which failed the load.
+  The per-row counts decide, as for `P`, so a haploid row and a diploid one both read. Another fixed
+  count (`Number=2`) reads as a list already and is read as it is. Rejected: not carrying a key so
+  declared, which would drop the values of every file whose rows are haploid (they load today), and
+  judging the declaration by the first rows, since a later diploid row would still fail the load.
 
 The VRS CisPhasedBlock is built from `phase_sets` at export, by `cis_phased_blocks` ("CisPhasedBlock
 export" below). It is not stored per row.

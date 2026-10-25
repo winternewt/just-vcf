@@ -205,6 +205,29 @@ def test_psl_phase_sets_are_read_per_allele(tmp_path: Path) -> None:
     assert any(w.startswith("1 record(s) carry both PS and PSL") for w in warnings)
 
 
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.4", "VCFv4.5"])
+@pytest.mark.parametrize(("psl", "pso", "psq"), [("P", "1", "1"), ("1", "P", "P"), ("P", "2", "2"), ("1", "1", "1")])
+def test_phase_set_lists_declared_with_a_fixed_count_are_read_per_allele(tmp_path: Path, version: str, psl: str, pso: str, psq: str) -> None:
+    """VCF defines PSL, PSO and PSQ as one value per GT allele (`Number=P`). A file declaring one of them
+    `Number=1` writes two values on a diploid row, which polars-bio cannot parse under that declaration;
+    the loader reads them as it reads `P`, each row's count checked against GT and PSL, so a haploid row
+    and a diploid one both load. A `Number=2` declaration, which loads as it is, reads the same."""
+    meta = tuple(
+        f'##FORMAT=<ID={key},Number={number},Type={kind},Description="x">'
+        for key, number, kind in (("PSL", psl, "String"), ("PSO", pso, "Integer"), ("PSQ", psq, "Integer"))
+    )
+    records = ["1\t100\t.\tA\tG\t50\t.\t.\tGT:PSL:PSO:PSQ\t1|1:a,a:1,2:30,40", "1\t200\t.\tA\tG\t50\t.\t.\tGT:PSL:PSO:PSQ\t1:a:3:50"]
+    loaded = load(write(tmp_path, vcf_text(records, version=version, extra_meta=meta)))
+    calls, facet = loaded.calls.collect().sort("pos"), loaded.facets.collect().row(0, named=True)
+    assert calls["phase_sets"].to_list() == [["a", "a"], ["a"]]
+    assert calls["phase_set_ordinals"].to_list() == [[1, 2], [3]]
+    assert calls["phase_set_qualities"].to_list() == [[30, 40], [50]]
+    assert not {"FORMAT/PSL", "FORMAT/PSO", "FORMAT/PSQ"} & set(facet["dropped_fields"] or [])
+    one = [key for key, number in (("PSL", psl), ("PSO", pso), ("PSQ", psq)) if number == "1"]
+    stated = [w for w in loaded.warnings if w.startswith("phase-set-list key(s) declared Number=1")]
+    assert stated == ([] if not one else [stated[0]]) and (not one or stated[0].endswith(", ".join(one))), loaded.warnings
+
+
 def test_a_file_without_psl_keeps_its_phase_set_lists_null(tmp_path: Path) -> None:
     records = ["1\t100\t.\tA\tG\t.\t.\t.\tGT:PS\t0|1:100"]
     calls, _, _ = frames(write(tmp_path, vcf_text(records, fmt=("GT", "PS"))))

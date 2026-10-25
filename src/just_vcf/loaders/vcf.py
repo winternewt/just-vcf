@@ -85,6 +85,13 @@ READ_AS_ANY_NUMBER = frozenset({"P"})
 """FORMAT Numbers polars-bio refuses (P10) that the loader reads through a copy declaring `Number=.`:
 the values are the same lists, and the length is checked against GT here."""
 
+PHASE_SET_LISTS = frozenset({"PSL", "PSO", "PSQ"})
+"""The phase-set-list keys, which VCF 4.4 and 4.5 define as one value per GT allele (`Number=P`). A file
+declaring one `Number=1` writes two values on a diploid row, which polars-bio cannot parse under that
+declaration (it reads a single value), so the copy declares it `Number=.` as it does `P`: each row's
+count is checked against GT (PSL) and PSL (PSO, PSQ) all the same. Another fixed count (`Number=2`) is
+read as a list already, and is read as it is."""
+
 VECTOR_NUMBERS: dict[str, str] = {"AD": "R", "PL": "G", "GL": "G", "GP": "G", "PP": "G"}
 """Carried vectors that are parallel to the alleles (R) or the genotypes (G). A file declaring one of
 them with a fixed count is using the name for something else: VarScan2's AD (Number=1) is the ALT
@@ -206,7 +213,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 11
+REWRITE_VERSION = 12
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -218,7 +225,9 @@ phase-set-list keys are carried, so a structural copy keeps them.
 copy keeps it.
 11: a structural copy leaves out a carried key declared with a Number it is not read under, and one of
 a Type VCF 4.3, 4.4 or 4.5 reserves otherwise (`left_out_of_copy`); a copy from 10 kept their lines,
-so a file with one fails its retry there."""
+so a file with one fails its retry there.
+12: a phase-set-list key declared `Number=1` (`PHASE_SET_LISTS`) is declared `Number=.` in the copy; a
+copy from 11 kept `Number=1`, under which a diploid row's two values fail the read."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -673,18 +682,26 @@ def caller_parts(header: Header, data: list[bytes]) -> list[Part]:
 
 
 def any_number_keys(header: Header) -> list[str]:
-    """FORMAT keys the header declares with a Number polars-bio refuses and the loader reads through a
-    copy declaring `Number=.` (`READ_AS_ANY_NUMBER`, P10). Any such key, carried or not: polars-bio
-    refuses the whole header for one."""
-    return sorted(key for key, number in header.format.items() if number in READ_AS_ANY_NUMBER)
+    """FORMAT keys the loader reads through a copy declaring `Number=.`: any key the header declares
+    with a Number polars-bio refuses (`READ_AS_ANY_NUMBER`, P10), carried or not, since polars-bio
+    refuses the whole header for one; and a phase-set-list key declared `Number=1`
+    (`PHASE_SET_LISTS`)."""
+    return sorted(key for key, number in header.format.items() if _read_as_any_number(key, number))
+
+
+def _read_as_any_number(key: str, number: str) -> bool:
+    return number in READ_AS_ANY_NUMBER or (key in PHASE_SET_LISTS and number == "1")
 
 
 def _readable_number(line: str) -> str:
-    """A `##FORMAT` line with a Number polars-bio refuses (`READ_AS_ANY_NUMBER`) declared `Number=.`."""
-    if not line.startswith("##FORMAT=<"):
+    """A `##FORMAT` line of a key `any_number_keys` names, declared `Number=.`."""
+    declared = re.match(r"^##FORMAT=<(.*)>$", line)
+    if not declared:
         return line
-    numbers = "|".join(re.escape(number) for number in sorted(READ_AS_ANY_NUMBER))
-    return re.sub(rf"(?<=[<,])Number=(?:{numbers})(?=[,>])", "Number=.", line)
+    attrs = _attrs(declared.group(1))
+    if not _read_as_any_number(attrs.get("ID", ""), attrs.get("Number", "")):
+        return line
+    return re.sub(r"(?<=[<,])Number=[^,>]*(?=[,>])", "Number=.", line, count=1)
 
 
 def unfit_keys(header: Header) -> dict[str, str]:

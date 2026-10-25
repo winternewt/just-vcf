@@ -713,10 +713,16 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             f"key(s) declared with a Type VCF {version[0]}.{version[1]} reserves otherwise, which polars-bio refuses, not carried: "
             + ", ".join(f"{name} (Type={kind}, {version[0]}.{version[1]} reserves {reserved[name]})" for name, kind in sorted(refused.items()))
         )
-    if any_number := vcf.any_number_keys(header):
+    any_number = vcf.any_number_keys(header)
+    if by_allele := [key for key in any_number if header.format[key] in vcf.READ_AS_ANY_NUMBER]:
         warnings.append(
             "FORMAT key(s) declared Number=P, which polars-bio refuses (P10), read through a copy declaring "
-            f"Number=. with each value's count checked against GT: {', '.join(any_number)}"
+            f"Number=. with each value's count checked against GT: {', '.join(by_allele)}"
+        )
+    if one_value := [key for key in any_number if key not in by_allele]:
+        warnings.append(
+            "phase-set-list key(s) declared Number=1, which VCF defines as one value per GT allele (Number=P), "
+            f"read through a copy declaring Number=. with each value's count checked against GT and PSL: {', '.join(one_value)}"
         )
     if not header.meta:
         warnings.append(

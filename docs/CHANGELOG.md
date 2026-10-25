@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A PSO or PSQ declared `Number=1` loads, where a diploid row's two values failed the load with
+  `HeaderRefused`: VCF defines PSL, PSO and PSQ as one value per GT allele, and the copy polars-bio
+  reads now declares a `Number=1` one `Number=.`, as it does `Number=P`, with each row's count
+  checked against GT and PSL. A PSL declared `Number=1` reads its values too, where its records' phase
+  was withheld. `Number=2` reads as before. `REWRITE_VERSION` 12.
+
 - A carried integer key declared `Float` or `String` (a VCF 4.2 header, or MIN_DP, LEN, PSO or PSQ in
   a version that holds no definition of them) keeps only whole numbers, where it was truncated or
   lost without a word: GQ `30.7` read as 30, AD `3.5,4` as `[3, 4]`, END `200.5` as 200, and GQ `x`

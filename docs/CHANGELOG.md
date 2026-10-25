@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The forge gate keeps checking every session's GitHub writes (issues, comments, pull request bodies)
+  against `.leak_words`, not only a seated session's: `[repo] forge_gate_unseated = true` in
+  `.blueprints.toml`, since kit v0.1.93 (#162) gates unseated sessions only when asked. The pin is at
+  v0.1.93.
+
 - A VCF 4.2 file declaring FT, PSL or INFO SVTYPE with a Type other than String (`Integer`, `Float`,
   `Character`) loads, where the first value (`PASS`, `DEL`) failed the whole read: the key is not
   carried, with a warning that names it and its Type, and it is in `dropped_fields`, as a 4.3+ header

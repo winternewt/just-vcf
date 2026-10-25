@@ -1,6 +1,10 @@
 [repo]
 # The repo's channel takes this name too; the seats talk in agent-chat and announcements (D104).
 id = "just-vcf"
+# The forge gate checks every gh write against .leak_words and for absolute paths. Since kit v0.1.93
+# (#162) it checks only seated sessions unless this is set; here a private genome's names are the one
+# thing that must not leave, so an unseated session's issue or comment is checked too.
+forge_gate_unseated = true
 
 [seat.triage]
 # Answers consumer feedback (docs/seats/TRIAGE.md). The lead and the liaison relay a consumer report to

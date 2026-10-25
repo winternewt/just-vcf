@@ -32,6 +32,7 @@ role, "Why it exists").
   path is versioned, so each kit move re-points it in the same sitting. The list itself
   (`.leak_words`, git-ignored) is the person's: what names it carries was their call, made with the
   lead; this seat never reads it out, prints it or commits it.
+  The forge gate checks every session's gh writes, seated or not: `[repo] forge_gate_unseated = true`.
 - **The kit's pin in this clone.** This seat alone moves it (the kit's `bin/move-to-tag.py`), then tells
   the other seats to `/reload-plugins`; none of them runs `move-to-tag`. It moves when a release
   carries a fix a seat here waits on, or when the kit's announcement says a release needs it; never

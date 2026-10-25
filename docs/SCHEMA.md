@@ -311,6 +311,12 @@ its own phase set. So:
 - A phased haplotype with no PS or PSL has `phased = true` and `phase_set` null (kind `ps`). It belongs
   to its chromosome's one implicit set (VCF 4.5: "All phased genotypes that do not contain a PS
   subfield are assumed to belong to the same phased set"), key `(facet_id, chrom, ps, null)`.
+- **A PS the loader cannot read withholds the phase** (`phased` null where it was true, the phase-set
+  lists null), never the implicit set: that set is for a record that wrote no PS, and one whose PS was
+  not read did write one. The cases, each counted in a warning that says the phase was withheld: a PS
+  value left out as not a whole number (Decision 9), and a negative PS (`-5`, `-1`), since VCF's PS is
+  a non-negative integer (2026-10-25; the list arithmetic read `-1` as the implicit set). PS `0` is a
+  set like any other.
 - **How the VCF loader reads PSL** (VCF 4.4+, `Number=P`: one value per allele in GT). On a record
   whose PSL names a set, each slot is read from its own entry: a phased slot with a name is in that
   set (kind `psl`); a phased slot with `.` is in the implicit set above (kind `ps`, set null), since it

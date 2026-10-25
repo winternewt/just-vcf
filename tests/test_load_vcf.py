@@ -1056,6 +1056,23 @@ def test_a_phase_set_that_is_not_read_withholds_the_phase(tmp_path: Path, kind: 
     assert any(w.startswith(f"2 PS value(s) {reason} left out") and "phase" in w for w in loaded.warnings), loaded.warnings
 
 
+@pytest.mark.parametrize("kind", ["Integer", "Float", "String"])
+def test_a_negative_phase_set_withholds_the_phase(tmp_path: Path, kind: str) -> None:
+    """VCF's PS is a non-negative integer, so `-5` and `-1` name no set. Read as they were, the list
+    arithmetic put both records in the chromosome's implicit set (`phased` true, `phase_sets` null):
+    each is left out and counted, and the record's phase withheld. PS 0 is a set like any other."""
+    meta = (f'##FORMAT=<ID=PS,Number=1,Type={kind},Description="Phase set">',)
+    values = {100: "-5", 200: "-1", 300: "0", 400: "7"}
+    records = [f"1\t{pos}\t.\tA\tG\t50\t.\t.\tGT:PS\t0|1:{ps}" for pos, ps in values.items()]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=meta)))
+    calls = loaded.calls.collect().sort("pos")
+    assert calls["phased"].to_list() == [[None, None], [None, None], [True, True], [True, True]]
+    assert calls["phase_sets"].to_list() == [None, None, ["0", "0"], ["7", "7"]]
+    assert calls["phase_set_kinds"].to_list() == [None, None, ["ps", "ps"], ["ps", "ps"]]
+    negative = [w for w in loaded.warnings if "negative" in w]
+    assert len(negative) == 1 and negative[0].startswith("2 PS value(s) negative") and "phase withheld" in negative[0], loaded.warnings
+
+
 @pytest.mark.parametrize("version", ["VCFv4.3", "VCFv4.4", "VCFv4.5"])
 def test_hq_declared_with_a_type_its_version_reserves_otherwise_is_not_carried(tmp_path: Path, version: str) -> None:
     """VCF 4.3 on reserves HQ as Integer, and polars-bio refuses a header of those versions declaring it

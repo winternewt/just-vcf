@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A negative PS (`0|1:-5`, `0|1:-1`) withholds the record's phase (`phased` null where it was true),
+  with a warning counting the values (`… PS value(s) negative …`), where the record landed in its
+  chromosome's implicit phase set: VCF's PS is a non-negative integer, so the value names no set.
+  PS `0` reads as before.
+
 - A Nirvana JSON file whose sample entries carry no genotype loads with `gt` and `gt_alleles` null,
   where it failed the spill with polars' `InvalidOperationError`, the VCF loader's failure below; and
   `normalize` splits a contig whose every record has no GT, where its `<*>` check raised

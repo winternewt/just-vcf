@@ -127,8 +127,10 @@ UNREAD_REASONS: dict[str, str] = {
     "not_whole": "not a whole number",
     "not_number": "not a number",
     "inexact": "too large to read exactly as a whole number",
+    "negative": "negative (VCF's PS is a non-negative integer)",
 }
-"""Why `_whole_numbers` leaves a value out → the warning's words. `inexact`: polars-bio reads a Float
+"""Why a value is left out → the warning's words: by `_whole_numbers`, and `negative` by `_negative_ps`.
+`inexact`: polars-bio reads a Float
 as a 32-bit float, exact for whole numbers only up to 2^24 (123456789 comes back 123456792), and text
 is read through a 64-bit one, exact up to 2^53; past that the number read may not be the file's."""
 
@@ -1059,7 +1061,7 @@ def read_records(
             if f"info_{key}" not in present
         ]
     ).with_columns(pl.col("fmt_GT").cast(pl.String), pl.col("fmt_FT").cast(pl.String))
-    return _whole_numbers(frame)
+    return _negative_ps(_whole_numbers(frame))
 
 
 def _whole_numbers(frame: pl.LazyFrame) -> pl.LazyFrame:
@@ -1093,6 +1095,18 @@ def _whole_numbers(frame: pl.LazyFrame) -> pl.LazyFrame:
             count = pl.col(name).list.eval(flag.cast(pl.Int64)).list.sum().fill_null(0) if listed else flag.cast(pl.Int64)
             columns.append(count.alias(f"_unread_{reason}:{name}"))
     return frame.with_columns(columns) if columns else frame
+
+
+def _negative_ps(frame: pl.LazyFrame) -> pl.LazyFrame:
+    """`frame` with a negative PS left out and counted in `_unread_negative:fmt_PS`. VCF's PS is a
+    non-negative integer, so a negative one names no set; read as it is, the list arithmetic of
+    `_phase_sets` put the record in its chromosome's implicit set (`-1` gave `PS + 1 = 0`, unphased-null).
+    Left out like any unread PS, it withholds the record's phase (`to_rows`)."""
+    negative = (pl.col("fmt_PS") < 0).fill_null(False)
+    return frame.with_columns(
+        pl.when(negative).then(None).otherwise(pl.col("fmt_PS")).alias("fmt_PS"),
+        negative.cast(pl.Int64).alias("_unread_negative:fmt_PS"),
+    )
 
 
 _BOUNDED = {"GQ": 2**16 - 1, "DP": 2**32 - 1, "MIN_DP": 2**32 - 1}

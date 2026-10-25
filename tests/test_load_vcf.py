@@ -10,7 +10,7 @@ import polars as pl
 import pytest
 
 from just_vcf import MultiSampleError, NoSampleError, load, rejoin_split, vcf_samples, write_vcf
-from just_vcf.loaders.vcf import FORMAT_KEYS, undo_resave
+from just_vcf.loaders.vcf import FORMAT_KEYS, HeaderRefused, undo_resave
 from just_vcf.schema import BLOCKS, CALLS
 
 FORMAT_LINES = {
@@ -329,6 +329,57 @@ def test_malformed_field_the_frames_do_not_carry_does_not_fail_the_load(tmp_path
     loaded = load(write(tmp_path, vcf_text(records, extra_meta=extra)))
     assert loaded.calls.collect()["gt"].to_list() == [[0, 1]]
     assert loaded.facets.collect()["dropped_fields"][0].to_list() == ["FORMAT/XAF"]
+
+
+# A carried key declared as VCF reserves it, with a value that does not parse under that declaration.
+# polars-bio names the key for a list-valued field: (meta line, the bad sample or INFO field, the key).
+_UNPARSED = [
+    ('##FORMAT=<ID=HQ,Number=2,Type=Integer,Description="h">', "GT:HQ\t0/1:{}", "30.5,40", "FORMAT/HQ"),
+    ('##FORMAT=<ID=HQ,Number=2,Type=Integer,Description="h">', "GT:HQ\t0/1:{}", "x,40", "FORMAT/HQ"),
+    ('##FORMAT=<ID=AD,Number=R,Type=Integer,Description="h">', "GT:AD\t0/1:{}", "x,4", "FORMAT/AD"),
+    ('##INFO=<ID=SVLEN,Number=A,Type=Integer,Description="h">', "SVLEN={}\tGT\t0/1", "x", "INFO/SVLEN"),
+]
+
+
+def _unparsed_record(pos: int, field: str, value: str) -> str:
+    """A record whose INFO or sample column carries `field` with `value`."""
+    if field.startswith("GT"):
+        return f"1\t{pos}\t.\tA\tG\t50\t.\t.\t{field.format(value)}"
+    return f"1\t{pos}\t.\tA\t<DEL>\t50\t.\t{field.format(value)}"
+
+
+@pytest.mark.parametrize(("meta", "field", "value", "name"), _UNPARSED)
+def test_a_carried_key_polars_bio_names_as_unparsable_is_not_carried(tmp_path: Path, meta: str, field: str, value: str, name: str) -> None:
+    """A VCF 4.2 file declaring a carried key as VCF reserves it, with a value that does not parse under
+    that declaration, loads without the key where polars-bio's error names it: listed in
+    `dropped_fields`, one warning naming it, and every other key still read."""
+    records = [_unparsed_record(100, field, value), _unparsed_record(200, field, "5"), "1\t300\t.\tC\tT\t50\t.\t.\tGT:GQ\t1/1:40"]
+    loaded = load(write(tmp_path, vcf_text(records, fmt=("GT", "GQ"), extra_meta=(meta,))))
+    calls, facet = loaded.calls.collect().sort("pos"), loaded.facets.collect().row(0, named=True)
+    assert calls["gt"].to_list() == [[0, 1], [0, 1], [1, 1]] and calls["gq"].to_list() == [None, None, 40]
+    assert name in facet["dropped_fields"]
+    named = [w for w in loaded.warnings if name in w and "cannot parse" in w]
+    assert len(named) == 1 and "not carried" in named[0], loaded.warnings
+
+
+def test_each_carried_key_polars_bio_cannot_parse_is_left_out_in_turn(tmp_path: Path) -> None:
+    """Two carried keys with values that do not parse: polars-bio names one per read, so each is left
+    out in its own retry, and the file loads without both."""
+    meta = ('##FORMAT=<ID=AD,Number=R,Type=Integer,Description="h">', '##FORMAT=<ID=HQ,Number=2,Type=Integer,Description="h">')
+    records = ["1\t100\t.\tA\tG\t50\t.\t.\tGT:AD:HQ\t0/1:x,4:30,40", "1\t200\t.\tA\tG\t50\t.\t.\tGT:AD:HQ\t0/1:3,4:30,x"]
+    loaded = load(write(tmp_path, vcf_text(records, extra_meta=meta)))
+    calls, facet = loaded.calls.collect(), loaded.facets.collect().row(0, named=True)
+    assert calls["gt"].to_list() == [[0, 1], [0, 1]] and calls["ad"].to_list() == [None, None] and calls["hq"].to_list() == [None, None]
+    assert {"FORMAT/AD", "FORMAT/HQ"} <= set(facet["dropped_fields"])
+    assert sorted(name for name in ("FORMAT/AD", "FORMAT/HQ") for w in loaded.warnings if name in w and "cannot parse" in w) == ["FORMAT/AD", "FORMAT/HQ"]
+
+
+def test_an_unparsable_carried_key_polars_bio_does_not_name_still_refuses(tmp_path: Path) -> None:
+    """polars-bio names no key when a single-value field fails to parse (GQ `30.5` under Integer), and
+    the loader never guesses which key it was: the load is refused, as before."""
+    records = ["1\t100\t.\tA\tG\t50\t.\t.\tGT:GQ\t0/1:30.5"]
+    with pytest.raises(HeaderRefused, match="Error reading FORMAT field"):
+        load(write(tmp_path, vcf_text(records, fmt=("GT", "GQ"))))
 
 
 def test_header_polars_bio_refuses_is_retried_with_structural_lines(tmp_path: Path) -> None:

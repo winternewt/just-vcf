@@ -210,6 +210,20 @@ class NoSampleError(ValueError):
 class HeaderRefused(ValueError):
     """polars-bio refused the file: its header (P8), or a field value it could not parse (P7)."""
 
+    def __init__(self, message: str, key: str | None = None, reason: str | None = None) -> None:
+        super().__init__(message)
+        self.key = key
+        """The key, namespaced (`FORMAT/HQ`), whose value polars-bio says it could not parse; None where
+        its error names none (it names a list-valued field, never a single-value one)."""
+        self.reason = reason
+        """What polars-bio said was wrong with that value (`invalid digit found in string`)."""
+
+
+_UNPARSED_FIELD = re.compile(r"Error reading (FORMAT|INFO)(?: array)? field '([^']+)': ([^\n]*)")
+"""polars-bio's error for a value it could not parse in a named field (datafusion-bio-formats
+`format_value_error`, `info_array_error`). A single-value field fails inside noodles' iterator, and
+that error ("Error reading FORMAT field: …") names no key."""
+
 
 _STRUCTURAL_META = ("##fileformat=", "##FILTER=", "##ALT=", "##contig=")
 """Meta lines kept in a structural-only copy, besides the INFO and FORMAT keys the frames carry.
@@ -276,6 +290,9 @@ class Header:
     alt_ids: set[str] = field(default_factory=set)
     """Symbolic alleles the header declares with `##ALT` (`CGA_NOCALL`, `NON_REF`, `DEL`…)."""
     """Declared INFO keys that mark split records → `vt`, `just_vcf` or `bcftools` (`_split_marker_kind`)."""
+    unparsed: dict[str, str] = field(default_factory=dict)
+    """Carried keys, namespaced, that polars-bio named as holding a value it cannot parse under their
+    declaration → what it said. Set by the loader's retry (`can_leave_out`); such a key is not carried."""
 
     @property
     def version_tuple(self) -> tuple[int, int] | None:
@@ -520,8 +537,30 @@ def left_out_of_copy(header: Header) -> set[str]:
     polars-bio refuses (`refused_types`) and those declared with a Number they are not read under
     (`unfit_keys`). Neither is requested from polars-bio, but it parses every key its header declares,
     so a value that does not parse under such a declaration (`51,40` under `Number=1`) would fail the
-    retry too; left undeclared, it is skipped (P1)."""
-    return set(refused_types(header)) | {f"FORMAT/{key}" for key in unfit_keys(header)}
+    retry too; left undeclared, it is skipped (P1). And those polars-bio named as holding a value it
+    cannot parse (`Header.unparsed`)."""
+    return set(refused_types(header)) | {f"FORMAT/{key}" for key in unfit_keys(header)} | set(header.unparsed)
+
+
+def can_leave_out(header: Header, name: str | None) -> bool:
+    """Whether the retry may read again without `name`, a key polars-bio named as holding a value it
+    cannot parse: a carried key the structural copy still declares. Never GT, without which no row has
+    a genotype, and never a key left out already, so each key costs one retry at most."""
+    if name is None or name == "FORMAT/GT" or name in left_out_of_copy(header):
+        return False
+    namespace, key = name.split("/", 1)
+    if namespace == "INFO":
+        return key in INFO_KEYS and key in header.info
+    return key in FORMAT_KEYS and key in header.format
+
+
+def structural_dir(cache: Path, header: Header) -> Path:
+    """Where the structural copy of the file under `cache` is written: one directory per set of keys
+    the retry left out (`Header.unparsed`), so a copy without a key is never taken for one with it."""
+    if not header.unparsed:
+        return cache / "structural"
+    names = ",".join(sorted(header.unparsed))
+    return cache / f"structural-{hashlib.sha256(names.encode()).hexdigest()[:16]}"
 
 
 @dataclass
@@ -635,9 +674,8 @@ def gl_source(header: Header) -> GlSource | None:
     """Which FORMAT key(s) `gl` is read from: the likelihood keys `read_records` carries, so a GL or PL
     declared with a fixed count (another quantity under the name) or a Type polars-bio refuses does not
     count. Call it after `declare`, so a key the rows use undeclared counts. None: neither is carried."""
-    refused = refused_types(header)
-    unfit = unfit_keys(header)
-    carried = {key for key in ("GL", "PL") if key in header.format and key not in unfit and f"FORMAT/{key}" not in refused}
+    left_out = left_out_of_copy(header)
+    carried = {key for key in ("GL", "PL") if key in header.format and f"FORMAT/{key}" not in left_out}
     if carried == {"GL", "PL"}:
         return GlSource.GL_OVER_PL
     if carried:
@@ -678,7 +716,7 @@ def readable_path(
     if layers in ((), ("gzip",), ("bgzf",)) and as_is:
         return path
     with cache_index.writing(cache, cache_index.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION}, origin):
-        return _write_copy(opener, header, missing, cache / "structural" if structural_only else cache, structural_only)
+        return _write_copy(opener, header, missing, structural_dir(cache, header) if structural_only else cache, structural_only)
 
 
 def _write_copy(opener, header: Header, missing: list[str], cache: Path, structural_only: bool) -> Path:
@@ -702,6 +740,8 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
                 declared.add(key.groups())
             out.write(f"{_readable_number(line)}\n".encode())
         for name in missing:
+            if structural_only and name in left_out:
+                continue
             namespace, key = name.split("/", 1)
             number = (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key][0]
             number = "." if number in READ_AS_ANY_NUMBER else number
@@ -760,9 +800,9 @@ def _write_bcf_copy(path: Path, layers: tuple[str, ...], opener, cache: Path) ->
     return target
 
 
-def pos_zero_left_out(cache: Path) -> int:
-    """Records at POS 0 left out of the structural copy under `cache`."""
-    marker = cache / "structural" / "pos_zero_left_out"
+def pos_zero_left_out(cache: Path, header: Header) -> int:
+    """Records at POS 0 left out of the structural copy under `cache` (`structural_dir`)."""
+    marker = structural_dir(cache, header) / "pos_zero_left_out"
     return int(marker.read_text()) if marker.exists() else 0
 
 
@@ -827,9 +867,13 @@ def _collect_all(plans: list[pl.LazyFrame]) -> list[pl.DataFrame]:
 
 
 def _refused(err: pl.exceptions.ComputeError) -> HeaderRefused | None:
-    """polars-bio's failure to parse a field value, as `HeaderRefused`; None for any other failure."""
-    if ("Error reading" in str(err) and "field" in str(err)) or "Missing variant start" in str(err):
-        return HeaderRefused(str(err).splitlines()[-1][-160:])
+    """polars-bio's failure to parse a field value, as `HeaderRefused`, with the key where its error
+    names one (`_UNPARSED_FIELD`); None for any other failure."""
+    text = str(err)
+    if ("Error reading" in text and "field" in text) or "Missing variant start" in text:
+        named = _UNPARSED_FIELD.search(text)
+        key, reason = (f"{named.group(1)}/{named.group(2)}", named.group(3).strip()[:160]) if named else (None, None)
+        return HeaderRefused(text.splitlines()[-1][-160:], key=key, reason=reason)
     return None
 
 
@@ -852,11 +896,10 @@ def read_records(
     carried key is present, as a typed null when the file does not declare it. `extra_info` are INFO
     keys read for selecting rows (`SF`), as lists of strings.
     """
-    refused = refused_types(header)
-    info = [key for key in INFO_KEYS if key in header.info and f"INFO/{key}" not in refused]
+    left_out = left_out_of_copy(header)
+    info = [key for key in INFO_KEYS if key in header.info and f"INFO/{key}" not in left_out]
     info += sorted(header.split_markers) + list(extra_info)
-    unfit = unfit_keys(header)
-    fmt = [key for key in FORMAT_KEYS if key in header.format and key not in unfit and f"FORMAT/{key}" not in refused]
+    fmt = [key for key in FORMAT_KEYS if key in header.format and f"FORMAT/{key}" not in left_out]
     multi = len(header.samples) > 1
     frame = scan(path, info, fmt, sample if multi else None)
     if first_record is not None:
@@ -1630,11 +1673,11 @@ def dropped_fields(header: Header, data: list[bytes] = ()) -> list[str]:
     info, fmt = row_keys(list(data))
     info |= set(header.info)
     fmt |= set(header.format)
-    refused = refused_types(header)
+    left_out = left_out_of_copy(header)
     dropped_info = [
-        f"INFO/{key}" for key in info if (key not in INFO_KEYS and key not in header.split_markers) or f"INFO/{key}" in refused
+        f"INFO/{key}" for key in info if (key not in INFO_KEYS and key not in header.split_markers) or f"INFO/{key}" in left_out
     ]
-    dropped_fmt = [f"FORMAT/{key}" for key in fmt if key not in FORMAT_KEYS or key in unfit_keys(header) or f"FORMAT/{key}" in refused]
+    dropped_fmt = [f"FORMAT/{key}" for key in fmt if key not in FORMAT_KEYS or f"FORMAT/{key}" in left_out]
     return sorted(dropped_info) + sorted(dropped_fmt)
 
 

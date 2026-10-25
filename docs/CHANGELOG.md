@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF with a carried key declared as VCF reserves it but holding a value polars-bio cannot parse
+  under that declaration (HQ `Integer` with `30.5,40` or `x,40`, AD with `x,4`, INFO SVLEN with `x`)
+  loads without that key, where it failed with `HeaderRefused`: when the structural retry is refused
+  too and polars-bio's error names the key, the loader reads again with it left out, warns once
+  naming it and polars-bio's reason, and lists it in `dropped_fields`. Each key is left out once at
+  most. A single-value key (GQ `30.5` under `Integer`) still fails the load: polars-bio's error names
+  no key there, and the loader does not guess.
+
 - The CGI `var` and masterVarBeta warning that counts haplotypes whose varScoreVAF differs from the
   varScoreEAF read into `hq` counts only haplotypes whose EAF is read. It counted a half-call's `?`
   slot, a partly called haplotype and a score past u16 too, whose EAF never reaches `hq`.

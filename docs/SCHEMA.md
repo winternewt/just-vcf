@@ -1176,6 +1176,15 @@ polars-bio parses every key its header declares, requested or not, so a value th
 under such a declaration (`51,40` under HQ `Number=1`) would fail the load. The loader's retry reads a
 copy whose header leaves both kinds out, and the rows' values under them are skipped unread.
 
+A third case is found only by reading (2026-10-25): a carried key declared as its version reserves it,
+with a value that does not parse under that declaration (HQ `Integer` with `30.5,40` or `x,40` under
+VCF 4.2). Where the structural copy is refused too and polars-bio's error names the key, the copy is
+written again without it and read again; the key is not carried, with a warning that names it and
+polars-bio's reason, and it is in `dropped_fields`. Each key is left out once at most, and GT never, so
+the retries end. polars-bio names the key only for a list-valued field (HQ, AD, PL, INFO SVLEN…): a
+single-value one (GQ `30.5` under `Integer`, an INFO END) fails inside the reader with no key named,
+and the load is refused as before, since which key failed would be a guess.
+
 ## Decision 10: multi-sample files
 
 The charter is about one person. A trio VCF or a PGP two-column merge has more than one sample column.

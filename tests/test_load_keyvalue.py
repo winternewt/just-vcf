@@ -149,6 +149,22 @@ UNREADABLE = ("not readable as allele indices kept with a null in gt and gt_alle
               "not an index, and the text in source_gt")
 
 
+def test_each_genotype_is_counted_under_one_reason(tmp_path: Path) -> None:
+    """A genotype not readable as allele indices is counted as that alone, even where its digits name an
+    allele past the ALT list (`1:2`, `x/5` on a one-ALT row): unreadable comes first, and the past-ALT
+    count is over the readable genotypes (`0/2`), where an index too long for 64 bits is past too (it
+    failed the load). So the two counts add up to the genotypes they name."""
+    genotypes = {"1:2": "unreadable", "x/5": "unreadable", "0/2": "past", "2/2": "past", "0/" + "9" * 20: "past", "0/1": None}
+    lines = [row("chr1", 1000 + i, "A", "G", (gt, "NULL", "NULL", "10"), NULLS) for i, gt in enumerate(genotypes)]
+    loaded = frames(write(tmp_path, lines))[0]
+    counts = {reason: sum(1 for why in genotypes.values() if why == reason) for reason in ("unreadable", "past")}
+    found = [w for w in loaded.warnings if "past the row's ALT list" in w or "not readable as allele indices" in w]
+    assert sorted(found) == sorted([
+        f"freeBayes facet: {counts['past']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there",
+        f"freeBayes facet: {counts['unreadable']} genotype(s) {UNREADABLE}",
+    ]), found
+
+
 def test_no_row_reaches_the_gather_without_a_genotype(tmp_path: Path) -> None:
     """A caller's genotype never reaches `gt_alleles` null: a NULL genotype (or `.`) drops the row before `gt`
     is read, and a no-call or an unreadable one reads as a list of null indices, not a null list. So

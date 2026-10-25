@@ -131,21 +131,33 @@ def caller_rows(rows: pl.LazyFrame, prefix: str) -> pl.LazyFrame:
     )
 
 
+READABLE_GT = r"^(\d+|\.)([/|](\d+|\.))*$"
+"""Genotype text readable as allele indices: each slot an index or `.`, separated by `/` or `|`."""
+
+
+def past_alts(genotype: pl.Expr, alts: pl.Expr) -> pl.Expr:
+    """True on a genotype readable as allele indices (`READABLE_GT`) with an index past the row's `alts`
+    ALT alleles, read from the text's digits: `1/300` is past where `gt`, a UInt8 list, nulls the 300,
+    and an index too long for 64 bits is past too. An unreadable genotype is counted as that alone, so
+    `1:2` is never also past (SCHEMA.md, the unreadable genotype)."""
+    biggest = pl.lit(2**63 - 1, dtype=pl.Int64)
+    indices = genotype.str.extract_all(r"\d+").list.eval(pl.element().cast(pl.Int64, strict=False).fill_null(biggest))
+    return genotype.str.contains(READABLE_GT) & (indices.list.max() > alts)
+
+
 def stats(rows: pl.LazyFrame) -> dict:
-    """Counts the warnings need, over every row: malformed rows, genotypes per caller, and genotype
-    indices past a row's ALT list."""
+    """Counts the warnings need, over every row: malformed rows, genotypes per caller, genotypes not
+    readable as allele indices, and readable ones indexing past a row's ALT list; each genotype in one
+    of the last two at most."""
     alts = pl.col("alt").str.split(",").list.len()
     exprs = [malformed(rows).sum().alias("malformed")]
     for _, prefix, _ in CALLERS:
         genotype = _value(f"{prefix}GenoType")
-        indices = genotype.str.extract_all(r"\d+").list.eval(pl.element().cast(pl.Int64)).list.max()
+        readable = genotype.str.contains(READABLE_GT)
         exprs += [
             (genotype.is_not_null() & ~malformed(rows)).sum().alias(f"{prefix}_rows"),
-            ((indices > alts) & ~malformed(rows)).fill_null(False).sum().alias(f"{prefix}_past_alts"),
-            (genotype.is_not_null() & ~genotype.str.contains(r"^(\d+|\.)([/|](\d+|\.))*$") & ~malformed(rows))
-            .fill_null(False)
-            .sum()
-            .alias(f"{prefix}_unreadable"),
+            (past_alts(genotype, alts) & ~malformed(rows)).fill_null(False).sum().alias(f"{prefix}_past_alts"),
+            (genotype.is_not_null() & ~readable & ~malformed(rows)).fill_null(False).sum().alias(f"{prefix}_unreadable"),
         ]
     exprs.append(pl.col("chromosome").filter(~malformed(rows)).unique().sort().alias("chroms").implode())
     return rows.select(exprs).collect().row(0, named=True)

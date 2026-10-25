@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The key=value table counts each genotype under one warning reason: one not readable as allele
+  indices (`1:2`) was counted there and again as indexing past the row's ALT list, from its digits; a
+  readable genotype alone is checked against the ALTs now. A genotype with an index too long for 64
+  bits (`0/99999999999999999999`) is counted as past the ALTs, where it failed the load with polars'
+  `InvalidOperationError`.
+
 - A BCF whose header declares GT with a Type other than String is refused with `HeaderRefused` naming
   GT and its Type, where polars-bio's own refusal named nothing under 4.3 ("invalid record"). The text
   VCF's warning that such a GT is read through a copy declaring it String no longer applies to a BCF,

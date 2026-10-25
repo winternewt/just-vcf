@@ -70,6 +70,7 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P18 `depth()` block mode drops a run that reaches a contig's last base, 1-based only (2026-10-24) | the end marker of a 1-based read lands one past the dense array | datafusion-bio-functions |
 | P19 `depth()` block mode builds every contig's batches before emitting (2026-10-24) | `merge_dense_results` fills one queue for the whole file | datafusion-bio-functions |
 | P20 an indexed BAM `depth()` reads the file twice (2026-10-24) | seen on real 30x BAMs, not reproduced on a 12 MB synthetic one | unconfirmed |
+| P21 a scalar INFO/FORMAT value that fails to parse is refused without its key (2026-10-25) | noodles parses scalars inside its iterator and drops the key with the error; dbf wraps it bare, while its list paths name the key | datafusion-bio-formats |
 
 ## Verdicts by kind (2026-09-30)
 
@@ -102,6 +103,7 @@ another path is named.
 | P10 | move the noodles fork past 0.91.0, which parses `Number=P` | datafusion-bio-formats | as above |
 | P19 | block-mode `depth()` emits contig by contig, as per-base mode does (22.6 GB peak on a 27 GB BAM against per-base mode's 13.3 GB) | datafusion-bio-functions | per-base mode (`coverage.py`) |
 | P13 | warn or refuse when `write_vcf`/`sink_vcf` drop an undeclared column; see open pb #474 | polars-bio | nothing until we write VCF through polars-bio |
+| P21 | name the key in every INFO/FORMAT parse error, as the list-valued paths already do | datafusion-bio-formats | the retry without a named key (`loaders/vcf.py:262`, `:609`); a keyless refusal still refuses the file |
 | P5 | document the `fmt_` rename, and that one sample gives flat columns while several give a `genotypes` struct | polars-bio (docs) | map columns by the header's own namespace (done) |
 | P11 | document that FILTER `.` reads as `""` | polars-bio (docs) | `""` → null (done, `:455`) |
 | P12 | document that multi-allelic ALT is joined with `\|` | polars-bio (docs) | split on `\|` (done, `:390`) |
@@ -507,6 +509,35 @@ an index. **Not reproduced**: on a 12 MB synthetic BAM (two 5 Mb contigs, 300,00
 provider's index-driven partitioning in datafusion-bio-formats (`bio-format-core/src/partition_balancer.rs`
 splits a long contig into ranges), which a small file may not trigger. Owner unknown until it is
 reproduced; nothing to file yet. Mitigation: none needed for correctness.
+
+## P21 — A scalar INFO/FORMAT value that fails to parse is refused without its key
+
+Found by the lead seat on the VCF loader (merged `20fb9b0`). A scalar value that does not parse as its
+declared type (FORMAT `GQ` `Number=1,Type=Integer` holding `30.5`, INFO `END=10.5`) fails the scan with
+`Error reading FORMAT field: invalid digit found in string` or `Error reading INFO field: ...`, no key
+named. The same fault in a list-valued key names it: `Error reading FORMAT field 'AD': ...`, `Error
+reading INFO array field 'SVLEN': ...`. Reproduced on 0.36.0 with four one-record synthetic VCFs, one per
+case.
+
+The cause is in two layers. noodles parses a scalar value inside its field iterator and returns
+`io::Result<(key, value)>`, attaching the key only on success (`noodles-vcf/src/record/info.rs:62`,
+`record/samples/sample.rs:50`, fork `42a3c01`), and its message names no key. A list value is parsed
+lazily, after the key is known. datafusion-bio-formats then wraps the iterator's error bare
+(`bio-format-vcf/src/physical_exec.rs:736` for INFO, `:1846` and `:2474` for FORMAT, v1.13.1), while its
+own helpers for the list paths name the key (`info_array_error`, `format_value_error`, `:671-685`).
+Unchanged on its main after v1.14.0 (`:736`, `:1852`, `:2480`).
+
+Mitigation: the loader reads again without a key polars-bio names in its refusal (`_UNPARSED_FIELD`,
+`loaders/vcf.py:262`; `can_leave_out`, `:609`). A keyless refusal gives it nothing to leave out, so such
+a file still refuses as a whole. Not filed.
+
+*Upstream (2026-10-25).* Not reported (polars-bio, datafusion-bio-formats and both noodles trackers
+searched live for the two messages and "invalid digit"; pb #380, closed, was a bare INFO key, not this).
+**File at datafusion-bio-formats**, which can fix it alone: on the error path, find the failing key by
+reading each selected key with `info.get(header, key)` / `sample.get(header, key)`, which costs nothing
+on a good record, and name it as the list paths do. A noodles change (the key in the iterator's error)
+would be the deeper fix, and could be mentioned. Goes well in one batch with P15, also
+datafusion-bio-formats.
 
 ## Harvested and closed without an entry (2026-09-30)
 

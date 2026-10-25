@@ -372,7 +372,10 @@ alone, and only a readable one is checked against the row's ALT list. So `1:2` o
 row is unreadable, never also past the ALTs, though its digits name an allele the row lacks. The
 indices are read from the text's digits, never from `gt`: `gt` is a `u8` list, so `1/300` reads
 `[1, null]` there and is still counted past the ALTs, and an index too long for 64 bits is past them
-too (it failed the key=value table's load).
+too (it failed the key=value table's load). The VCF loader counts the same, with the same warning, from
+the GT text polars-bio hands back (2026-10-26; `0/300` loaded as `gt [0, null]` unwarned), and its
+frame is the other loaders' (`gt [0, null]`, `gt_alleles` null there). In a VCF 4.4+ file, which has no
+`source_gt` (P4), that row looks like the half-call `0/.`, and only the warning's count says otherwise.
 
 ## Decision 3: graded evidence (charter 7)
 
@@ -1236,6 +1239,16 @@ polars-bio reads and costs a pass over each sample column; and writing the copy 
 reader holds no definitions, which would read the whole file under another version (GT's leading
 phase indicator, P4).
 
+The same holds for a reserved key the loader never carries (2026-10-26): the structural copy keeps
+only the carried keys' lines, so FORMAT MQ or INFO DP, declared by the file or used undeclared, was
+read under the version's definition, and MQ `60.5` under 4.3's Integer failed the retry. So the copy
+declares every key the version reserves and the copy does not declare otherwise `Number=.` with the
+reserved Type (`READER_DEFINITIONS`, the pinned noodles fork's own table; `REWRITE_VERSION` 17), every
+one, not only those the rows read ahead use, since a later record may use another and a declared key
+no record uses costs nothing. Two are not declared: GT, which the reader parses as a genotype whatever
+its line says, and a Flag (INFO DB, SOMATIC), which the reader holds under no Number but 0, so a Flag
+written with a value (`DB=1`) still fails the read, as it does under the file's own line.
+
 GT is never left out (2026-10-25): a facet without genotypes is not a calls facet, and GT's values are
 genotype text whatever its line says. Declared `Integer`, `Float` or `Character`, it is read as written
 through a copy whose header declares it `Type=String`, in every version, with a warning naming the Type.
@@ -1252,6 +1265,15 @@ polars-bio's reason, and it is in `dropped_fields`. Each key is left out once at
 the retries end. polars-bio names the key only for a list-valued field (HQ, AD, PL, INFO SVLEN…): a
 single-value one (GQ `30.5` under `Integer`, an INFO END) fails inside the reader with no key named,
 and the load is refused as before, since which key failed would be a guess.
+
+An INFO value takes the same path as a FORMAT one, in every version (2026-10-26). polars-bio parses a
+record's INFO only when an INFO column is read, and the pass the retry wraps read none where the
+carried INFO keys were ones it counts nothing of (SVTYPE, a split marker), so the first read of INFO
+was the spill's, after the retry: INFO DP `Type=Integer` holding `30.5` beside SVTYPE failed the load
+with polars' raw `ComputeError`. That pass now reads every INFO column the spill reads, in the same
+pass over the file. The value is in a key not carried, so the structural copy, which leaves DP's line
+out, loads the file with DP in `dropped_fields`; one in a carried key is left out by name or refused
+as above.
 
 **A carried integer key declared `Float` or `String` keeps only whole numbers** (2026-10-25). VCF 4.2
 reserves no Type, and a later version none for a key it holds no definition of (MIN_DP; LEN before

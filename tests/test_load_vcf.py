@@ -1385,3 +1385,86 @@ def test_hq_is_never_filled_from_gq(tmp_path: Path) -> None:
     path = write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:GQ\t0/1:40"], fmt=("GT", "GQ"), extra_meta=(HQ_LINE.format(number=2),)))
     calls = load(path).calls.collect()
     assert calls["gq"].to_list() == [40] and calls["hq"].to_list() == [None]
+
+
+PAST_ALTS_WARNING = "genotype(s) index an allele past the row's ALT list; gt_alleles has a null there"
+
+
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.4"])
+def test_a_genotype_past_the_alts_is_counted_from_the_gt_text(tmp_path: Path, version: str) -> None:
+    """An allele index past the row's ALT list is counted in one warning, as the key=value table and
+    Nirvana count it (SCHEMA.md Decision 2), from the GT text's digits: `gt` is a `u8` list, so `0/300`
+    reads `[0, null]` there, the frame of `0/.`, and in a 4.4+ file, which has no `source_gt`, only the
+    count says the file wrote something else. `0/.`, and `1|2` over two ALTs, are not past."""
+    records = [
+        "1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/300",
+        "1\t200\t.\tA\tG\t.\t.\t.\tGT\t0/2",
+        "1\t300\t.\tA\tG\t.\t.\t.\tGT\t0/.",
+        "1\t400\t.\tA\tG,T\t.\t.\t.\tGT\t1|2",
+        "1\t500\t.\tA\t.\t.\t.\t.\tGT\t0/1",
+    ]
+    calls, _, warnings = frames(write(tmp_path, vcf_text(records, version=version)))
+    assert [w for w in warnings if PAST_ALTS_WARNING in w] == [f"3 {PAST_ALTS_WARNING}"], warnings
+    by_pos = {row["pos"]: row for row in calls.iter_rows(named=True)}
+    # The other loaders' frame: the slots read as written, an index past the alleles null in gt_alleles.
+    assert (by_pos[100]["gt"], by_pos[100]["gt_alleles"]) == ([0, None], ["A", None])
+    assert (by_pos[200]["gt"], by_pos[200]["gt_alleles"]) == ([0, 2], ["A", None])
+    assert (by_pos[500]["gt"], by_pos[500]["gt_alleles"]) == ([0, 1], ["A", None])
+    assert by_pos[400]["gt_alleles"] == ["G", "T"]
+
+
+@pytest.mark.parametrize(("neighbour", "value"), [
+    ('##INFO=<ID=SVTYPE,Number=1,Type=String,Description="x">', "SVTYPE=SNV"),
+    ('##INFO=<ID=OLD_MULTIALLELIC,Number=1,Type=String,Description="x">', "OLD_MULTIALLELIC=1:200:A/G/T"),
+])
+def test_an_info_value_that_does_not_parse_reaches_the_retry(tmp_path: Path, neighbour: str, value: str) -> None:
+    """An INFO value polars-bio cannot parse fails the read the retry wraps, as a FORMAT one does, not
+    the spill after it. polars-bio parses INFO only when an INFO column is read, and the stats pass read
+    none where the carried INFO keys were ones it does not count (SVTYPE, a split marker), so INFO DP
+    `30.5` under `Type=Integer` escaped as polars' raw `ComputeError` from the spill. Under VCF 4.2 the
+    structural copy, which leaves DP's line out, reads it as undeclared text, so the file loads as its
+    whole-valued twin does, with DP not carried."""
+    def loaded_with(dp: str, name: str):
+        records = [f"1\t{pos}\t.\tA\tG\t50\t.\tDP={dp};{value}\tGT\t0/1" for pos in (100, 200)]
+        meta = (INFO_LINES["DP"], neighbour)
+        return load(write(tmp_path, vcf_text(records, version="VCFv4.2", extra_meta=meta), name))
+
+    reference, refused = loaded_with("30", "whole.vcf"), loaded_with("30.5", "other.vcf")
+    assert refused.calls.collect().drop("facet_id").equals(reference.calls.collect().drop("facet_id"))
+    assert any("polars-bio refused the file" in w and "Error reading INFO field" in w for w in refused.warnings), refused.warnings
+    assert "INFO/DP" in refused.facets.collect()["dropped_fields"][0]
+
+
+@pytest.mark.parametrize(("namespace", "key", "line", "version", "whole", "other"), [
+    ("FORMAT", "MQ", '##FORMAT=<ID=MQ,Number=1,Type=Integer,Description="x">', "VCFv4.3", "60", "60.5"),
+    ("FORMAT", "MQ", '##FORMAT=<ID=MQ,Number=1,Type=Integer,Description="x">', "VCFv4.4", "60", "60.5"),
+    ("FORMAT", "MQ", '##FORMAT=<ID=MQ,Number=1,Type=Integer,Description="x">', "VCFv4.5", "60", "60.5"),
+    # A Type the version refuses: the header is refused first, and the retry reads MQ undeclared.
+    ("FORMAT", "MQ", '##FORMAT=<ID=MQ,Number=1,Type=Float,Description="x">', "VCFv4.3", "60", "60.5"),
+    # Used and never declared (P22): polars-bio's reader applies its own definition all the same.
+    ("FORMAT", "MQ", None, "VCFv4.3", "60", "60.5"),
+    ("FORMAT", "NQ", None, "VCFv4.5", "3", "x"),
+    ("INFO", "DP", INFO_LINES["DP"], "VCFv4.3", "30", "30.5"),
+    ("INFO", "AN", None, "VCFv4.4", "2", "two"),
+])
+def test_a_reserved_key_never_carried_is_skipped_unread(
+    tmp_path: Path, namespace: str, key: str, line: str | None, version: str, whole: str, other: str
+) -> None:
+    """A key a VCF 4.3+ version reserves and the loader never carries (FORMAT MQ, INFO DP) is skipped
+    unread in the structural copy, whatever its values, as a carried key left out is. The copy left its
+    line out, and polars-bio's reader then parsed every value under the version's own definition (MQ a
+    single Integer), so `60.5` failed the retry ("invalid digit found in string", naming no key) and the
+    load was refused. The file loads as its whole-valued twin does, with the key not carried."""
+    # A carried INFO key beside it, so polars-bio reads each record's INFO.
+    meta = tuple(m for m in (line, '##INFO=<ID=SVTYPE,Number=1,Type=String,Description="x">') if m)
+
+    def loaded_with(value: str, name: str):
+        records = [
+            (f"1\t{pos}\t.\tA\tG\t50\t.\t{key}={value};SVTYPE=SNV\tGT\t0/1" if namespace == "INFO" else f"1\t{pos}\t.\tA\tG\t50\t.\tSVTYPE=SNV\tGT:{key}\t0/1:{value}")
+            for pos in (100, 200)
+        ]
+        return load(write(tmp_path, vcf_text(records, version=version, extra_meta=meta), name))
+
+    reference, refused = loaded_with(whole, "whole.vcf"), loaded_with(other, "other.vcf")
+    assert refused.calls.collect().drop("facet_id").equals(reference.calls.collect().drop("facet_id"))
+    assert f"{namespace}/{key}" in refused.facets.collect()["dropped_fields"][0]

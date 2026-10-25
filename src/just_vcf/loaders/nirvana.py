@@ -22,7 +22,7 @@ from typing import BinaryIO
 
 import polars as pl
 
-from just_vcf.loaders.text import READABLE_GT, UNREADABLE_WARNING, genotype_indices, genotype_phase, past_alts
+from just_vcf.loaders.text import PAST_ALTS_WARNING, READABLE_GT, UNREADABLE_WARNING, genotype_indices, genotype_phase, past_alts
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import CALLS, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
 
@@ -192,7 +192,7 @@ def warnings_for(counts: dict, other_lines: int) -> list[str]:
     if counts["unreadable"]:
         found.append(f"{counts['unreadable']} {UNREADABLE_WARNING}")
     if counts["past_alts"]:
-        found.append(f"{counts['past_alts']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there")
+        found.append(f"{counts['past_alts']} {PAST_ALTS_WARNING}")
     return found
 
 

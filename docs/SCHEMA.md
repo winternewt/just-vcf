@@ -1167,7 +1167,7 @@ designs it.
 **Recommendation: B.** Under P1, a key missing from the header never reaches the loader at all. The
 loader builds complete headers for the formats it synthesises (`vcf_no_meta`, the key=value table).
 
-**A carried key the reader cannot follow is not carried** (2026-10-24), in two cases, each with a load
+**A carried key the reader cannot follow is not carried** (2026-10-24), in three cases, each with a load
 warning that names the key and with the key in `dropped_fields`:
 
 - declared with a Number it is not read under: a vector over the alleles or genotypes with a fixed
@@ -1176,13 +1176,17 @@ warning that names the key and with the key in `dropped_fields`:
   (`HQ` `Type=Float`; `CN` `Type=Float` under 4.3, which reserves it Integer). polars-bio's reader
   holds a definition per version and refuses the whole header for such a line; it checks only the
   Type, and nothing under 4.2. A key it has no definition for in that version (`DS`, `MIN_DP`, `LEN`
-  before 4.5, `PSL`/`PSO`/`PSQ` before 4.4) is read under any Type.
+  before 4.5, `PSL`/`PSO`/`PSQ` before 4.4) is read under any Type, except a text key below;
+- a text key (`FT`, `PSL`, INFO `SVTYPE`) declared with a Type other than String, in any version
+  (2026-10-25): no value it holds (`PASS`, a set name, `DEL`) parses as a number, and under VCF 4.2,
+  where polars-bio refuses no Type, the first one failed the whole read. The warning names the key
+  and its Type. GT is read as a genotype whatever its declaration.
 
 polars-bio parses every key its header declares, requested or not, so a value that does not parse
 under such a declaration (`51,40` under HQ `Number=1`) would fail the load. The loader's retry reads a
 copy whose header leaves both kinds out, and the rows' values under them are skipped unread.
 
-A third case is found only by reading (2026-10-25): a carried key declared as its version reserves it,
+One more case is found only by reading (2026-10-25): a carried key declared as its version reserves it,
 with a value that does not parse under that declaration (HQ `Integer` with `30.5,40` or `x,40` under
 VCF 4.2). Where the structural copy is refused too and polars-bio's error names the key, the copy is
 written again without it and read again; the key is not carried, with a warning that names it and

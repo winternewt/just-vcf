@@ -1137,6 +1137,26 @@ def test_a_carried_info_key_declared_with_another_type_loads(tmp_path: Path, key
     assert any(f"INFO/{key} (Type=Float" in w and "not carried" in w for w in loaded.warnings), loaded.warnings
 
 
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.3", "VCFv4.5"])
+@pytest.mark.parametrize("kind", ["Integer", "Float"])
+@pytest.mark.parametrize(("namespace", "key", "record", "column"), [
+    ("FORMAT", "FT", "1\t100\t.\tA\tG\t50\t.\t.\tGT:FT\t0/1:PASS", "sample_filters"),
+    ("INFO", "SVTYPE", "1\t100\t.\tA\t<DEL>\t50\t.\tSVTYPE=DEL\tGT\t0/1", "sv_type"),
+])
+def test_a_text_key_declared_as_a_number_is_not_carried(
+    tmp_path: Path, namespace: str, key: str, record: str, column: str, kind: str, version: str
+) -> None:
+    """FT and SVTYPE hold text (`PASS`, `DEL`). Declared Integer or Float, no value of theirs parses, and
+    under VCF 4.2, which reserves no Type, polars-bio fails the whole read on the first one: the file
+    loads without the key, which is in `dropped_fields`, with one warning that names it."""
+    declared = f'##{namespace}=<ID={key},Number=1,Type={kind},Description="x">'
+    loaded = load(write(tmp_path, vcf_text([record], version=version, extra_meta=(declared,))))
+    calls, facet = loaded.calls.collect(), loaded.facets.collect().row(0, named=True)
+    assert calls["gt"].to_list() == [[0, 1]] and calls[column].to_list() == [None]
+    assert f"{namespace}/{key}" in facet["dropped_fields"]
+    assert sum(f"{namespace}/{key} (Type={kind}" in w and "not carried" in w for w in loaded.warnings) == 1, loaded.warnings
+
+
 def test_an_undeclared_hq_the_rows_use_is_read(tmp_path: Path) -> None:
     path = write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:HQ\t0|1:51,40"]))
     loaded = load(path)

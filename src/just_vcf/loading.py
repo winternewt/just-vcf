@@ -713,6 +713,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             f"key(s) declared with a Type VCF {version[0]}.{version[1]} reserves otherwise, which polars-bio refuses, not carried: "
             + ", ".join(f"{name} (Type={kind}, {version[0]}.{version[1]} reserves {reserved[name]})" for name, kind in sorted(refused.items()))
         )
+    if typed_otherwise := vcf.text_keys_typed_otherwise(header):
+        warnings.append(
+            "text key(s) declared as numbers, so no value of theirs can be read, not carried: "
+            + ", ".join(f"{name} (Type={kind}, VCF reserves String)" for name, kind in sorted(typed_otherwise.items()))
+        )
     any_number = vcf.any_number_keys(header)
     if by_allele := [key for key in any_number if header.format[key] in vcf.READ_AS_ANY_NUMBER]:
         warnings.append(

@@ -213,7 +213,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 12
+REWRITE_VERSION = 13
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -227,7 +227,9 @@ copy keeps it.
 a Type VCF 4.3, 4.4 or 4.5 reserves otherwise (`left_out_of_copy`); a copy from 10 kept their lines,
 so a file with one fails its retry there.
 12: a phase-set-list key declared `Number=1` (`PHASE_SET_LISTS`) is declared `Number=.` in the copy; a
-copy from 11 kept `Number=1`, under which a diploid row's two values fail the read."""
+copy from 11 kept `Number=1`, under which a diploid row's two values fail the read.
+13: a structural copy leaves out a text key declared as a number (`text_keys_typed_otherwise`: FT
+`Type=Integer` under VCF 4.2); a copy from 12 kept its line, and its retry failed on the first value."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -570,14 +572,37 @@ def refused_types(header: Header) -> dict[str, str]:
     return {name: header.types[name] for name, kind in reserved.items() if name in header.types and header.types[name] != kind}
 
 
+TEXT_KEYS = ("FORMAT/FT", "FORMAT/PSL", "INFO/SVTYPE")
+"""The carried keys whose values are text (`PASS`, a phase-set name, `DEL`). GT, text too, is read by
+polars-bio as a genotype whatever its declaration."""
+
+
+def text_keys_typed_otherwise(header: Header) -> dict[str, str]:
+    """`TEXT_KEYS` the header declares with a Type other than String → that Type, where its version does
+    not refuse the line already (`refused_types`). No such value parses as a number, and under VCF 4.2,
+    which reserves no Type, polars-bio fails the whole read on the first one, so they are not carried."""
+    refused = refused_types(header)
+    return {
+        name: header.types[name]
+        for name in TEXT_KEYS
+        if header.types.get(name) not in (None, "", "String") and name not in refused
+    }
+
+
 def left_out_of_copy(header: Header) -> set[str]:
     """Carried keys, namespaced, whose declaration a structural copy leaves out: those of a Type
     polars-bio refuses (`refused_types`) and those declared with a Number they are not read under
     (`unfit_keys`). Neither is requested from polars-bio, but it parses every key its header declares,
     so a value that does not parse under such a declaration (`51,40` under `Number=1`) would fail the
-    retry too; left undeclared, it is skipped (P1). And those polars-bio named as holding a value it
-    cannot parse (`Header.unparsed`)."""
-    return set(refused_types(header)) | {f"FORMAT/{key}" for key in unfit_keys(header)} | set(header.unparsed)
+    retry too; left undeclared, it is skipped (P1). And text keys declared as numbers
+    (`text_keys_typed_otherwise`), and those polars-bio named as holding a value it cannot parse
+    (`Header.unparsed`)."""
+    return (
+        set(refused_types(header))
+        | {f"FORMAT/{key}" for key in unfit_keys(header)}
+        | set(text_keys_typed_otherwise(header))
+        | set(header.unparsed)
+    )
 
 
 def can_leave_out(header: Header, name: str | None) -> bool:

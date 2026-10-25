@@ -37,13 +37,35 @@ The estimate:
   each over the median on chr20, read at every base and not only at called sites. There a Y can be
   shown absent (`y_present = False`): with no Y, reads reach that region only by mismapping. Where the
   two Y lines disagree (the calls show a Y, the coverage shows none) the answer is unknown.
-- **Karyotype** from the two: one X and Y present is `XY`, two X and Y present `XXY`, one X and Y
-  absent `XO`, two X and Y absent `XX`. XXX, XYY and the rarer classes wait (a Y ratio above the
-  usual range still reads as one Y present). A value in an unknown band, lines that disagree, too few
-  sites, a facet that is not a whole genome, a build without a region set, or one whose thresholds
-  were never measured (T2T-CHM13, measured and reported only) all answer
-  `UNKNOWN_KARYOTYPE` with the reason, never the nearest class. `x_copies` is still answered wherever
-  the X lines settle it.
+- **Counts past two** come from the coverage line only. Copy number puts each copy at half an
+  autosome's depth, so a coverage ratio counts X copies (one 0.5, two 1.0, three 1.5) and Y copies
+  (none 0, one 0.5, two 1.0), each in a band of 0.125 either side: the central half of every gap
+  between two counts is unknown, as for the other lines. The call-based lines cannot count: the het
+  share says one X or two or more, the calls' Y depth says a Y is present or nothing. The calls' X
+  depth says one, two, or (above 1.25, the midpoint between two and three copies) more than two,
+  which a coverage three confirms and nothing else turns into a count. Each line allows a range of
+  counts and the answer is the range every line allows (`x_copy_count`, `y_copy_count` where it is
+  one number). No XXX or XYY genome was measured: these bands are copy number alone.
+- **Karyotype** from the two counts: `XO`, `XY`, `XYY`; `XX`, `XXY`, `XXYY`; `XXX`, `XXXY`; three X
+  with two Y is `OTHER_KARYOTYPE` (Phenopackets lists no XXXYY). Where a line could not count, the
+  reading from before counts were measured stands: a het share's two or more reads two, a Y shown
+  only by the calls reads one (so `XY` and `XXY` from calls alone, which cannot tell XY from XYY);
+  more than two X with no coverage line to count them is unknown (`copies_uncounted`). A value in an
+  unknown band, lines that disagree, too few sites, a facet that is not a whole genome, a build
+  without a region set, or one whose thresholds were never measured (T2T-CHM13, measured and
+  reported only) all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
+  `x_copies` is still answered wherever the X lines settle it.
+- **An array facet** (`callset_type = array`) has no depth; its lines are read from the letters as
+  written (`array`, `ArrayLines`), so no REF is needed. X: the het share of two-letter base calls on
+  non-PAR X over the autosomes' het share, one X near 0 (genotyping errors only), two X near 3/4 (X
+  diversity under the neutral expectation), the central half of the gap unknown. An X written with one
+  letter is the vendor's decision (23andMe does so for a sample it calls male), counted and never read
+  (`caller_asserted_only`). Y: the called share of the X-degenerate Y probes over the autosomes'
+  called share, near 1 with a Y and near 0 without. A vendor may no-call every Y probe because it
+  decided the sample is female, and nothing in the file tells that mask from a chip that saw no Y:
+  on PGP-HMS, 23andMe exports with a two-letter X read exactly 0, AncestryDNA women 0.008-0.098
+  (docs/ROADMAP.md RM269). So the Y line is read only with `array_y=True`; otherwise `y_reason` is
+  `vendor_asserted` and the karyotype unknown. Arrays cannot count copies.
 
 The estimate names a karyotype, not a sex: a person with an XX karyotype and a male phenotype has
 `x_copies = two_or_more`, and `XX` where a coverage facet shows no Y. It is read from variant calls
@@ -152,8 +174,9 @@ TWO_X_MIN_DEPTH_RATIO = 0.79
 """Measured clusters 0.42–0.50 and 0.89–1.00; gap 0.50–0.89."""
 
 TWO_X_MAX_DEPTH_RATIO = 1.25
-"""Above it the depth fits more than two X better than two (three copies would sit near 1.5): unknown,
-not two. The midpoint between two and three copies, from copy number alone."""
+"""Above it the depth fits more than two X better than two (three copies would sit near 1.5): the
+line then allows three or more, never two, and names no count itself. The midpoint between two and
+three copies, from copy number alone."""
 
 Y_PRESENT_MIN_DEPTH_RATIO = 0.52
 """Local genomes: 0.35–0.40 with two X, 0.56–0.82 with one. PGP-HMS: self-reported women 0.125 and
@@ -162,18 +185,21 @@ answer unknown. There is no absent threshold: men reach the two-X range."""
 
 # --- Coverage thresholds (RM278): ratios of read-depth medians, not of call-site DP ---------------
 
-COVERAGE_ONE_X_MAX_RATIO = 0.625
-COVERAGE_TWO_X_MIN_RATIO = 0.875
-COVERAGE_TWO_X_MAX_RATIO = 1.25
-"""Copy number puts one X at 0.5 of an autosome's depth and two at 1.0; each unknown band is the
-gap's central half, as for the call-based lines, and above 1.25 is unknown (three copies would sit at
-1.5). On four BAMs every ratio lay within 0.034 of its copy-number value (docs/ROADMAP.md RM269)."""
+COVERAGE_RATIO_PER_COPY = 0.5
+"""An autosome holds two copies, so each copy of X or Y reads half its depth: one copy 0.5, two 1.0,
+three 1.5, none 0 (plus mismapped reads)."""
 
-COVERAGE_Y_ABSENT_MAX_RATIO = 0.125
-COVERAGE_Y_PRESENT_MIN_RATIO = 0.375
-"""One Y puts the X-degenerate Y at 0.5 of an autosome's depth, none at 0 plus mismapped reads; the
-unknown band is the gap's central half. A mosaic loss of Y in part of the cells lowers the ratio
-toward the band and reads unknown there, not absent."""
+COVERAGE_BAND_HALF_WIDTH = 0.125
+"""A count's band reaches this far either side of its copy-number value: a quarter of the 0.5 between
+two counts, so the unknown band between them is the gap's central half, as for the call-based lines.
+A mosaic (a loss of Y or of one X in part of the cells) sits between two counts and reads unknown
+there, not as either. On four BAMs every ratio lay within 0.034 of its copy-number value
+(docs/ROADMAP.md RM269)."""
+
+COVERAGE_X_COUNTS = (1, 2, 3)
+COVERAGE_Y_COUNTS = (0, 1, 2)
+"""The counts a coverage line reads. Outside their bands (no X, four X, three Y) the line is unknown,
+not the nearest count: none of those was asked for or measured."""
 
 COVERAGE_MIN_EVEN_SHARE = 0.75
 """Share of chr20's described bases (gaps left out) whose interval mean lies between half and twice
@@ -205,11 +231,12 @@ region set, and no T2T genome was among the calibration files. Rejected: applyin
 to it unmeasured."""
 
 _AUTOSOMES = [str(n) for n in range(1, 23)]
+_BASES = ["A", "C", "G", "T"]
 
 
 class KaryotypicSex(str, Enum):
-    """GA4GH Phenopackets v2 `KaryotypicSex`, values verbatim. XY, XXY, XX, XO and UNKNOWN_KARYOTYPE are
-    estimated here (XX and XO only with a coverage facet); the rest are listed so the vocabulary is the standard's."""
+    """GA4GH Phenopackets v2 `KaryotypicSex`, values verbatim. Every value but XXXX is estimated here;
+    all but XY and XXY only with a coverage facet, and OTHER_KARYOTYPE for three X with two Y."""
 
     UNKNOWN_KARYOTYPE = "UNKNOWN_KARYOTYPE"
     XX = "XX"
@@ -225,7 +252,8 @@ class KaryotypicSex(str, Enum):
 
 
 class XCopies(str, Enum):
-    """How many X chromosomes the evidence supports. It cannot tell two from three."""
+    """How many X chromosomes the evidence supports, one or more than one. The count itself, where a
+    coverage line settles it, is `SexChromosomeEvidence.x_copy_count`."""
 
     ONE = "one"
     TWO_OR_MORE = "two_or_more"
@@ -247,6 +275,9 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
         "coverage_no_build",
         "coverage_build_mismatch",
         "coverage_uneven",
+        "copies_uncounted",
+        "vendor_asserted",
+        "no_calls_not_written",
     }
 )
 """Why an answer is unknown. An open vocabulary: a new kind of evidence brings new reasons.
@@ -255,7 +286,8 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
 - `unsupported_build`: a label with no region set here (GRCh36).
 - `uncalibrated_build`: a build with a region set but no measured thresholds (T2T-CHM13): the
   measurements are reported, the estimate is withheld.
-- `not_wgs`: `callset_type` is not `wgs`; the thresholds were measured on whole genomes.
+- `not_wgs`: `callset_type` is neither `wgs` nor `array` (an array has its own lines); the depth
+  thresholds were measured on whole genomes.
 - `too_few_sites`: a line had fewer sites than its minimum.
 - `intermediate`: a value fell in the unknown band between two classes, or outside every band.
 - `lines_disagree`: the het share and the X depth ratio point to different X counts.
@@ -271,6 +303,15 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
   (`coverage.reason` only).
 - `coverage_uneven`: the coverage facet's chr20 depth is not even enough for a whole genome
   (`COVERAGE_MIN_EVEN_SHARE`): an exome's or a panel's reads; it is set aside (`coverage.reason` only).
+- `vendor_asserted`: an array's Y probes were measured but not read: whether they are called follows
+  the vendor's own sex call where it masks Y for the samples it calls female (`array_y`; `y_reason`
+  only).
+- `no_calls_not_written`: an array export with no no-call row on the autosomes (a genuine probe
+  export calls 97-99.9% of them): it drops its no-calls, so its Y rows are only the called ones and
+  their share says nothing (`y_reason` only).
+- `copies_uncounted`: the X lines agree on more than two copies, but none counts them (the calls'
+  X depth above two copies' band, with no coverage line): `x_copies` is `two_or_more`, the karyotype
+  unknown.
 """
 
 
@@ -357,6 +398,36 @@ class CoverageRatios(BaseModel):
         return value
 
 
+class ArrayLines(BaseModel):
+    """What an array export's letters say about its X and Y, read from `gt_alleles` as written (no REF
+    is needed). Rows no filter failed; a row is called when it lists alleles and none is null."""
+
+    model_config = ConfigDict(frozen=True)
+
+    autosome_rows: int
+    autosome_called: int
+    autosome_base_pairs: int
+    """Called two-letter rows whose letters are both bases (A, C, G, T)."""
+    autosome_hets: int
+    x_rows: int
+    """Non-PAR X rows."""
+    x_called: int
+    x_called_one_letter: int
+    """Called non-PAR X rows written with one letter: the vendor's decision that the sample has one X,
+    never evidence of it."""
+    x_base_pairs: int
+    x_hets: int
+    y_rows: int
+    """Rows inside the X-degenerate Y."""
+    y_called: int
+    x_het_ratio: float | None
+    """The het share of non-PAR X base pairs over the autosomes' het share. None when X is not written
+    with two letters on most called rows, or either side is under its minimum."""
+    y_call_ratio: float | None
+    """The called share of X-degenerate Y rows over the autosomes' called share; None under the minimum,
+    or when the export wrote no no-call on the autosomes (it drops them, so rows are not probes)."""
+
+
 class SexChromosomeEvidence(BaseModel):
     """What one facet's calls say about its sex chromosomes, and the estimate it supports.
 
@@ -393,6 +464,13 @@ class SexChromosomeEvidence(BaseModel):
     """`True` when a Y depth line shows a Y; `False` only when a coverage facet shows none and no line
     shows one; otherwise None (module docstring)."""
     y_reason: str | None
+    x_copy_count: int | None = None
+    """The number of X copies every X line allows, where that is one number: a coverage line counts one
+    to three, the calls' X depth one or two (above two copies' band it allows three or more), the het
+    share alone only one. None where `x_copies` is None or more than one count fits."""
+    y_copy_count: int | None = None
+    """The same for Y, zero to two, from a coverage line only: the calls' Y depth shows a Y, never how
+    many."""
     inferred_karyotypic_sex: KaryotypicSex
     """A Phenopackets `KaryotypicSex` value, estimated from calls: not a cytogenetic result."""
     reason: str | None
@@ -401,6 +479,8 @@ class SexChromosomeEvidence(BaseModel):
     """The same in words, with the numbers."""
     coverage: CoverageRatios | None = None
     """The coverage facet's line, when `sex_chromosome_evidence` was given one."""
+    array: ArrayLines | None = None
+    """An array facet's letter counts (`callset_type = array`); None for every other facet."""
 
     @field_validator("x_copies_reason", "y_reason", "reason")
     @classmethod
@@ -413,7 +493,7 @@ class SexChromosomeEvidence(BaseModel):
         return self.inferred_karyotypic_sex is not KaryotypicSex.UNKNOWN_KARYOTYPE
 
 
-def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None) -> tuple[SexChromosomeEvidence, ...]:
+def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None, *, array_y: bool = False) -> tuple[SexChromosomeEvidence, ...]:
     """Measure each loaded facet's sex-chromosome evidence and estimate its karyotype (module docstring).
 
     `loaded` is what `just_vcf.load` (or `rejoin_split`) returns. The result has one entry per row of
@@ -424,6 +504,11 @@ def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None) ->
     the two is the caller's call, since the schema has no person. It adds a read-depth line to X and
     Y for each facet on its own build, and is set aside for any other facet, with the reason in
     `coverage.reason`.
+
+    `array_y` reads an array facet's X-degenerate Y probes as a Y line (module docstring). It is off by
+    default: a vendor that no-calls Y for the samples it calls female makes the line its own sex call.
+    Turn it on for an export whose vendor does not (on PGP-HMS, AncestryDNA's women called a few Y
+    probes; 23andMe's none). It changes nothing for other facets.
 
     The answer is a karyotype, not a sex: an XX male reads two X copies (and `XX` where a coverage facet
     shows no Y), never `XY` for his phenotype. It is an estimate from variant calls and read depth,
@@ -440,6 +525,7 @@ def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None) ->
             facet["caller"],
             facet["ploidy_statements"],
             measured if measured is None else _paired(measured, coverage.facet.assembly_label, facet["assembly_label"]),
+            array_y,
         )
         for facet in facets.iter_rows(named=True)
     )
@@ -542,6 +628,12 @@ def measure(calls: pl.LazyFrame, assembly_label: str | None) -> dict:
     dp = pl.col("dp").cast(pl.Float64)
     xdeg = _in_intervals(X_DEGENERATE_Y.get(assembly_label, ())) if supported else pl.lit(False)
     reference = pl.col("chrom") == DEPTH_REFERENCE_CHROM
+    # Letters as written, for arrays (no REF before `resolve_ref`, so no `gt`): a row is called when it
+    # lists alleles and none is null; a two-letter base call is het when its letters differ.
+    letters = pl.col("gt_alleles")
+    called = (n_haplotypes > 0) & letters.list.eval(pl.element().is_not_null()).list.all().fill_null(False)
+    base_pair = called & (n_haplotypes == 2) & letters.list.eval(pl.element().is_in(_BASES)).list.all().fill_null(False)
+    letter_het = base_pair & (letters.list.get(0, null_on_oob=True) != letters.list.get(1, null_on_oob=True))
 
     per_group = (
         counted.group_by("group")
@@ -566,6 +658,12 @@ def measure(calls: pl.LazyFrame, assembly_label: str | None) -> dict:
             ((n_haplotypes == 1) & has_alt & xdeg).sum().alias("xdeg_haploid_alt"),
             (balance_row & xdeg).sum().alias("xdeg_balance_sites"),
             (ad_alt / (ad_ref + ad_alt)).filter(balance_row & xdeg).median().alias("xdeg_balance"),
+            called.sum().alias("called"),
+            (called & (n_haplotypes == 1)).sum().alias("called_one"),
+            base_pair.sum().alias("base_pairs"),
+            letter_het.sum().alias("letter_hets"),
+            xdeg.sum().alias("xdeg_rows"),
+            (called & xdeg).sum().alias("xdeg_called"),
         )
         .collect()
     )
@@ -613,6 +711,7 @@ def estimate(
     caller: str | None = None,
     ploidy_statements: list[str] | None = None,
     coverage: CoverageRatios | None = None,
+    array_y: bool = False,
 ) -> SexChromosomeEvidence:
     """Turn `measure`'s numbers into the evidence and the estimate (rules in the module docstring).
 
@@ -639,6 +738,25 @@ def estimate(
         fields = {"region_set": None, "x_heterozygosity": None, "y_heterozygosity": None, "depth": None, "x_copies": None, "x_copies_reason": reason, "y_present": None, "y_reason": reason}
         return SexChromosomeEvidence(**base, **{**fields, **known}, inferred_karyotypic_sex=KaryotypicSex.UNKNOWN_KARYOTYPE, reason=reason, detail=detail)
 
+    def named(x_range: Copies | None, x_reason: str | None, y_range: Copies | None, y_reason: str | None, detail: str) -> SexChromosomeEvidence:
+        lines = {
+            "x_copies": None if x_range is None else (XCopies.ONE if x_range[0] == 1 else XCopies.TWO_OR_MORE),
+            "x_copies_reason": x_reason,
+            "y_present": None if y_range is None else y_range[0] >= 1,
+            "y_reason": y_reason,
+            "x_copy_count": _count(x_range),
+            "y_copy_count": _count(y_range),
+        }
+        if x_range is None:
+            return unknown(x_reason, detail, **known, **lines)
+        if y_range is None:
+            return unknown("no_depth" if y_reason == "no_depth" else "y_unusable", detail, **known, **lines)
+        x_read = _count(x_range) or _UNCOUNTED_READING.get(x_range)
+        y_read = _count(y_range) if _count(y_range) is not None else _UNCOUNTED_READING.get(y_range)
+        if x_read is None or y_read is None:
+            return unknown("copies_uncounted", detail, **known, **lines)
+        return SexChromosomeEvidence(**base, **known, **lines, inferred_karyotypic_sex=KARYOTYPES[(x_read, y_read)], reason=None, detail=detail)
+
     if assembly_label is None:
         return unknown("no_build", "the facet has no assembly label, so the pseudo-autosomal regions cannot be placed")
     if not measured["supported"]:
@@ -662,6 +780,14 @@ def estimate(
         y_ratio=y_dp / ref_dp if reference_ok and y_sites >= MIN_Y_SITES and y_dp is not None else None,
     )
     known = {"region_set": REGION_SET[assembly_label], "x_heterozygosity": x_het, "y_heterozygosity": y_het, "depth": depth}
+    if callset_type is CallsetType.ARRAY:
+        lines = _array_lines(groups)
+        known["array"] = lines
+        if assembly_label not in ESTIMATE_BUILDS:
+            return unknown("uncalibrated_build", f"no array rule was checked on {assembly_label}", **known)
+        x_range, x_reason, x_detail = _array_x(lines)
+        y_range, y_reason, y_detail = _array_y(lines, array_y)
+        return named(x_range, x_reason, y_range, y_reason, f"X: {x_detail}; Y: {y_detail}")
     if callset_type is not CallsetType.WGS:
         kind = callset_type.value if callset_type else "unknown"
         return unknown("not_wgs", f"callset type {kind}; the thresholds were measured on whole genomes", **known)
@@ -674,21 +800,10 @@ def estimate(
         return unknown("uncalibrated_build", f"the thresholds were measured on {calibrated} genomes, none on {assembly_label}; measured: {measured_here}", **known)
 
     no_dp = int(auto.get("depth_sites", 0)) + x_sites + int(y.get("depth_sites", 0)) == 0
-    x_copies, x_reason, x_detail = _x_copies(x_het, depth, no_dp, usable)
-    y_present, y_reason, y_detail = _y_present(depth, no_dp, usable)
-    detail = f"X: {x_detail}; Y: {y_detail}"
-    lines = {"x_copies": x_copies, "x_copies_reason": x_reason, "y_present": y_present, "y_reason": y_reason}
-    if x_copies is None:
-        return unknown(x_reason, detail, **known, **{**lines})
-    if y_present is None:
-        return unknown("no_depth" if y_reason == "no_depth" else "y_unusable", detail, **known, **lines)
-    karyotype = {
-        (XCopies.ONE, True): KaryotypicSex.XY,
-        (XCopies.TWO_OR_MORE, True): KaryotypicSex.XXY,
-        (XCopies.ONE, False): KaryotypicSex.XO,
-        (XCopies.TWO_OR_MORE, False): KaryotypicSex.XX,
-    }[(x_copies, y_present)]
-    return SexChromosomeEvidence(**base, **known, **lines, inferred_karyotypic_sex=karyotype, reason=None, detail=detail)
+    x_range, x_reason, x_detail = _x_copies(x_het, depth, no_dp, usable)
+    y_range, y_reason, y_detail = _y_present(depth, no_dp, usable)
+    return named(x_range, x_reason, y_range, y_reason, f"X: {x_detail}; Y: {y_detail}")
+
 
 
 def _heterozygosity(group: dict, prefix: str) -> Heterozygosity:
@@ -703,67 +818,200 @@ def _heterozygosity(group: dict, prefix: str) -> Heterozygosity:
     )
 
 
+Copies = tuple[int, int | None]
+"""The copy counts a line allows, lowest and highest; None as the highest is no upper bound."""
+
+Band = tuple[float | None, float | None, Copies]
+"""A line's value range (inclusive, None open) and the counts it allows there."""
+
+HET_SHARE_BANDS: tuple[Band, ...] = ((None, ONE_X_MAX_HET_SHARE, (1, 1)), (TWO_X_MIN_HET_SHARE, None, (2, None)))
+DEPTH_X_BANDS: tuple[Band, ...] = (
+    (None, ONE_X_MAX_DEPTH_RATIO, (1, 1)),
+    (TWO_X_MIN_DEPTH_RATIO, TWO_X_MAX_DEPTH_RATIO, (2, 2)),
+    (TWO_X_MAX_DEPTH_RATIO, None, (3, None)),
+)
+"""The calls' X depth: one, two, or more than two (the first band holding a value wins, so 1.25 is two)."""
+
+
+def _coverage_bands(counts: tuple[int, ...]) -> tuple[Band, ...]:
+    """A band per count around its copy-number value; a count of zero has no lower edge."""
+    return tuple(
+        (
+            None if n == 0 else n * COVERAGE_RATIO_PER_COPY - COVERAGE_BAND_HALF_WIDTH,
+            n * COVERAGE_RATIO_PER_COPY + COVERAGE_BAND_HALF_WIDTH,
+            (n, n),
+        )
+        for n in counts
+    )
+
+
+COVERAGE_X_BANDS = _coverage_bands(COVERAGE_X_COUNTS)
+COVERAGE_Y_BANDS = _coverage_bands(COVERAGE_Y_COUNTS)
+
+TWO_X_EXPECTED_HET_RATIO = 0.75
+"""What two X should read against the autosomes: X diversity is about 3/4 of an autosome's, since a
+population with as many men as women carries three X for every four copies of an autosome
+(Ne_X = 3/4 Ne_A, the neutral expectation). One X reads 0, genotyping errors aside."""
+
+ARRAY_ONE_X_MAX_HET_RATIO = TWO_X_EXPECTED_HET_RATIO / 4
+ARRAY_TWO_X_MIN_HET_RATIO = TWO_X_EXPECTED_HET_RATIO * 3 / 4
+"""An array's X het share over its autosomal het share, banded at the central half of the gap
+between 0 and `TWO_X_EXPECTED_HET_RATIO` (0.1875 and 0.5625), the rule the other lines follow.
+Rejected: an expectation of 1 (X as diverse as an autosome), which gives 0.25 and 0.75 like PLINK
+`--check-sex`'s F cut-offs of 0.2 and 0.8 (F from expected het by allele frequency, which a single
+export has not). Two X has no upper edge: hets cannot count copies. PGP-HMS, docs/ROADMAP.md RM269."""
+
+ARRAY_Y_ABSENT_MAX_CALL_RATIO = 0.25
+ARRAY_Y_PRESENT_MIN_CALL_RATIO = 0.75
+"""The X-degenerate Y probes' called share over the autosomes'. A Y calls like an autosome (near 1),
+none leaves its probes uncalled (near 0); the unknown band is the gap's central half. Read only with
+`array_y` (the vendor's no-calls on Y follow its own sex call)."""
+
+ARRAY_X_BANDS: tuple[Band, ...] = ((None, ARRAY_ONE_X_MAX_HET_RATIO, (1, 1)), (ARRAY_TWO_X_MIN_HET_RATIO, None, (2, None)))
+ARRAY_Y_BANDS: tuple[Band, ...] = ((None, ARRAY_Y_ABSENT_MAX_CALL_RATIO, (0, 0)), (ARRAY_Y_PRESENT_MIN_CALL_RATIO, None, (1, None)))
+
+KARYOTYPES: dict[tuple[int, int], KaryotypicSex] = {
+    (1, 0): KaryotypicSex.XO, (1, 1): KaryotypicSex.XY, (1, 2): KaryotypicSex.XYY,
+    (2, 0): KaryotypicSex.XX, (2, 1): KaryotypicSex.XXY, (2, 2): KaryotypicSex.XXYY,
+    (3, 0): KaryotypicSex.XXX, (3, 1): KaryotypicSex.XXXY, (3, 2): KaryotypicSex.OTHER_KARYOTYPE,
+}  # fmt: skip
+"""(X copies, Y copies) to the Phenopackets value. Phenopackets lists no XXXYY, so three X with two Y
+is its `OTHER_KARYOTYPE`."""
+
+_UNCOUNTED_READING: dict[Copies, int] = {(2, None): 2, (1, None): 1}
+"""How an uncounted range reads in the karyotype, as it did before counts were measured: a het share's
+two or more as two, a Y the calls show as one. Three or more X with nothing counting them reads
+nothing (`copies_uncounted`)."""
+
+
+def _read(value: float | None, bands: tuple[Band, ...]) -> Copies | str | None:
+    """The counts of the first band holding `value`; `intermediate` in none; None with no value."""
+    if value is None:
+        return None
+    for low, high, copies in bands:
+        if (low is None or value >= low) and (high is None or value <= high):
+            return copies
+    return "intermediate"
+
+
+def _agree(found: list[Copies | str]) -> Copies | str | None:
+    """The counts every line allows: `intermediate` if one fell between bands, `lines_disagree` if
+    they share none, None without a line."""
+    if "intermediate" in found:
+        return "intermediate"
+    ranges = [line for line in found if not isinstance(line, str)]
+    if not ranges:
+        return None
+    low = max(lo for lo, _ in ranges)
+    highs = [hi for _, hi in ranges if hi is not None]
+    high = min(highs) if highs else None
+    return "lines_disagree" if high is not None and low > high else (low, high)
+
+
+def _count(copies: Copies | None) -> int | None:
+    """The count a range holds when it is one number."""
+    return copies[0] if copies is not None and copies[0] == copies[1] else None
+
+
 def _x_copies(
     x_het: Heterozygosity, depth: DepthRatios, no_dp: bool, coverage: CoverageRatios | None
-) -> tuple[XCopies | None, str | None, str]:
-    """X copies from the het share, the X depth ratio and the coverage ratio; all measured must agree."""
+) -> tuple[Copies | None, str | None, str]:
+    """The X counts the het share, the X depth ratio and the coverage ratio all allow."""
     written_diploid = x_het.diploid_alt_sites >= MIN_X_SITES and x_het.diploid_alt_sites > x_het.haploid_alt_sites
     share = x_het.het_share if written_diploid else None
-    by_share = _band(share, ONE_X_MAX_HET_SHARE, TWO_X_MIN_HET_SHARE, None)
-    by_depth = _band(depth.x_ratio, ONE_X_MAX_DEPTH_RATIO, TWO_X_MIN_DEPTH_RATIO, TWO_X_MAX_DEPTH_RATIO)
-    by_coverage = _band(coverage.x_ratio if coverage else None, COVERAGE_ONE_X_MAX_RATIO, COVERAGE_TWO_X_MIN_RATIO, COVERAGE_TWO_X_MAX_RATIO)
+    by_share = _read(share, HET_SHARE_BANDS)
+    by_depth = _read(depth.x_ratio, DEPTH_X_BANDS)
+    by_coverage = _read(coverage.x_ratio if coverage else None, COVERAGE_X_BANDS)
     said = (
         f"het share {_fmt(x_het.het_share)} over {x_het.diploid_alt_sites:,} diploid ALT call(s), "
         f"{x_het.haploid_alt_sites:,} haploid; depth ratio {_fmt(depth.x_ratio)} over {depth.x_sites:,} call(s) with DP"
     )
     if coverage is not None:
         said += f"; coverage ratio {_fmt(coverage.x_ratio)} over {coverage.x_bases:,} base(s)"
-    found_lines = [line for line in (by_share, by_depth, by_coverage) if line is not None]
-    if "intermediate" in found_lines:
-        return None, "intermediate", said
-    if len(set(found_lines)) > 1:
-        return None, "lines_disagree", said
-    if found_lines:
-        return XCopies(found_lines[0]), None, said
+    agreed = _agree([line for line in (by_share, by_depth, by_coverage) if line is not None])
+    if isinstance(agreed, str):
+        return None, agreed, said
+    if agreed is not None:
+        return agreed, None, said
     if x_het.haploid_alt_sites >= MIN_X_SITES:
         return None, "caller_asserted_only", said
     return None, ("no_depth" if no_dp and coverage is None else "too_few_sites"), said
 
 
-def _y_present(depth: DepthRatios, no_dp: bool, coverage: CoverageRatios | None) -> tuple[bool | None, str | None, str]:
-    """Y present from the X-degenerate Y depth: the calls' DP shows a Y or nothing; coverage either way."""
+def _array_lines(groups: dict) -> ArrayLines:
+    """An array facet's letter counts and the two ratios (`ArrayLines`)."""
+    auto, x, y = groups.get("autosomes", {}), groups.get("x_nonpar", {}), groups.get("y_nonpar", {})
+    count = {
+        "autosome_rows": int(auto.get("rows", 0)), "autosome_called": int(auto.get("called", 0)),
+        "autosome_base_pairs": int(auto.get("base_pairs", 0)), "autosome_hets": int(auto.get("letter_hets", 0)),
+        "x_rows": int(x.get("rows", 0)), "x_called": int(x.get("called", 0)), "x_called_one_letter": int(x.get("called_one", 0)),
+        "x_base_pairs": int(x.get("base_pairs", 0)), "x_hets": int(x.get("letter_hets", 0)),
+        "y_rows": int(y.get("xdeg_rows", 0)), "y_called": int(y.get("xdeg_called", 0)),
+    }  # fmt: skip
+    auto_share = count["autosome_hets"] / count["autosome_base_pairs"] if count["autosome_base_pairs"] >= MIN_REFERENCE_SITES else None
+    auto_called = count["autosome_called"] / count["autosome_rows"] if count["autosome_rows"] >= MIN_REFERENCE_SITES else None
+    written_two = count["x_base_pairs"] >= MIN_X_SITES and count["x_base_pairs"] > count["x_called_one_letter"]
+    x_ratio = count["x_hets"] / count["x_base_pairs"] / auto_share if written_two and auto_share else None
+    # Rows count the probes only where the export writes its no-calls; one that drops them has nothing
+    # but called Y rows, and a woman's cross-hybridising calls would read as a Y.
+    writes_no_calls = count["autosome_called"] < count["autosome_rows"]
+    y_ratio = count["y_called"] / count["y_rows"] / auto_called if count["y_rows"] >= MIN_Y_SITES and auto_called and writes_no_calls else None
+    return ArrayLines(**count, x_het_ratio=x_ratio, y_call_ratio=y_ratio)
+
+
+def _array_x(lines: ArrayLines) -> tuple[Copies | None, str | None, str]:
+    """X copies from the het share of two-letter X calls over the autosomes'."""
+    said = (
+        f"het ratio {_fmt(lines.x_het_ratio)} ({lines.x_hets:,} het of {lines.x_base_pairs:,} two-letter calls on non-PAR X, "
+        f"{lines.x_called_one_letter:,} written with one letter)"
+    )
+    found = _read(lines.x_het_ratio, ARRAY_X_BANDS)
+    if isinstance(found, str):
+        return None, found, said
+    if found is not None:
+        return found, None, said
+    if lines.x_called_one_letter >= MIN_X_SITES:
+        return None, "caller_asserted_only", said
+    return None, "too_few_sites", said
+
+
+def _array_y(lines: ArrayLines, array_y: bool) -> tuple[Copies | None, str | None, str]:
+    """Y from the called share of X-degenerate Y probes, read only when `array_y` is set."""
+    said = f"call ratio {_fmt(lines.y_call_ratio)} ({lines.y_called:,} of {lines.y_rows:,} X-degenerate Y rows called)"
+    if lines.y_call_ratio is None:
+        if lines.y_rows >= MIN_Y_SITES and lines.autosome_rows >= MIN_REFERENCE_SITES and lines.autosome_called == lines.autosome_rows:
+            return None, "no_calls_not_written", said + "; the export writes no no-call, so its rows are not its probes"
+        return None, "too_few_sites", said
+    if not array_y:
+        return None, "vendor_asserted", said + "; not read: the vendor's Y calls and no-calls follow its own sex call"
+    found = _read(lines.y_call_ratio, ARRAY_Y_BANDS)
+    if isinstance(found, str):
+        return None, found, said
+    return found, None, said + "; read as the vendor's calls (array_y)"
+
+
+def _y_present(depth: DepthRatios, no_dp: bool, coverage: CoverageRatios | None) -> tuple[Copies | None, str | None, str]:
+    """The Y counts the X-degenerate Y lines allow: the calls' DP shows a Y (one or more) or nothing,
+    a coverage line counts none, one or two."""
     said = f"X-degenerate depth ratio {_fmt(depth.y_ratio)} over {depth.y_sites:,} call(s) with DP"
     if no_dp:
         by_calls, calls_reason = None, "no_depth"
     elif depth.y_ratio is None:
         by_calls, calls_reason = None, "too_few_sites"
     elif depth.y_ratio >= Y_PRESENT_MIN_DEPTH_RATIO:
-        by_calls, calls_reason = True, None
+        by_calls, calls_reason = (1, None), None
     else:
         by_calls, calls_reason = None, "y_not_shown"
-    if coverage is None:
-        return by_calls, calls_reason, said
-    said += f"; coverage ratio {_fmt(coverage.y_ratio)} over {coverage.y_bases:,} base(s)"
-    if coverage.y_ratio is None:
-        return by_calls, calls_reason, said
-    if coverage.y_ratio >= COVERAGE_Y_PRESENT_MIN_RATIO:
-        return True, None, said
-    if coverage.y_ratio > COVERAGE_Y_ABSENT_MAX_RATIO:
-        return None, "intermediate", said
-    if by_calls:
-        return None, "lines_disagree", said
-    return False, None, said
-
-
-def _band(value: float | None, one_max: float, two_min: float, two_max: float | None) -> str | None:
-    """`one`, `two_or_more`, `intermediate`, or None when there is no value."""
-    if value is None:
-        return None
-    if value <= one_max:
-        return XCopies.ONE.value
-    if value >= two_min and (two_max is None or value <= two_max):
-        return XCopies.TWO_OR_MORE.value
-    return "intermediate"
+    by_coverage = None
+    if coverage is not None:
+        said += f"; coverage ratio {_fmt(coverage.y_ratio)} over {coverage.y_bases:,} base(s)"
+        by_coverage = _read(coverage.y_ratio, COVERAGE_Y_BANDS)
+    agreed = _agree([line for line in (by_calls, by_coverage) if line is not None])
+    if isinstance(agreed, str):
+        return None, agreed, said
+    if agreed is None:
+        return None, calls_reason, said
+    return agreed, None, said
 
 
 def _fmt(value: float | None) -> str:

@@ -33,6 +33,29 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   naming it and polars-bio's reason, and lists it in `dropped_fields`. Each key is left out once at
   most. A single-value key (GQ `30.5` under `Integer`) still fails the load: polars-bio's error names
   no key there, and the loader does not guess.
+- `sex_chromosome_evidence` reads array facets (RM269), which answered `not_wgs` before. From the
+  letters as written (no REF needed): X copies from the het share of two-letter base calls on non-PAR
+  X over the autosomes' (one X at most 0.1875, two or more from 0.5625, the central half of the gap
+  between 0 and the 3/4 that two X carry under the neutral expectation), and a Y line from the
+  X-degenerate Y probes' called share over the autosomes' (absent at most 0.25, present from 0.75).
+  An X written with one letter is the vendor's call and answers `caller_asserted_only`. The Y line is
+  read only with the new `array_y=True`, since a vendor may no-call Y for every sample it calls female;
+  without it `y_reason` is the new `vendor_asserted` and the karyotype unknown. An export that writes
+  no no-call on the autosomes has no Y line (`no_calls_not_written`): its rows are not its probes.
+  The counts are on the
+  result's new nullable `array` field (`just_vcf.karyotype.ArrayLines`). PGP-HMS check in
+  docs/ROADMAP.md RM269. Minor.
+
+- `sex_chromosome_evidence(loaded, coverage=…)` counts copies past two from the coverage facet
+  (RM269): each copy reads half chr20's depth, so X reads one to three copies and Y none to two, each
+  0.125 either side of its value, and names `XXX`, `XYY`, `XXYY`, `XXXY`, and `OTHER_KARYOTYPE` for
+  three X with two Y. New nullable result fields `x_copy_count` and `y_copy_count`, and a reason
+  `copies_uncounted`. Values that change: a coverage X ratio of 1.125–1.25 (was two X), one under
+  0.375 (was one X) and a coverage Y ratio of 0.625–0.875 or over 1.125 (was a Y present) now answer
+  unknown, `intermediate`; the calls' X depth above 1.25 allows three or more X where it read unknown,
+  so `x_copies` is `two_or_more` there and the karyotype `copies_uncounted` unless coverage counts it.
+  No XXX or XYY genome was measured: the bands are copy number alone. From calls alone `XY` and `XXY`
+  are still named, though they cannot tell XY from XYY. Minor.
 
 - The CGI `var` and masterVarBeta warning that counts haplotypes whose varScoreVAF differs from the
   varScoreEAF read into `hq` counts only haplotypes whose EAF is read. It counted a half-call's `?`

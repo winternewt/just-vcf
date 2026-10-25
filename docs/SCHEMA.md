@@ -1334,8 +1334,9 @@ lifted to GRCh38. How the draft holds up:
   *say* the karyotype. It is a fact about the person, measured from evidence (Y depth near 2x, X depth
   near 1x). It is not a fact about any one facet. A person-level finding with its own provenance does
   not exist yet. Since RM269 each facet's own evidence can be measured (below); it reads this person's
-  X as one copy and Y as present, so `XY`: the Y depth of a variant-call VCF does not
-  separate one Y from two, and XYY stays open until a coverage facet.
+  X as one copy and Y as present, so `XY` from the VCF alone: the Y depth of a variant-call VCF does
+  not separate one Y from two (`y_copy_count` stays null). With a coverage facet of the same person
+  the X-degenerate Y reads near 1.0 of chr20's depth, two copies, and the answer is `XYY`.
 - **The deleted region, absent from the GRCh38 VCF.** The GRCh38 facet is WGS without blocks, so
   `absence_means = weak_reference`, and a question about a site in the deletion gets "weak evidence of
   reference". For a deletion on both Y copies, that is wrong. **Open:** absence has to be conditioned
@@ -1472,6 +1473,46 @@ the T2T consortium's X-degenerate class (docs/PROVENANCE.md); other builds answe
 facet is grouped and measured, and its estimate withheld (`uncalibrated_build`, RM286) until T2T callsets
 of known karyotype are measured. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 
+`sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM278) of the same person and
+build, paired by the caller. Its `coverage` field (`just_vcf.karyotype.CoverageRatios`, module-level
+like the result's other nested models) holds the length-weighted median read depth over non-PAR X,
+over the X-degenerate Y and over chr20 (zero-depth intervals left out on chr20 and X, where they are
+assembly gaps; kept on the Y, where zero is the signal), from intervals wholly inside each region and
+described at every base, and the two ratios. It is a third X line and a second Y line, and the only
+line that counts past two: copy number puts each copy at half chr20's depth, so it reads one, two or
+three X (0.5, 1.0, 1.5) and none, one or two Y (0, 0.5, 1.0), each within 0.125, and anything
+between or beyond those bands is unknown (`intermediate`). Each line allows a range of counts (the het
+share one, or two or more; the calls' X depth one, two, or above 1.25 three or more; the calls' Y
+depth one or more) and the answer is what all of them allow: none in common is `lines_disagree`, as
+is coverage showing no Y where the calls' depth shows one. Where it is one number it is
+`x_copy_count` or `y_copy_count` (nullable ints; `x_copies` and `y_present` keep their meaning).
+The counts name `XO`, `XY`, `XYY`, `XX`, `XXY`, `XXYY`, `XXX`, `XXXY`, and `OTHER_KARYOTYPE` for
+three X with two Y, which Phenopackets does not list. Without a count, the earlier reading stands:
+two or more X read two and a Y the calls show reads one, so the calls alone still name `XY` and `XXY`
+(they cannot tell XY from XYY); three or more X that nothing counts are `copies_uncounted`. No XXX or
+XYY genome was measured: the bands are copy number alone. A coverage facet without a build, or on
+another one, is set aside with `coverage.reason` (`coverage_no_build`, `coverage_build_mismatch`),
+and the answer is the calls' alone. So is a coverage facet whose chr20 depth is too uneven for a whole
+genome (`coverage_uneven`: under 75% of its bases within half to twice the median, an exome's or a
+panel's shape). The field defaults to null, so nothing changes without coverage.
+
+An array facet (`callset_type = array`) gets its own lines, on the result's `array` field
+(`just_vcf.karyotype.ArrayLines`, null for every other facet), read from `gt_alleles` as the export
+wrote them, so no REF and no `gt` are needed: rows, called rows, one-letter rows, two-letter base
+calls and their hets, per autosomes, non-PAR X and the X-degenerate Y. X copies come from the het
+share of two-letter base calls on non-PAR X over the autosomes' het share (`x_het_ratio`): one X at
+most 0.1875, two or more from 0.5625, the central half of the gap between 0 (one X, genotyping errors
+only) and 3/4 (two X, the neutral expectation of X diversity against an autosome's). An X written
+with one letter on most called rows is the vendor's decision (23andMe), counted, never read
+(`caller_asserted_only`). Y comes from the X-degenerate Y probes' called share over the autosomes'
+(`y_call_ratio`): absent at most 0.25, present from 0.75. It is read only with
+`sex_chromosome_evidence(…, array_y=True)`: a vendor that no-calls Y for the samples it calls female
+makes the line its own sex call, and the file cannot tell that mask from a chip that saw no Y.
+Without it `y_reason` is `vendor_asserted` and the karyotype unknown. An export with no no-call row
+on the autosomes drops its no-calls, so its rows are not its probes and its Y share says nothing:
+`y_call_ratio` is null and `y_reason` `no_calls_not_written`. Arrays never count copies, so
+they name at most `XO`, `XY`, `XX` and `XXY`. Computed, not stored: no schema change.
+
 ## CisPhasedBlock export: computed on demand, not stored (RM284)
 
 The person chose columns with an export on demand: phase sets stay the three `calls` columns of
@@ -1525,22 +1566,6 @@ a stored block table, which every load would pay for and every change to an alle
 - **Order**: by the set's first row in `calls`, then kind, set name and haplotype.
 - An IRI is not an Allele to vrs-python 2.3: a block whose members are written as `ga4gh:VA.…` strings
   digests to another id there. Resolve the members to Alleles before identifying it again.
-
-never `False` from the calls, because depth at called sites cannot show a Y absent (a man's GATK genome
-read below the present band, close to the two-X range).
-
-`sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM278) of the same person and
-build, paired by the caller. Its `coverage` field (`just_vcf.karyotype.CoverageRatios`, module-level like the result's other nested models) holds the length-weighted median
-read depth over non-PAR X, over the X-degenerate Y and over chr20 (zero-depth intervals left out on
-chr20 and X, where they are assembly gaps; kept on the Y, where zero is the signal), from intervals
-wholly inside each region and described at every base, and the two ratios. It is a third X line,
-which must agree with the other two, and a second Y line that can show a Y absent: `y_present = False`,
-which names `XX` (two X) and `XO` (one X). Coverage showing no Y where the calls' depth shows one is
-`lines_disagree`. A coverage facet without a build, or on another one, is set aside with
-`coverage.reason` (`coverage_no_build`, `coverage_build_mismatch`), and the answer is the calls' alone. So is a coverage facet whose chr20 depth is too uneven for a whole genome (`coverage_uneven`: under 75% of its bases within half to twice the median, an exome's or a panel's shape).
-The field defaults to null, so nothing changes without coverage. The PAR bounds and the X-degenerate
-Y come from GIAB's stratifications for GRCh37 and GRCh38 (docs/PROVENANCE.md); other builds answer
-unknown. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 
 ## Coverage facets: read depth beside the frames (RM278)
 

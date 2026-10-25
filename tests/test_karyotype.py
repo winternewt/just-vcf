@@ -20,6 +20,8 @@ from just_vcf import (
 )
 from just_vcf.coverage import COVERAGE_INTERVALS
 from just_vcf.karyotype import (
+    COVERAGE_X_BANDS,
+    COVERAGE_Y_BANDS,
     MIN_X_SITES,
     MIN_Y_SITES,
     ESTIMATE_BUILDS,
@@ -320,11 +322,24 @@ def test_lines_that_disagree_are_unknown() -> None:
 
 
 def test_depth_above_two_copies_is_not_called_xx() -> None:
-    # Three X copies would put the X depth near 1.5 times the autosomes', with a two-X het share.
+    # Three X copies would put the X depth near 1.5 times the autosomes', with a two-X het share. The
+    # calls' depth allows three or more there, never two, and counts nothing: no XX, no XXY.
     dp = round(REF_DP * 1.5)
     assert dp / REF_DP > TWO_X_MAX_DEPTH_RATIO
     found = evidence(frame(chr20(), x_calls(1200, 800, dp), y_calls(1000, 6)))
-    assert (found.x_copies, found.reason) == (None, "intermediate")
+    assert (found.x_copies, found.x_copy_count, found.reason) == (XCopies.TWO_OR_MORE, None, "y_unusable")
+    with_y = evidence(frame(chr20(), x_calls(1200, 800, dp), y_calls(1000, 18)))
+    assert (with_y.inferred_karyotypic_sex, with_y.reason, with_y.y_present) == (KaryotypicSex.UNKNOWN_KARYOTYPE, "copies_uncounted", True)
+
+
+def test_calls_alone_count_x_but_never_y() -> None:
+    # The calls' X depth counts one or two; their Y depth shows a Y, never how many (men read 0.43-1.97).
+    xy, xxy = evidence(frame(chr20(), *XY)), evidence(frame(chr20(), XX[0], XY[1]))
+    assert [(e.inferred_karyotypic_sex, e.x_copy_count, e.y_copy_count) for e in (xy, xxy)] == [
+        (KaryotypicSex.XY, 1, None), (KaryotypicSex.XXY, 2, None),
+    ]  # fmt: skip
+    # Without DP only the het share speaks: two or more X, no count.
+    assert evidence(frame(chr20(dp=None), x_calls(1200, 800, None))).x_copy_count is None
 
 
 def test_a_low_y_depth_never_reads_as_no_y() -> None:
@@ -606,3 +621,176 @@ def test_coverage_with_too_few_bases_gives_no_ratio() -> None:
     found = with_coverage(frame(chr20(), XX[0], XX[1]), Coverage(facet=full.facet, intervals=full.intervals.filter(kept)))
     assert (found.coverage.y_bases, found.coverage.y_ratio) == (500_000, None)
     assert found.y_reason == "y_not_shown"
+
+
+# --- Counts past two, from coverage only ---------------------------------------------------------
+
+THREE_X_DP = round(REF_DP * 1.5)  # calls' X depth 1.5: above two copies' band, three or more
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "x_depth", "y_depth", "expected", "counts"),
+    [
+        # Copy number: X at 1.5 of chr20 is three copies, Y at 1.0 two.
+        (x_calls(1200, 800, THREE_X_DP), XX[1], 45.0, 0.0, KaryotypicSex.XXX, (3, 0)),
+        (XY[0], XY[1], 15.0, 30.0, KaryotypicSex.XYY, (1, 2)),
+        (XX[0], XY[1], 30.0, 30.0, KaryotypicSex.XXYY, (2, 2)),
+        (x_calls(1200, 800, THREE_X_DP), XY[1], 45.0, 15.0, KaryotypicSex.XXXY, (3, 1)),
+        # Phenopackets has no XXXYY: the standard's own OTHER_KARYOTYPE.
+        (x_calls(1200, 800, THREE_X_DP), XY[1], 45.0, 30.0, KaryotypicSex.OTHER_KARYOTYPE, (3, 2)),
+        (XY[0], XX[1], 15.0, 15.0, KaryotypicSex.XY, (1, 1)),
+    ],
+)
+def test_coverage_counts_three_x_and_two_y(
+    x: pl.DataFrame, y: pl.DataFrame, x_depth: float, y_depth: float, expected: KaryotypicSex, counts: tuple[int, int]
+) -> None:
+    found = with_coverage(frame(chr20(), x, y), coverage_facet(x_depth, y_depth))
+    assert (found.inferred_karyotypic_sex, found.reason) == (expected, None)
+    assert (found.x_copy_count, found.y_copy_count) == counts
+    assert found.x_copies is (XCopies.ONE if counts[0] == 1 else XCopies.TWO_OR_MORE)
+    assert found.y_present is (counts[1] > 0)
+
+
+@pytest.mark.parametrize(
+    ("x", "x_depth", "y_depth", "x_reason", "y_reason"),
+    [
+        # Between two counts' bands: the central half of each gap (0.5 per copy, 0.125 either side).
+        (XX[0], 37.5, 0.0, "intermediate", None),  # X 1.25, between two and three
+        (XX[0], 30.0, 22.5, None, "intermediate"),  # Y 0.75, between one and two
+        (XY[0], 7.5, 15.0, "intermediate", None),  # X 0.25, under one copy's band
+        (XX[0], 30.0, 37.5, None, "intermediate"),  # Y 1.25: three Y are not read
+    ],
+)
+def test_a_coverage_count_between_bands_is_unknown(x: pl.DataFrame, x_depth: float, y_depth: float, x_reason: str | None, y_reason: str | None) -> None:
+    found = with_coverage(frame(chr20(), x, XX[1]), coverage_facet(x_depth, y_depth))
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+    assert (found.x_copies_reason, found.y_reason) == (x_reason, y_reason)
+    assert found.reason == (x_reason or "y_unusable")
+
+
+def test_a_coverage_three_against_a_calls_two_disagrees() -> None:
+    # The calls' X depth 1.0 is two copies; coverage at 1.5 says three. Neither wins.
+    found = with_coverage(frame(chr20(), *XX), coverage_facet(45.0, 0.0))
+    assert (found.x_copies, found.x_copies_reason, found.inferred_karyotypic_sex) == (None, "lines_disagree", KaryotypicSex.UNKNOWN_KARYOTYPE)
+
+
+def test_the_coverage_bands_are_copy_number() -> None:
+    # Each count k at k/2 of chr20's depth, 0.125 either side: the edges hold, the next step out does not.
+    for count, (low, high, copies) in zip((1, 2, 3), COVERAGE_X_BANDS, strict=True):
+        assert (low, high, copies) == (count / 2 - 0.125, count / 2 + 0.125, (count, count))
+    assert [band[:2] for band in COVERAGE_Y_BANDS] == [(None, 0.125), (0.375, 0.625), (0.875, 1.125)]
+    edge = with_coverage(frame(chr20(), x_calls(1200, 800, THREE_X_DP), XX[1]), coverage_facet(41.25, 3.75))  # 1.375, 0.125
+    assert (edge.x_copy_count, edge.y_copy_count) == (3, 0)
+
+
+# --- Array exports: letters as written, no REF ---------------------------------------------------
+
+
+def letters(chrom: str, start: int, n: int, alleles: list[str | None], *, step: int = 10) -> pl.DataFrame:
+    """Array rows as a loader writes them before `resolve_ref`: letters in `gt_alleles`, no `gt`."""
+    return pl.DataFrame(
+        {
+            "facet_id": "f",
+            "chrom": chrom,
+            "pos": pl.int_range(0, n, eager=True) * step + start,
+            "gt_alleles": [alleles] * n,
+            "evidence_basis": "assay",
+        },
+        schema_overrides={"facet_id": pl.String, "chrom": pl.String, "pos": pl.UInt32, "gt_alleles": pl.List(pl.String), "evidence_basis": pl.String},
+    )
+
+
+AUTOSOME_CALL_RATE = 2000 / 2040
+
+
+def autosomes(hets: int = 600, homs: int = 1400, no_calls: int = 40) -> pl.DataFrame:
+    """Autosomal het share 0.3 by default (600 of 2,000 two-letter calls), 40 written no-calls."""
+    return pl.concat([
+        letters("1", 1_000_000, hets, ["A", "G"]), letters("2", 1_000_000, homs, ["C", "C"]),
+        letters("3", 1_000_000, no_calls, [None, None]),
+    ])  # fmt: skip
+
+
+def array_x(hets: int, homs: int, *, one_letter: int = 0) -> pl.DataFrame:
+    return pl.concat([
+        letters("X", X_START, hets, ["A", "G"]), letters("X", X_START + 1_000_000, homs, ["T", "T"]),
+        letters("X", X_START + 2_000_000, one_letter, ["T"]),
+    ])  # fmt: skip
+
+
+def array_y(called: int, no_calls: int) -> pl.DataFrame:
+    return pl.concat([letters("Y", Y_START, called, ["G"], step=20), letters("Y", Y_START + 20 * called, no_calls, [None], step=20)])
+
+
+def on_array(*parts: pl.DataFrame, read_y: bool = False, build: str = "GRCh38") -> SexChromosomeEvidence:
+    return estimate(measure(frame(*parts), build), "f", build, CallsetType.ARRAY, array_y=read_y)
+
+
+def test_an_array_with_two_letters_on_x_reads_two_x_from_its_hets() -> None:
+    # X het share 500/2,000 = 0.25 over the autosomes' 0.3: ratio 0.833, two X. Y no-called throughout.
+    found = on_array(autosomes(), array_x(500, 1500), array_y(0, 700))
+    lines = found.array
+    assert (lines.x_base_pairs, lines.x_hets, lines.autosome_base_pairs, lines.autosome_hets) == (2000, 500, 2000, 600)
+    assert lines.x_het_ratio == pytest.approx((500 / 2000) / (600 / 2000))
+    assert (lines.y_rows, lines.y_called, lines.y_call_ratio) == (700, 0, 0.0)
+    assert (lines.autosome_rows, lines.autosome_called) == (2040, 2000)
+    assert (found.x_copies, found.x_copy_count) == (XCopies.TWO_OR_MORE, None)
+    # The vendor's Y no-calls follow its own sex call: by default they are not read.
+    assert (found.y_present, found.y_reason, found.reason) == (None, "vendor_asserted", "y_unusable")
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+    read = on_array(autosomes(), array_x(500, 1500), array_y(0, 700), read_y=True)
+    assert (read.y_present, read.y_copy_count, read.inferred_karyotypic_sex) == (False, 0, KaryotypicSex.XX)
+
+
+def test_an_arrays_one_letter_x_is_the_vendors_assertion() -> None:
+    # 23andMe writes a one-X sample's X with one letter: its call, not evidence. Y called (one letter).
+    found = on_array(autosomes(), array_x(0, 0, one_letter=2000), array_y(650, 50), read_y=True)
+    assert found.array.x_called_one_letter == 2000 and found.array.x_het_ratio is None
+    assert (found.x_copies, found.x_copies_reason) == (None, "caller_asserted_only")
+    assert found.y_present is True
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+
+
+def test_an_array_writing_one_x_with_two_letters_reads_one_x() -> None:
+    # Doubled letters with a genotyping error's few hets: ratio (4/2000)/0.3, about 0.007.
+    found = on_array(autosomes(), array_x(4, 1996), array_y(650, 50), read_y=True)
+    assert (found.x_copies, found.x_copy_count) == (XCopies.ONE, 1)
+    assert found.array.y_call_ratio == pytest.approx((650 / 700) / AUTOSOME_CALL_RATE)
+    assert (found.inferred_karyotypic_sex, found.reason) == (KaryotypicSex.XY, None)
+
+
+def test_an_array_that_drops_its_no_calls_gives_no_y_line() -> None:
+    # Without no-call rows the Y rows are only the called ones: 700 of 700 says nothing about a Y.
+    found = on_array(autosomes(no_calls=0), array_x(500, 1500), array_y(700, 0), read_y=True)
+    assert (found.array.autosome_called, found.array.autosome_rows, found.array.y_call_ratio) == (2000, 2000, None)
+    assert (found.y_present, found.y_reason, found.inferred_karyotypic_sex) == (None, "no_calls_not_written", KaryotypicSex.UNKNOWN_KARYOTYPE)
+    assert found.x_copies is XCopies.TWO_OR_MORE
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "x_reason", "y_reason"),
+    [
+        (array_x(300, 1700), array_y(0, 700), "intermediate", None),  # ratio 0.5, between one and two X
+        (array_x(500, 1500), array_y(350, 350), None, "intermediate"),  # Y called half as often as the autosomes
+        (array_x(500, 1500), array_y(100, 100), None, "too_few_sites"),  # 200 X-degenerate Y rows
+    ],
+)
+def test_weak_array_lines_are_unknown(x: pl.DataFrame, y: pl.DataFrame, x_reason: str | None, y_reason: str | None) -> None:
+    found = on_array(autosomes(), x, y, read_y=True)
+    assert (found.x_copies_reason, found.y_reason) == (x_reason, y_reason)
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+
+
+def test_array_rows_without_two_bases_are_not_het_evidence() -> None:
+    # 23andMe's I/D letters and written no-calls are neither base pairs nor hets; no-calls lower the
+    # autosomes' called share, which the Y ratio divides by.
+    indels = letters("X", X_START + 3_000_000, 3000, ["I", "D"])
+    found = on_array(autosomes(no_calls=500), array_x(500, 1500), indels, array_y(560, 140), read_y=True)
+    assert (found.array.x_base_pairs, found.array.x_hets) == (2000, 500)
+    assert (found.array.autosome_called, found.array.autosome_rows) == (2000, 2500)
+    assert found.array.y_call_ratio == pytest.approx((560 / 700) / (2000 / 2500))
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XXY
+
+
+def test_a_genome_carries_no_array_lines() -> None:
+    assert evidence(frame(chr20(), *XY)).array is None

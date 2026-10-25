@@ -105,7 +105,7 @@ meanwhile. The desk carries the ones filed there.
   Y copies past two. Chip files read X from their own hets; their Y probes only behind `array_y` (#136: on by default
   for AncestryDNA, whose Y calls are measured, or off for all as now). The lead's calls, for veto: three X with two Y
   is `OTHER_KARYOTYPE`; the array two-X expectation is 3/4 (Ne_X = 3/4 Ne_A), not PLINK's 0.2/0.8; copy counts are new
-  nullable `x_copy_count`/`y_copy_count`, not new `XCopies` members; tables with no stated build answer `no_build`.
+  nullable `x_copy_count`/`y_copy_count`, not new `XCopies` members; a table that states no build answers `no_build` as loaded and is estimated on `resolve_ref`'s output, the result naming the build's source.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

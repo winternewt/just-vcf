@@ -1143,7 +1143,7 @@ store:
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY, XXYY and XXXY from a coverage facet's copy counts built 2026-10-25; arrays' X from their hets and Y behind `array_y` built 2026-10-25, checked on 270 PGP-HMS exports) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY, XXYY and XXXY from a coverage facet's copy counts built 2026-10-25; arrays' X from their hets and Y behind `array_y` built 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, and tables with no stated build estimated on `resolve_ref`'s output, 2026-10-25, checked on 109 PGP-HMS tables) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -1427,9 +1427,10 @@ only):
   Y masked: vendor and hets agree against the self-report). No AncestryDNA file read against its label.
   Off, every array answers unknown, `x_copies` filled wherever the X is written with two letters.
 - 23andMe on GRCh36 (250 exports) answers `unsupported_build`; FTDNA (103), FTDNA space (2), rsid
-  tables (3) and one Final Report state no build at load and answer `no_build` (`resolve_ref` can
-  infer one, F9; the estimate reads the label `load` set). One Final Report did not load
-  (`TableLayoutError`).
+  tables (3) and one Final Report state no build at load and answer `no_build` as loaded. The
+  estimate reads the facets frame, not what `load` alone wrote: on `resolve_ref`'s output, which
+  carries the build F9 inferred from the rows, they are estimated (below, "Built 2026-10-25: the
+  build's source"). One Final Report did not load (`TableLayoutError`).
 
 Decisions, each with what was rejected:
 
@@ -1447,6 +1448,33 @@ Decisions, each with what was rejected:
   them) has only called Y rows, where a woman's cross-hybridising calls would read as a Y, and answers
   `no_calls_not_written`. Rejected: the chip's probe set as the denominator (`just_vcf.probes`), which
   exists only for learned or configured chips.
+
+**Built 2026-10-25: the build's source.** The estimate already read a build `resolve_ref` inferred:
+it reads the facets frame, and `resolve_ref` writes the label F9's row scoring gave
+(`assembly_label_basis = inferred`) into it. What was missing was saying so. The result now carries
+`assembly_label_basis` (verbatim), `assembly_label_source` (`stated`, `contig_lengths`, `rows`,
+`liftover`, read off the facet's columns by SCHEMA.md Decision 5's rule; null for a label no rule
+accounts for) and `ref_seqcol_digest`, carried and deciding nothing; `no_build`'s detail points at
+`resolve_ref`. Nothing in the estimate infers or defaults a build. Decisions, each with what was
+rejected:
+
+- The estimate takes `resolve_ref`'s output; it does not resolve. Rejected: a `reference` argument
+  running F9 inside the estimate (a hidden REF read of about 13 s per FTDNA table, and a second path to
+  a build the frames already record).
+- The finer source is derived on the result. Rejected: widening `AssemblyLabelBasis` to name the three
+  inferred sources, a dtype change and a schema bump for what the columns already tell apart. The
+  person may prefer it stored.
+
+Checked 2026-10-25 on the same 109 PGP-HMS tables, through `load`, `resolve_ref` against
+`/data/just-dna-cache/reference/store-ncbi36` (GRCh36, GRCh37, GRCh38) and the estimate (aggregates
+only): all 109 resolved, every one with `assembly_label_source = rows`. 69 read GRCh36 (FTDNA 66,
+FTDNA space 2, rsid table 1) and answer `unsupported_build`, F9's split of these files. Of the 40 on
+GRCh37, 32 FTDNA exports answer `too_few_sites`: 19 carry under 1,000 X rows (autosomal files) and 13
+under 1,000 autosomal rows (X-only files, no autosomal het share to divide by). The other 8 give
+`x_copies`: 5 FTDNA with too few X-degenerate Y probes, and 3 (2 rsid tables, the Final Report)
+`vendor_asserted`, named with `array_y`. Against `store-chm13`, which has no GRCh36, the 69 were
+refused (`no_fit`), as they must be. FTDNA's autosomal and X files of one person are two facets; a
+person-level layer could pair them, and the GRCh36 tables wait for a GRCh36 region set.
 
 **Left:** whether a VCF alone may name `XY`/`XXY` when it cannot count the Y, or must answer unknown
 until a coverage facet counts it, is the person's decision. Whether `array_y` should be on for

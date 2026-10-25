@@ -156,25 +156,69 @@ V43_RESERVED_TYPES: dict[str, str] = {"FORMAT/CN": "Integer", "INFO/CN": "Intege
 """The carried keys whose Type VCF 4.3 reserves differently from VCF 4.5 (CN is Float from 4.4 on).
 The loader declares an undeclared one so in a 4.3 file, and `write_vcf`, which writes 4.3, too."""
 
-_RESERVED_43 = ("GT", "GQ", "HQ", "DP", "AD", "PL", "GL", "GP", "PP", "FT", "PS", "CN")
-_RESERVED_44 = (*_RESERVED_43, "PSL", "PSO", "PSQ")
-_RESERVED_INFO = ("END", "SVLEN", "SVTYPE", "CIPOS", "CIEND", "CN")
+def _by_type(info: dict[str, str], fmt: dict[str, str]) -> dict[str, str]:
+    """Namespaced key → Type, from each namespace's keys listed per Type."""
+    return {f"{namespace}/{key}": kind for namespace, listed in (("INFO", info), ("FORMAT", fmt)) for kind, keys in listed.items() for key in keys.split()}
+
+
+_INFO_44 = {
+    "Flag": "1000G DB H2 H3 IMPRECISE NOVEL SOMATIC VALIDATED",
+    "Float": "AF BQ CICN CIRUC CN MQ RUC",
+    "Integer": "AC AD ADF ADR AN CIEND CILEN CIPOS CIRB DP END HOMLEN MQ0 NS RB RN RUB RUL SB SVLEN",
+    "String": "AA BKPTID CIGAR DBRIPID DBVARID DBVID EVENT EVENTTYPE HOMSEQ MATEID MEINFO METRANS PARID RUS SVCLAIM SVTYPE",
+}
+_FORMAT_44 = {
+    "Float": "CICN CN CNL CNP CNQ GL GP",
+    "Integer": "AD ADF ADR AHAP DP EC GQ HAP HQ MQ NQ PL PP PQ PS PSO PSQ",
+    "String": "FT GT PSL",
+}
+
+READER_DEFINITIONS: dict[tuple[int, int], dict[str, str]] = {
+    (4, 3): _by_type(
+        {
+            "Flag": "1000G DB H2 H3 IMPRECISE NOVEL SOMATIC VALIDATED",
+            "Float": "AF BQ MQ",
+            "Integer": "AC AD ADF ADR AN CICN CICNADJ CIEND CILEN CIPOS CN CNADJ DP DPADJ END HOMLEN MQ0 NS SB SVLEN",
+            "String": "AA BKPTID CIGAR DBRIPID DBVARID DBVID EVENT HOMSEQ MATEID MEINFO METRANS PARID SVTYPE",
+        },
+        {
+            "Float": "CNL CNP CNQ GL GP",
+            "Integer": "AD ADF ADR AHAP CN DP EC GQ HAP HQ MQ NQ PL PP PQ PS",
+            "String": "FT GT",
+        },
+    ),
+    (4, 4): _by_type(_INFO_44, _FORMAT_44),
+    (4, 5): _by_type(
+        _INFO_44,
+        {
+            "Float": f"{_FORMAT_44['Float']} LGL LGP",
+            "Integer": f"{_FORMAT_44['Integer']} LA LAA LAD LADF LADR LEC LEN LPL LPP",
+            "String": _FORMAT_44["String"],
+        },
+    ),
+}
+"""Per VCF version, every key polars-bio's reader (noodles) holds a reserved definition for → the Type
+it requires, as the noodles fork datafusion-bio-formats pins defines them (`42a3c01`,
+noodles-vcf `header/record/value/map/{info,format}/definition/v4_{3,4,5}.rs`). It refuses the whole
+header when one of them is declared with another Type (`validate_format_definition`,
+`validate_info_definition`: only the Type is checked, and only for 4.3, 4.4 and 4.5, so a VCF 4.2
+header is never refused so). And it reads a key the header does not declare under this definition,
+carried or not (P22), so a structural copy declares each one it does not declare otherwise
+(`skipped_declarations`)."""
 
 RESERVED_TYPES: dict[tuple[int, int], dict[str, str]] = {
     version: {
-        **{f"FORMAT/{key}": FORMAT_KEYS[key][1] for key in keys},
-        **{f"INFO/{key}": INFO_KEYS[key][1] for key in _RESERVED_INFO},
-        **(V43_RESERVED_TYPES if version == (4, 3) else {}),
+        name: kind
+        for name, kind in definitions.items()
+        if name.split("/", 1)[1] in (INFO_KEYS if name.startswith("INFO/") else FORMAT_KEYS)
     }
-    for version, keys in (((4, 3), _RESERVED_43), ((4, 4), _RESERVED_44), ((4, 5), (*_RESERVED_44, "LEN")))
+    for version, definitions in READER_DEFINITIONS.items()
 }
-"""Per VCF version, the carried keys polars-bio's reader (noodles) holds a reserved definition for →
-the Type it requires. It refuses the whole header when one of them is declared with another Type
-(noodles-vcf `validate_format_definition` and `validate_info_definition`; only the Type is checked,
-and only for 4.3, 4.4 and 4.5, so a VCF 4.2 header is never refused so). Such a key is not carried
-(`refused_types`), except GT, which the copy declares String (`retyped_gt`). The keys not listed
-here (DS, MIN_DP, LEN before 4.5, the phase-set lists before 4.4) have no definition in that version
-and are read under any Type."""
+"""Per VCF version, the carried keys of `READER_DEFINITIONS` → the Type the reader requires. A carried key
+declared with another Type is not carried (`refused_types`), except GT, which the copy declares String
+(`retyped_gt`). The carried keys not listed here (DS, MIN_DP, LEN before 4.5, PSO and PSQ before 4.4)
+have no definition in that version and are read under any Type. 4.3's CN is Integer
+(`V43_RESERVED_TYPES`)."""
 
 _LIST_INFO = ("SVLEN", "CIPOS", "CIEND", "CN")
 """INFO keys read as lists. One declared `Number=1` (VCF 4.2's INFO CN, an older caller's SVLEN) is
@@ -218,7 +262,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 16
+REWRITE_VERSION = 17
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -243,7 +287,12 @@ value's fraction away in 32 bits.
 16: a structural copy declares a key it leaves out `Number=.` with the Type the file's version reserves
 (`skipped_declarations`), where it dropped the line; a copy from 15 left a refused single-value key
 undeclared, its values were parsed under the version's definition, and `DP=30.5` under 4.3 failed the
-read."""
+read.
+17: a structural copy declares every key the file's version reserves and the copy does not declare
+otherwise `Number=.` with the reserved Type (`skipped_declarations`, `READER_DEFINITIONS`), Flags and GT
+excepted; a copy from 16 declared only the carried keys it left out, so a reserved key never carried
+(FORMAT MQ `60.5`, INFO DP `30.5` under 4.3) was parsed under the version's definition and failed the
+retry."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -637,22 +686,31 @@ def left_out_of_copy(header: Header) -> set[str]:
     )
 
 
-def skipped_declarations(header: Header) -> list[str]:
-    """The lines a structural copy declares a key it leaves out (`left_out_of_copy`) with, where the
-    file's VCF version holds a definition of the key (`RESERVED_TYPES`): `Number=.` and the Type that
-    version reserves. Undeclared, polars-bio's reader (noodles) reads such a key's values under that
-    definition, and it parses a single value (DP, GQ, PS, CN, INFO END) as the record is read, requested
-    or not, so `30.5` under DP's reserved Integer failed the whole load, naming no key. A list it
-    parses only when the value is requested, and a key left out never is, so declared `Number=.` its
-    values are skipped unread. The reader checks only a line's Type against its definition, so the line
-    is accepted. Under VCF 4.2 it holds no definitions, and an undeclared key is read as text, which
-    never fails: no line is needed."""
-    reserved = RESERVED_TYPES.get(header.version_tuple or (0, 0), {})
+def skipped_declarations(header: Header, declared: set[str]) -> list[str]:
+    """The lines a structural copy declares each key its file's VCF version holds a definition of
+    (`READER_DEFINITIONS`) with, where the copy does not declare the key itself (`declared`, namespaced):
+    `Number=.` and the Type that version reserves. That is every reserved key the frames do not carry
+    (INFO DP, FORMAT MQ), and every carried one the copy leaves out (`left_out_of_copy`). Undeclared,
+    polars-bio's reader (noodles) reads such a key's values under the version's definition, and it
+    parses a single value (DP, GQ, PS, MQ, INFO END) as the record is read, requested or not, so `30.5`
+    under DP's reserved Integer failed the whole load, naming no key. A list it parses only when the
+    value is requested, and a key the copy does not carry never is, so declared `Number=.` its values
+    are skipped unread. The reader checks only a line's Type against its definition, so the line is
+    accepted. Every such key is declared, not only those the rows read ahead use, since a record past
+    them may use another, and a declared key no record uses costs nothing. Two are not: GT, which the
+    reader parses as a genotype whatever its line says, and a Flag (INFO DB, SOMATIC), which the reader
+    refuses under any Number but 0 ("invalid number for type"), so a Flag written with a value (`DB=1`)
+    still fails the read, as it fails under the file's own line.
+    Under VCF 4.2 the reader holds no definitions, and an undeclared key is read as text, which never
+    fails: no line is needed."""
+    definitions = READER_DEFINITIONS.get(header.version_tuple or (0, 0), {})
     lines = []
-    for name in sorted(left_out_of_copy(header) & set(reserved)):
+    for name, kind in sorted(definitions.items()):
+        if name in declared or name == "FORMAT/GT" or kind == "Flag":
+            continue
         namespace, key = name.split("/", 1)
         lines.append(
-            f'##{namespace}=<ID={key},Number=.,Type={reserved[name]},'
+            f'##{namespace}=<ID={key},Number=.,Type={kind},'
             'Description="Declared by just-vcf: not carried, so its values are skipped unread">'
         )
     return lines
@@ -847,9 +905,9 @@ def readable_path(
     lines polars-bio needs and the INFO and FORMAT keys the frames carry, for a file it refused (P7, P8):
     polars-bio skips a key its header does not declare (P1), so a malformed value in a key the frames
     do not carry is never parsed. Not so for a key a VCF 4.3+ version reserves: the reader parses an
-    undeclared one under its own definition, so a carried key the copy leaves out is declared so that
-    it is skipped (`skipped_declarations`); a reserved key the frames never carry (INFO DP, FORMAT MQ)
-    is still parsed so.
+    undeclared one under its own definition, so every reserved key the copy does not declare itself (a
+    carried key it leaves out, INFO DP, FORMAT MQ) is declared so that it is skipped
+    (`skipped_declarations`).
 
     `cache` is the entry (`vcf/<key>`); it is written, or reused, under its lock, with `origin` in its
     manifest (`just_vcf.cache.writing`).
@@ -878,6 +936,7 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
         return target
     cache.mkdir(parents=True, exist_ok=True)
     declared: set[tuple[str, str]] = set()
+    keys: set[str] = set()  # the INFO and FORMAT keys the copy declares, namespaced
     left_out = left_out_of_copy(header)
     retyped = retyped_whole(header)
     with opener() as source, target.open("wb") as raw, BgzfWriter(raw) as out:
@@ -890,10 +949,13 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
                 if key.groups() in declared:
                     continue
                 declared.add(key.groups())
+            if structured := re.match(r"^##(INFO|FORMAT)=<(.*)>$", line):
+                keys.add(f"{structured.group(1)}/{_attrs(structured.group(2)).get('ID')}")
             out.write(f"{_readable_line(line, retyped)}\n".encode())
         for name in missing:
             if structural_only and name in left_out:
                 continue
+            keys.add(name)
             namespace, key = name.split("/", 1)
             number = (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key][0]
             number = "." if number in READ_AS_ANY_NUMBER else number
@@ -903,7 +965,7 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
                 f'Description="Declared by just-vcf: used by the rows, missing from the header">\n'.encode()
             )
         if structural_only:
-            for line in skipped_declarations(header):
+            for line in skipped_declarations(header, keys):
                 out.write(f"{line}\n".encode())
         out.write(("#" + "\t".join(header.columns) + "\n").encode())
         if structural_only:

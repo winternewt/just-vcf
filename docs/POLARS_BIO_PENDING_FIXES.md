@@ -566,7 +566,11 @@ behaviours, reproduced on 0.36.0 with synthetic two-record VCFs (VCF 4.3, one go
   before any row and GT is never left out (`can_leave_out`, `loaders/vcf.py:609`).
 
 Mitigation: the structural copy declares a key the version refuses `Number=.`, so it is read as text and
-not carried (`7c37f1a`). The GT case still refuses the file. Not filed.
+not carried (`7c37f1a`), and since 2026-10-26 every reserved key it does not declare otherwise, carried
+or not (FORMAT MQ, INFO DP), from noodles' own per-version table (`READER_DEFINITIONS`,
+`loaders/vcf.py`; Flags excepted, which no `Number=.` holds, so `DB=1` still fails). The stats pass reads
+every INFO column the frames read, so an INFO failure reaches that retry as a FORMAT one does, where it
+escaped from the spill as a raw `ComputeError`. The GT case still refuses the file. Not filed.
 
 *Upstream (2026-10-26).* Neither is reported (the searches of P21). **File the first at
 datafusion-bio-formats, with P21**: one change covers both. On an error from the key iterator, find the

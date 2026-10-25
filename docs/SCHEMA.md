@@ -1239,6 +1239,16 @@ polars-bio reads and costs a pass over each sample column; and writing the copy 
 reader holds no definitions, which would read the whole file under another version (GT's leading
 phase indicator, P4).
 
+The same holds for a reserved key the loader never carries (2026-10-26): the structural copy keeps
+only the carried keys' lines, so FORMAT MQ or INFO DP, declared by the file or used undeclared, was
+read under the version's definition, and MQ `60.5` under 4.3's Integer failed the retry. So the copy
+declares every key the version reserves and the copy does not declare otherwise `Number=.` with the
+reserved Type (`READER_DEFINITIONS`, the pinned noodles fork's own table; `REWRITE_VERSION` 17), every
+one, not only those the rows read ahead use, since a later record may use another and a declared key
+no record uses costs nothing. Two are not declared: GT, which the reader parses as a genotype whatever
+its line says, and a Flag (INFO DB, SOMATIC), which the reader holds under no Number but 0, so a Flag
+written with a value (`DB=1`) still fails the read, as it does under the file's own line.
+
 GT is never left out (2026-10-25): a facet without genotypes is not a calls facet, and GT's values are
 genotype text whatever its line says. Declared `Integer`, `Float` or `Character`, it is read as written
 through a copy whose header declares it `Type=String`, in every version, with a warning naming the Type.

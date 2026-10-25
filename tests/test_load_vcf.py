@@ -1433,3 +1433,38 @@ def test_an_info_value_that_does_not_parse_reaches_the_retry(tmp_path: Path, nei
     assert refused.calls.collect().drop("facet_id").equals(reference.calls.collect().drop("facet_id"))
     assert any("polars-bio refused the file" in w and "Error reading INFO field" in w for w in refused.warnings), refused.warnings
     assert "INFO/DP" in refused.facets.collect()["dropped_fields"][0]
+
+
+@pytest.mark.parametrize(("namespace", "key", "line", "version", "whole", "other"), [
+    ("FORMAT", "MQ", '##FORMAT=<ID=MQ,Number=1,Type=Integer,Description="x">', "VCFv4.3", "60", "60.5"),
+    ("FORMAT", "MQ", '##FORMAT=<ID=MQ,Number=1,Type=Integer,Description="x">', "VCFv4.4", "60", "60.5"),
+    ("FORMAT", "MQ", '##FORMAT=<ID=MQ,Number=1,Type=Integer,Description="x">', "VCFv4.5", "60", "60.5"),
+    # A Type the version refuses: the header is refused first, and the retry reads MQ undeclared.
+    ("FORMAT", "MQ", '##FORMAT=<ID=MQ,Number=1,Type=Float,Description="x">', "VCFv4.3", "60", "60.5"),
+    # Used and never declared (P22): polars-bio's reader applies its own definition all the same.
+    ("FORMAT", "MQ", None, "VCFv4.3", "60", "60.5"),
+    ("FORMAT", "NQ", None, "VCFv4.5", "3", "x"),
+    ("INFO", "DP", INFO_LINES["DP"], "VCFv4.3", "30", "30.5"),
+    ("INFO", "AN", None, "VCFv4.4", "2", "two"),
+])
+def test_a_reserved_key_never_carried_is_skipped_unread(
+    tmp_path: Path, namespace: str, key: str, line: str | None, version: str, whole: str, other: str
+) -> None:
+    """A key a VCF 4.3+ version reserves and the loader never carries (FORMAT MQ, INFO DP) is skipped
+    unread in the structural copy, whatever its values, as a carried key left out is. The copy left its
+    line out, and polars-bio's reader then parsed every value under the version's own definition (MQ a
+    single Integer), so `60.5` failed the retry ("invalid digit found in string", naming no key) and the
+    load was refused. The file loads as its whole-valued twin does, with the key not carried."""
+    # A carried INFO key beside it, so polars-bio reads each record's INFO.
+    meta = tuple(m for m in (line, '##INFO=<ID=SVTYPE,Number=1,Type=String,Description="x">') if m)
+
+    def loaded_with(value: str, name: str):
+        records = [
+            (f"1\t{pos}\t.\tA\tG\t50\t.\t{key}={value};SVTYPE=SNV\tGT\t0/1" if namespace == "INFO" else f"1\t{pos}\t.\tA\tG\t50\t.\tSVTYPE=SNV\tGT:{key}\t0/1:{value}")
+            for pos in (100, 200)
+        ]
+        return load(write(tmp_path, vcf_text(records, version=version, extra_meta=meta), name))
+
+    reference, refused = loaded_with(whole, "whole.vcf"), loaded_with(other, "other.vcf")
+    assert refused.calls.collect().drop("facet_id").equals(reference.calls.collect().drop("facet_id"))
+    assert f"{namespace}/{key}" in refused.facets.collect()["dropped_fields"][0]

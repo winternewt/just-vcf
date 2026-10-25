@@ -4,11 +4,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF 4.3+ key its version reserves and the loader never carries (FORMAT MQ, NQ, INFO DP, AN, and
+  the rest of the reader's table) is skipped unread in the retry whatever its values, declared in the
+  file or not: the structural copy left its line out, polars-bio's reader parsed it under the
+  version's own definition, and FORMAT MQ `60.5` or INFO DP `30.5` under 4.3 failed the load with
+  `HeaderRefused`, naming no key. The copy now declares every reserved key it does not declare
+  otherwise `Number=.` with the reserved Type, GT and Flags excepted (`REWRITE_VERSION` 17). A Flag
+  written with a value (`DB=1`) still fails the read.
+
 - A VCF whose INFO holds a value polars-bio cannot parse reaches the loader's retry, as a FORMAT one
   does, in every version: INFO DP `Type=Integer` holding `30.5` beside a carried SVTYPE or a split
   marker failed the load with polars' raw `ComputeError` from the spill, since the pass the retry wraps
   read no INFO column. It now reads every INFO column the spill reads, and the file loads with DP not
-  carried under VCF 4.2 (under 4.3+ the retry still refuses it with `HeaderRefused`, naming no key).
+  carried, under VCF 4.2 as under 4.3+ (the entry above).
 
 - The VCF loader counts a genotype indexing past the row's ALT list, with the warning the key=value
   table and Nirvana JSON give (`… genotype(s) index an allele past the row's ALT list; gt_alleles has a
@@ -26,8 +34,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   with the key not carried, but `30.5` failed the whole load with `HeaderRefused` ("invalid digit found
   in string"), because polars-bio's reader parsed the key, left undeclared in the copy, under the
   version's own definition. The structural copy now declares such a key `Number=.` with the reserved
-  Type, which the reader never parses for a key not requested (`REWRITE_VERSION` 16). A reserved key
-  the frames never carry (INFO DP, FORMAT MQ) is still parsed so where the copy drops its line.
+  Type, which the reader never parses for a key not requested (`REWRITE_VERSION` 16).
 
 - Nirvana JSON counts a genotype indexing past the row's ALT list from the genotype text, as the
   key=value table does: `1/300` reads `gt [1, null]` (a `u8` list) and was counted from `gt`, so it

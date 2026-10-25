@@ -52,8 +52,8 @@ The estimate:
   only by the calls reads one (so `XY` and `XXY` from calls alone, which cannot tell XY from XYY);
   more than two X with no coverage line to count them is unknown (`copies_uncounted`). A value in an
   unknown band, lines that disagree, too few sites, a facet that is not a whole genome, a build
-  without a region set, or one whose thresholds were never measured (T2T-CHM13, measured and
-  reported only) all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
+  without a region set, or one whose thresholds were never measured (T2T-CHM13, and GRCh36 for
+  anything but an array: measured and reported only) all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
   `x_copies` is still answered wherever the X lines settle it.
 - **An array facet** (`callset_type = array`) has no depth; its lines are read from the letters as
   written (`array`, `ArrayLines`), so no REF is needed. X: the het share of two-letter base calls on
@@ -65,7 +65,8 @@ The estimate:
   decided the sample is female, and nothing in the file tells that mask from a chip that saw no Y:
   on PGP-HMS, 23andMe exports with a two-letter X read exactly 0, AncestryDNA women 0.008-0.098
   (docs/ROADMAP.md RM269). So the Y line is read only with `array_y=True`; otherwise `y_reason` is
-  `vendor_asserted` and the karyotype unknown. Arrays cannot count copies.
+  `vendor_asserted` and the karyotype unknown. Arrays cannot count copies. They are estimated on
+  GRCh36 too (`ARRAY_ESTIMATE_BUILDS`), where a genome is not.
 
 **The build** places the PARs and the X-degenerate Y, and it is the facet's `assembly_label`, whatever
 in the library filled it: stated by the source at load, inferred at load from the header's `##contig`
@@ -100,10 +101,16 @@ from just_vcf.schema import AssemblyLabelBasis, CallsetType
 # --- Regions -----------------------------------------------------------------------------------
 # Derived from GIAB genome stratifications v3.6, `XY` group, and for T2T-CHM13's X-degenerate Y from the
 # T2T consortium's sequence classes (docs/PROVENANCE.md), converted from BED (0-based, half-open) to
-# 1-based closed `pos` ranges; tests/test_karyotype.py re-derives them from the BED files carried in
-# assets/. The derivation is just-vcf's own, not a GIAB or T2T product.
+# 1-based closed `pos` ranges. GRCh36 (NCBI36, hg18): PARs from Ensembl 54's assembly exceptions, the
+# X-degenerate Y lifted from GRCh37's through UCSC's hg19ToHg18 chain. tests/test_karyotype.py
+# re-derives every set from the files carried in assets/. The derivations are just-vcf's own, not a
+# GIAB, T2T, Ensembl or UCSC product.
 
 PAR_BOUNDS: dict[str, dict[str, tuple[tuple[int, int], tuple[int, int]]]] = {
+    "GRCh36": {
+        "X": ((1, 2_709_520), (154_584_238, 154_913_754)),
+        "Y": ((1, 2_709_520), (57_443_438, 57_772_954)),
+    },
     "GRCh37": {
         "X": ((60_002, 2_699_520), (154_931_045, 155_260_560)),
         "Y": ((10_001, 2_749_806), (59_133_471, 59_363_566)),
@@ -118,9 +125,21 @@ PAR_BOUNDS: dict[str, dict[str, tuple[tuple[int, int], tuple[int, int]]]] = {
     },
 }
 """PAR1 and PAR2 per build and chromosome, 1-based closed: from the first to the last base of GIAB's
-`chr{X,Y}_PAR` intervals on each arm (GIAB leaves assembly gaps out, so its PAR file is fragmented)."""
+`chr{X,Y}_PAR` intervals on each arm (GIAB leaves assembly gaps out, so its PAR file is fragmented).
+
+GRCh36: GIAB has no NCBI36 set. The bounds are NCBI36's published PARs as Ensembl 54 (the last
+Ensembl release on NCBI36) records them, its `assembly_exception` rows of type `PAR` (Y 1-2,709,520
+and 57,443,438-57,772,954 on X 1-2,709,520 and 154,584,238-154,913,754; Ensembl coordinates are
+1-based closed, as here). Checked on hg18's own sequence: X and Y are identical at every base inside
+each PAR and no closer than chance in the kilobase outside it (docs/PROVENANCE.md)."""
 
 X_DEGENERATE_Y: dict[str, tuple[tuple[int, int], ...]] = {
+    "GRCh36": (
+        (2_809_807, 2_978_085), (6_676_755, 7_502_522), (11_214_554, 11_253_954), (11_653_955, 12_208_578),
+        (12_308_579, 14_605_747), (14_680_008, 16_496_367), (16_526_489, 16_781_069), (17_047_240, 18_077_540),
+        (19_491_609, 20_829_067), (20_829_068, 21_877_227), (26_970_971, 27_228_749), (57_228_750, 57_327_044),
+        (57_377_045, 57_443_437),
+    ),
     "GRCh37": (
         (2_749_807, 2_918_085), (6_616_755, 7_442_522), (13_104_554, 13_143_954), (13_193_955, 13_748_578),
         (13_798_579, 16_096_353), (16_170_614, 17_986_973), (18_017_095, 18_271_675), (18_537_846, 19_568_146),
@@ -158,9 +177,23 @@ T2T-CHM13: the T2T consortium's `X-DEG` sequence class (`chm13v2.0_chrXY_sequenc
 the complete Y of HG002), less GIAB's `chrY_XTR` and `chrY_PAR`. The class file's second X-DEG interval
 starts two bases inside XTR2, and those two bases are dropped. GIAB's CHM13 set has no ampliconic file,
 and on a gapless Y its nonPAR minus XTR would keep the ampliconic sequence, the heterochromatin, the
-centromere and the satellites, so the GRCh37/38 derivation does not carry over."""
+centromere and the satellites, so the GRCh37/38 derivation does not carry over.
+
+GRCh36: the GRCh37 set lifted through UCSC's `hg19ToHg18.over.chain.gz`. Each GRCh37 interval is cut
+by the chain's ungapped blocks, pieces that land off chrY are dropped (117 bases of one interval go to
+hg18's chrX), and the interval becomes the span from its first to its last base on chrY (each lies
+on one chain, plus strand, in order; 653 bases of the 9.89 Mb set do not align to chrY), kept
+between the GRCh36 PARs. That clips the last interval at PAR2, where hg18's X and Y are identical:
+the 66 kb of GRCh37's 58,967,657-59,133,470 that lie before NCBI's PAR2 stay, the 99 kb inside go. Two
+intervals now abut (19,491,609-20,829,067 and 20,829,068-21,877,227): the 50 kb GRCh37 gap between
+them is not in NCBI36. Lifting the set back through UCSC's hg18ToHg19 lands every aligned base inside
+the GRCh37 set."""
 
 REGION_SET: dict[str, str] = {
+    "GRCh36": (
+        "NCBI36 PARs as Ensembl 54 records them, and GIAB genome stratifications v3.6 XY (GRCh37) lifted "
+        "through UCSC hg19ToHg18 (X-degenerate Y), derived by just-vcf"
+    ),
     "GRCh37": "GIAB genome stratifications v3.6 XY, derived by just-vcf",
     "GRCh38": "GIAB genome stratifications v3.6 XY, derived by just-vcf",
     "T2T-CHM13": (
@@ -239,7 +272,15 @@ ESTIMATE_BUILDS = frozenset({"GRCh37", "GRCh38"})
 """Builds the thresholds were measured on, and so the only ones estimated. T2T-CHM13 is measured and
 reported, but its estimate waits for T2T callsets of known karyotype: its X-degenerate Y is another
 region set, and no T2T genome was among the calibration files. Rejected: applying the GRCh37/38 bands
-to it unmeasured."""
+to it unmeasured. A GRCh36 genome is measured and reported likewise: its X-degenerate Y is GRCh37's lifted, but
+no NCBI36 genome was measured."""
+
+ARRAY_ESTIMATE_BUILDS = ESTIMATE_BUILDS | {"GRCh36"}
+"""Builds an array facet is estimated on. The array bands are not measured thresholds (one X near 0,
+two near the neutral 3/4; a Y probe calls like an autosome or not at all), so the build only places the
+regions, and GRCh36 is read where its exports were checked: on PGP-HMS its 250 23andMe exports read as
+the GRCh37 ones do (docs/ROADMAP.md RM269). Rejected: holding GRCh36 arrays back with its genomes,
+whose depth bands were measured on GRCh37/38 genomes only."""
 
 _AUTOSOMES = [str(n) for n in range(1, 23)]
 _BASES = ["A", "C", "G", "T"]
@@ -295,9 +336,11 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
 
 - `no_build`: the facet has no `assembly_label`, so the PARs cannot be placed. An array table that
   states none gets one from `resolve_ref`, which infers it from the rows (F9); pass its output.
-- `unsupported_build`: a label with no region set here (GRCh36).
-- `uncalibrated_build`: a build with a region set but no measured thresholds (T2T-CHM13): the
-  measurements are reported, the estimate is withheld.
+- `unsupported_build`: a label with no region set here: none of the four the library writes
+  (GRCh36, GRCh37, GRCh38, T2T-CHM13), so an older build such as NCBI35, or a label a caller wrote.
+- `uncalibrated_build`: a build with a region set but no measured thresholds (T2T-CHM13; GRCh36 but
+  for an array facet, `ARRAY_ESTIMATE_BUILDS`): the measurements are reported, the estimate is withheld. A coverage facet on such a build is set aside
+  with it (`coverage.reason`).
 - `not_wgs`: `callset_type` is neither `wgs` nor `array` (an array has its own lines); the depth
   thresholds were measured on whole genomes.
 - `too_few_sites`: a line had fewer sites than its minimum.
@@ -611,8 +654,9 @@ def measure_coverage(coverage: Coverage) -> CoverageRatios:
     label = coverage.facet.assembly_label
     base = {"coverage_facet_id": coverage.facet.facet_id, "format_id": coverage.facet.format_id.value}
     if label not in ESTIMATE_BUILDS:
+        reason = "coverage_no_build" if label is None else "unsupported_build" if label not in REGION_BUILDS else "uncalibrated_build"
         return CoverageRatios(
-            **base, reason="coverage_no_build" if label is None else "unsupported_build", reference_bases=0, reference_median=None,
+            **base, reason=reason, reference_bases=0, reference_median=None,
             reference_even_share=None, x_bases=0, x_median=None, y_bases=0, y_median=None, x_ratio=None, y_ratio=None,
         )
     (_, par1_end), (par2_start, _) = PAR_BOUNDS[label]["X"]
@@ -873,7 +917,7 @@ def estimate(
     if callset_type is CallsetType.ARRAY:
         lines = _array_lines(groups)
         known["array"] = lines
-        if assembly_label not in ESTIMATE_BUILDS:
+        if assembly_label not in ARRAY_ESTIMATE_BUILDS:
             return unknown("uncalibrated_build", f"no array rule was checked on {assembly_label}", **known)
         x_range, x_reason, x_detail = _array_x(lines)
         y_range, y_reason, y_detail = _array_y(lines, array_y)

@@ -1546,11 +1546,14 @@ just-vcf's, since Phenopackets has no place for an inference). From calls alone 
 `UNKNOWN_KARYOTYPE` are estimated, the last always with a reason: `y_present` is `True` or unknown,
 never `False`, because depth at called sites cannot show a Y absent (a man's GATK genome read below the
 present band, close to the two-X range), so `XX` and `XO` wait for a coverage facet. The PAR bounds and the X-degenerate
-Y come from GIAB's stratifications for GRCh37 and GRCh38, and for T2T-CHM13 from GIAB's (PAR, XTR) with
-the T2T consortium's X-degenerate class (docs/PROVENANCE.md); other builds answer unknown
-(`unsupported_build`). The thresholds were measured on GRCh37 and GRCh38 genomes only, so a T2T-CHM13
-facet is grouped and measured, and its estimate withheld (`uncalibrated_build`, RM286) until T2T callsets
-of known karyotype are measured. Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
+Y come from GIAB's stratifications for GRCh37 and GRCh38, for T2T-CHM13 from GIAB's (PAR, XTR) with
+the T2T consortium's X-degenerate class, and for GRCh36 from NCBI36's PARs as Ensembl 54 records them
+with GRCh37's X-degenerate Y lifted through UCSC's hg19ToHg18 chain (docs/PROVENANCE.md); a label
+with none of these (NCBI35, or one a caller wrote) answers unknown (`unsupported_build`). The
+thresholds were measured on GRCh37 and GRCh38 genomes only, so a T2T-CHM13 facet, or a GRCh36 one
+that is not an array, is grouped and measured, and its estimate withheld (`uncalibrated_build`, RM286, RM269) until callsets of known
+karyotype on it are measured. A coverage facet on such a build is set aside with the same reason.
+Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 
 `sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM278) of the same person and
 build, paired by the caller. Its `coverage` field (`just_vcf.karyotype.CoverageRatios`, module-level
@@ -1593,7 +1596,9 @@ on the autosomes drops its no-calls, so its rows are not its probes and its Y sh
 a letter null, `autosome_no_calls`); a row whose genotype could not be read (`gt_alleles` null, a
 code no loader reads) is not called but says nothing of the export's no-calls (2026-10-25: one such
 row read a no-call-dropping export's Y). Arrays never count copies, so
-they name at most `XO`, `XY`, `XX` and `XXY`. Computed, not stored: no schema change.
+they name at most `XO`, `XY`, `XX` and `XXY`. They are estimated on GRCh36 as on GRCh37 and GRCh38
+(`just_vcf.karyotype.ARRAY_ESTIMATE_BUILDS`), where a genome is not: their bands are no measured
+threshold, and GRCh36's 23andMe exports read as the GRCh37 ones do (RM269). Computed, not stored: no schema change.
 
 The build is the facet's `assembly_label` as the frames carry it, whatever in the library filled it:
 the source's own statement at load, the header's `##contig` lengths at load (RM4), an array's rows

@@ -60,6 +60,10 @@ downstream"). Ours, it closes here, the tool with its test and changelog line in
 kit's, it files restated in the kit's terms (no person, no genome, no path), waits for the release,
 moves the pin and retires what the release replaced.
 
+What this seat posts on an issue here (a comment, a filing) ends with the line
+`Seat: just-vcf/tooling`, so its own issues watcher leaves it out, and a close within 10 minutes of
+it (kit #165).
+
 ## Grant
 
 Commit on `main`; push `main` to `origin` as a fast-forward; patch tags, pushed to `origin`; its own

@@ -1,0 +1,5 @@
+UCSC hg19ToHg18 liftOver chain, https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg18.over.chain.gz
+(md5 be13baed73d5ab9623b6e95be5d76401, equal to that directory's md5sum.txt; sha256
+fc312e924e970dee936a69972768c6f84591d3a6daddbe598e49321c5fb1d253; Last-Modified 2009-06-04), downloaded 2026-10-25.
+hg19ToHg18.over.chain.chrY.chain holds, verbatim and in file order, every chain record whose source
+(tName) is chrY: three chains, two to hg18 chrY and one to chrX. See docs/PROVENANCE.md.

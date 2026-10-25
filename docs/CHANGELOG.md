@@ -33,6 +33,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   VCF's warning that such a GT is read through a copy declaring it String no longer applies to a BCF,
   which has no copy.
 
+- The tooling seat signs what it posts on this repository's issues with `Seat: just-vcf/tooling`, so its
+  issues watcher no longer wakes it for its own comments and closes (kit v0.1.94, #165). The pin is at
+  v0.1.94.
+
 - The key=value table's and Nirvana JSON's warning for a genotype that is not allele indices says what
   the row holds: a null in `gt` and `gt_alleles` for each slot that is not an index, and the text in
   `source_gt`. It said "gt and gt_alleles null", but `gt` is a list of one slot per haplotype the text
@@ -43,6 +47,24 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   says so: one load warning names each key so read and its declared Type (`FORMAT/DP (Type=Float)`),
   as the GT retype's warning does. A key not carried is named by its own warning instead, and a BCF,
   read as stored, gets none. Additive.
+
+- An array facet on GRCh36 is estimated (RM269), where it answered `uncalibrated_build` (and before
+  GRCh36 had a region set, `unsupported_build`): `karyotype.ARRAY_ESTIMATE_BUILDS` adds GRCh36 to the
+  builds the array rule reads, since its bands are not measured thresholds and the build only places
+  the regions. A whole genome on GRCh36 still answers `uncalibrated_build`. Checked on PGP-HMS: the
+  250 GRCh36 23andMe exports read as the GRCh37 ones do (73 two-letter X, all self-reported women,
+  `XX` with `array_y`; 173 one-letter X, the vendor's call), and of the 69 tables `resolve_ref` places
+  on GRCh36, 3 give one X and none reads against its label. A value change; no column changes.
+
+- `sex_chromosome_evidence` places the sex chromosomes on GRCh36 (NCBI36, hg18), where it answered
+  `unsupported_build` (RM269): `PAR_BOUNDS["GRCh36"]` are NCBI36's PARs as Ensembl 54 records them
+  (checked on hg18's own sequence, X and Y identical inside each PAR), and `X_DEGENERATE_Y["GRCh36"]`
+  is the GRCh37 set lifted through UCSC's hg19ToHg18 chain, kept between those PARs (docs/PROVENANCE.md;
+  the sources are carried in `assets/` and the test re-derives both). A GRCh36 facet is grouped and
+  measured, and answers `uncalibrated_build`, as T2T-CHM13 does: no NCBI36 genome was among the
+  calibration files. `unsupported_build` is left for labels with no region set (NCBI35, a label a
+  caller wrote). A coverage facet on GRCh36 or T2T-CHM13 is now set aside as `uncalibrated_build`,
+  where it said `unsupported_build` although both have region sets. A value change; no column changes.
 
 - `sex_chromosome_evidence` on an array facet tells a written no-call from an unreadable row (RM269):
   the check that the export writes its no-calls counted every autosomal row not called, so one row

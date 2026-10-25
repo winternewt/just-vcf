@@ -114,3 +114,31 @@ def past_alts(genotype: pl.Expr, alts: pl.Expr) -> pl.Expr:
     biggest = pl.lit(2**63 - 1, dtype=pl.Int64)
     indices = genotype.str.extract_all(r"\d+").list.eval(pl.element().cast(pl.Int64, strict=False).fill_null(biggest))
     return genotype.str.contains(READABLE_GT) & (indices.list.max() > alts)
+
+
+def genotype_indices(text: pl.Expr) -> pl.Expr:
+    """`gt` from genotype text of allele indices (`0/1`, `1|2`, `./.`): one slot per haplotype the text
+    separates, null per `.` and per index past 255 (counted by `past_alts`). Null where the text is not
+    readable as allele indices (`READABLE_GT`): the genotype is unknown, so no slot is read, not the `0`
+    of `0/x` either, which would read as the half-call `0/.` the file did not write (SCHEMA.md
+    Decision 2). Gather `gt_alleles` behind a `gt` null guard: a batch whose every `gt` is null gathers a
+    list of a Null inner type, which the spill's parquet sink cannot write."""
+    slots = text.str.replace_all(r"\|", "/").str.split("/").list.eval(
+        pl.when(pl.element() == ".").then(None).otherwise(pl.element()).cast(pl.UInt8, strict=False)
+    )
+    return pl.when(text.str.contains(READABLE_GT)).then(slots)
+
+
+def genotype_phase(text: pl.Expr) -> pl.Expr:
+    """`phased` from the same text, one entry per slot: true after `|`, false after `/`, and the first
+    slot's read from the first separator, as for VCF before 4.4 (phased unless a `/` follows, so a
+    haploid call is phased). Null where `genotype_indices` is."""
+    seps = text.str.extract_all(r"[/|]")
+    first = ~text.str.contains("/", literal=True)
+    return pl.when(text.str.contains(READABLE_GT)).then(pl.concat_list(first, seps.list.eval(pl.element() == "|")))
+
+
+UNREADABLE_WARNING = (
+    "genotype(s) not readable as allele indices kept with gt, gt_alleles and phased null, and the text in source_gt"
+)
+"""The warning, after its count, for genotypes `genotype_indices` does not read."""

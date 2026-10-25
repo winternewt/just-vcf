@@ -355,8 +355,19 @@ The VRS CisPhasedBlock is built from `phase_sets` at export, by `cis_phased_bloc
 export" below). It is not stored per row.
 
 **Genotype text that is not allele indices** (2026-10-25; the key=value table and Nirvana JSON, whose
-genotypes the loader reads from text itself). A genotype is readable when each slot is an index or `.`, separated by
-`/` or `|`. Each genotype is counted under one reason at most: one not readable is counted as that
+genotypes the loader reads from text itself). A genotype is readable when each slot is an index or `.`,
+separated by `/` or `|`. One that is not (`N/A`, `x`, `-`, `1:2`, `0/x`) is withheld whole: `gt`,
+`gt_alleles` and `phased` are null, `source_gt` keeps the text, and a warning counts the rows. Its
+readable slots are not read either: `0/x` as `[0, null]` would be the frame of `0/.`, a half-call the
+file did not write, and the frame could no longer tell a slot the file left uncalled from one the
+loader could not read. Withheld, the two stay apart: `gt` null with `source_gt` set is unreadable, a
+list of nulls is a written no-call, and `gt` null with `source_gt` null is no genotype. The array
+loaders withhold a genotype they cannot read the same way (`gt_alleles` null, the text kept).
+Rejected: keeping the readable slots, which is the honest reading only if the text means what its
+readable part seems to, and a text the loader cannot read is the evidence that it may not. The VCF
+loader never reaches the case: polars-bio parses GT itself and refuses the whole file on `0/x`
+(`HeaderRefused`, "Error reading FORMAT field 'GT'"), and since GT is never left out, the load fails.
+Each genotype is counted under one reason at most: one not readable is counted as that
 alone, and only a readable one is checked against the row's ALT list. So `1:2` or `x/5` on a one-ALT
 row is unreadable, never also past the ALTs, though its digits name an allele the row lacks. The
 indices are read from the text's digits, never from `gt`: `gt` is a `u8` list, so `1/300` reads
@@ -702,7 +713,7 @@ With Decisions 1–5 as recommended:
 | `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention: the REF slot first, then one per ALT in `alts` order. An element is null when it was withheld (charter 4); the whole list is null when nothing was minted. Minting rule below ("When an id is minted") |
 | `vrs_errors` | `list[str]` | parallel to `vrs_allele_ids`: what minting itself reported for an allele it tried and could not mint (`no_contig`, `refused`). Null where minting succeeded or never ran. Only facts that minting alone learns go here; see "Why an id is missing" below |
 | `gt_alleles` | `list[str]` | the genotype text cannot be split into haplotypes without the site's alleles (Living DNA writes an indel's two allele sequences back to back, `CCA`; `resolve_ref` splits those where one split fits the reference, Decision 2); `source_gt` keeps the text. Entries null per uncalled haplotype |
-| `gt` | `list[u8]` | there is no allele list to index yet, or RM3 withheld it with `alts` (a mixed-strand array, Decision 2). Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
+| `gt` | `list[u8]` | there is no allele list to index yet, or RM3 withheld it with `alts` (a mixed-strand array, Decision 2), or the genotype text is not allele indices (the key=value table, Nirvana JSON; `source_gt` keeps it, Decision 2). Indices into `[source_ref] + alts` when the source wrote a REF, otherwise into `[ref] + alts` after RM3 (Decision 2) |
 | `source_gt` | `str` | the source wrote no genotype text (a BCF encodes GT in binary). The file's raw text, not polars-bio's rewrite of it |
 | `phased` | `list[bool]` | the source says nothing about phase for the whole row (every array export). Otherwise parallel to `gt_alleles`, with an element null where the source did not say for that haplotype |
 | `phase_sets` | `list[str]` | parallel to `gt_alleles`. The raw PS, PSL or CGI hapLink value. Null for an unphased haplotype, and for a phased one in its chromosome's implicit set. Keyed by kind: PS and hapLink per chromosome, PSL per file (Decision 2) |
@@ -2413,6 +2424,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-25, genotype text that is not allele indices): the key=value table
+  and Nirvana JSON withhold such a genotype whole (`gt`, `gt_alleles`, `phased` null, `source_gt`
+  kept), where they read its readable slots (`0/x` was `[0, null]`). No column's shape changes; `gt`
+  gains a stated reason to be null (Decision 2, "Genotype text that is not allele indices").
 
 - **No version change** (2026-10-24, layer 7, `hq` through a split): `normalize` writes a split row's
   `hq` null on each GT slot it writes `.` (the slot held another ALT), and the row's `hq` null when no

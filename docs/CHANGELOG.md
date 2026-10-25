@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The key=value table and Nirvana JSON withhold a genotype that is not allele indices whole: `gt`,
+  `gt_alleles` and `phased` are null and `source_gt` keeps the text, where the readable slots were read
+  (`0/x` was `gt [0, null]`, the frame of the half-call `0/.`, and `N/A` was `[null, null]`, the frame
+  of a written no-call). The warning says so (`… kept with gt, gt_alleles and phased null, and the
+  text in source_gt`). A consumer reading these facets sees `gt` null on such rows; no column changes.
+
 - A VCF 4.3+ key its version refuses under the declared Type (DP, GQ or PS `Type=Float`, CN `Float`
   under 4.3, INFO END `Float`) is skipped unread whatever its values, as Decision 9 says: `30` loaded
   with the key not carried, but `30.5` failed the whole load with `HeaderRefused` ("invalid digit found

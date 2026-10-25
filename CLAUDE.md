@@ -320,10 +320,12 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
 - **Polars `explode` on a list column that can be empty:** pass `empty_as_null=False` where an empty list
   must stay empty (the bare call is deprecated and turns `[]` into a null row; met 2026-10-22).
 - **Polars `list.gather` indexed by a column that can be null:** guard it,
-  `pl.when(pl.col("gt").is_not_null()).then(alleles.list.gather(pl.col("gt"), null_on_oob=True))`. Over a
-  batch (or a frame, or zero rows) whose every index list is null, polars 1.44 makes a list of a Null
-  inner type, whatever the plan's schema says: a parquet sink then fails with `InvalidOperationError`,
-  and so does a `list.contains` on the result. The guard gives the typed list (met 2026-10-25).
+  `pl.when(pl.col("gt").is_not_null()).then(alleles.list.gather(pl.col("gt"), null_on_oob=True))`. Over
+  index lists that are all null, and over zero rows, polars 1.44 makes a list of a Null inner type
+  (measured 2026-10-25). In a lazy plan a batch whose every index list is null has that type whatever
+  the plan's schema says, and a parquet sink fails with `InvalidOperationError`; zero rows, and an
+  eager frame (which carries `List(Null)` in its own schema), still sink. A `list.contains` on the
+  result fails in every case, eager or lazy, zero rows or all null. The guard gives the typed list.
 - **Heed terminal warnings, deprecations especially.** A deprecation in code you touched is a
   **blocker**: find the current upstream API, fix it, and update this file.
 - **Refactor internals aggressively** — no dead code, no old API kept for nostalgia. The contract —

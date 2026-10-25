@@ -23,6 +23,7 @@ from just_vcf import (
 )
 from just_vcf.coverage import COVERAGE_INTERVALS
 from just_vcf.karyotype import (
+    ARRAY_ESTIMATE_BUILDS,
     ASSEMBLY_LABEL_SOURCES,
     COVERAGE_X_BANDS,
     COVERAGE_Y_BANDS,
@@ -904,6 +905,24 @@ def test_array_rows_without_two_bases_are_not_het_evidence() -> None:
 
 def test_a_genome_carries_no_array_lines() -> None:
     assert evidence(frame(chr20(), *XY)).array is None
+
+
+def test_an_array_on_grch36_is_estimated_on_grch36s_regions() -> None:
+    """A GRCh36 export (23andMe's v1 to v3) is read as a GRCh37 one is, on NCBI36's PARs and X-degenerate Y."""
+    assert "GRCh36" in ARRAY_ESTIMATE_BUILDS - ESTIMATE_BUILDS
+    y = pl.concat([letters("Y", GRCH36_Y_START, 650, ["G"], step=20), letters("Y", GRCH36_Y_START + 20 * 650, 50, [None], step=20)])
+    par1 = letters("X", 2_700_001, 500, ["A", "A"])  # PAR1 on GRCh36 (to 2,709,520): no non-PAR X call
+    parts = (autosomes(), array_x(4, 1996), par1, y)
+    found = on_array(*parts, read_y=True, build="GRCh36")
+    assert (found.array.x_base_pairs, found.array.y_rows, found.array.y_called) == (2000, 700, 650)
+    assert found.array.y_call_ratio == pytest.approx((650 / 700) / AUTOSOME_CALL_RATE)
+    assert (found.inferred_karyotypic_sex, found.reason, found.x_copy_count) == (KaryotypicSex.XY, None, 1)
+    assert found.region_set == REGION_SET["GRCh36"]
+    off = on_array(*parts, build="GRCh36")
+    assert (off.x_copies, off.y_reason, off.reason) == (XCopies.ONE, "vendor_asserted", "y_unusable")
+    # On GRCh37's regions the same rows find no X-degenerate Y probe, and the PAR1 rows are non-PAR X.
+    grch37 = on_array(*parts, read_y=True, build="GRCh37")
+    assert (grch37.array.y_rows, grch37.array.x_base_pairs, grch37.y_reason) == (0, 2500, "too_few_sites")
 
 
 # --- The build: whatever in the library filled `assembly_label`, and which source that was ----------

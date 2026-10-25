@@ -52,8 +52,8 @@ The estimate:
   only by the calls reads one (so `XY` and `XXY` from calls alone, which cannot tell XY from XYY);
   more than two X with no coverage line to count them is unknown (`copies_uncounted`). A value in an
   unknown band, lines that disagree, too few sites, a facet that is not a whole genome, a build
-  without a region set, or one whose thresholds were never measured (T2T-CHM13 and GRCh36, measured
-  and reported only) all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
+  without a region set, or one whose thresholds were never measured (T2T-CHM13, and GRCh36 for
+  anything but an array: measured and reported only) all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
   `x_copies` is still answered wherever the X lines settle it.
 - **An array facet** (`callset_type = array`) has no depth; its lines are read from the letters as
   written (`array`, `ArrayLines`), so no REF is needed. X: the het share of two-letter base calls on
@@ -65,7 +65,8 @@ The estimate:
   decided the sample is female, and nothing in the file tells that mask from a chip that saw no Y:
   on PGP-HMS, 23andMe exports with a two-letter X read exactly 0, AncestryDNA women 0.008-0.098
   (docs/ROADMAP.md RM269). So the Y line is read only with `array_y=True`; otherwise `y_reason` is
-  `vendor_asserted` and the karyotype unknown. Arrays cannot count copies.
+  `vendor_asserted` and the karyotype unknown. Arrays cannot count copies. They are estimated on
+  GRCh36 too (`ARRAY_ESTIMATE_BUILDS`), where a genome is not.
 
 **The build** places the PARs and the X-degenerate Y, and it is the facet's `assembly_label`, whatever
 in the library filled it: stated by the source at load, inferred at load from the header's `##contig`
@@ -271,8 +272,15 @@ ESTIMATE_BUILDS = frozenset({"GRCh37", "GRCh38"})
 """Builds the thresholds were measured on, and so the only ones estimated. T2T-CHM13 is measured and
 reported, but its estimate waits for T2T callsets of known karyotype: its X-degenerate Y is another
 region set, and no T2T genome was among the calibration files. Rejected: applying the GRCh37/38 bands
-to it unmeasured. GRCh36 is measured and reported likewise: its X-degenerate Y is GRCh37's lifted, but
+to it unmeasured. A GRCh36 genome is measured and reported likewise: its X-degenerate Y is GRCh37's lifted, but
 no NCBI36 genome was measured."""
+
+ARRAY_ESTIMATE_BUILDS = ESTIMATE_BUILDS | {"GRCh36"}
+"""Builds an array facet is estimated on. The array bands are not measured thresholds (one X near 0,
+two near the neutral 3/4; a Y probe calls like an autosome or not at all), so the build only places the
+regions, and GRCh36 is read where its exports were checked: on PGP-HMS its 250 23andMe exports read as
+the GRCh37 ones do (docs/ROADMAP.md RM269). Rejected: holding GRCh36 arrays back with its genomes,
+whose depth bands were measured on GRCh37/38 genomes only."""
 
 _AUTOSOMES = [str(n) for n in range(1, 23)]
 _BASES = ["A", "C", "G", "T"]
@@ -330,8 +338,8 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
   states none gets one from `resolve_ref`, which infers it from the rows (F9); pass its output.
 - `unsupported_build`: a label with no region set here: none of the four the library writes
   (GRCh36, GRCh37, GRCh38, T2T-CHM13), so an older build such as NCBI35, or a label a caller wrote.
-- `uncalibrated_build`: a build with a region set but no measured thresholds (T2T-CHM13, GRCh36): the
-  measurements are reported, the estimate is withheld. A coverage facet on such a build is set aside
+- `uncalibrated_build`: a build with a region set but no measured thresholds (T2T-CHM13; GRCh36 but
+  for an array facet, `ARRAY_ESTIMATE_BUILDS`): the measurements are reported, the estimate is withheld. A coverage facet on such a build is set aside
   with it (`coverage.reason`).
 - `not_wgs`: `callset_type` is neither `wgs` nor `array` (an array has its own lines); the depth
   thresholds were measured on whole genomes.
@@ -909,7 +917,7 @@ def estimate(
     if callset_type is CallsetType.ARRAY:
         lines = _array_lines(groups)
         known["array"] = lines
-        if assembly_label not in ESTIMATE_BUILDS:
+        if assembly_label not in ARRAY_ESTIMATE_BUILDS:
             return unknown("uncalibrated_build", f"no array rule was checked on {assembly_label}", **known)
         x_range, x_reason, x_detail = _array_x(lines)
         y_range, y_reason, y_detail = _array_y(lines, array_y)

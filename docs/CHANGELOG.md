@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- An array facet on GRCh36 is estimated (RM269), where it answered `uncalibrated_build` (and before
+  GRCh36 had a region set, `unsupported_build`): `karyotype.ARRAY_ESTIMATE_BUILDS` adds GRCh36 to the
+  builds the array rule reads, since its bands are not measured thresholds and the build only places
+  the regions. A whole genome on GRCh36 still answers `uncalibrated_build`. Checked on PGP-HMS: the
+  250 GRCh36 23andMe exports read as the GRCh37 ones do (73 two-letter X, all self-reported women,
+  `XX` with `array_y`; 173 one-letter X, the vendor's call), and of the 69 tables `resolve_ref` places
+  on GRCh36, 3 give one X and none reads against its label. A value change; no column changes.
+
 - `sex_chromosome_evidence` places the sex chromosomes on GRCh36 (NCBI36, hg18), where it answered
   `unsupported_build` (RM269): `PAR_BOUNDS["GRCh36"]` are NCBI36's PARs as Ensembl 54 records them
   (checked on hg18's own sequence, X and Y identical inside each PAR), and `X_DEGENERATE_Y["GRCh36"]`

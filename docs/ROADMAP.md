@@ -1143,7 +1143,7 @@ store:
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY, XXYY and XXXY from a coverage facet's copy counts built 2026-10-25; arrays' X from their hets and Y behind `array_y` built 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, and tables with no stated build estimated on `resolve_ref`'s output, 2026-10-25, checked on 109 PGP-HMS tables; GRCh36's region set, measured and not estimated, 2026-10-25) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY, XXYY and XXXY from a coverage facet's copy counts built 2026-10-25; arrays' X from their hets and Y behind `array_y` built 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, and tables with no stated build estimated on `resolve_ref`'s output, 2026-10-25, checked on 109 PGP-HMS tables; GRCh36's region set 2026-10-25, its arrays estimated and its genomes measured only, checked on 250 PGP-HMS 23andMe exports and 69 resolved tables) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -1491,8 +1491,10 @@ X-degenerate Y, so its facets answered `unsupported_build`. Now:
 - The sources are carried in `assets/` and `tests/test_karyotype.py` re-derives both constants;
   the whole derivation and its checks are in docs/PROVENANCE.md.
 
-A GRCh36 facet is now grouped and measured and answers `uncalibrated_build`, as T2T-CHM13 does: no
-NCBI36 genome was among the calibration files. `unsupported_build` is left for labels with no region
+A GRCh36 whole genome is now grouped and measured and answers `uncalibrated_build`, as T2T-CHM13
+does: no NCBI36 genome was among the calibration files. A GRCh36 array is estimated
+(`ARRAY_ESTIMATE_BUILDS`): its bands are not measured thresholds, the build only places the regions,
+and its exports read as the GRCh37 ones do (below). `unsupported_build` is left for labels with no region
 set (NCBI35, a label a caller wrote into the frame). A coverage facet on GRCh36 or T2T-CHM13 is set
 aside as `uncalibrated_build`, where it said `unsupported_build`.
 
@@ -1506,11 +1508,32 @@ Decisions, each with what was rejected:
 - Ensembl 54's PARs, not GIAB's GRCh37 PARs lifted: those put Y's PAR1 end at 2,809,806 and PAR2
   start at 57,542,859, about 100 kb past where hg18's X and Y stop being identical (GIAB's GRCh37 Y
   PARs are about 100 kb longer than NCBI's, docs/PROVENANCE.md).
+- Arrays on GRCh36 estimated, genomes not. Rejected: holding the arrays back with the genomes (their
+  rule has nothing measured on a build to transfer), and estimating GRCh36 genomes (the depth bands
+  were measured on GRCh37/38 genomes, PGP-HMS has no GRCh36 genome to check them on, and the lifted
+  region set is the same sequence but the alignments are not). The person may prefer either.
+
+Checked 2026-10-25 on PGP-HMS through the library (`load`, for tables `resolve_ref` against
+`store-ncbi36`, then the estimate; labels as above, unverified; aggregates only):
+
+- **The 250 23andMe exports on GRCh36** (chip v1/v2 81, v3 164, unknown 5) follow the vendor's one
+  switch as the GRCh37 ones do. 73 write X with two letters, every one labelled a woman: X het ratio
+  0.83-1.02, every X-degenerate Y probe no-called (Y call ratio exactly 0 over 708 or more probes).
+  173 write X with one letter (165 men, 1 woman, 1 conflicting label, 6 unlabelled): Y call ratio
+  0.84-1.00. Answers: the 73 give `x_copies = two_or_more` and, with `array_y`, `XX`; the 173 answer
+  `caller_asserted_only`; 4 have too few X calls to read (`too_few_sites`). No two-letter X read a low
+  het ratio, and no export read against its label but the one woman whose X the vendor wrote with one
+  letter (its call, not read).
+- **The 69 tables `resolve_ref` places on GRCh36** (FTDNA 66, FTDNA space 2, rsid table 1): FTDNA
+  writes no Y, so no Y line anywhere but the rsid table. 64 answer `too_few_sites`, FTDNA's split
+  files (35 with under 1,000 X rows, 29 with under 1,000 autosomal rows); 3 FTDNA give `x_copies = one`
+  (het ratio 0.006; one man, two unlabelled); 2 write X with one letter (`caller_asserted_only`), one
+  of them the rsid table, whose Y calls 0.94 of its probes.
 
 **Left:** whether a VCF alone may name `XY`/`XXY` when it cannot count the Y, or must answer unknown
 until a coverage facet counts it, is the person's decision. Whether `array_y` should be on for
 AncestryDNA by default, and the array two-X expectation (3/4 or PLINK's shape), are the person's
-too. Exomes answer unknown. Liftovers of one callset are not yet weighed as one
+too, and so is whether GRCh36 genomes stay `uncalibrated_build`. Exomes answer unknown. Liftovers of one callset are not yet weighed as one
 piece of evidence (`facets_disagree` belongs to the person-level layer). GRCh37's last X-degenerate
 interval may reach about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md); the GRCh36 lift corroborates
 it, since that stretch lifts inside NCBI36's PAR2, where hg18's X and Y are identical. The somalier

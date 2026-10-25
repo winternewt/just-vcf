@@ -33,7 +33,7 @@ The mirror is under `data/interim/` (git-ignored), for grepping:
 |---|---|---|
 | `polars-bio/` | full clone, docs in `docs/` | `a1f724f` (2026-09-21) = released 0.36.0; `diff` against the installed wheel is clean |
 | `datafusion-bio-formats/` | full clone | tag `v1.13.1`, the one polars-bio 0.36.0 pins |
-| `noodles/` | biodatageeks fork, full history; remote `upstream` = zaeleus/noodles | `42a3c01`, the rev datafusion-bio-formats pins; 21 commits on `noodles-0.113.0` (`fe2b112`) |
+| `noodles/` | biodatageeks fork, full history; remote `upstream` = zaeleus/noodles | `42a3c01`, the rev datafusion-bio-formats pins; 21 commits on `noodles-0.113.0` (`fe2b112`); moving it means re-extracting `READER_DEFINITIONS` (P22) |
 | `opendal/` | apache/opendal, full clone (remote reads: s3, gcs, azblob, http) | `1755db1`, the rev datafusion-bio-formats pins; main, 279 commits after `v0.55.0`, not a release |
 | `bigtools/` | biodatageeks fork; remote `upstream` = jackh726/bigtools | `0d7a572`, the rev polars-bio's `Cargo.lock` pins; 17 commits on upstream `b1fd283` |
 | `datafusion-bio-functions/` | full clone, LFS files left as pointers | tag `v0.22.2`, the one polars-bio 0.36.0 pins |
@@ -94,7 +94,7 @@ another path is named.
 | P16 | `import polars_bio` adds a stderr handler to the root logger and sets its level to WARNING; Python's logging HOWTO says a library adds only a `NullHandler` | polars-bio | the CLI turns logging off while a command runs (`cli.py:149-152`); a library user still gets the handler |
 | P17 | `depth()` returns a depth over 32,767 wrapped negative; mosdepth and samtools count in 32 bits | datafusion-bio-functions | a negative depth is left out of its window and counted in a warning (`coverage.py`) |
 | P18 | 1-based `depth()` in block mode emits nothing for a run of coverage that reaches a contig's last base; 0-based and per-base mode count it | datafusion-bio-functions | per-base mode, folded into windows here (`coverage.py`) |
-| P22 | a key the scan drops for being undeclared (P1) still fails the whole scan when its value does not parse as the type the spec reserves for its name | datafusion-bio-formats | the copy declares such a key `Number=.`, read as text and not carried (`7c37f1a`) |
+| P22 | a key the scan drops for being undeclared (P1) still fails the whole scan when its value does not parse as the type the spec reserves for its name | datafusion-bio-formats | under 4.3+ the copy declares every undeclared reserved key `Number=.` and skips it (`c5daa78`, `READER_DEFINITIONS`); an undeclared Flag still fails |
 
 ### Feature requests: works as designed, we want more
 
@@ -565,8 +565,17 @@ behaviours, reproduced on 0.36.0 with synthetic two-record VCFs (VCF 4.3, one go
   withhold such a genotype instead (`loaders/text.py:123`); the VCF loader cannot, since the refusal comes
   before any row and GT is never left out (`can_leave_out`, `loaders/vcf.py:609`).
 
-Mitigation: the structural copy declares a key the version refuses `Number=.`, so it is read as text and
-not carried (`7c37f1a`). The GT case still refuses the file. Not filed.
+Mitigation: under VCF 4.3+ the structural copy declares every key the reader reserves and the file does
+not declare, carried or not (FORMAT `MQ`, INFO `DP`), `Number=.` with the reader's Type for that version,
+so it is read as text and skipped (`7c37f1a`, `c5daa78`; `READER_DEFINITIONS`, `loaders/vcf.py:176`,
+`REWRITE_VERSION` 17). Flags are the exception: noodles refuses a Flag declared with a Number other than
+0, so an undeclared `DB=1` still fails a 4.3+ read. The stats pass reads every INFO column the frames
+read, so an INFO failure reaches the retry rather than escaping from the spill (`5f976d3`). The GT case
+still refuses the file. Not filed.
+
+`READER_DEFINITIONS` is copied by hand from the noodles fork at `42a3c01`
+(`header/record/value/map/{info,format}/definition/v4_*.rs`): **re-extract it whenever the noodles pin
+moves.**
 
 *Upstream (2026-10-26).* Neither is reported (the searches of P21). **File the first at
 datafusion-bio-formats, with P21**: one change covers both. On an error from the key iterator, find the

@@ -20,7 +20,7 @@ from typing import BinaryIO
 
 import polars as pl
 
-from just_vcf.loaders.text import READABLE_GT, UNREADABLE_WARNING, genotype_indices, genotype_phase, past_alts
+from just_vcf.loaders.text import PAST_ALTS_WARNING, READABLE_GT, UNREADABLE_WARNING, genotype_indices, genotype_phase, past_alts
 from just_vcf.schema import CALLS, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
@@ -150,7 +150,7 @@ def warnings_for(counts: dict, prefix: str) -> list[str]:
     """One caller's warnings, one per reason with its count."""
     found = []
     if counts[f"{prefix}_past_alts"]:
-        found.append(f"{counts[f'{prefix}_past_alts']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there")
+        found.append(f"{counts[f'{prefix}_past_alts']} {PAST_ALTS_WARNING}")
     if counts[f"{prefix}_unreadable"]:
         found.append(f"{counts[f'{prefix}_unreadable']} {UNREADABLE_WARNING}")
     return found

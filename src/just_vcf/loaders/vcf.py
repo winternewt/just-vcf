@@ -36,6 +36,7 @@ from polars_bio.sql import SQL
 from just_vcf import cache as cache_index
 from just_vcf.bgzf import BgzfWriter
 from just_vcf.links import CALLER_SPLIT  # noqa: F401 (kept importable here; defined in just_vcf.links)
+from just_vcf.loaders.text import PAST_ALTS_WARNING, past_alts
 from just_vcf.schema import BLOCKS, CALLS, EMPTY_ALLELE, BlockKind, EvidenceBasis, GlSource, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
@@ -1258,6 +1259,8 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
         # Reading GT makes polars-bio parse every sample field here, where a value it cannot parse
         # can still be retried (P7), rather than when the caller collects the frames.
         pl.col("fmt_GT").null_count().alias("gt_missing"),
+        # From the text, as the other loaders count it: `gt` is UInt8, so `0/300` reads `[0, null]` there.
+        past_alts(_gt_body(), alts.list.len()).fill_null(False).sum().alias("past_alts"),
         (_gt_body().str.count_matches(r"[/|]").max() + 1).alias("ploidy_max"),
         *_psl_stats(),
         *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith(("_multi_", "_unread_"))],
@@ -1518,6 +1521,8 @@ def to_rows(
             "is declared but not carried, so whether each wrote a PS, and which set it named, is unknown, and a "
             "phased record is not read as one in its chromosome's implicit set"
         )
+    if stats.get("past_alts"):
+        warnings.append(f"{stats['past_alts']} {PAST_ALTS_WARNING}")
     if stats.get("unfit_HQ"):
         warnings.append(f"{stats['unfit_HQ']} HQ value(s) not one per GT allele set to null")
     if stats.get("out_HQ"):

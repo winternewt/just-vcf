@@ -372,7 +372,10 @@ alone, and only a readable one is checked against the row's ALT list. So `1:2` o
 row is unreadable, never also past the ALTs, though its digits name an allele the row lacks. The
 indices are read from the text's digits, never from `gt`: `gt` is a `u8` list, so `1/300` reads
 `[1, null]` there and is still counted past the ALTs, and an index too long for 64 bits is past them
-too (it failed the key=value table's load).
+too (it failed the key=value table's load). The VCF loader counts the same, with the same warning, from
+the GT text polars-bio hands back (2026-10-26; `0/300` loaded as `gt [0, null]` unwarned), and its
+frame is the other loaders' (`gt [0, null]`, `gt_alleles` null there). In a VCF 4.4+ file, which has no
+`source_gt` (P4), that row looks like the half-call `0/.`, and only the warning's count says otherwise.
 
 ## Decision 3: graded evidence (charter 7)
 

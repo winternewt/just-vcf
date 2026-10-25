@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The VCF loader counts a genotype indexing past the row's ALT list, with the warning the key=value
+  table and Nirvana JSON give (`… genotype(s) index an allele past the row's ALT list; gt_alleles has a
+  null there`), counted from the GT text's digits: `0/300` loaded as `gt [0, null]` and `0/2` over one
+  ALT as `gt [0, 2]`, both unwarned. The frame does not change.
+
 - The key=value table and Nirvana JSON withhold a genotype that is not allele indices whole: `gt`,
   `gt_alleles` and `phased` are null and `source_gt` keeps the text, where the readable slots were read
   (`0/x` was `gt [0, null]`, the frame of the half-call `0/.`, and `N/A` was `[null, null]`, the frame

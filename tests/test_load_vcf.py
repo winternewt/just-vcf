@@ -1385,3 +1385,29 @@ def test_hq_is_never_filled_from_gq(tmp_path: Path) -> None:
     path = write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:GQ\t0/1:40"], fmt=("GT", "GQ"), extra_meta=(HQ_LINE.format(number=2),)))
     calls = load(path).calls.collect()
     assert calls["gq"].to_list() == [40] and calls["hq"].to_list() == [None]
+
+
+PAST_ALTS_WARNING = "genotype(s) index an allele past the row's ALT list; gt_alleles has a null there"
+
+
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.4"])
+def test_a_genotype_past_the_alts_is_counted_from_the_gt_text(tmp_path: Path, version: str) -> None:
+    """An allele index past the row's ALT list is counted in one warning, as the key=value table and
+    Nirvana count it (SCHEMA.md Decision 2), from the GT text's digits: `gt` is a `u8` list, so `0/300`
+    reads `[0, null]` there, the frame of `0/.`, and in a 4.4+ file, which has no `source_gt`, only the
+    count says the file wrote something else. `0/.`, and `1|2` over two ALTs, are not past."""
+    records = [
+        "1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/300",
+        "1\t200\t.\tA\tG\t.\t.\t.\tGT\t0/2",
+        "1\t300\t.\tA\tG\t.\t.\t.\tGT\t0/.",
+        "1\t400\t.\tA\tG,T\t.\t.\t.\tGT\t1|2",
+        "1\t500\t.\tA\t.\t.\t.\t.\tGT\t0/1",
+    ]
+    calls, _, warnings = frames(write(tmp_path, vcf_text(records, version=version)))
+    assert [w for w in warnings if PAST_ALTS_WARNING in w] == [f"3 {PAST_ALTS_WARNING}"], warnings
+    by_pos = {row["pos"]: row for row in calls.iter_rows(named=True)}
+    # The other loaders' frame: the slots read as written, an index past the alleles null in gt_alleles.
+    assert (by_pos[100]["gt"], by_pos[100]["gt_alleles"]) == ([0, None], ["A", None])
+    assert (by_pos[200]["gt"], by_pos[200]["gt_alleles"]) == ([0, 2], ["A", None])
+    assert (by_pos[500]["gt"], by_pos[500]["gt_alleles"]) == ([0, 1], ["A", None])
+    assert by_pos[400]["gt_alleles"] == ["G", "T"]

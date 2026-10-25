@@ -142,3 +142,6 @@ UNREADABLE_WARNING = (
     "genotype(s) not readable as allele indices kept with gt, gt_alleles and phased null, and the text in source_gt"
 )
 """The warning, after its count, for genotypes `genotype_indices` does not read."""
+
+PAST_ALTS_WARNING = "genotype(s) index an allele past the row's ALT list; gt_alleles has a null there"
+"""The warning, after its count, for genotypes `past_alts` counts, in every loader that reads allele indices."""

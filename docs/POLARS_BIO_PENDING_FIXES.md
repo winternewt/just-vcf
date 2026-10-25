@@ -561,7 +561,7 @@ behaviours, reproduced on 0.36.0 with synthetic two-record VCFs (VCF 4.3, one go
 - **One unparsable GT fails the whole scan.** `GT=0/x` gives `Error reading FORMAT field 'GT': invalid
   digit found in string`. noodles parses GT lazily; datafusion-bio-formats refuses the scan on the first
   allele that does not decode, and says why in its own comments: mapping undecodable data to null "would
-  present corrupt data as merely absent" (`:667-685`). By design, not a defect. just-vcf's text loaders
+  present corrupt data as merely absent" (`:668-685`). By design, not a defect. just-vcf's text loaders
   withhold such a genotype instead (`loaders/text.py:123`); the VCF loader cannot, since the refusal comes
   before any row and GT is never left out (`can_leave_out`, `loaders/vcf.py:609`).
 

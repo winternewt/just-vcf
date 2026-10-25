@@ -100,6 +100,12 @@ meanwhile. The desk carries the ones filed there.
   `hq` per slot, as it joins GT (the old keep-when-equal rule lost `hq` at every split heterozygous site); rows that
   disagree on one slot null only that slot; `call_HQ` sits on the `ploidy` dimension, unconfirmed against the VCF
   Zarr 0.4 spec (not on this machine), a one-string rename if wrong.
+- **Layer 4, sex chromosomes (RM269), desk #135 and #136:** from a variant file alone the estimate still names XY and
+  XXY though it cannot rule out an extra Y (#135, default: keep, caveat documented); a coverage facet now counts X and
+  Y copies past two. Chip files read X from their own hets; their Y probes only behind `array_y` (#136: on by default
+  for AncestryDNA, whose Y calls are measured, or off for all as now). The lead's calls, for veto: three X with two Y
+  is `OTHER_KARYOTYPE`; the array two-X expectation is 3/4 (Ne_X = 3/4 Ne_A), not PLINK's 0.2/0.8; copy counts are new
+  nullable `x_copy_count`/`y_copy_count`, not new `XCopies` members; tables with no stated build answer `no_build`.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

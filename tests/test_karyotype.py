@@ -700,8 +700,11 @@ def letters(chrom: str, start: int, n: int, alleles: list[str | None], *, step: 
     )
 
 
-def autosomes(hets: int = 600, homs: int = 1400, no_calls: int = 0) -> pl.DataFrame:
-    """Autosomal het share 0.3 by default (600 of 2,000 two-letter calls)."""
+AUTOSOME_CALL_RATE = 2000 / 2040
+
+
+def autosomes(hets: int = 600, homs: int = 1400, no_calls: int = 40) -> pl.DataFrame:
+    """Autosomal het share 0.3 by default (600 of 2,000 two-letter calls), 40 written no-calls."""
     return pl.concat([
         letters("1", 1_000_000, hets, ["A", "G"]), letters("2", 1_000_000, homs, ["C", "C"]),
         letters("3", 1_000_000, no_calls, [None, None]),
@@ -730,6 +733,7 @@ def test_an_array_with_two_letters_on_x_reads_two_x_from_its_hets() -> None:
     assert (lines.x_base_pairs, lines.x_hets, lines.autosome_base_pairs, lines.autosome_hets) == (2000, 500, 2000, 600)
     assert lines.x_het_ratio == pytest.approx((500 / 2000) / (600 / 2000))
     assert (lines.y_rows, lines.y_called, lines.y_call_ratio) == (700, 0, 0.0)
+    assert (lines.autosome_rows, lines.autosome_called) == (2040, 2000)
     assert (found.x_copies, found.x_copy_count) == (XCopies.TWO_OR_MORE, None)
     # The vendor's Y no-calls follow its own sex call: by default they are not read.
     assert (found.y_present, found.y_reason, found.reason) == (None, "vendor_asserted", "y_unusable")
@@ -751,8 +755,16 @@ def test_an_array_writing_one_x_with_two_letters_reads_one_x() -> None:
     # Doubled letters with a genotyping error's few hets: ratio (4/2000)/0.3, about 0.007.
     found = on_array(autosomes(), array_x(4, 1996), array_y(650, 50), read_y=True)
     assert (found.x_copies, found.x_copy_count) == (XCopies.ONE, 1)
-    assert found.array.y_call_ratio == pytest.approx(650 / 700)
+    assert found.array.y_call_ratio == pytest.approx((650 / 700) / AUTOSOME_CALL_RATE)
     assert (found.inferred_karyotypic_sex, found.reason) == (KaryotypicSex.XY, None)
+
+
+def test_an_array_that_drops_its_no_calls_gives_no_y_line() -> None:
+    # Without no-call rows the Y rows are only the called ones: 700 of 700 says nothing about a Y.
+    found = on_array(autosomes(no_calls=0), array_x(500, 1500), array_y(700, 0), read_y=True)
+    assert (found.array.autosome_called, found.array.autosome_rows, found.array.y_call_ratio) == (2000, 2000, None)
+    assert (found.y_present, found.y_reason, found.inferred_karyotypic_sex) == (None, "no_calls_not_written", KaryotypicSex.UNKNOWN_KARYOTYPE)
+    assert found.x_copies is XCopies.TWO_OR_MORE
 
 
 @pytest.mark.parametrize(

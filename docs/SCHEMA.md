@@ -1476,7 +1476,9 @@ with one letter on most called rows is the vendor's decision (23andMe), counted,
 (`y_call_ratio`): absent at most 0.25, present from 0.75. It is read only with
 `sex_chromosome_evidence(…, array_y=True)`: a vendor that no-calls Y for the samples it calls female
 makes the line its own sex call, and the file cannot tell that mask from a chip that saw no Y.
-Without it `y_reason` is `vendor_asserted` and the karyotype unknown. Arrays never count copies, so
+Without it `y_reason` is `vendor_asserted` and the karyotype unknown. An export with no no-call row
+on the autosomes drops its no-calls, so its rows are not its probes and its Y share says nothing:
+`y_call_ratio` is null and `y_reason` `no_calls_not_written`. Arrays never count copies, so
 they name at most `XO`, `XY`, `XX` and `XXY`. Computed, not stored: no schema change.
 
 ## CisPhasedBlock export: computed on demand, not stored (RM284)

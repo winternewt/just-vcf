@@ -277,6 +277,7 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
         "coverage_uneven",
         "copies_uncounted",
         "vendor_asserted",
+        "no_calls_not_written",
     }
 )
 """Why an answer is unknown. An open vocabulary: a new kind of evidence brings new reasons.
@@ -285,7 +286,8 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
 - `unsupported_build`: a label with no region set here (GRCh36).
 - `uncalibrated_build`: a build with a region set but no measured thresholds (T2T-CHM13): the
   measurements are reported, the estimate is withheld.
-- `not_wgs`: `callset_type` is not `wgs`; the thresholds were measured on whole genomes.
+- `not_wgs`: `callset_type` is neither `wgs` nor `array` (an array has its own lines); the depth
+  thresholds were measured on whole genomes.
 - `too_few_sites`: a line had fewer sites than its minimum.
 - `intermediate`: a value fell in the unknown band between two classes, or outside every band.
 - `lines_disagree`: the het share and the X depth ratio point to different X counts.
@@ -304,6 +306,9 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
 - `vendor_asserted`: an array's Y probes were measured but not read: whether they are called follows
   the vendor's own sex call where it masks Y for the samples it calls female (`array_y`; `y_reason`
   only).
+- `no_calls_not_written`: an array export with no no-call row on the autosomes (a genuine probe
+  export calls 97-99.9% of them): it drops its no-calls, so its Y rows are only the called ones and
+  their share says nothing (`y_reason` only).
 - `copies_uncounted`: the X lines agree on more than two copies, but none counts them (the calls'
   X depth above two copies' band, with no coverage line): `x_copies` is `two_or_more`, the karyotype
   unknown.
@@ -419,7 +424,8 @@ class ArrayLines(BaseModel):
     """The het share of non-PAR X base pairs over the autosomes' het share. None when X is not written
     with two letters on most called rows, or either side is under its minimum."""
     y_call_ratio: float | None
-    """The called share of X-degenerate Y rows over the autosomes' called share; None under the minimum."""
+    """The called share of X-degenerate Y rows over the autosomes' called share; None under the minimum,
+    or when the export wrote no no-call on the autosomes (it drops them, so rows are not probes)."""
 
 
 class SexChromosomeEvidence(BaseModel):
@@ -946,7 +952,10 @@ def _array_lines(groups: dict) -> ArrayLines:
     auto_called = count["autosome_called"] / count["autosome_rows"] if count["autosome_rows"] >= MIN_REFERENCE_SITES else None
     written_two = count["x_base_pairs"] >= MIN_X_SITES and count["x_base_pairs"] > count["x_called_one_letter"]
     x_ratio = count["x_hets"] / count["x_base_pairs"] / auto_share if written_two and auto_share else None
-    y_ratio = count["y_called"] / count["y_rows"] / auto_called if count["y_rows"] >= MIN_Y_SITES and auto_called else None
+    # Rows count the probes only where the export writes its no-calls; one that drops them has nothing
+    # but called Y rows, and a woman's cross-hybridising calls would read as a Y.
+    writes_no_calls = count["autosome_called"] < count["autosome_rows"]
+    y_ratio = count["y_called"] / count["y_rows"] / auto_called if count["y_rows"] >= MIN_Y_SITES and auto_called and writes_no_calls else None
     return ArrayLines(**count, x_het_ratio=x_ratio, y_call_ratio=y_ratio)
 
 
@@ -970,6 +979,8 @@ def _array_y(lines: ArrayLines, array_y: bool) -> tuple[Copies | None, str | Non
     """Y from the called share of X-degenerate Y probes, read only when `array_y` is set."""
     said = f"call ratio {_fmt(lines.y_call_ratio)} ({lines.y_called:,} of {lines.y_rows:,} X-degenerate Y rows called)"
     if lines.y_call_ratio is None:
+        if lines.y_rows >= MIN_Y_SITES and lines.autosome_rows >= MIN_REFERENCE_SITES and lines.autosome_called == lines.autosome_rows:
+            return None, "no_calls_not_written", said + "; the export writes no no-call, so its rows are not its probes"
         return None, "too_few_sites", said
     if not array_y:
         return None, "vendor_asserted", said + "; not read: the vendor's Y calls and no-calls follow its own sex call"

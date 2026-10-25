@@ -1442,7 +1442,11 @@ Decisions, each with what was rejected:
   (23andMe's is a mask), and a per-vendor list of trusted vendors (one measured property of
   PGP-HMS exports, which a vendor's next release can change silently).
 - An array's absent site is unknown (charter 11); only probes the export writes count, and a probe
-  it writes as a no-call counts as not called.
+  it writes as a no-call counts as not called. So the Y share needs an export that writes its
+  no-calls: one with no no-call row on the autosomes (a VCF made from an array, a table that drops
+  them) has only called Y rows, where a woman's cross-hybridising calls would read as a Y, and answers
+  `no_calls_not_written`. Rejected: the chip's probe set as the denominator (`just_vcf.probes`), which
+  exists only for learned or configured chips.
 
 **Left:** whether a VCF alone may name `XY`/`XXY` when it cannot count the Y, or must answer unknown
 until a coverage facet counts it, is the person's decision. Whether `array_y` should be on for

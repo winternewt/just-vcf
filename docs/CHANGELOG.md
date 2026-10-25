@@ -11,7 +11,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   X-degenerate Y probes' called share over the autosomes' (absent at most 0.25, present from 0.75).
   An X written with one letter is the vendor's call and answers `caller_asserted_only`. The Y line is
   read only with the new `array_y=True`, since a vendor may no-call Y for every sample it calls female;
-  without it `y_reason` is the new `vendor_asserted` and the karyotype unknown. The counts are on the
+  without it `y_reason` is the new `vendor_asserted` and the karyotype unknown. An export that writes
+  no no-call on the autosomes has no Y line (`no_calls_not_written`): its rows are not its probes.
+  The counts are on the
   result's new nullable `array` field (`just_vcf.karyotype.ArrayLines`). PGP-HMS check in
   docs/ROADMAP.md RM269. Minor.
 

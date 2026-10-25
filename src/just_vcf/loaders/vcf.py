@@ -119,8 +119,9 @@ WHOLE_COLUMNS: dict[str, str] = {
 }
 """Columns of the carried keys VCF types Integer that the frames read as whole numbers → the name the
 warnings give them. A VCF 4.2 header (and a later one for a key its version holds no definition of,
-such as MIN_DP) can declare one Float or String, and polars-bio then hands back floats or text: only a
-whole number is read from those (`_whole_numbers`). HQ has its own rule (`_hq_slots`); PL and PP are
+such as MIN_DP) can declare one Float or String; both are read as text (a Float through a copy
+declaring it String, `retyped_whole`), and a BCF's Float as the floats it stores: only a whole number
+is read from those (`_whole_numbers`). HQ has its own rule (`_hq_slots`); PL and PP are
 read as the numbers they are, since a fraction there is a likelihood, not a count cut short."""
 
 UNREAD_REASONS: dict[str, str] = {
@@ -130,9 +131,9 @@ UNREAD_REASONS: dict[str, str] = {
     "negative": "negative (VCF's PS is a non-negative integer)",
 }
 """Why a value is left out → the warning's words: by `_whole_numbers`, and `negative` by `_negative_ps`.
-`inexact`: polars-bio reads a Float
-as a 32-bit float, exact for whole numbers only up to 2^24 (123456789 comes back 123456792), and text
-is read through a 64-bit one, exact up to 2^53; past that the number read may not be the file's."""
+`inexact`: text is read through a 64-bit float, exact for whole numbers up to 2^53, and a BCF's
+32-bit float only up to 2^24 (123456789 is stored 123456792); past that the number read may not be the
+file's."""
 
 HQ_MAX = 2**16 - 1
 """The largest haplotype quality `hq` (`u16`) holds; a larger one, or a negative one, is left out and counted."""
@@ -216,7 +217,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 14
+REWRITE_VERSION = 15
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -234,7 +235,10 @@ copy from 11 kept `Number=1`, under which a diploid row's two values fail the re
 13: a structural copy leaves out a text key declared as a number (`text_keys_typed_otherwise`: FT
 `Type=Integer` under VCF 4.2); a copy from 12 kept its line, and its retry failed on the first value.
 14: GT declared with a Type other than String is declared `Type=String` in every copy (`retyped_gt`); a
-structural copy from 13 left a VCF 4.3+ file's GT out, and no row had a genotype."""
+structural copy from 13 left a VCF 4.3+ file's GT out, and no row had a genotype.
+15: an integer key declared `Type=Float` is declared `Type=String` in every copy (`retyped_whole`), and a
+file with one is always read through a copy; a copy from 14 kept Float, under which polars-bio rounds a
+value's fraction away in 32 bits."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -740,16 +744,35 @@ def _read_as_any_number(key: str, number: str) -> bool:
     return number in READ_AS_ANY_NUMBER or (key in PHASE_SET_LISTS and number == "1")
 
 
-def _readable_line(line: str) -> str:
-    """A `##FORMAT` line as the copy polars-bio reads writes it: a key `any_number_keys` names declared
-    `Number=.`, and GT declared `Type=String` whatever Type the file gave it (`retyped_gt`)."""
-    declared = re.match(r"^##FORMAT=<(.*)>$", line)
+WHOLE_KEYS = frozenset({*(f"FORMAT/{key}" for key in ("GQ", "DP", "MIN_DP", "LEN", "PS", "AD", "PSO", "PSQ", "HQ")),
+                        *(f"INFO/{key}" for key in ("END", "SVLEN", "CIPOS", "CIEND"))})
+"""The carried keys VCF types Integer that the frames read as whole numbers (`WHOLE_COLUMNS`, and HQ)."""
+
+
+def retyped_whole(header: Header) -> set[str]:
+    """`WHOLE_KEYS` the header declares `Type=Float` where polars-bio reads that declaration (VCF 4.2, or
+    a later version holding no definition of the key): the copy declares them `Type=String`
+    (`_readable_line`). polars-bio reads a Float as a 32-bit float, which rounds the fraction the file
+    wrote away (`30.0000001` is 30.0, `5000000.1` is 5000000), so no value it hands back could be
+    certified whole; read as text, each is judged by its digits (`_whole_value`). A key whose version
+    refuses Float is not carried at all (`refused_types`)."""
+    refused = refused_types(header)
+    return {name for name in WHOLE_KEYS if header.types.get(name) == "Float" and name not in refused}
+
+
+def _readable_line(line: str, retyped: set[str] = frozenset()) -> str:
+    """A `##FORMAT` or `##INFO` line as the copy polars-bio reads writes it: a key `any_number_keys` names
+    declared `Number=.`, GT declared `Type=String` whatever Type the file gave it (`retyped_gt`), and a
+    key in `retyped` (`retyped_whole`) declared `Type=String`."""
+    declared = re.match(r"^##(FORMAT|INFO)=<(.*)>$", line)
     if not declared:
         return line
-    attrs = _attrs(declared.group(1))
-    if _read_as_any_number(attrs.get("ID", ""), attrs.get("Number", "")):
+    namespace, attrs = declared.group(1), _attrs(declared.group(2))
+    key = attrs.get("ID", "")
+    if namespace == "FORMAT" and _read_as_any_number(key, attrs.get("Number", "")):
         line = re.sub(r"(?<=[<,])Number=[^,>]*(?=[,>])", "Number=.", line, count=1)
-    if attrs.get("ID") == "GT" and attrs.get("Type", "") not in ("", "String"):
+    as_text = (namespace == "FORMAT" and key == "GT" and attrs.get("Type", "") not in ("", "String")) or f"{namespace}/{key}" in retyped
+    if as_text:
         line = re.sub(r"(?<=[<,])Type=[^,>]*(?=[,>])", "Type=String", line, count=1)
     return line
 
@@ -809,6 +832,7 @@ def readable_path(
         and not structural_only
         and not any_number_keys(header)
         and retyped_gt(header) is None
+        and not retyped_whole(header)
     )
     if layers in ((), ("gzip",), ("bgzf",)) and as_is:
         return path
@@ -825,6 +849,7 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
     cache.mkdir(parents=True, exist_ok=True)
     declared: set[tuple[str, str]] = set()
     left_out = left_out_of_copy(header)
+    retyped = retyped_whole(header)
     with opener() as source, target.open("wb") as raw, BgzfWriter(raw) as out:
         out.write(f"##fileformat={header.version or 'VCFv4.2'}\n".encode())
         for line in header.meta:
@@ -835,7 +860,7 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
                 if key.groups() in declared:
                     continue
                 declared.add(key.groups())
-            out.write(f"{_readable_line(line)}\n".encode())
+            out.write(f"{_readable_line(line, retyped)}\n".encode())
         for name in missing:
             if structural_only and name in left_out:
                 continue
@@ -1071,12 +1096,57 @@ def read_records(
     return frame
 
 
+_TEXT_NUMBER = r"^[+-]?(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$"
+"""A decimal number as text: the integer digits, the fraction digits and the exponent, read apart so
+that whether the number is whole is decided from the digits the file wrote (`_whole_value`)."""
+
+
+@dataclass(frozen=True)
+class _Whole:
+    """One value read as a whole number (`_whole_value`)."""
+
+    value: pl.Expr
+    """The value as a Float64 (null where it is no number)."""
+    finite: pl.Expr
+    """True where it is a finite number."""
+    whole: pl.Expr
+    """True where it is a whole number, as the file wrote it."""
+    exact: int
+    """The magnitude from which a whole value read through `value` may not be the file's."""
+
+
+def _whole_value(raw: pl.Expr, inner: pl.DataType) -> _Whole:
+    """`raw` (a column or `pl.element()`) of dtype `inner` read as a whole number.
+
+    Text is judged by its digits, never by the number it parses to: `30.0000001` and
+    `30.00000000000000001` parse to 30.0 in a 32-bit float and in a 64-bit one, so no float can say the
+    file wrote a whole number. A value is whole when its fraction digits, past the exponent's shift, are
+    all zeros (`30.0`, `1e2`, `120e-1`); its number is then the 64-bit parse, which is exact for a whole
+    number below 2^53. A float is a BCF's own stored value (a VCF's Float key is read as text, through
+    a copy declaring it String, `retyped_whole`), whole where it has no fraction, exact for whole
+    numbers below 2^24 in 32 bits."""
+    value = raw.cast(pl.Float64, strict=False)
+    finite = value.is_finite().fill_null(False)
+    if inner != pl.String:
+        return _Whole(value=value, finite=finite, whole=finite & (value == value.floor()), exact=2**24 if inner == pl.Float32 else 2**53)
+    parts = raw.str.extract_groups(_TEXT_NUMBER)
+    integer = parts.struct.field("1").str.strip_chars_start("0")
+    fraction = parts.struct.field("2").fill_null("").str.strip_chars_end("0").str.len_chars().cast(pl.Int64)
+    written_exponent = parts.struct.field("3")
+    exponent = written_exponent.cast(pl.Int64, strict=False).fill_null(0)
+    trailing_zeros = (integer.str.len_chars() - integer.str.strip_chars_end("0").str.len_chars()).cast(pl.Int64)
+    shifted_whole = (fraction <= exponent) | ((fraction == 0) & ((integer.str.len_chars() == 0) | (trailing_zeros >= -exponent)))
+    readable = parts.struct.field("1").is_not_null() & (written_exponent.is_null() | written_exponent.cast(pl.Int64, strict=False).is_not_null())
+    return _Whole(value=value, finite=finite, whole=(finite & readable & shifted_whole).fill_null(False), exact=2**53)
+
+
 def _whole_numbers(frame: pl.LazyFrame) -> pl.LazyFrame:
-    """`frame` with each `WHOLE_COLUMNS` column polars-bio handed back as floats or text (the key was
-    declared Float or String) read as whole numbers: a whole number is kept as it is (`30.0` is 30), and
-    every other value is left out, never truncated or rounded, which would be a number the file did not
-    write. Each value left out is counted per row in `_unread_<reason>:<column>` (`UNREAD_REASONS`),
-    which `scan_stats` sums. A column of integers is left as it is."""
+    """`frame` with each `WHOLE_COLUMNS` column polars-bio handed back as text or floats (the key was
+    declared String or Float, the latter read as text through the copy, `retyped_whole`; floats come
+    from a BCF) read as whole numbers: a whole number is kept as it is (`30.0` is 30), and every other
+    value is left out, never truncated or rounded, which would be a number the file did not write
+    (`_whole_value`). Each value left out is counted per row in `_unread_<reason>:<column>`
+    (`UNREAD_REASONS`), which `scan_stats` sums. A column of integers is left as it is."""
     schema = frame.collect_schema()
     columns: list[pl.Expr] = []
     for name in WHOLE_COLUMNS:
@@ -1085,18 +1155,15 @@ def _whole_numbers(frame: pl.LazyFrame) -> pl.LazyFrame:
         inner = dtype.inner if listed else dtype
         if inner is None or inner.is_integer() or inner == pl.Null:
             continue
-        exact = 2**24 if inner == pl.Float32 else 2**53
         raw = pl.element() if listed else pl.col(name)
-        value = raw.cast(pl.Float64, strict=False)
+        read = _whole_value(raw, inner)
         stated = raw.is_not_null()
-        finite = value.is_finite().fill_null(False)
-        whole = finite & (value == value.floor())
         flags = {
-            "not_whole": stated & finite & ~whole,
-            "not_number": stated & ~finite,
-            "inexact": stated & whole & (value.abs() >= exact),
+            "not_whole": stated & read.finite & ~read.whole,
+            "not_number": stated & ~read.finite,
+            "inexact": stated & read.whole & (read.value.abs() >= read.exact),
         }
-        kept = pl.when(whole & (value.abs() < exact)).then(value).cast(pl.Int64)
+        kept = pl.when(read.whole & (read.value.abs() < read.exact)).then(read.value).cast(pl.Int64)
         columns.append((pl.col(name).list.eval(kept) if listed else kept).alias(name))
         for reason, flag in flags.items():
             count = pl.col(name).list.eval(flag.cast(pl.Int64)).list.sum().fill_null(0) if listed else flag.cast(pl.Int64)
@@ -1134,7 +1201,7 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
         for key, top in _BOUNDED.items()
     ]
     alts = _alts_expr()
-    hq = _hq_slots(hq_is_integer(records))
+    hq = _hq_slots(hq_type(records))
     plan = records.select(
         *out_of_range,
         hq.unfit.sum().alias("unfit_HQ"),
@@ -1213,21 +1280,21 @@ class _HqSlots:
     """Values on a called allele that are no finite number (`x`, `nan`): left out."""
 
 
-def hq_is_integer(frame: pl.LazyFrame) -> bool:
-    """Whether `fmt_HQ` comes back as integers, as VCF's `Type=Integer` declares it. A VCF 4.2 header,
-    which polars-bio does not hold to the reserved Type, may declare it Float or String."""
-    return frame.collect_schema()["fmt_HQ"].inner.is_integer()
+def hq_type(frame: pl.LazyFrame) -> pl.DataType:
+    """The dtype `fmt_HQ`'s values come back as: integers, as VCF's `Type=Integer` declares it, or text
+    where a VCF 4.2 header (which polars-bio does not hold to the reserved Type) declares it String or
+    Float (read as text through the copy, `retyped_whole`); floats from a BCF."""
+    return frame.collect_schema()["fmt_HQ"].inner
 
 
-def _hq_slots(integer: bool = True) -> _HqSlots:
+def _hq_slots(inner: pl.DataType = pl.Int64) -> _HqSlots:
     """HQ per GT allele. The values beyond the GT's alleles are allowed only where missing: a haploid
     row under VCF's `Number=2` writes `51,.` (CGI does, on every haploid row). A value on an uncalled
     allele (`./1:20,30`) speaks for no allele and is not read; out-of-range values are left to the caller.
 
-    `integer` is False where HQ was declared Float or String (`hq_is_integer`): the values are read
-    through Float64, and only a whole number is kept, so a score is never cut to fit (`30.5` is not 30)."""
+    `inner` is the dtype of HQ's values (`hq_type`). Where it is not an integer (HQ declared Float or
+    String), only a whole number is kept (`_whole_value`), so a score is never cut to fit (`30.5` is not 30)."""
     raw = pl.col("fmt_HQ")
-    values = raw.cast(pl.List(pl.Int64)) if integer else raw.cast(pl.List(pl.Float64), strict=False)
     gt = _gt_expr()
     # A record without GT has no alleles for a value to speak for (slice and head take no null length).
     slots = gt.list.len().fill_null(0)
@@ -1239,13 +1306,14 @@ def _hq_slots(integer: bool = True) -> _HqSlots:
     given = pl.when(fits).then(raw.list.head(slots).list.eval(pl.element().is_not_null().cast(pl.Int64)))
     on_called = given * called
     uncalled = given.list.sum().fill_null(0) - on_called.list.sum().fill_null(0)
-    head = pl.when(fits).then(values.list.head(slots)) * called
-    if integer:
+    if inner.is_integer() or inner == pl.Null:
         zero = pl.lit(0, dtype=pl.Int64)
+        head = pl.when(fits).then(raw.cast(pl.List(pl.Int64)).list.head(slots)) * called
         return _HqSlots(unfit=stated & ~fits, read=head, uncalled=uncalled, not_whole=zero, not_number=zero)
-    finite = head.list.eval(pl.element().is_finite().cast(pl.Int64)).list.sum().fill_null(0)
-    whole = head.list.eval(pl.when(pl.element().is_finite() & (pl.element() == pl.element().floor())).then(pl.element()))
+    read = _whole_value(pl.element(), inner)
     # Kept in Float64: a whole number past i64 (`1e30`) would not cast, and the range check reads floats.
+    whole = pl.when(fits).then(raw.list.eval(pl.when(read.whole).then(read.value)).list.head(slots)) * called
+    finite = (pl.when(fits).then(raw.list.eval(read.finite.cast(pl.Int64)).list.head(slots)) * called).list.sum().fill_null(0)
     return _HqSlots(
         unfit=stated & ~fits,
         read=whole,
@@ -1528,7 +1596,7 @@ def to_rows(
         .otherwise(None)
         .alias("dosage"),
         _bounded("GQ", pl.UInt16).alias("gq"),
-        _hq(hq_is_integer(records)),
+        _hq(hq_type(records)),
         _bounded("DP", pl.UInt32).alias("dp"),
         _bounded("MIN_DP", pl.UInt32).alias("dp_min"),
         pl.col("fmt_AD").cast(pl.List(pl.UInt32), strict=False).alias("ad"),
@@ -1839,9 +1907,9 @@ def _bounded(key: str, dtype: pl.DataType) -> pl.Expr:
     return pl.when((value >= 0) & (value <= _BOUNDED[key])).then(value).otherwise(None).cast(dtype)
 
 
-def _hq(integer: bool = True) -> pl.Expr:
+def _hq(inner: pl.DataType = pl.Int64) -> pl.Expr:
     """`hq`: HQ per GT allele (`_hq_slots`), a value outside 0..`HQ_MAX` null, the row null where no value is left."""
-    scores = _hq_slots(integer).read.list.eval(pl.when(pl.element().is_between(0, HQ_MAX)).then(pl.element()).cast(pl.UInt16))
+    scores = _hq_slots(inner).read.list.eval(pl.when(pl.element().is_between(0, HQ_MAX)).then(pl.element()).cast(pl.UInt16))
     return pl.when(scores.list.drop_nulls().list.len() > 0).then(scores).alias("hq")
 
 

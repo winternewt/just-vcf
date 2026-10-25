@@ -1221,17 +1221,34 @@ and the load is refused as before, since which key failed would be a guess.
 
 **A carried integer key declared `Float` or `String` keeps only whole numbers** (2026-10-25). VCF 4.2
 reserves no Type, and a later version none for a key it holds no definition of (MIN_DP; LEN before
-4.5; PSO and PSQ before 4.4), so such a header can declare GQ, DP, MIN_DP, LEN, PS, AD, PSO, PSQ or
-INFO END, SVLEN, CIPOS or CIEND `Float` or `String`. The loader reads those values as HQ's (above): a
-whole number as it is (`30.0` is 30); a number with a fraction (`30.7`) left out, never truncated or
-rounded; text that is no finite number (`x`, `nan`) left out; and a whole number past what the value
-was read through holds exactly left out too: polars-bio reads a Float as a 32-bit float, exact only up
-to 2^24, so a PS or END of 123456789 comes back 123456792, a set or a position the file did not write.
-Each key and reason is one warning with its count. A PS left out withholds the phase of a phased
-record (`phased` null where it was true): a phased record without PS is in its chromosome's implicit
-set, and saying so would be a claim the file did not make. A PS not carried at all (any of the cases
-above) withholds the phase of every phased record (Decision 2). PL and PP declared `Float` are read as the
-numbers they are; a fraction there is a likelihood, not a count cut short.
+4.5; PSO and PSQ before 4.4), so such a header can declare GQ, DP, MIN_DP, LEN, PS, AD, PSO, PSQ, HQ or
+INFO END, SVLEN, CIPOS or CIEND `Float` or `String`. A whole number is read as it is (`30.0` is 30); a
+number with a fraction (`30.7`) is left out, never truncated or rounded; text that is no finite number
+(`x`, `nan`) is left out; and a whole number past what the value was read through holds exactly
+(2^53, a 64-bit float) is left out too. Each key and reason is one warning with its count. A PS left out
+withholds the phase of a phased record (`phased` null where it was true): a phased record without PS
+is in its chromosome's implicit set, and saying so would be a claim the file did not make. A PS not
+carried at all (any of the cases above) withholds the phase of every phased record (Decision 2). PL and
+PP declared `Float` are read as the numbers they are; a fraction there is a likelihood, not a count cut
+short.
+
+**Whole is decided from the digits the file wrote, never from a float** (2026-10-25). polars-bio reads
+a `Float` as a 32-bit float, and no value it hands back can be certified whole, at any magnitude: a
+32-bit float has 24 significant bits, so `30.0000001` (30 + 1e-7, under half the step of 1.9e-6 at
+30) and `5000000.1` (under half the step of 0.5 above 2^22) both come back whole, and above 2^24 the
+whole numbers themselves are rounded (PS 123456789 came back 123456792). A threshold such as 2^22,
+from which the step is 0.5 or more, catches the large values only: below it a fraction finer than half
+the step still rounds away (`30.0000001`), and a file can write as many digits as it likes. 64 bits
+only moves the problem (`30.00000000000000001` is 30.0 there).
+So every copy polars-bio reads declares these keys `Type=String` where the file says `Float` and its
+version lets polars-bio read the line (`retyped_whole`; `REWRITE_VERSION` 15), and the text is judged
+by its digits (`_whole_value`): whole when the fraction digits, past the exponent's shift, are all
+zeros (`30.000`, `1e2`, `120e-1`), its number then the 64-bit parse, exact below 2^53. Rejected: a
+magnitude threshold on the 32-bit value (2^22, 2^24), which keeps `30.0000001` as 30, a value the file
+did not write; and leaving every Float-declared integer key out, which drops the whole numbers most such
+files write. A BCF stores a `Float` as a 32-bit float, so its value is the file's own; whole where it
+has no fraction, and left out from 2^24 as before. A key its version refuses as `Float` (PS under 4.3)
+is not carried (above).
 
 ## Decision 10: multi-sample files
 

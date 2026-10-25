@@ -4,6 +4,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- An integer key declared `Float` (GQ, DP, MIN_DP, LEN, PS, AD, PSO, PSQ, HQ, INFO END, SVLEN, CIPOS,
+  CIEND) is read from its text, where polars-bio's 32-bit float rounded the fraction away and the value
+  read as whole: DP `30.0000001` read 30, END `5000000.1` read 5000000, PS `10000000.5` read set
+  `10000000`. The copy polars-bio reads declares such a key `Type=String` (`REWRITE_VERSION` 15), and
+  whether a value is whole is decided by its digits, never by a float, for `String` keys too
+  (`30.00000000000000001` was 30 there): a fraction is left out and counted. No magnitude threshold
+  could do it, since `30.0000001` rounds well below 2^22 (docs/SCHEMA.md, Decision 9). A whole number
+  past 2^24 now reads exactly (PS or END 123456789, which was left out as inexact). Exponent forms
+  read by their digits as before (`1e2` is 100, `1.25e1` is left out). A BCF's Float is its stored
+  32-bit value and reads as before.
+
 - A VCF that declares PS but whose PS the loader does not carry (a Type its version refuses, such as
   `PS Type=String` under 4.3; a PS the retry left out) withholds the phase of every phased record,
   with one warning counting them, where `0|1:100` and `1|0:200` read as phased in one set across the

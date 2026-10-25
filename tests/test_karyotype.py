@@ -20,6 +20,8 @@ from just_vcf import (
 )
 from just_vcf.coverage import COVERAGE_INTERVALS
 from just_vcf.karyotype import (
+    COVERAGE_X_BANDS,
+    COVERAGE_Y_BANDS,
     MIN_X_SITES,
     MIN_Y_SITES,
     ESTIMATE_BUILDS,
@@ -320,11 +322,24 @@ def test_lines_that_disagree_are_unknown() -> None:
 
 
 def test_depth_above_two_copies_is_not_called_xx() -> None:
-    # Three X copies would put the X depth near 1.5 times the autosomes', with a two-X het share.
+    # Three X copies would put the X depth near 1.5 times the autosomes', with a two-X het share. The
+    # calls' depth allows three or more there, never two, and counts nothing: no XX, no XXY.
     dp = round(REF_DP * 1.5)
     assert dp / REF_DP > TWO_X_MAX_DEPTH_RATIO
     found = evidence(frame(chr20(), x_calls(1200, 800, dp), y_calls(1000, 6)))
-    assert (found.x_copies, found.reason) == (None, "intermediate")
+    assert (found.x_copies, found.x_copy_count, found.reason) == (XCopies.TWO_OR_MORE, None, "y_unusable")
+    with_y = evidence(frame(chr20(), x_calls(1200, 800, dp), y_calls(1000, 18)))
+    assert (with_y.inferred_karyotypic_sex, with_y.reason, with_y.y_present) == (KaryotypicSex.UNKNOWN_KARYOTYPE, "copies_uncounted", True)
+
+
+def test_calls_alone_count_x_but_never_y() -> None:
+    # The calls' X depth counts one or two; their Y depth shows a Y, never how many (men read 0.43-1.97).
+    xy, xxy = evidence(frame(chr20(), *XY)), evidence(frame(chr20(), XX[0], XY[1]))
+    assert [(e.inferred_karyotypic_sex, e.x_copy_count, e.y_copy_count) for e in (xy, xxy)] == [
+        (KaryotypicSex.XY, 1, None), (KaryotypicSex.XXY, 2, None),
+    ]  # fmt: skip
+    # Without DP only the het share speaks: two or more X, no count.
+    assert evidence(frame(chr20(dp=None), x_calls(1200, 800, None))).x_copy_count is None
 
 
 def test_a_low_y_depth_never_reads_as_no_y() -> None:
@@ -606,3 +621,63 @@ def test_coverage_with_too_few_bases_gives_no_ratio() -> None:
     found = with_coverage(frame(chr20(), XX[0], XX[1]), Coverage(facet=full.facet, intervals=full.intervals.filter(kept)))
     assert (found.coverage.y_bases, found.coverage.y_ratio) == (500_000, None)
     assert found.y_reason == "y_not_shown"
+
+
+# --- Counts past two, from coverage only ---------------------------------------------------------
+
+THREE_X_DP = round(REF_DP * 1.5)  # calls' X depth 1.5: above two copies' band, three or more
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "x_depth", "y_depth", "expected", "counts"),
+    [
+        # Copy number: X at 1.5 of chr20 is three copies, Y at 1.0 two.
+        (x_calls(1200, 800, THREE_X_DP), XX[1], 45.0, 0.0, KaryotypicSex.XXX, (3, 0)),
+        (XY[0], XY[1], 15.0, 30.0, KaryotypicSex.XYY, (1, 2)),
+        (XX[0], XY[1], 30.0, 30.0, KaryotypicSex.XXYY, (2, 2)),
+        (x_calls(1200, 800, THREE_X_DP), XY[1], 45.0, 15.0, KaryotypicSex.XXXY, (3, 1)),
+        # Phenopackets has no XXXYY: the standard's own OTHER_KARYOTYPE.
+        (x_calls(1200, 800, THREE_X_DP), XY[1], 45.0, 30.0, KaryotypicSex.OTHER_KARYOTYPE, (3, 2)),
+        (XY[0], XX[1], 15.0, 15.0, KaryotypicSex.XY, (1, 1)),
+    ],
+)
+def test_coverage_counts_three_x_and_two_y(
+    x: pl.DataFrame, y: pl.DataFrame, x_depth: float, y_depth: float, expected: KaryotypicSex, counts: tuple[int, int]
+) -> None:
+    found = with_coverage(frame(chr20(), x, y), coverage_facet(x_depth, y_depth))
+    assert (found.inferred_karyotypic_sex, found.reason) == (expected, None)
+    assert (found.x_copy_count, found.y_copy_count) == counts
+    assert found.x_copies is (XCopies.ONE if counts[0] == 1 else XCopies.TWO_OR_MORE)
+    assert found.y_present is (counts[1] > 0)
+
+
+@pytest.mark.parametrize(
+    ("x", "x_depth", "y_depth", "x_reason", "y_reason"),
+    [
+        # Between two counts' bands: the central half of each gap (0.5 per copy, 0.125 either side).
+        (XX[0], 37.5, 0.0, "intermediate", None),  # X 1.25, between two and three
+        (XX[0], 30.0, 22.5, None, "intermediate"),  # Y 0.75, between one and two
+        (XY[0], 7.5, 15.0, "intermediate", None),  # X 0.25, under one copy's band
+        (XX[0], 30.0, 37.5, None, "intermediate"),  # Y 1.25: three Y are not read
+    ],
+)
+def test_a_coverage_count_between_bands_is_unknown(x: pl.DataFrame, x_depth: float, y_depth: float, x_reason: str | None, y_reason: str | None) -> None:
+    found = with_coverage(frame(chr20(), x, XX[1]), coverage_facet(x_depth, y_depth))
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+    assert (found.x_copies_reason, found.y_reason) == (x_reason, y_reason)
+    assert found.reason == (x_reason or "y_unusable")
+
+
+def test_a_coverage_three_against_a_calls_two_disagrees() -> None:
+    # The calls' X depth 1.0 is two copies; coverage at 1.5 says three. Neither wins.
+    found = with_coverage(frame(chr20(), *XX), coverage_facet(45.0, 0.0))
+    assert (found.x_copies, found.x_copies_reason, found.inferred_karyotypic_sex) == (None, "lines_disagree", KaryotypicSex.UNKNOWN_KARYOTYPE)
+
+
+def test_the_coverage_bands_are_copy_number() -> None:
+    # Each count k at k/2 of chr20's depth, 0.125 either side: the edges hold, the next step out does not.
+    for count, (low, high, copies) in zip((1, 2, 3), COVERAGE_X_BANDS, strict=True):
+        assert (low, high, copies) == (count / 2 - 0.125, count / 2 + 0.125, (count, count))
+    assert [band[:2] for band in COVERAGE_Y_BANDS] == [(None, 0.125), (0.375, 0.625), (0.875, 1.125)]
+    edge = with_coverage(frame(chr20(), x_calls(1200, 800, THREE_X_DP), XX[1]), coverage_facet(41.25, 3.75))  # 1.375, 0.125
+    assert (edge.x_copy_count, edge.y_copy_count) == (3, 0)

@@ -4,6 +4,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `sex_chromosome_evidence(loaded, coverage=…)` counts copies past two from the coverage facet
+  (RM269): each copy reads half chr20's depth, so X reads one to three copies and Y none to two, each
+  0.125 either side of its value, and names `XXX`, `XYY`, `XXYY`, `XXXY`, and `OTHER_KARYOTYPE` for
+  three X with two Y. New nullable result fields `x_copy_count` and `y_copy_count`, and a reason
+  `copies_uncounted`. Values that change: a coverage X ratio of 1.125–1.25 (was two X), one under
+  0.375 (was one X) and a coverage Y ratio of 0.625–0.875 or over 1.125 (was a Y present) now answer
+  unknown, `intermediate`; the calls' X depth above 1.25 allows three or more X where it read unknown,
+  so `x_copies` is `two_or_more` there and the karyotype `copies_uncounted` unless coverage counts it.
+  No XXX or XYY genome was measured: the bands are copy number alone. From calls alone `XY` and `XXY`
+  are still named, though they cannot tell XY from XYY. Minor.
+
 - The CGI `var` and masterVarBeta warning that counts haplotypes whose varScoreVAF differs from the
   varScoreEAF read into `hq` counts only haplotypes whose EAF is read. It counted a half-call's `?`
   slot, a partly called haplotype and a score past u16 too, whose EAF never reaches `hq`.

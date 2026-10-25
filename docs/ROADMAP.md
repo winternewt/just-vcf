@@ -1143,7 +1143,7 @@ store:
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY and arrays wait) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY, XXYY and XXXY from a coverage facet's copy counts built 2026-10-25; arrays wait) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -1366,8 +1366,32 @@ Four files from three person folders confirm the bands' placement, not their wid
 - The coverage facet is paired by the caller and used only on its own build. Rejected: placing it on
   the facet's build, which would read GRCh37 coordinates against GRCh38 regions.
 
-**Left:** XXX, XYY and the other classes need a copy count past two, which the bands above do not
-read (a Y ratio near 1.0 still reads as one Y present). An array's female Y probes are no-calls, which may be the absence signal
+**Built 2026-10-25: copy counts past two from coverage.** The coverage line counts: each copy reads
+half chr20's depth, so X reads one, two or three copies (0.5, 1.0, 1.5) and Y none, one or two (0,
+0.5, 1.0), each band 0.125 either side of its value, the central half of every gap unknown, the rule
+the earlier bands followed. Each line now allows a range of counts and the answer is their overlap
+(`x_copy_count`, `y_copy_count`, nullable, beside `x_copies` and `y_present`, which keep their
+meaning). New classes: `XXX`, `XYY`, `XXYY`, `XXXY`, and `OTHER_KARYOTYPE` for three X with two Y.
+No genome of those classes was measured; the bands are copy number alone. Decisions, each with what
+was rejected:
+
+- The coverage bands narrowed to fit: two X was 0.875–1.25, now 0.875–1.125; one X gained a floor
+  at 0.375; one Y was 0.375 and up, now 0.375–0.625. A ratio in the new gaps reads unknown where it
+  named a class. None of the four calibration BAMs is near a new edge (each within 0.034 of its
+  copy-number value). Rejected: keeping 1.25 as two's top, which leaves no unknown band before three.
+- The calls' X depth above 1.25 allows three or more, where it read unknown, so a three-X genome's
+  own calls do not veto a coverage three. It names no count itself: with no coverage line the answer
+  is `copies_uncounted` (and `x_copies = two_or_more`, which is true). Rejected: leaving it
+  `intermediate`, which makes XXX unreachable for any facet carrying DP.
+- The calls alone still name `XY` and `XXY`, reading their Y "one or more" as one and a het share's
+  "two or more" as two, as they did before. They cannot tell XY from XYY or XXY from XXYY (men's
+  call-site Y depth spans 0.43–1.97 across callers). Rejected for now: answering unknown there, which
+  turns every VCF-only answer unknown; it is the person's choice (below).
+- Three X with two Y is `OTHER_KARYOTYPE`, the standard's own term for a karyotype it does not list.
+  Rejected: unknown, which would say the evidence was weak when the counts are not.
+
+**Left:** whether a VCF alone may name `XY`/`XXY` when it cannot count the Y, or must answer unknown
+until a coverage facet counts it, is the person's decision. An array's female Y probes are no-calls, which may be the absence signal
 arrays have and genomes lack. Arrays (no `gt`
 before RM3, no depth) and exomes answer unknown; an array's own lines (female Y probes no-calls,
 AncestryDNA's doubled X letters) are not built. Liftovers of one callset are not yet weighed as one

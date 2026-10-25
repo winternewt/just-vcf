@@ -1138,7 +1138,7 @@ def test_a_carried_info_key_declared_with_another_type_loads(tmp_path: Path, key
 
 
 @pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.3", "VCFv4.5"])
-@pytest.mark.parametrize("kind", ["Integer", "Float"])
+@pytest.mark.parametrize("kind", ["Integer", "Float", "Character"])
 @pytest.mark.parametrize(("namespace", "key", "record", "column"), [
     ("FORMAT", "FT", "1\t100\t.\tA\tG\t50\t.\t.\tGT:FT\t0/1:PASS", "sample_filters"),
     ("INFO", "SVTYPE", "1\t100\t.\tA\t<DEL>\t50\t.\tSVTYPE=DEL\tGT\t0/1", "sv_type"),
@@ -1146,7 +1146,7 @@ def test_a_carried_info_key_declared_with_another_type_loads(tmp_path: Path, key
 def test_a_text_key_declared_as_a_number_is_not_carried(
     tmp_path: Path, namespace: str, key: str, record: str, column: str, kind: str, version: str
 ) -> None:
-    """FT and SVTYPE hold text (`PASS`, `DEL`). Declared Integer or Float, no value of theirs parses, and
+    """FT and SVTYPE hold text (`PASS`, `DEL`). Declared Integer, Float or Character, the value does not parse, and
     under VCF 4.2, which reserves no Type, polars-bio fails the whole read on the first one: the file
     loads without the key, which is in `dropped_fields`, with one warning that names it."""
     declared = f'##{namespace}=<ID={key},Number=1,Type={kind},Description="x">'

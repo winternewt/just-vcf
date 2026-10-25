@@ -579,8 +579,9 @@ under VCF 4.2 polars-bio reads it as a genotype whatever its declared Type (prob
 
 def text_keys_typed_otherwise(header: Header) -> dict[str, str]:
     """`TEXT_KEYS` the header declares with a Type other than String → that Type, where its version does
-    not refuse the line already (`refused_types`). No such value parses as a number, and under VCF 4.2,
-    which reserves no Type, polars-bio fails the whole read on the first one, so they are not carried."""
+    not refuse the line already (`refused_types`). Their values (`PASS`) do not parse under such a Type,
+    and under VCF 4.2, which reserves no Type, polars-bio fails the whole read on the first one, so
+    they are not carried."""
     refused = refused_types(header)
     return {
         name: header.types[name]

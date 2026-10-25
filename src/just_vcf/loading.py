@@ -715,7 +715,7 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         )
     if typed_otherwise := vcf.text_keys_typed_otherwise(header):
         warnings.append(
-            "text key(s) declared as numbers, so no value of theirs can be read, not carried: "
+            "text key(s) declared with a Type other than String, which does not hold their values, not carried: "
             + ", ".join(f"{name} (Type={kind}, VCF reserves String)" for name, kind in sorted(typed_otherwise.items()))
         )
     any_number = vcf.any_number_keys(header)

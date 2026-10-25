@@ -4,10 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
-- A VCF 4.2 file declaring FT, PSL or INFO SVTYPE as a number (`Type=Integer` or `Float`) loads, where
-  the first value (`PASS`, `DEL`) failed the whole read: the key is not carried, with a warning that
-  names it and its Type, and it is in `dropped_fields`, as a 4.3+ header declaring them so already
-  was. `REWRITE_VERSION` 13.
+- A VCF 4.2 file declaring FT, PSL or INFO SVTYPE with a Type other than String (`Integer`, `Float`,
+  `Character`) loads, where the first value (`PASS`, `DEL`) failed the whole read: the key is not
+  carried, with a warning that names it and its Type, and it is in `dropped_fields`, as a 4.3+ header
+  declaring them so already was. `REWRITE_VERSION` 13.
 
 - A PSO or PSQ declared `Number=1` loads, where a diploid row's two values failed the load with
   `HeaderRefused`: VCF defines PSL, PSO and PSQ as one value per GT allele, and the copy polars-bio

@@ -1178,8 +1178,8 @@ warning that names the key and with the key in `dropped_fields`:
   Type, and nothing under 4.2. A key it has no definition for in that version (`DS`, `MIN_DP`, `LEN`
   before 4.5, `PSL`/`PSO`/`PSQ` before 4.4) is read under any Type, except a text key below;
 - a text key (`FT`, `PSL`, INFO `SVTYPE`) declared with a Type other than String, in any version
-  (2026-10-25): no value it holds (`PASS`, a set name, `DEL`) parses as a number, and under VCF 4.2,
-  where polars-bio refuses no Type, the first one failed the whole read. The warning names the key
+  (2026-10-25): its values (`PASS`, a set name, `DEL`) do not parse as an Integer, a Float or a
+  Character, and under VCF 4.2, where polars-bio refuses no Type, the first one failed the whole read. The warning names the key
   and its Type. Under 4.2, polars-bio reads GT as a genotype whatever its declared Type.
 
 polars-bio parses every key its header declares, requested or not, so a value that does not parse

@@ -963,7 +963,9 @@ def test_hq_that_is_not_a_whole_number_is_left_out_and_counted(tmp_path: Path, k
     loaded = load(write(tmp_path, vcf_text(_hq_records(rows), extra_meta=meta)))
     assert loaded.calls.collect().sort("pos")["hq"].to_list() == [hq for _, hq, _ in rows]
     counts = {reason: sum(1 for *_, why in rows if why == reason) for reason in ("fraction", "text", "uncalled", "out")}
-    hq_warnings = {w for w in loaded.warnings if "HQ" in w}
+    retyped = [w for w in loaded.warnings if w.startswith(_RETYPED_WARNING)]
+    assert [w.rsplit(": ", 1)[1] for w in retyped] == (["FORMAT/HQ (Type=Float)"] if kind == "Float" else []), retyped
+    hq_warnings = {w for w in loaded.warnings if "HQ value(s)" in w}
     assert hq_warnings == {
         f"{counts['out']} HQ value(s) outside 0..65535 set to null",
         f"{counts['fraction']} HQ value(s) not a whole number left out",
@@ -1066,6 +1068,46 @@ def test_a_fraction_a_32_bit_float_rounds_away_is_left_out(
         assert row["phased"] == [None, None]
     label = f"INFO {key}" if key == "END" else key
     assert any(w.startswith(f"1 {label} value(s) not a whole number left out") for w in loaded.warnings), loaded.warnings
+
+
+_RETYPED_WARNING = "integer key(s) declared Type=Float, which polars-bio reads as a 32-bit float"
+
+
+@pytest.mark.parametrize(("version", "dp", "retyped"), [
+    # 4.2 reserves no Type: DP, MIN_DP and END are retyped; AD's fixed count leaves it out; GQ is String.
+    ("VCFv4.2", "30.0000001", ["FORMAT/DP", "FORMAT/MIN_DP", "INFO/END"]),
+    # 4.3 refuses DP and END as Float, so they are not carried; it holds no definition of MIN_DP. DP is
+    # whole here: a fraction in a refused DP fails the read, a defect of its own.
+    ("VCFv4.3", "30", ["FORMAT/MIN_DP"]),
+])
+def test_a_float_integer_key_read_as_text_is_named_in_one_warning(tmp_path: Path, version: str, dp: str, retyped: list[str]) -> None:
+    """The copy polars-bio reads declares a Float integer key String (`retyped_whole`), as it does GT
+    (`retyped_gt`), and the load says so once, naming each key so read and its declared Type. A key
+    not carried at all (a fixed-count AD, a Type the version refuses) is named by its own warning
+    instead, and a String one was read as text already."""
+    meta = (
+        '##FORMAT=<ID=DP,Number=1,Type=Float,Description="x">',
+        '##FORMAT=<ID=MIN_DP,Number=1,Type=Float,Description="x">',
+        '##FORMAT=<ID=GQ,Number=1,Type=String,Description="x">',
+        '##FORMAT=<ID=AD,Number=2,Type=Float,Description="x">',
+        '##INFO=<ID=END,Number=1,Type=Float,Description="x">',
+    )
+    record = f"1\t100\t.\tA\tG\t50\t.\tEND=100\tGT:DP:MIN_DP:GQ:AD\t0/1:{dp}:12.0000001:40:3,4"
+    loaded = load(write(tmp_path, vcf_text([record], extra_meta=meta, version=version)))
+    (stated,) = [w for w in loaded.warnings if w.startswith(_RETYPED_WARNING)]
+    assert stated.endswith(": " + ", ".join(f"{name} (Type=Float)" for name in retyped)), stated
+    # Each FORMAT key named was read from its text: the fraction a 32-bit float rounds away is seen.
+    fractions = {w.split(" ")[1] for w in loaded.warnings if w.endswith("value(s) not a whole number left out")}
+    assert fractions == {name.removeprefix("FORMAT/") for name in retyped if name.startswith("FORMAT/")}, loaded.warnings
+    dropped = loaded.facets.collect().row(0, named=True)["dropped_fields"] or []
+    assert "FORMAT/AD" in dropped and not set(retyped) & set(dropped), dropped
+
+
+def test_no_float_integer_key_gives_no_retype_warning(tmp_path: Path) -> None:
+    """A header declaring its integer keys Integer, or String, reads them without the copy's retype."""
+    meta = ('##FORMAT=<ID=GQ,Number=1,Type=String,Description="x">',)
+    loaded = load(write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:DP:GQ\t0/1:30:40"], fmt=("GT", "DP"), extra_meta=meta)))
+    assert not any(w.startswith(_RETYPED_WARNING) for w in loaded.warnings), loaded.warnings
 
 
 # Text judged by its digits: (written, read or the reason it is left out).
@@ -1225,7 +1267,7 @@ def test_a_carried_key_declared_with_another_type_loads(tmp_path: Path, key: str
     (value,) = calls[column].to_list()
     read = value is not None and (not isinstance(value, list) or any(v is not None for v in value))
     assert dropped != read, (value, facet["dropped_fields"])
-    assert dropped == any(f"FORMAT/{key} (Type={other}" in w for w in loaded.warnings), loaded.warnings
+    assert dropped == any(f"FORMAT/{key} (Type={other}" in w and "not carried" in w for w in loaded.warnings), loaded.warnings
     if version == "VCFv4.2":
         assert not dropped
 

@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF read through a copy that declares its `Float` integer keys `Type=String` (`retyped_whole`)
+  says so: one load warning names each key so read and its declared Type (`FORMAT/DP (Type=Float)`),
+  as the GT retype's warning does. A key not carried is named by its own warning instead, and a BCF,
+  read as stored, gets none. Additive.
+
 - `sex_chromosome_evidence` on an array facet tells a written no-call from an unreadable row (RM269):
   the check that the export writes its no-calls counted every autosomal row not called, so one row
   whose genotype no loader could read (`gt_alleles` null) let an export that drops its no-calls read

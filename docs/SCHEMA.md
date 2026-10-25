@@ -1249,6 +1249,9 @@ did not write; and leaving every Float-declared integer key out, which drops the
 files write. A BCF stores a `Float` as a 32-bit float, so its value is the file's own; whole where it
 has no fraction, and left out from 2^24 as before. A key its version refuses as `Float` (PS under 4.3)
 is not carried (above).
+One load warning names the keys a copy so declares, each with its declared Type (`FORMAT/DP
+(Type=Float)`), as GT's retype has one; a key not carried is named by its own warning instead, and a
+BCF, whose header is not rewritten, gets none.
 
 ## Decision 10: multi-sample files
 

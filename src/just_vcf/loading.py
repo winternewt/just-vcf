@@ -12,6 +12,7 @@ import logging
 import zlib
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import BinaryIO
 
@@ -712,10 +713,21 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             f"key(s) declared with a Type VCF {version[0]}.{version[1]} reserves otherwise, which polars-bio refuses, not carried: "
             + ", ".join(f"{name} (Type={kind}, {version[0]}.{version[1]} reserves {reserved[name]})" for name, kind in sorted(refused.items()))
         )
-    if any_number := vcf.any_number_keys(header):
+    if typed_otherwise := vcf.text_keys_typed_otherwise(header):
+        warnings.append(
+            "text key(s) declared with a Type other than String, which does not hold their values, not carried: "
+            + ", ".join(f"{name} (Type={kind}, VCF reserves String)" for name, kind in sorted(typed_otherwise.items()))
+        )
+    any_number = vcf.any_number_keys(header)
+    if by_allele := [key for key in any_number if header.format[key] in vcf.READ_AS_ANY_NUMBER]:
         warnings.append(
             "FORMAT key(s) declared Number=P, which polars-bio refuses (P10), read through a copy declaring "
-            f"Number=. with each value's count checked against GT: {', '.join(any_number)}"
+            f"Number=. with each value's count checked against GT: {', '.join(by_allele)}"
+        )
+    if one_value := [key for key in any_number if key not in by_allele]:
+        warnings.append(
+            "phase-set-list key(s) declared Number=1, which VCF defines as one value per GT allele (Number=P), "
+            f"read through a copy declaring Number=. with each value's count checked against GT and PSL: {', '.join(one_value)}"
         )
     if not header.meta:
         warnings.append(
@@ -763,7 +775,6 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     stated_filters = callset.stated_content_filters(header.meta)
     # The member's own name inside an archive; the name is read for its words and never logged.
     named_filter = callset.named_content_filter(sniffed.member or sniffed.path.name)
-    likelihoods = vcf.gl_source(header)
 
     facets: list[dict] = []
     facet_stats: list[dict] = []
@@ -815,6 +826,8 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         classes, class_warnings = _variant_classes(facet_id, spilled, stated_filters, named_filter)
         part_warnings += class_warnings
         caller = part.caller if part.split else source.caller
+        # After the read: a retry may have left GL or PL out (`Header.unparsed`).
+        likelihoods = vcf.gl_source(header)
         facets.append(
             {
                 "facet_id": facet_id,
@@ -920,25 +933,51 @@ def _read_text_records(
     warnings: list[str],
 ) -> tuple[pl.LazyFrame, dict]:
     """A text VCF's records for one part and their stats, read once more from a structural copy if
-    polars-bio refuses the first read (P7, P8). The retry is reported in `warnings`."""
-    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: _vcf_text(sniffed, header.resaved), header, missing, copy, origin)
+    polars-bio refuses the first read (P7, P8). The retry is reported in `warnings`.
+
+    Where the structural copy is refused too and polars-bio's error names a carried key holding a value
+    it cannot parse (`HeaderRefused.key`), the copy is written again without that key and read again,
+    the key recorded in `Header.unparsed` and warned about. Each key is left out once at most
+    (`vcf.can_leave_out`), so the retries end; an error that names no key, or one already left out, is
+    raised as it is: the loader never guesses which key failed."""
+    opener = partial(_vcf_text, sniffed, header.resaved)
+    path = vcf.readable_path(sniffed.path, sniffed.layers, opener, header, missing, copy, origin)
+    read = _read_part(path, header, part, data[0] if data else None)
+    if not isinstance(read, vcf.HeaderRefused):
+        return read
+    warnings.append(
+        f"polars-bio refused the file ({read}); read again with a header of only the carried INFO and "
+        "FORMAT keys and the FILTER, ALT and contig lines"
+    )
+    first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
+    for _ in range(len(vcf.FORMAT_KEYS) + len(vcf.INFO_KEYS) + 1):
+        path = vcf.readable_path(sniffed.path, sniffed.layers, opener, header, missing, copy, origin, structural_only=True)
+        read = _read_part(path, header, part, first)
+        if not isinstance(read, vcf.HeaderRefused):
+            break
+        if not vcf.can_leave_out(header, read.key):
+            raise read
+        header.unparsed[read.key] = read.reason or ""
+        warnings.append(
+            f"{read.key} not carried: polars-bio cannot parse a value of it under its declaration "
+            f"(Type={header.types.get(read.key, '')}): {read.reason}; read again without it"
+        )
+    else:
+        raise read
+    if left_out := vcf.pos_zero_left_out(copy, header):
+        warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
+    return read
+
+
+def _read_part(path: Path, header: vcf.Header, part: "vcf.Part", first: bytes | None) -> tuple[pl.LazyFrame, dict] | vcf.HeaderRefused:
+    """One part's records and their stats from `path`, or polars-bio's refusal of them, returned (not
+    raised) so the caller decides whether to retry without a nested `try`."""
     try:
-        raw = vcf.read_records(path, header, part.sample, data[0] if data else None, extra_info=part.info)
+        raw = vcf.read_records(path, header, part.sample, first, extra_info=part.info)
         records = part.select(raw)
         return records, vcf.scan_stats(records, part.unsourced(raw))
     except vcf.HeaderRefused as err:
-        warnings.append(
-            f"polars-bio refused the file ({err}); read again with a header of only the carried INFO and "
-            "FORMAT keys and the FILTER, ALT and contig lines"
-        )
-    path = vcf.readable_path(sniffed.path, sniffed.layers, lambda: _vcf_text(sniffed, header.resaved), header, missing, copy, origin, structural_only=True)
-    first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
-    raw = vcf.read_records(path, header, part.sample, first, extra_info=part.info)
-    records = part.select(raw)
-    stats = vcf.scan_stats(records, part.unsourced(raw))
-    if left_out := vcf.pos_zero_left_out(copy):
-        warnings.append(f"{left_out} record(s) at POS 0 left out: polars-bio cannot read them")
-    return records, stats
+        return err
 
 
 def _assembly_label(stated: str | None, contigs: list[dict]) -> tuple[str | None, AssemblyLabelBasis | None, list[str]]:

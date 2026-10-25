@@ -331,7 +331,13 @@ its own phase set. So:
   counterpart of PSQ, is not carried.
 - polars-bio refuses a header that declares `Number=P` (P10), so the loader reads such a file
   through its rewritten copy with those keys declared `Number=.` (`REWRITE_VERSION` 9), with a warning;
-  the count is checked against GT here.
+  the count is checked against GT here. A PSL, PSO or PSQ declared `Number=1` is read the same way
+  (`REWRITE_VERSION` 12, 2026-10-25): VCF 4.4 and 4.5 define all three as one value per GT allele, and
+  a diploid row's two values do not parse under a single-value declaration, which failed the load.
+  The per-row counts decide, as for `P`, so a haploid row and a diploid one both read. Another fixed
+  count (`Number=2`) reads as a list already and is read as it is. Rejected: not carrying a key so
+  declared, which would drop the values of every file whose rows are haploid (they load today), and
+  judging the declaration by the first rows, since a later diploid row would still fail the load.
 
 The VRS CisPhasedBlock is built from `phase_sets` at export, by `cis_phased_blocks` ("CisPhasedBlock
 export" below). It is not stored per row.
@@ -1161,7 +1167,7 @@ designs it.
 **Recommendation: B.** Under P1, a key missing from the header never reaches the loader at all. The
 loader builds complete headers for the formats it synthesises (`vcf_no_meta`, the key=value table).
 
-**A carried key the reader cannot follow is not carried** (2026-10-24), in two cases, each with a load
+**A carried key the reader cannot follow is not carried** (2026-10-24), in three cases, each with a load
 warning that names the key and with the key in `dropped_fields`:
 
 - declared with a Number it is not read under: a vector over the alleles or genotypes with a fixed
@@ -1170,11 +1176,37 @@ warning that names the key and with the key in `dropped_fields`:
   (`HQ` `Type=Float`; `CN` `Type=Float` under 4.3, which reserves it Integer). polars-bio's reader
   holds a definition per version and refuses the whole header for such a line; it checks only the
   Type, and nothing under 4.2. A key it has no definition for in that version (`DS`, `MIN_DP`, `LEN`
-  before 4.5, `PSL`/`PSO`/`PSQ` before 4.4) is read under any Type.
+  before 4.5, `PSL`/`PSO`/`PSQ` before 4.4) is read under any Type, except a text key below;
+- a text key (`FT`, `PSL`, INFO `SVTYPE`) declared with a Type other than String, in any version
+  (2026-10-25): its values (`PASS`, a set name, `DEL`) do not parse as an Integer, a Float or a
+  Character, and under VCF 4.2, where polars-bio refuses no Type, the first one failed the whole read. The warning names the key
+  and its Type. Under 4.2, polars-bio reads GT as a genotype whatever its declared Type.
 
 polars-bio parses every key its header declares, requested or not, so a value that does not parse
 under such a declaration (`51,40` under HQ `Number=1`) would fail the load. The loader's retry reads a
-copy whose header leaves both kinds out, and the rows' values under them are skipped unread.
+copy whose header leaves all three out, and the rows' values under them are skipped unread.
+
+One more case is found only by reading (2026-10-25): a carried key declared as its version reserves it,
+with a value that does not parse under that declaration (HQ `Integer` with `30.5,40` or `x,40` under
+VCF 4.2). Where the structural copy is refused too and polars-bio's error names the key, the copy is
+written again without it and read again; the key is not carried, with a warning that names it and
+polars-bio's reason, and it is in `dropped_fields`. Each key is left out once at most, and GT never, so
+the retries end. polars-bio names the key only for a list-valued field (HQ, AD, PL, INFO SVLEN…): a
+single-value one (GQ `30.5` under `Integer`, an INFO END) fails inside the reader with no key named,
+and the load is refused as before, since which key failed would be a guess.
+
+**A carried integer key declared `Float` or `String` keeps only whole numbers** (2026-10-25). VCF 4.2
+reserves no Type, and a later version none for a key it holds no definition of (MIN_DP; LEN before
+4.5; PSO and PSQ before 4.4), so such a header can declare GQ, DP, MIN_DP, LEN, PS, AD, PSO, PSQ or
+INFO END, SVLEN, CIPOS or CIEND `Float` or `String`. The loader reads those values as HQ's (above): a
+whole number as it is (`30.0` is 30); a number with a fraction (`30.7`) left out, never truncated or
+rounded; text that is no finite number (`x`, `nan`) left out; and a whole number past what the value
+was read through holds exactly left out too: polars-bio reads a Float as a 32-bit float, exact only up
+to 2^24, so a PS or END of 123456789 comes back 123456792, a set or a position the file did not write.
+Each key and reason is one warning with its count. A PS left out withholds the phase of a phased
+record (`phased` null where it was true): a phased record without PS is in its chromosome's implicit
+set, and saying so would be a claim the file did not make. PL and PP declared `Float` are read as the
+numbers they are; a fraction there is a likelihood, not a count cut short.
 
 ## Decision 10: multi-sample files
 

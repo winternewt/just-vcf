@@ -4,6 +4,36 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF 4.2 file declaring FT, PSL or INFO SVTYPE with a Type other than String (`Integer`, `Float`,
+  `Character`) loads, where the first value (`PASS`, `DEL`) failed the whole read: the key is not
+  carried, with a warning that names it and its Type, and it is in `dropped_fields`, as a 4.3+ header
+  declaring them so already was. `REWRITE_VERSION` 13.
+
+- A PSO or PSQ declared `Number=1` loads, where a diploid row's two values failed the load with
+  `HeaderRefused`: VCF defines PSL, PSO and PSQ as one value per GT allele, and the copy polars-bio
+  reads now declares a `Number=1` one `Number=.`, as it does `Number=P`, with each row's count
+  checked against GT and PSL. A PSL declared `Number=1` reads its values too, where its records' phase
+  was withheld. `Number=2` reads as before. `REWRITE_VERSION` 12.
+
+- A carried integer key declared `Float` or `String` (a VCF 4.2 header, or MIN_DP, LEN, PSO or PSQ in
+  a version that holds no definition of them) keeps only whole numbers, where it was truncated or
+  lost without a word: GQ `30.7` read as 30, AD `3.5,4` as `[3, 4]`, END `200.5` as 200, and GQ `x`
+  as null. A whole number reads as it is (`30.0` is 30); a fraction, text that is no number, and a
+  whole number a 32-bit float cannot hold exactly are left out, one warning per key and reason with
+  its count. The last mattered: polars-bio reads a Float as a 32-bit float, so a PS or END of
+  123456789 came back 123456792. A PS left out withholds a phased record's phase rather than putting
+  it in the chromosome's implicit set. A PS, LEN or INFO END declared `String` with text that is no
+  integer no longer fails the load with `InvalidOperationError`. Covers GQ, DP, MIN_DP, LEN, PS, AD,
+  PSO, PSQ and INFO END, SVLEN, CIPOS, CIEND.
+
+- A VCF with a carried key declared as VCF reserves it but holding a value polars-bio cannot parse
+  under that declaration (HQ `Integer` with `30.5,40` or `x,40`, AD with `x,4`, INFO SVLEN with `x`)
+  loads without that key, where it failed with `HeaderRefused`: when the structural retry is refused
+  too and polars-bio's error names the key, the loader reads again with it left out, warns once
+  naming it and polars-bio's reason, and lists it in `dropped_fields`. Each key is left out once at
+  most. A single-value key (GQ `30.5` under `Integer`) still fails the load: polars-bio's error names
+  no key there, and the loader does not guess.
+
 - The CGI `var` and masterVarBeta warning that counts haplotypes whose varScoreVAF differs from the
   varScoreEAF read into `hq` counts only haplotypes whose EAF is read. It counted a half-call's `?`
   slot, a partly called haplotype and a score past u16 too, whose EAF never reaches `hq`.

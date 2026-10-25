@@ -85,6 +85,13 @@ READ_AS_ANY_NUMBER = frozenset({"P"})
 """FORMAT Numbers polars-bio refuses (P10) that the loader reads through a copy declaring `Number=.`:
 the values are the same lists, and the length is checked against GT here."""
 
+PHASE_SET_LISTS = frozenset({"PSL", "PSO", "PSQ"})
+"""The phase-set-list keys, which VCF 4.4 and 4.5 define as one value per GT allele (`Number=P`). A file
+declaring one `Number=1` writes two values on a diploid row, which polars-bio cannot parse under that
+declaration (it reads a single value), so the copy declares it `Number=.` as it does `P`: each row's
+count is checked against GT (PSL) and PSL (PSO, PSQ) all the same. Another fixed count (`Number=2`) is
+read as a list already, and is read as it is."""
+
 VECTOR_NUMBERS: dict[str, str] = {"AD": "R", "PL": "G", "GL": "G", "GP": "G", "PP": "G"}
 """Carried vectors that are parallel to the alleles (R) or the genotypes (G). A file declaring one of
 them with a fixed count is using the name for something else: VarScan2's AD (Number=1) is the ALT
@@ -95,6 +102,35 @@ SLOT_NUMBERS: dict[str, frozenset[str]] = {"HQ": frozenset({"2", "P", "."})}
 `Number=2` for HQ (diploid by definition; a haploid row writes its second value missing), VCF 4.4's
 `P`, and `.`. Any other Number names another quantity under the key (one per genotype, a single
 value), which is not carried; each row's count is checked against its GT (`_hq_slots`)."""
+
+WHOLE_COLUMNS: dict[str, str] = {
+    "fmt_GQ": "GQ",
+    "fmt_DP": "DP",
+    "fmt_MIN_DP": "MIN_DP",
+    "fmt_LEN": "LEN",
+    "fmt_PS": "PS",
+    "fmt_AD": "AD",
+    "fmt_PSO": "PSO",
+    "fmt_PSQ": "PSQ",
+    "info_END": "INFO END",
+    "info_SVLEN": "INFO SVLEN",
+    "info_CIPOS": "INFO CIPOS",
+    "info_CIEND": "INFO CIEND",
+}
+"""Columns of the carried keys VCF types Integer that the frames read as whole numbers → the name the
+warnings give them. A VCF 4.2 header (and a later one for a key its version holds no definition of,
+such as MIN_DP) can declare one Float or String, and polars-bio then hands back floats or text: only a
+whole number is read from those (`_whole_numbers`). HQ has its own rule (`_hq_slots`); PL and PP are
+read as the numbers they are, since a fraction there is a likelihood, not a count cut short."""
+
+UNREAD_REASONS: dict[str, str] = {
+    "not_whole": "not a whole number",
+    "not_number": "not a number",
+    "inexact": "too large to read exactly as a whole number",
+}
+"""Why `_whole_numbers` leaves a value out → the warning's words. `inexact`: polars-bio reads a Float
+as a 32-bit float, exact for whole numbers only up to 2^24 (123456789 comes back 123456792), and text
+is read through a 64-bit one, exact up to 2^53; past that the number read may not be the file's."""
 
 HQ_MAX = 2**16 - 1
 """The largest haplotype quality `hq` (`u16`) holds; a larger one, or a negative one, is left out and counted."""
@@ -177,7 +213,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 11
+REWRITE_VERSION = 13
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -189,7 +225,11 @@ phase-set-list keys are carried, so a structural copy keeps them.
 copy keeps it.
 11: a structural copy leaves out a carried key declared with a Number it is not read under, and one of
 a Type VCF 4.3, 4.4 or 4.5 reserves otherwise (`left_out_of_copy`); a copy from 10 kept their lines,
-so a file with one fails its retry there."""
+so a file with one fails its retry there.
+12: a phase-set-list key declared `Number=1` (`PHASE_SET_LISTS`) is declared `Number=.` in the copy; a
+copy from 11 kept `Number=1`, under which a diploid row's two values fail the read.
+13: a structural copy leaves out a text key declared as a number (`text_keys_typed_otherwise`: FT
+`Type=Integer` under VCF 4.2); a copy from 12 kept its line, and its retry failed on the first value."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -209,6 +249,20 @@ class NoSampleError(ValueError):
 
 class HeaderRefused(ValueError):
     """polars-bio refused the file: its header (P8), or a field value it could not parse (P7)."""
+
+    def __init__(self, message: str, key: str | None = None, reason: str | None = None) -> None:
+        super().__init__(message)
+        self.key = key
+        """The key, namespaced (`FORMAT/HQ`), whose value polars-bio says it could not parse; None where
+        its error names none (it names a list-valued field, never a single-value one)."""
+        self.reason = reason
+        """What polars-bio said was wrong with that value (`invalid digit found in string`)."""
+
+
+_UNPARSED_FIELD = re.compile(r"Error reading (FORMAT|INFO)(?: array)? field '([^']+)': ([^\n]*)")
+"""polars-bio's error for a value it could not parse in a named field (datafusion-bio-formats
+`format_value_error`, `info_array_error`). A single-value field fails inside noodles' iterator, and
+that error ("Error reading FORMAT field: …") names no key."""
 
 
 _STRUCTURAL_META = ("##fileformat=", "##FILTER=", "##ALT=", "##contig=")
@@ -276,6 +330,9 @@ class Header:
     alt_ids: set[str] = field(default_factory=set)
     """Symbolic alleles the header declares with `##ALT` (`CGA_NOCALL`, `NON_REF`, `DEL`…)."""
     """Declared INFO keys that mark split records → `vt`, `just_vcf` or `bcftools` (`_split_marker_kind`)."""
+    unparsed: dict[str, str] = field(default_factory=dict)
+    """Carried keys, namespaced, that polars-bio named as holding a value it cannot parse under their
+    declaration → what it said. Set by the loader's retry (`can_leave_out`); such a key is not carried."""
 
     @property
     def version_tuple(self) -> tuple[int, int] | None:
@@ -515,13 +572,59 @@ def refused_types(header: Header) -> dict[str, str]:
     return {name: header.types[name] for name, kind in reserved.items() if name in header.types and header.types[name] != kind}
 
 
+TEXT_KEYS = ("FORMAT/FT", "FORMAT/PSL", "INFO/SVTYPE")
+"""The carried keys whose values are text (`PASS`, a phase-set name, `DEL`). GT, text too, is not one:
+under VCF 4.2 polars-bio reads it as a genotype whatever its declared Type (probed 2026-10-25)."""
+
+
+def text_keys_typed_otherwise(header: Header) -> dict[str, str]:
+    """`TEXT_KEYS` the header declares with a Type other than String → that Type, where its version does
+    not refuse the line already (`refused_types`). Their values (`PASS`) do not parse under such a Type,
+    and under VCF 4.2, which reserves no Type, polars-bio fails the whole read on the first one, so
+    they are not carried."""
+    refused = refused_types(header)
+    return {
+        name: header.types[name]
+        for name in TEXT_KEYS
+        if header.types.get(name) not in (None, "", "String") and name not in refused
+    }
+
+
 def left_out_of_copy(header: Header) -> set[str]:
     """Carried keys, namespaced, whose declaration a structural copy leaves out: those of a Type
     polars-bio refuses (`refused_types`) and those declared with a Number they are not read under
     (`unfit_keys`). Neither is requested from polars-bio, but it parses every key its header declares,
     so a value that does not parse under such a declaration (`51,40` under `Number=1`) would fail the
-    retry too; left undeclared, it is skipped (P1)."""
-    return set(refused_types(header)) | {f"FORMAT/{key}" for key in unfit_keys(header)}
+    retry too; left undeclared, it is skipped (P1). And text keys declared as numbers
+    (`text_keys_typed_otherwise`), and those polars-bio named as holding a value it cannot parse
+    (`Header.unparsed`)."""
+    return (
+        set(refused_types(header))
+        | {f"FORMAT/{key}" for key in unfit_keys(header)}
+        | set(text_keys_typed_otherwise(header))
+        | set(header.unparsed)
+    )
+
+
+def can_leave_out(header: Header, name: str | None) -> bool:
+    """Whether the retry may read again without `name`, a key polars-bio named as holding a value it
+    cannot parse: a carried key the structural copy still declares. Never GT, without which no row has
+    a genotype, and never a key left out already, so each key costs one retry at most."""
+    if name is None or name == "FORMAT/GT" or name in left_out_of_copy(header):
+        return False
+    namespace, key = name.split("/", 1)
+    if namespace == "INFO":
+        return key in INFO_KEYS and key in header.info
+    return key in FORMAT_KEYS and key in header.format
+
+
+def structural_dir(cache: Path, header: Header) -> Path:
+    """Where the structural copy of the file under `cache` is written: one directory per set of keys
+    the retry left out (`Header.unparsed`), so a copy without a key is never taken for one with it."""
+    if not header.unparsed:
+        return cache / "structural"
+    names = ",".join(sorted(header.unparsed))
+    return cache / f"structural-{hashlib.sha256(names.encode()).hexdigest()[:16]}"
 
 
 @dataclass
@@ -605,18 +708,26 @@ def caller_parts(header: Header, data: list[bytes]) -> list[Part]:
 
 
 def any_number_keys(header: Header) -> list[str]:
-    """FORMAT keys the header declares with a Number polars-bio refuses and the loader reads through a
-    copy declaring `Number=.` (`READ_AS_ANY_NUMBER`, P10). Any such key, carried or not: polars-bio
-    refuses the whole header for one."""
-    return sorted(key for key, number in header.format.items() if number in READ_AS_ANY_NUMBER)
+    """FORMAT keys the loader reads through a copy declaring `Number=.`: any key the header declares
+    with a Number polars-bio refuses (`READ_AS_ANY_NUMBER`, P10), carried or not, since polars-bio
+    refuses the whole header for one; and a phase-set-list key declared `Number=1`
+    (`PHASE_SET_LISTS`)."""
+    return sorted(key for key, number in header.format.items() if _read_as_any_number(key, number))
+
+
+def _read_as_any_number(key: str, number: str) -> bool:
+    return number in READ_AS_ANY_NUMBER or (key in PHASE_SET_LISTS and number == "1")
 
 
 def _readable_number(line: str) -> str:
-    """A `##FORMAT` line with a Number polars-bio refuses (`READ_AS_ANY_NUMBER`) declared `Number=.`."""
-    if not line.startswith("##FORMAT=<"):
+    """A `##FORMAT` line of a key `any_number_keys` names, declared `Number=.`."""
+    declared = re.match(r"^##FORMAT=<(.*)>$", line)
+    if not declared:
         return line
-    numbers = "|".join(re.escape(number) for number in sorted(READ_AS_ANY_NUMBER))
-    return re.sub(rf"(?<=[<,])Number=(?:{numbers})(?=[,>])", "Number=.", line)
+    attrs = _attrs(declared.group(1))
+    if not _read_as_any_number(attrs.get("ID", ""), attrs.get("Number", "")):
+        return line
+    return re.sub(r"(?<=[<,])Number=[^,>]*(?=[,>])", "Number=.", line, count=1)
 
 
 def unfit_keys(header: Header) -> dict[str, str]:
@@ -635,9 +746,8 @@ def gl_source(header: Header) -> GlSource | None:
     """Which FORMAT key(s) `gl` is read from: the likelihood keys `read_records` carries, so a GL or PL
     declared with a fixed count (another quantity under the name) or a Type polars-bio refuses does not
     count. Call it after `declare`, so a key the rows use undeclared counts. None: neither is carried."""
-    refused = refused_types(header)
-    unfit = unfit_keys(header)
-    carried = {key for key in ("GL", "PL") if key in header.format and key not in unfit and f"FORMAT/{key}" not in refused}
+    left_out = left_out_of_copy(header)
+    carried = {key for key in ("GL", "PL") if key in header.format and f"FORMAT/{key}" not in left_out}
     if carried == {"GL", "PL"}:
         return GlSource.GL_OVER_PL
     if carried:
@@ -678,7 +788,7 @@ def readable_path(
     if layers in ((), ("gzip",), ("bgzf",)) and as_is:
         return path
     with cache_index.writing(cache, cache_index.REWRITE_COPY, {"REWRITE_VERSION": REWRITE_VERSION}, origin):
-        return _write_copy(opener, header, missing, cache / "structural" if structural_only else cache, structural_only)
+        return _write_copy(opener, header, missing, structural_dir(cache, header) if structural_only else cache, structural_only)
 
 
 def _write_copy(opener, header: Header, missing: list[str], cache: Path, structural_only: bool) -> Path:
@@ -702,6 +812,8 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
                 declared.add(key.groups())
             out.write(f"{_readable_number(line)}\n".encode())
         for name in missing:
+            if structural_only and name in left_out:
+                continue
             namespace, key = name.split("/", 1)
             number = (INFO_KEYS if namespace == "INFO" else FORMAT_KEYS)[key][0]
             number = "." if number in READ_AS_ANY_NUMBER else number
@@ -760,9 +872,9 @@ def _write_bcf_copy(path: Path, layers: tuple[str, ...], opener, cache: Path) ->
     return target
 
 
-def pos_zero_left_out(cache: Path) -> int:
-    """Records at POS 0 left out of the structural copy under `cache`."""
-    marker = cache / "structural" / "pos_zero_left_out"
+def pos_zero_left_out(cache: Path, header: Header) -> int:
+    """Records at POS 0 left out of the structural copy under `cache` (`structural_dir`)."""
+    marker = structural_dir(cache, header) / "pos_zero_left_out"
     return int(marker.read_text()) if marker.exists() else 0
 
 
@@ -827,9 +939,13 @@ def _collect_all(plans: list[pl.LazyFrame]) -> list[pl.DataFrame]:
 
 
 def _refused(err: pl.exceptions.ComputeError) -> HeaderRefused | None:
-    """polars-bio's failure to parse a field value, as `HeaderRefused`; None for any other failure."""
-    if ("Error reading" in str(err) and "field" in str(err)) or "Missing variant start" in str(err):
-        return HeaderRefused(str(err).splitlines()[-1][-160:])
+    """polars-bio's failure to parse a field value, as `HeaderRefused`, with the key where its error
+    names one (`_UNPARSED_FIELD`); None for any other failure."""
+    text = str(err)
+    if ("Error reading" in text and "field" in text) or "Missing variant start" in text:
+        named = _UNPARSED_FIELD.search(text)
+        key, reason = (f"{named.group(1)}/{named.group(2)}", named.group(3).strip()[:160]) if named else (None, None)
+        return HeaderRefused(text.splitlines()[-1][-160:], key=key, reason=reason)
     return None
 
 
@@ -852,11 +968,10 @@ def read_records(
     carried key is present, as a typed null when the file does not declare it. `extra_info` are INFO
     keys read for selecting rows (`SF`), as lists of strings.
     """
-    refused = refused_types(header)
-    info = [key for key in INFO_KEYS if key in header.info and f"INFO/{key}" not in refused]
+    left_out = left_out_of_copy(header)
+    info = [key for key in INFO_KEYS if key in header.info and f"INFO/{key}" not in left_out]
     info += sorted(header.split_markers) + list(extra_info)
-    unfit = unfit_keys(header)
-    fmt = [key for key in FORMAT_KEYS if key in header.format and key not in unfit and f"FORMAT/{key}" not in refused]
+    fmt = [key for key in FORMAT_KEYS if key in header.format and f"FORMAT/{key}" not in left_out]
     multi = len(header.samples) > 1
     frame = scan(path, info, fmt, sample if multi else None)
     if first_record is not None:
@@ -913,7 +1028,7 @@ def read_records(
         for name in (f"info_{key}" for key in extra_info)
         if name in present
     )
-    return frame.with_columns(
+    frame = frame.with_columns(
         [pl.lit(None, dtype=_dtype(number, kind)).alias(f"fmt_{key}") for key, (number, kind) in FORMAT_KEYS.items() if f"fmt_{key}" not in present]
         + [
             pl.lit(None, dtype=pl.List(_dtype("1", kind)) if key in _LIST_INFO else _dtype("1", kind)).alias(f"info_{key}")
@@ -921,6 +1036,40 @@ def read_records(
             if f"info_{key}" not in present
         ]
     ).with_columns(pl.col("fmt_GT").cast(pl.String), pl.col("fmt_FT").cast(pl.String))
+    return _whole_numbers(frame)
+
+
+def _whole_numbers(frame: pl.LazyFrame) -> pl.LazyFrame:
+    """`frame` with each `WHOLE_COLUMNS` column polars-bio handed back as floats or text (the key was
+    declared Float or String) read as whole numbers: a whole number is kept as it is (`30.0` is 30), and
+    every other value is left out, never truncated or rounded, which would be a number the file did not
+    write. Each value left out is counted per row in `_unread_<reason>:<column>` (`UNREAD_REASONS`),
+    which `scan_stats` sums. A column of integers is left as it is."""
+    schema = frame.collect_schema()
+    columns: list[pl.Expr] = []
+    for name in WHOLE_COLUMNS:
+        dtype = schema.get(name)
+        listed = isinstance(dtype, pl.List)
+        inner = dtype.inner if listed else dtype
+        if inner is None or inner.is_integer() or inner == pl.Null:
+            continue
+        exact = 2**24 if inner == pl.Float32 else 2**53
+        raw = pl.element() if listed else pl.col(name)
+        value = raw.cast(pl.Float64, strict=False)
+        stated = raw.is_not_null()
+        finite = value.is_finite().fill_null(False)
+        whole = finite & (value == value.floor())
+        flags = {
+            "not_whole": stated & finite & ~whole,
+            "not_number": stated & ~finite,
+            "inexact": stated & whole & (value.abs() >= exact),
+        }
+        kept = pl.when(whole & (value.abs() < exact)).then(value).cast(pl.Int64)
+        columns.append((pl.col(name).list.eval(kept) if listed else kept).alias(name))
+        for reason, flag in flags.items():
+            count = pl.col(name).list.eval(flag.cast(pl.Int64)).list.sum().fill_null(0) if listed else flag.cast(pl.Int64)
+            columns.append(count.alias(f"_unread_{reason}:{name}"))
+    return frame.with_columns(columns) if columns else frame
 
 
 _BOUNDED = {"GQ": 2**16 - 1, "DP": 2**32 - 1, "MIN_DP": 2**32 - 1}
@@ -968,7 +1117,7 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
         pl.col("fmt_GT").null_count().alias("gt_missing"),
         (_gt_body().str.count_matches(r"[/|]").max() + 1).alias("ploidy_max"),
         *_psl_stats(),
-        *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith("_multi_")],
+        *[pl.col(name).sum().alias(name) for name in records.collect_schema().names() if name.startswith(("_multi_", "_unread_"))],
         *[
             (pl.col(f"fmt_{key}").is_not_null() & ~_fits(pl.col(f"fmt_{key}"), key, alts)).sum().alias(f"unfit_{key}")
             for key in VECTOR_NUMBERS
@@ -1202,6 +1351,12 @@ def to_rows(
         f"{count} {name.removeprefix('_multi_')} value(s) held more than one number; the first was kept"
         for name, count in stats.items()
         if name.startswith("_multi_") and count
+    ] + [
+        f"{count} {WHOLE_COLUMNS[column]} value(s) {UNREAD_REASONS[reason]} left out"
+        + (": a phased record among them has its phase withheld, since the set it is in is unknown" if column == "fmt_PS" else "")
+        for name, count in stats.items()
+        if name.startswith("_unread_") and count
+        for reason, column in [name.removeprefix("_unread_").split(":", 1)]
     ]
     if stats.get("unfit_HQ"):
         warnings.append(f"{stats['unfit_HQ']} HQ value(s) not one per GT allele set to null")
@@ -1260,6 +1415,11 @@ def to_rows(
         _gt_expr().alias("gt"),
         pl.when(gt_text.is_null()).then(None).otherwise(pl.concat_list(first_phased, seps.list.eval(pl.element() == "|"))).alias("phased"),
     )
+    if ps_unread := [name for name in rows.collect_schema().names() if name.startswith("_unread_") and name.endswith(":fmt_PS")]:
+        # A PS left out (`_whole_numbers`) must not put a phased record in its chromosome's implicit set,
+        # where a phased record without PS is: the set it named is unknown, so its phase is withheld.
+        unknown = pl.col("phased").list.eval(pl.when(pl.element()).then(pl.lit(None, dtype=pl.Boolean)).otherwise(pl.element()))
+        rows = rows.with_columns(pl.when(pl.sum_horizontal(ps_unread) > 0).then(unknown).otherwise(pl.col("phased")).alias("phased"))
     allele_list = pl.concat_list(pl.col("source_ref"), pl.col("alts"))
     rows = rows.with_columns(allele_list.list.gather(pl.col("gt"), null_on_oob=True).alias("gt_alleles"))
     # A record is a block only when it asserts reference or nothing: a GT calling `<*>` stays a call.
@@ -1630,11 +1790,11 @@ def dropped_fields(header: Header, data: list[bytes] = ()) -> list[str]:
     info, fmt = row_keys(list(data))
     info |= set(header.info)
     fmt |= set(header.format)
-    refused = refused_types(header)
+    left_out = left_out_of_copy(header)
     dropped_info = [
-        f"INFO/{key}" for key in info if (key not in INFO_KEYS and key not in header.split_markers) or f"INFO/{key}" in refused
+        f"INFO/{key}" for key in info if (key not in INFO_KEYS and key not in header.split_markers) or f"INFO/{key}" in left_out
     ]
-    dropped_fmt = [f"FORMAT/{key}" for key in fmt if key not in FORMAT_KEYS or key in unfit_keys(header) or f"FORMAT/{key}" in refused]
+    dropped_fmt = [f"FORMAT/{key}" for key in fmt if key not in FORMAT_KEYS or f"FORMAT/{key}" in left_out]
     return sorted(dropped_info) + sorted(dropped_fmt)
 
 

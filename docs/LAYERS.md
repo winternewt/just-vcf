@@ -106,6 +106,13 @@ meanwhile. The desk carries the ones filed there.
   for AncestryDNA, whose Y calls are measured, or off for all as now). The lead's calls, for veto: three X with two Y
   is `OTHER_KARYOTYPE`; the array two-X expectation is 3/4 (Ne_X = 3/4 Ne_A), not PLINK's 0.2/0.8; copy counts are new
   nullable `x_copy_count`/`y_copy_count`, not new `XCopies` members; a table that states no build answers `no_build` as loaded and is estimated on `resolve_ref`'s output, the result naming the build's source.
+- **Layer 1, the lead's calls on VCF loading (built, listed for veto):** GT declared Integer, Float or Character is
+  read as the genotype with a warning, not refused; a VCF with no GT anywhere loads with the genotype unknown on every
+  row and a warning, not refused as no calls; Float-declared integer keys (GQ, DP, PS, END, ...) are read from their
+  text in the copy polars-bio reads, since no 32-bit float value can be certified whole (`REWRITE_VERSION` 15; unlike
+  the GT retype, no warning names it); a PS declared but not carried, or negative, withholds the phase of every phased
+  record it would have set, haploid calls included, while a record whose PSL names a set keeps it; one PGP Final
+  Report (no Chr/MapInfo columns) waits for its chip manifest, HumanOmni2.5-8v1_A, which is not on disk.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

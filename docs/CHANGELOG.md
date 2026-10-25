@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF 4.3, 4.4 or 4.5 file declaring GT `Type=Integer`, `Float` or `Character` loads with its
+  genotypes, where the retry after polars-bio's refusal left GT out and the load failed with
+  `InvalidOperationError` (or, past the fix below, would have had no genotype on any row). GT is never
+  left out: the copy polars-bio reads declares it `Type=String` and the rows are read as written, in
+  every version, with a warning naming the declared Type. A 4.2 file, which loaded already, now gets
+  that warning too. `REWRITE_VERSION` 14.
+
 - A VCF whose records carry no GT (a FORMAT of `DP` alone, whether GT is declared or not) loads with
   `gt` and `gt_alleles` null, the genotype unknown, where a run of such records failed the spill with
   polars' `InvalidOperationError` (`list.gather` over a batch of all-null indices makes a list of a

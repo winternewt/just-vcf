@@ -1186,11 +1186,17 @@ warning that names the key and with the key in `dropped_fields`:
 - a text key (`FT`, `PSL`, INFO `SVTYPE`) declared with a Type other than String, in any version
   (2026-10-25): its values (`PASS`, a set name, `DEL`) do not parse as an Integer, a Float or a
   Character, and under VCF 4.2, where polars-bio refuses no Type, the first one failed the whole read. The warning names the key
-  and its Type. Under 4.2, polars-bio reads GT as a genotype whatever its declared Type.
+  and its Type.
 
 polars-bio parses every key its header declares, requested or not, so a value that does not parse
 under such a declaration (`51,40` under HQ `Number=1`) would fail the load. The loader's retry reads a
 copy whose header leaves all three out, and the rows' values under them are skipped unread.
+
+GT is never left out (2026-10-25): a facet without genotypes is not a calls facet, and GT's values are
+genotype text whatever its line says. Declared `Integer`, `Float` or `Character`, it is read as written
+through a copy whose header declares it `Type=String`, in every version, with a warning naming the Type.
+Under 4.2 polars-bio read it so already; under 4.3, 4.4 and 4.5 it refused the header, and the retry
+that left GT out had no row with a genotype.
 
 One more case is found only by reading (2026-10-25): a carried key declared as its version reserves it,
 with a value that does not parse under that declaration (HQ `Integer` with `30.5,40` or `x,40` under

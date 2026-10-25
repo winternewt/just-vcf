@@ -1157,6 +1157,28 @@ def test_a_text_key_declared_as_a_number_is_not_carried(
     assert sum(f"{namespace}/{key} (Type={kind}" in w and "not carried" in w for w in loaded.warnings) == 1, loaded.warnings
 
 
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.3", "VCFv4.4", "VCFv4.5"])
+@pytest.mark.parametrize("kind", ["Integer", "Float", "Character"])
+def test_gt_declared_with_another_type_is_read_as_the_genotype(tmp_path: Path, kind: str, version: str) -> None:
+    """GT is the one key a facet cannot do without. Declared Integer, Float or Character, polars-bio
+    refuses a VCF 4.3+ header, and a retry leaving GT out had every row without a genotype (and failed
+    the spill). The copy declares GT String and the rows are read as written, in every version, with a
+    warning naming the Type; GT is never in `dropped_fields`. The same file declaring String is the
+    expected answer."""
+    records = ["1\t100\t.\tA\tG\t50\t.\t.\tGT:GQ\t0/1:30", "1\t200\t.\tC\tT,G\t50\t.\t.\tGT:GQ\t1|2:40", "2\t300\t.\tT\tC\t50\t.\t.\tGT:GQ\t./.:."]
+    written = vcf_text(records, fmt=("GT", "GQ"), version=version)
+    expected = load(write(tmp_path, written, "string.vcf")).calls.collect()
+    declared = FORMAT_LINES["GT"].replace("Type=String", f"Type={kind}")
+    loaded = load(write(tmp_path, written.replace(FORMAT_LINES["GT"], declared)))
+    calls, facet = loaded.calls.collect(), loaded.facets.collect().row(0, named=True)
+    for column in ("gt", "gt_alleles", "phased", "gq", "source_gt"):
+        assert calls[column].to_list() == expected[column].to_list(), column
+    assert calls["gt"].null_count() == 0
+    assert "FORMAT/GT" not in (facet["dropped_fields"] or [])
+    assert sum(f"FORMAT/GT declared Type={kind}" in w for w in loaded.warnings) == 1, loaded.warnings
+    assert not any("refused" in w or "not carried" in w for w in loaded.warnings), loaded.warnings
+
+
 @pytest.mark.parametrize("fmt", [("DP",), ("GT", "DP")])
 def test_records_without_gt_load_with_the_genotype_unknown(tmp_path: Path, fmt: tuple[str, ...]) -> None:
     """A sample column that carries no GT (none declared, or declared and unused) leaves every record's

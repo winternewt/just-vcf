@@ -156,7 +156,9 @@ def calls_rows(positions: pl.LazyFrame, index: int) -> pl.LazyFrame:
             pl.when(pl.col("_gq").is_between(0, 65535)).then(pl.col("_gq")).otherwise(None).cast(pl.UInt16).alias("gq"),
         )
         .with_columns(
-            alleles.list.gather(pl.col("gt"), null_on_oob=True).alias("gt_alleles"),
+            # Guarded: `list.gather` over a batch whose every index list is null makes a list of a Null inner
+            # type, which the spill's parquet sink cannot write (every position with no genotype failed the load).
+            pl.when(pl.col("gt").is_not_null()).then(alleles.list.gather(pl.col("gt"), null_on_oob=True)).alias("gt_alleles"),
             pl.when(pl.col("_ad").list.len() == pl.col("alts").list.len() + 1)
             .then(pl.col("_ad").cast(pl.List(pl.UInt32), strict=False))
             .otherwise(None)

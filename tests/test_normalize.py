@@ -203,6 +203,27 @@ def test_the_unspecified_allele_is_dropped_from_split_rows(tmp_path: Path, store
     assert any("1 multi-allelic row(s) left as written: the genotype calls `<*>`" in w for w in out.warnings), out.warnings
 
 
+def test_a_contig_without_genotypes_splits_with_the_genotype_unknown(tmp_path: Path, store: ReferenceStore) -> None:
+    """Records without GT (FORMAT DP alone), every one on contig 2: the multi-allelic site is split, one
+    row per ALT, each with `gt` null, never a guessed call. Each contig is split on its own, and the
+    `<*>` check gathers the alleles `gt` indexes; polars' `list.gather` over all-null index lists makes
+    a list of a Null inner type, on which `list.contains` raised, so the contig failed normalize."""
+    p, q = 60, 90
+    a, b = [x for x in "ACGT" if x != at("2", p)][:2]
+    records = [
+        record("1", 50, at("1", 50), other(at("1", 50)), "0/1", vectors=False),
+        f"2\t{p}\t.\t{at('2', p)}\t{a},{b}\t50\tPASS\t.\tDP\t12",
+        f"2\t{q}\t.\t{at('2', q)}\t{other(at('2', q))}\t50\tPASS\t.\tDP\t13",
+    ]
+    path = tmp_path / "in.vcf"
+    path.write_text("\n".join([*HEADER[:-1], '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Depth">', HEADER[-1], *records]) + "\n")
+    out = normalize(resolve_ref(load(path), store), store)
+    contig = out.calls.filter(pl.col("chrom") == "2").collect()
+    assert sorted((row["pos"], tuple(row["alts"])) for row in contig.iter_rows(named=True)) == sorted([(p, (a,)), (p, (b,)), (q, (other(at("2", q)),))])
+    assert contig["gt"].null_count() == contig["gt_alleles"].null_count() == contig.height
+    assert contig.filter(pl.col("pos") == p)["dp"].to_list() == [12, 12]
+
+
 # --- left-alignment and trimming ----------------------------------------------------------------
 
 

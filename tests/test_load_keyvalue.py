@@ -145,6 +145,25 @@ def test_an_index_past_the_alts_is_counted(tmp_path: Path) -> None:
     assert "freeBayes facet: 1 genotype(s) index an allele past the row's ALT list; gt_alleles has a null there" in loaded.warnings
 
 
+def test_no_row_reaches_the_gather_without_a_genotype(tmp_path: Path) -> None:
+    """A caller's genotype never reaches `gt_alleles` null: a NULL genotype (or `.`) drops the row before `gt`
+    is read, and a no-call or an unreadable one reads as a list of null indices, not a null list. So
+    polars' `list.gather` over all-null index lists (a list of a Null inner type the spill's parquet
+    sink cannot write) cannot happen here, even when one caller is NULL on every row and the other
+    holds only no-calls: the first caller's facet is empty and the other's indices are all null."""
+    genotypes = ["./.", "./.", ".|.", "N/A"]
+    lines = [row("chr1", 1000 + i, "A", "G", (gt, "NULL", "NULL", str(10 + i)), NULLS) for i, gt in enumerate(genotypes)]
+    loaded, _, _, rows, calls, _ = frames(write(tmp_path, lines))
+    assert calls.schema == CALLS
+    assert rows["VarScan2"].height == 0, "a NULL genotype is no row"
+    fb = rows["freeBayes"]
+    assert fb["source_gt"].to_list() == genotypes and fb["dp"].to_list() == [10 + i for i in range(len(genotypes))]
+    assert fb["gt"].null_count() == 0, "no row's gt is a null list"
+    assert fb["gt"].to_list() == [[None] * len(gt.replace("|", "/").split("/")) for gt in genotypes]
+    assert fb["gt_alleles"].to_list() == fb["gt"].to_list()
+    assert any("1 genotype(s) not readable" in w for w in loaded.warnings), loaded.warnings
+
+
 def test_loading_twice_gives_the_same_frames(tmp_path: Path) -> None:
     path = write(tmp_path, ROWS)
     first, second = load(path), load(path)

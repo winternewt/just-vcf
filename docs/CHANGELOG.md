@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A Nirvana JSON file whose sample entries carry no genotype loads with `gt` and `gt_alleles` null,
+  where it failed the spill with polars' `InvalidOperationError`, the VCF loader's failure below; and
+  `normalize` splits a contig whose every record has no GT, where its `<*>` check raised
+  `InvalidOperationError` on the same Null-typed gather. Every `list.gather` indexed by a column that
+  can be null is now guarded on that column, also in the CASAVA SNP (`ad`) and Color (`gt_alleles`)
+  readers, whose all-null gathers the frame's own cast had absorbed. The key=value table and CASAVA
+  indels never reach one: a row without a genotype is dropped before `gt` is read.
+
 - The forge gate keeps checking every session's GitHub writes (issues, comments, pull request bodies)
   against `.leak_words`, not only a seated session's: `[repo] forge_gate_unseated = true` in
   `.blueprints.toml`, since kit v0.1.93 (#162) gates unseated sessions only when asked. The pin is at

@@ -168,8 +168,9 @@ RESERVED_TYPES: dict[tuple[int, int], dict[str, str]] = {
 the Type it requires. It refuses the whole header when one of them is declared with another Type
 (noodles-vcf `validate_format_definition` and `validate_info_definition`; only the Type is checked,
 and only for 4.3, 4.4 and 4.5, so a VCF 4.2 header is never refused so). Such a key is not carried
-(`refused_types`). The keys not listed here (DS, MIN_DP, LEN before 4.5, the phase-set lists before
-4.4) have no definition in that version and are read under any Type."""
+(`refused_types`), except GT, which the copy declares String (`retyped_gt`). The keys not listed
+here (DS, MIN_DP, LEN before 4.5, the phase-set lists before 4.4) have no definition in that version
+and are read under any Type."""
 
 _LIST_INFO = ("SVLEN", "CIPOS", "CIEND", "CN")
 """INFO keys read as lists. One declared `Number=1` (VCF 4.2's INFO CN, an older caller's SVLEN) is
@@ -213,7 +214,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 13
+REWRITE_VERSION = 14
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -229,7 +230,9 @@ so a file with one fails its retry there.
 12: a phase-set-list key declared `Number=1` (`PHASE_SET_LISTS`) is declared `Number=.` in the copy; a
 copy from 11 kept `Number=1`, under which a diploid row's two values fail the read.
 13: a structural copy leaves out a text key declared as a number (`text_keys_typed_otherwise`: FT
-`Type=Integer` under VCF 4.2); a copy from 12 kept its line, and its retry failed on the first value."""
+`Type=Integer` under VCF 4.2); a copy from 12 kept its line, and its retry failed on the first value.
+14: GT declared with a Type other than String is declared `Type=String` in every copy (`retyped_gt`); a
+structural copy from 13 left a VCF 4.3+ file's GT out, and no row had a genotype."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -567,14 +570,30 @@ def declared_type(header: Header, name: str) -> str:
 
 def refused_types(header: Header) -> dict[str, str]:
     """Carried keys a VCF 4.3+ header declares with a Type its version's reserved definition does not
-    have (`RESERVED_TYPES`) → that Type. polars-bio refuses the header, so they are not carried."""
+    have (`RESERVED_TYPES`) → that Type. polars-bio refuses the header, so they are not carried. GT is
+    never among them: it is read through a copy declaring it String (`retyped_gt`)."""
     reserved = RESERVED_TYPES.get(header.version_tuple or (0, 0), {})
-    return {name: header.types[name] for name, kind in reserved.items() if name in header.types and header.types[name] != kind}
+    return {
+        name: header.types[name]
+        for name, kind in reserved.items()
+        if name != "FORMAT/GT" and name in header.types and header.types[name] != kind
+    }
+
+
+def retyped_gt(header: Header) -> str | None:
+    """The Type a header declares GT with when it is not String (`Integer`, `Float`, `Character`), else
+    None. GT is the one key a facet cannot do without, and its values are genotype text whatever the
+    line says: polars-bio reads them as genotypes under VCF 4.2, which reserves no Type, and refuses the
+    whole header under 4.3, 4.4 and 4.5. So in every version the copy polars-bio reads declares GT
+    `Type=String` (`_readable_line`), and the rows are read as written. A key left out would leave
+    every row without a genotype."""
+    kind = header.types.get("FORMAT/GT")
+    return kind if "GT" in header.format and kind not in (None, "", "String") else None
 
 
 TEXT_KEYS = ("FORMAT/FT", "FORMAT/PSL", "INFO/SVTYPE")
 """The carried keys whose values are text (`PASS`, a phase-set name, `DEL`). GT, text too, is not one:
-under VCF 4.2 polars-bio reads it as a genotype whatever its declared Type (probed 2026-10-25)."""
+it is read as a genotype whatever its declared Type (`retyped_gt`)."""
 
 
 def text_keys_typed_otherwise(header: Header) -> dict[str, str]:
@@ -719,15 +738,18 @@ def _read_as_any_number(key: str, number: str) -> bool:
     return number in READ_AS_ANY_NUMBER or (key in PHASE_SET_LISTS and number == "1")
 
 
-def _readable_number(line: str) -> str:
-    """A `##FORMAT` line of a key `any_number_keys` names, declared `Number=.`."""
+def _readable_line(line: str) -> str:
+    """A `##FORMAT` line as the copy polars-bio reads writes it: a key `any_number_keys` names declared
+    `Number=.`, and GT declared `Type=String` whatever Type the file gave it (`retyped_gt`)."""
     declared = re.match(r"^##FORMAT=<(.*)>$", line)
     if not declared:
         return line
     attrs = _attrs(declared.group(1))
-    if not _read_as_any_number(attrs.get("ID", ""), attrs.get("Number", "")):
-        return line
-    return re.sub(r"(?<=[<,])Number=[^,>]*(?=[,>])", "Number=.", line, count=1)
+    if _read_as_any_number(attrs.get("ID", ""), attrs.get("Number", "")):
+        line = re.sub(r"(?<=[<,])Number=[^,>]*(?=[,>])", "Number=.", line, count=1)
+    if attrs.get("ID") == "GT" and attrs.get("Type", "") not in ("", "String"):
+        line = re.sub(r"(?<=[<,])Type=[^,>]*(?=[,>])", "Type=String", line, count=1)
+    return line
 
 
 def unfit_keys(header: Header) -> dict[str, str]:
@@ -784,6 +806,7 @@ def readable_path(
         and not missing
         and not structural_only
         and not any_number_keys(header)
+        and retyped_gt(header) is None
     )
     if layers in ((), ("gzip",), ("bgzf",)) and as_is:
         return path
@@ -810,7 +833,7 @@ def _write_copy(opener, header: Header, missing: list[str], cache: Path, structu
                 if key.groups() in declared:
                     continue
                 declared.add(key.groups())
-            out.write(f"{_readable_number(line)}\n".encode())
+            out.write(f"{_readable_line(line)}\n".encode())
         for name in missing:
             if structural_only and name in left_out:
                 continue
@@ -1421,7 +1444,12 @@ def to_rows(
         unknown = pl.col("phased").list.eval(pl.when(pl.element()).then(pl.lit(None, dtype=pl.Boolean)).otherwise(pl.element()))
         rows = rows.with_columns(pl.when(pl.sum_horizontal(ps_unread) > 0).then(unknown).otherwise(pl.col("phased")).alias("phased"))
     allele_list = pl.concat_list(pl.col("source_ref"), pl.col("alts"))
-    rows = rows.with_columns(allele_list.list.gather(pl.col("gt"), null_on_oob=True).alias("gt_alleles"))
+    # Guarded, not only for meaning: polars 1.44's `list.gather` over a batch whose every index list is
+    # null makes a list of a Null inner type, which the spill's parquet sink cannot write (a record
+    # without GT, many in a row, failed the load with InvalidOperationError).
+    rows = rows.with_columns(
+        pl.when(pl.col("gt").is_not_null()).then(allele_list.list.gather(pl.col("gt"), null_on_oob=True)).alias("gt_alleles")
+    )
     # A record is a block only when it asserts reference or nothing: a GT calling `<*>` stays a call.
     reference_or_nothing = pl.col("gt").is_null() | pl.col("gt").list.eval(pl.element().is_null() | (pl.element() == 0)).list.all()
     rows = rows.with_columns((pl.col("_block") & reference_or_nothing).alias("_block"))

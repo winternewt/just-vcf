@@ -9,6 +9,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   `.blueprints.toml`, since kit v0.1.93 (#162) gates unseated sessions only when asked. The pin is at
   v0.1.93.
 
+- A VCF 4.3, 4.4 or 4.5 file declaring GT `Type=Integer`, `Float` or `Character` loads with its
+  genotypes, where the retry after polars-bio's refusal left GT out and the load failed with
+  `InvalidOperationError` (or, past the fix below, would have had no genotype on any row). GT is never
+  left out: the copy polars-bio reads declares it `Type=String` and the rows are read as written, in
+  every version, with a warning naming the declared Type. A 4.2 file, which loaded already, now gets
+  that warning too. `REWRITE_VERSION` 14.
+
+- A VCF whose records carry no GT (a FORMAT of `DP` alone, whether GT is declared or not) loads with
+  `gt` and `gt_alleles` null, the genotype unknown, where a run of such records failed the spill with
+  polars' `InvalidOperationError` (`list.gather` over a batch of all-null indices makes a list of a
+  Null inner type, which the parquet sink cannot write). A file that declares no GT and whose records
+  read ahead use none says so in a warning (`no GT: …`).
+
 - A VCF 4.2 file declaring FT, PSL or INFO SVTYPE with a Type other than String (`Integer`, `Float`,
   `Character`) loads, where the first value (`PASS`, `DEL`) failed the whole read: the key is not
   carried, with a warning that names it and its Type, and it is in `dropped_fields`, as a 4.3+ header

@@ -707,6 +707,12 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     if missing:
         warnings.append(f"key(s) used but not declared, declared by the loader: {', '.join(missing)}")
         vcf.declare(header, missing)
+    if "GT" not in header.format:
+        # polars-bio drops an undeclared key (P1), so a GT first used past the rows read ahead is not read either.
+        warnings.append(
+            "no GT: the header declares none and the records read ahead use none, so no record's genotype is read "
+            "(gt is null, unknown, on every row)"
+        )
     if unfit := vcf.unfit_keys(header):
         warnings.append(
             "FORMAT key(s) declared with a Number that is not one value per allele, genotype or GT allele, not carried: "
@@ -718,6 +724,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         warnings.append(
             f"key(s) declared with a Type VCF {version[0]}.{version[1]} reserves otherwise, which polars-bio refuses, not carried: "
             + ", ".join(f"{name} (Type={kind}, {version[0]}.{version[1]} reserves {reserved[name]})" for name, kind in sorted(refused.items()))
+        )
+    if gt_type := vcf.retyped_gt(header):
+        warnings.append(
+            f"FORMAT/GT declared Type={gt_type}, which VCF reserves String: its values are read as the genotypes "
+            "they are written as, through a copy declaring Type=String"
         )
     if typed_otherwise := vcf.text_keys_typed_otherwise(header):
         warnings.append(

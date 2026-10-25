@@ -258,6 +258,58 @@ def test_color_variant_set_unknown_zygosity_keeps_gt_null(tmp_path: Path) -> Non
     assert any("Zygosity other than" in w for w in loaded.warnings)
 
 
+# --- rows with no genotype ---------------------------------------------------------------------------
+# polars' `list.gather` over a batch whose every index list is null makes a list of a Null inner type,
+# which a parquet sink cannot write. Each table below has a gather indexed by a column that can be null;
+# a file where it is null on every row loads, and its calls sink to parquet, with the schema's types.
+
+
+def _sunk(loaded, tmp_path: Path) -> pl.DataFrame:
+    """`loaded`'s calls written through a parquet sink and read back."""
+    path = tmp_path / "calls.parquet"
+    loaded.calls.sink_parquet(path)
+    return pl.read_parquet(path)
+
+
+def test_color_variant_set_without_a_readable_zygosity_sinks(tmp_path: Path) -> None:
+    """Every row's Zygosity unread (or its Alt not a sequence): `gt` is null on every row, and so is
+    `gt_alleles`, gathered from it."""
+    rows = [("1", 55523033, "A", "G", "Hemizygous"), ("13", 32906729, "CA", "C", "Hemizygous"), ("17", 41245466, "G", "<DEL>", "Heterozygous")]
+    path = tmp_path / "v.csv"
+    path.write_text(COLOR_HEAD_NEW + "".join(f"K1,{c},{p},{r},{a},G,SNV,c.1,p.1,ENST1,,{z},,Benign,,T,GRCh37,2025-06-23\r\n" for c, p, r, a, z in rows))
+    loaded = load(path)
+    calls = _sunk(loaded, tmp_path)
+    assert calls.schema == CALLS
+    assert sorted(calls["pos"].to_list()) == sorted(p for _, p, _, _, _ in rows)
+    assert calls["gt"].null_count() == calls["gt_alleles"].null_count() == len(rows)
+    assert any("2 row(s) with a Zygosity other than" in w for w in loaded.warnings), loaded.warnings
+
+
+def test_casava_snps_without_a_readable_call_sink(tmp_path: Path) -> None:
+    """Every Call unreadable: `alts` and `gt` null on every row, so the per-allele base count `ad` is
+    gathered by indices that are all null."""
+    rows = [(str(i), "1", str(900000 + i), 5, 0, 5, 0, "GAT", 10, 10, "G", "Other", "") for i in range(3)]
+    path = tmp_path / "s_1_snps.txt"
+    path.write_bytes(_casava(rows).encode())
+    loaded = load(path)
+    calls = _sunk(loaded, tmp_path)
+    assert calls.schema == CALLS
+    assert calls["source_gt"].to_list() == ["GAT"] * len(rows)
+    assert calls["gt"].null_count() == calls["gt_alleles"].null_count() == calls["ad"].null_count() == len(rows)
+
+
+def test_casava_indels_never_gather_without_a_genotype(tmp_path: Path) -> None:
+    """A row whose max_gtype is not het, hom or ref is dropped before `gt` is made, so `gt` is never
+    null where `gt_alleles` is gathered: a file of such rows loads to no calls, and sinks."""
+    rows = [(i, "20", 10000012 + 50 * i, "1D", "G/-", 3070, gtype, 76, 0, 23) for i, gtype in enumerate(["hemi", "", "?"])]
+    path = tmp_path / "indels.txt"
+    path.write_bytes((INDEL_HEADER + "".join(_indel_row(*row) + "\r\n" for row in rows)).encode())
+    loaded = load(path)
+    calls = _sunk(loaded, tmp_path)
+    assert calls.schema == CALLS and calls.height == 0
+    assert any(f"{len(rows)} row(s) whose ref/indel or max_gtype cannot be read dropped" in w for w in loaded.warnings), loaded.warnings
+
+
 # --- GET-Evidence GFF --------------------------------------------------------------------------------
 
 

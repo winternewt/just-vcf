@@ -221,7 +221,10 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
     symbolic = pl.col("alts").list.eval(pl.element().str.contains(_SYMBOLIC) & (pl.element() != UNSPECIFIED)).list.any()
     star = pl.col("alts").list.contains(UNSPECIFIED)
     # A genotype calling `<*>` says a haplotype carries some other allele, which no split row can hold.
-    star_called = (pl.concat_list(pl.lit(""), pl.col("alts")).list.gather(pl.col("gt"), null_on_oob=True).list.contains(UNSPECIFIED)).fill_null(False)
+    # Guarded: over a contig whose every `gt` is null, `list.gather` makes a list of a Null inner type,
+    # on which `list.contains` raises (records without GT failed normalize).
+    called = pl.when(pl.col("gt").is_not_null()).then(pl.concat_list(pl.lit(""), pl.col("alts")).list.gather(pl.col("gt"), null_on_oob=True))
+    star_called = called.list.contains(UNSPECIFIED).fill_null(False)
     unindexed = pl.col("gt").is_null() & pl.col("gt_alleles").is_not_null()
     n_symbolic, n_star_called, n_unindexed = rows.select(
         (multi & symbolic).sum().alias("a"),

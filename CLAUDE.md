@@ -319,6 +319,11 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
   case rather than asserting a message.
 - **Polars `explode` on a list column that can be empty:** pass `empty_as_null=False` where an empty list
   must stay empty (the bare call is deprecated and turns `[]` into a null row; met 2026-10-22).
+- **Polars `list.gather` indexed by a column that can be null:** guard it,
+  `pl.when(pl.col("gt").is_not_null()).then(alleles.list.gather(pl.col("gt"), null_on_oob=True))`. Over a
+  batch (or a frame, or zero rows) whose every index list is null, polars 1.44 makes a list of a Null
+  inner type, whatever the plan's schema says: a parquet sink then fails with `InvalidOperationError`,
+  and so does a `list.contains` on the result. The guard gives the typed list (met 2026-10-25).
 - **Heed terminal warnings, deprecations especially.** A deprecation in code you touched is a
   **blocker**: find the current upstream API, fix it, and update this file.
 - **Refactor internals aggressively** — no dead code, no old API kept for nostalgia. The contract —

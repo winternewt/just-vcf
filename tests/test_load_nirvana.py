@@ -104,6 +104,22 @@ def test_two_samples_need_a_choice(tmp_path: Path) -> None:
     assert first != second.facets.collect()["facet_id"].to_list(), "each sample is its own facet"
 
 
+def test_positions_without_a_genotype_load_with_the_genotype_unknown(tmp_path: Path) -> None:
+    """A file whose every sample entry has no genotype loads with `gt` and `gt_alleles` null on every
+    row. polars' `list.gather` over a batch whose every index list is null makes a list of a Null inner
+    type, which the spill's parquet sink cannot write: the load once failed there."""
+    positions = [
+        _position("chr1", 100 + i, "A", ["G", "T"] if i % 2 else ["G"], [{"totalDepth": 10 + i, "genotypeQuality": 30}]) for i in range(4)
+    ]
+    loaded = load(_write(tmp_path / "s1.json", positions))
+    calls = loaded.calls.collect()
+    assert calls.schema == CALLS
+    assert calls["pos"].to_list() == [p["position"] for p in positions]
+    assert calls["dp"].to_list() == [p["samples"][0]["totalDepth"] for p in positions]
+    assert calls["gt"].null_count() == calls["gt_alleles"].null_count() == len(positions)
+    assert any(f"{len(positions)} position(s) whose sample has no genotype" in w for w in loaded.warnings)
+
+
 def test_real_nirvana_json(pgp_participants: Path) -> None:
     found: Sniffed | None = None
     for path in sorted(pgp_participants.glob("*/upload-*/*")):

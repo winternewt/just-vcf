@@ -265,7 +265,8 @@ def _casava_snp_table(data: bytes, spec: FormatSpec) -> SiteTable:
         pl.col("source_alleles").list.eval(count_of).alias("_base_index"),
         per_base.alias("_counts"),
     ).with_columns(
-        pl.col("_counts").list.gather(pl.col("_base_index"), null_on_oob=True).alias("ad"),
+        # Guarded (CLAUDE.md §5): a gather over all-null index lists makes a list of a Null inner type.
+        pl.when(pl.col("_base_index").is_not_null()).then(pl.col("_counts").list.gather(pl.col("_base_index"), null_on_oob=True)).alias("ad"),
     )
     expected = (
         pl.when(pl.col("gt").list.len() == 1)
@@ -507,7 +508,8 @@ def _color_variant_set(data: bytes, spec: FormatSpec) -> SiteTable:
         pl.when(readable).then(pl.col("pos") + pl.col("ref").str.len_chars().cast(pl.UInt32) - 1).otherwise(None).alias("end_pos"),
         pl.lit(None, dtype=pl.List(pl.String)).alias("ids"),
     ).with_columns(
-        pl.concat_list("source_ref", "alts").list.gather(pl.col("gt"), null_on_oob=True).alias("gt_alleles"),
+        # Guarded (CLAUDE.md §5): a gather over all-null index lists makes a list of a Null inner type.
+        pl.when(pl.col("gt").is_not_null()).then(pl.concat_list("source_ref", "alts").list.gather(pl.col("gt"), null_on_oob=True)).alias("gt_alleles"),
         pl.when(pl.col("source_ref").is_not_null()).then(pl.lit(RefCheck.NOT_RUN.value)).otherwise(None).alias("ref_check"),
     )
     unread = frame.filter(~readable.fill_null(False)).height

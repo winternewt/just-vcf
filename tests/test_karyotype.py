@@ -42,6 +42,7 @@ from just_vcf.karyotype import (
     estimate,
     measure,
 )
+from just_vcf.liftover import read_chain
 from just_vcf.schema import CALLS, AssemblyLabelBasis, CallsetType, conform, empty
 from test_reference import write_fasta
 
@@ -91,7 +92,7 @@ def test_bed_conversion_keeps_the_bases() -> None:
     assert end - start + 1 == 3_050_044 - 2_781_479
 
 
-@pytest.mark.parametrize("build", sorted(PAR_BOUNDS))
+@pytest.mark.parametrize("build", sorted(GIAB_PREFIX))
 def test_par_bounds_are_the_giab_par_arms(build: str) -> None:
     for chrom in ("X", "Y"):
         intervals = bed(build, f"chr{chrom}_PAR")
@@ -154,6 +155,66 @@ def test_giabs_t2t_nonpar_less_xtr_is_not_x_degenerate() -> None:
     xdeg = sum(e - s for s, e in classes["X-DEG"])
     assert sum(e - s for s, e in rest) > 4 * xdeg
     assert all(any(s <= start and end <= e for s, e in rest) for start, end in classes["HET"] + classes["CEN"])
+
+
+# --- GRCh36 (NCBI36): Ensembl 54's PARs, and GRCh37's X-degenerate Y lifted through UCSC's chain ---
+
+ENSEMBL_54 = ASSETS / "ensembl_54_ncbi36"
+HG19_TO_HG18_Y = ASSETS / "ucsc_liftover" / "hg19ToHg18.over.chain.chrY.chain"
+
+
+def ensembl_table(name: str) -> list[list[str]]:
+    return [line.split("\t") for line in (ENSEMBL_54 / name).read_text().splitlines() if line]
+
+
+def test_grch36_par_bounds_are_ensembl_54s_par_exceptions() -> None:
+    """Ensembl stores each PAR once, on X, and Y's copy as an `assembly_exception` of type PAR pointing at
+    it. Coordinates are 1-based closed, as `pos` is; the seq_regions are NCBI36 chromosomes."""
+    (ncbi36,) = [row[0] for row in ensembl_table("coord_system.txt") if row[2:4] == ["chromosome", "NCBI36"]]
+    names = {row[0]: row[1] for row in ensembl_table("seq_region_XY.txt") if row[2] == ncbi36}
+    pars = sorted(
+        ((int(y_start), int(y_end)), (int(x_start), int(x_end)))
+        for _, y, y_start, y_end, kind, x, x_start, x_end, _ in ensembl_table("assembly_exception.txt")
+        if kind == "PAR" and (names.get(y), names.get(x)) == ("Y", "X")
+    )
+    assert PAR_BOUNDS["GRCh36"] == {"X": tuple(x for _, x in pars), "Y": tuple(y for y, _ in pars)}
+    # Each PAR is one sequence on both chromosomes: the same length on X and Y.
+    assert [e - s for s, e in PAR_BOUNDS["GRCh36"]["X"]] == [e - s for s, e in PAR_BOUNDS["GRCh36"]["Y"]]
+
+
+def lifted_to_grch36(chain_blocks: pl.DataFrame, intervals: tuple[tuple[int, int], ...]) -> tuple[list[tuple[int, int]], int, int]:
+    """Each 1-based closed GRCh37 Y interval through the chain's blocks: the span from its first to its
+    last base landing on chrY. Also the bases landing elsewhere and the bases in no block."""
+    blocks = chain_blocks.filter(pl.col("t_chrom") == "Y").sort("t_start")
+    spans, elsewhere, unaligned = [], 0, 0
+    for start, end in intervals:
+        hit = blocks.filter((pl.col("t_end") > start - 1) & (pl.col("t_start") < end))
+        pieces = []
+        for block in hit.iter_rows(named=True):
+            assert not block["q_minus"]
+            t_start, t_end = max(start - 1, block["t_start"]), min(end, block["t_end"])
+            q_start = block["q_start"] + t_start - block["t_start"]
+            pieces.append((block["q_chrom"], block["chain"], q_start + 1, q_start + t_end - t_start))
+        on_y = [piece for piece in pieces if piece[0] == "chrY"]
+        elsewhere += sum(e - s + 1 for chrom, _, s, e in pieces if chrom != "chrY")
+        unaligned += end - start + 1 - sum(e - s + 1 for _, _, s, e in pieces)
+        assert len({chain for _, chain, _, _ in on_y}) == 1  # one chain, in order: a span means something
+        assert all(a[3] < b[2] for a, b in zip(on_y, on_y[1:]))
+        spans.append((on_y[0][2], on_y[-1][3]))
+    return spans, elsewhere, unaligned
+
+
+def test_grch36_x_degenerate_y_is_grch37s_lifted_through_hg19_to_hg18() -> None:
+    chain = read_chain(HG19_TO_HG18_Y)
+    spans, elsewhere, unaligned = lifted_to_grch36(chain.blocks, X_DEGENERATE_Y["GRCh37"])
+    (_, par1_end), (par2_start, _) = PAR_BOUNDS["GRCh36"]["Y"]
+    kept = tuple((max(s, par1_end + 1), min(e, par2_start - 1)) for s, e in spans if s < par2_start and e > par1_end)
+    assert X_DEGENERATE_Y["GRCh36"] == kept
+    # One interval to every GRCh37 one; only the last crossed into PAR2 (NCBI's, sequence-checked).
+    assert len(kept) == len(X_DEGENERATE_Y["GRCh37"])
+    assert [span != k for span, k in zip(spans, kept)] == [False] * (len(kept) - 1) + [True]
+    assert (elsewhere, unaligned) == (117, 536)  # 117 bases go to hg18's chrX; 536 are in no block
+    assert all(a[1] < b[0] for a, b in zip(kept, kept[1:]))
 
 
 # --- Synthetic calls ----------------------------------------------------------------------------
@@ -392,7 +453,7 @@ def test_allele_balance_reads_ad_at_the_called_alt() -> None:
     ("build", "kind", "reason"),
     [
         (None, CallsetType.WGS, "no_build"),
-        ("GRCh36", CallsetType.WGS, "unsupported_build"),
+        ("NCBI35", CallsetType.WGS, "unsupported_build"),  # hg17: a real build with no region set here
         ("GRCh38", CallsetType.WES, "not_wgs"),
         ("GRCh38", None, "not_wgs"),
     ],
@@ -425,6 +486,29 @@ def test_t2t_is_measured_on_its_own_regions_but_not_estimated() -> None:
     # The same evidence on a calibrated build (its Y rows placed in GRCh38's X-degenerate Y) is estimated.
     grch38 = evidence(frame(chr20(), *XY), "GRCh38")
     assert grch38.inferred_karyotypic_sex is KaryotypicSex.XY
+
+
+GRCH36_Y_START = 11_220_000  # in GRCh36's third X-degenerate interval (11,214,554–11,253,954); not one on GRCh37
+
+
+def test_grch36_is_measured_on_its_own_regions_but_not_estimated_from_calls() -> None:
+    """GRCh36 has region sets (Ensembl 54's PARs, GRCh37's X-degenerate Y lifted), but no NCBI36 genome
+    was among the calibration files: a whole genome on it is measured and reported, not estimated."""
+    assert "GRCh36" in REGION_BUILDS - ESTIMATE_BUILDS
+    y = rows("Y", GRCH36_Y_START, 1000, [1, 1], 18, step=20)
+    par1 = rows("X", 2_700_001, 500, [0, 1], REF_DP)  # PAR1 on GRCh36 (to 2,709,520), not on GRCh37 (to 2,699,520)
+    par2 = rows("Y", 57_450_000, 300, [0, 1], REF_DP)  # Y's PAR2 on GRCh36 (from 57,443,438)
+    parts = (chr20(), XY[0], y, par1, par2)
+    found = evidence(frame(*parts), "GRCh36")
+    assert (found.inferred_karyotypic_sex, found.reason, found.x_copies, found.y_present) == (
+        KaryotypicSex.UNKNOWN_KARYOTYPE, "uncalibrated_build", None, None,
+    )  # fmt: skip
+    assert found.region_set == REGION_SET["GRCh36"] and "hg19ToHg18" in found.region_set
+    assert (found.ploidy["par"].two, found.ploidy["x_nonpar"].two, found.ploidy["y_nonpar"].two) == (800, 2000, 1000)
+    assert (found.depth.y_sites, found.depth.y_ratio, found.depth.x_ratio) == (1000, 18 / REF_DP, 0.5)
+    # On GRCh37's regions the same rows place otherwise: PAR1 rows are non-PAR X, the Y rows no X-degenerate Y.
+    grch37 = evidence(frame(*parts), "GRCh37")
+    assert (grch37.ploidy["x_nonpar"].two, grch37.depth.y_sites) == (2500, 0)
 
 
 def test_reasons_are_a_closed_list_checked_on_the_model() -> None:
@@ -608,6 +692,13 @@ def test_coverage_on_another_or_no_build_is_set_aside(coverage_build: str | None
     assert (found.coverage.x_ratio, found.coverage.y_ratio) == (None, None)
     # Without its line the answer is the calls' alone: two X, Y not shown.
     assert (found.inferred_karyotypic_sex, found.x_copies, found.y_reason) == (KaryotypicSex.UNKNOWN_KARYOTYPE, XCopies.TWO_OR_MORE, "y_not_shown")
+
+
+@pytest.mark.parametrize(("build", "reason"), [("GRCh36", "uncalibrated_build"), ("T2T-CHM13", "uncalibrated_build"), ("NCBI35", "unsupported_build")])
+def test_coverage_on_a_build_without_thresholds_says_whether_it_has_regions(build: str, reason: str) -> None:
+    found = with_coverage(frame(chr20(), XX[0], XX[1]), coverage_facet(30.0, 0.0, build=build), build=build)
+    assert (found.coverage.reason, found.coverage.x_ratio, found.coverage.y_ratio) == (reason, None, None)
+    assert found.reason == reason
 
 
 def test_uneven_coverage_is_set_aside() -> None:

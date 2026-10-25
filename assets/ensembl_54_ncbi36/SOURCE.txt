@@ -1,0 +1,7 @@
+Ensembl release 54 (the last on NCBI36), core database dump, tables decompressed verbatim:
+https://ftp.ensembl.org/pub/release-54/mysql/homo_sapiens_core_54_36p/
+  assembly_exception.txt.gz  sha256 ff1053656340e375bfac8fbd8bf0c071797e86155e6231ce41d1de2c4d4427d2  (CHECKSUMS: 41984 1)
+  coord_system.txt.gz        sha256 bfb5bf086f751aa773c741cc281f45e0cb3c32a4db4e0af988c566502c1f5a07  (CHECKSUMS: 32166 1)
+  seq_region.txt.gz          sha256 b5f201eb748511e28ae84cc1755aea9877ab45632f5ea2987ca3c1979eb4925d  (CHECKSUMS: 24672 583)
+Downloaded 2026-10-25. seq_region_XY.txt holds only the two seq_region rows assembly_exception's PAR rows
+name (226031 Y, 226054 X, coord_system 17 = chromosome NCBI36), verbatim. See docs/PROVENANCE.md.

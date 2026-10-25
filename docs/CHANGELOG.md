@@ -4,6 +4,35 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The key=value table and Nirvana JSON withhold a genotype that is not allele indices whole: `gt`,
+  `gt_alleles` and `phased` are null and `source_gt` keeps the text, where the readable slots were read
+  (`0/x` was `gt [0, null]`, the frame of the half-call `0/.`, and `N/A` was `[null, null]`, the frame
+  of a written no-call). The warning says so (`… kept with gt, gt_alleles and phased null, and the
+  text in source_gt`). A consumer reading these facets sees `gt` null on such rows; no column changes.
+
+- A VCF 4.3+ key its version refuses under the declared Type (DP, GQ or PS `Type=Float`, CN `Float`
+  under 4.3, INFO END `Float`) is skipped unread whatever its values, as Decision 9 says: `30` loaded
+  with the key not carried, but `30.5` failed the whole load with `HeaderRefused` ("invalid digit found
+  in string"), because polars-bio's reader parsed the key, left undeclared in the copy, under the
+  version's own definition. The structural copy now declares such a key `Number=.` with the reserved
+  Type, which the reader never parses for a key not requested (`REWRITE_VERSION` 16). A reserved key
+  the frames never carry (INFO DP, FORMAT MQ) is still parsed so where the copy drops its line.
+
+- Nirvana JSON counts a genotype indexing past the row's ALT list from the genotype text, as the
+  key=value table does: `1/300` reads `gt [1, null]` (a `u8` list) and was counted from `gt`, so it
+  went unwarned. Each genotype is counted under one reason there too (`1:2` is unreadable only).
+
+- The key=value table counts each genotype under one warning reason: one not readable as allele
+  indices (`1:2`) was counted there and again as indexing past the row's ALT list, from its digits; a
+  readable genotype alone is checked against the ALTs now. A genotype with an index too long for 64
+  bits (`0/99999999999999999999`) is counted as past the ALTs, where it failed the load with polars'
+  `InvalidOperationError`.
+
+- A BCF whose header declares GT with a Type other than String is refused with `HeaderRefused` naming
+  GT and its Type, where polars-bio's own refusal named nothing under 4.3 ("invalid record"). The text
+  VCF's warning that such a GT is read through a copy declaring it String no longer applies to a BCF,
+  which has no copy.
+
 - The tooling seat signs what it posts on this repository's issues with `Seat: just-vcf/tooling`, so its
   issues watcher no longer wakes it for its own comments and closes (kit v0.1.94, #165). The pin is at
   v0.1.94.

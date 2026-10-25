@@ -1076,9 +1076,9 @@ _RETYPED_WARNING = "integer key(s) declared Type=Float, which polars-bio reads a
 @pytest.mark.parametrize(("version", "dp", "retyped"), [
     # 4.2 reserves no Type: DP, MIN_DP and END are retyped; AD's fixed count leaves it out; GQ is String.
     ("VCFv4.2", "30.0000001", ["FORMAT/DP", "FORMAT/MIN_DP", "INFO/END"]),
-    # 4.3 refuses DP and END as Float, so they are not carried; it holds no definition of MIN_DP. DP is
-    # whole here: a fraction in a refused DP fails the read, a defect of its own.
-    ("VCFv4.3", "30", ["FORMAT/MIN_DP"]),
+    # 4.3 refuses DP and END as Float, so they are not carried, a fraction there skipped unread; it holds
+    # no definition of MIN_DP.
+    ("VCFv4.3", "30.0000001", ["FORMAT/MIN_DP"]),
 ])
 def test_a_float_integer_key_read_as_text_is_named_in_one_warning(tmp_path: Path, version: str, dp: str, retyped: list[str]) -> None:
     """The copy polars-bio reads declares a Float integer key String (`retyped_whole`), as it does GT
@@ -1283,6 +1283,40 @@ def test_a_carried_info_key_declared_with_another_type_loads(tmp_path: Path, key
     assert loaded.calls.collect()["gt"].to_list() == [[0, 1]]
     assert f"INFO/{key}" in loaded.facets.collect()["dropped_fields"][0]
     assert any(f"INFO/{key} (Type=Float" in w and "not carried" in w for w in loaded.warnings), loaded.warnings
+
+
+@pytest.mark.parametrize(("namespace", "key", "kind", "version", "whole", "other"), [
+    ("FORMAT", "DP", "Float", "VCFv4.3", "30", "30.5"),
+    ("FORMAT", "GQ", "Float", "VCFv4.4", "30", "30.5"),
+    ("FORMAT", "PS", "Float", "VCFv4.5", "7", "7.5"),
+    ("FORMAT", "CN", "Float", "VCFv4.3", "2", "2.5"),
+    ("FORMAT", "DP", "String", "VCFv4.3", "30", "deep"),
+    ("INFO", "END", "Float", "VCFv4.3", "100", "100.5"),
+])
+def test_a_refused_key_s_values_are_skipped_unread(
+    tmp_path: Path, namespace: str, key: str, kind: str, version: str, whole: str, other: str
+) -> None:
+    """A key its version refuses under the declared Type is not carried, and its values are skipped
+    unread, whatever they are. polars-bio's reader holds the version's own definition of the key
+    (DP a single Integer), and with the key's line left out of the copy it parsed every value under
+    that definition, requested or not: `30` read, and `30.5` failed the whole load ("invalid digit
+    found in string", naming no key). So a value only the declared Type holds loads exactly as a
+    value the reserved Type holds."""
+    # A carried INFO key beside it, so polars-bio reads each record's INFO (it skips it with none requested).
+    meta = (f'##{namespace}=<ID={key},Number=1,Type={kind},Description="x">', '##INFO=<ID=SVTYPE,Number=1,Type=String,Description="x">')
+
+    def loaded_with(value: str, name: str):
+        records = [
+            (f"1\t{pos}\t.\tA\tG\t50\t.\tEND={value};SVTYPE=SNV\tGT\t0/1" if namespace == "INFO" else f"1\t{pos}\t.\tA\tG\t50\t.\t.\tGT:{key}\t0/1:{value}")
+            for pos in (100, 200)
+        ]
+        return load(write(tmp_path, vcf_text(records, version=version, extra_meta=meta), name))
+
+    reference, refused = loaded_with(whole, "whole.vcf"), loaded_with(other, "other.vcf")
+    assert refused.calls.collect().drop("facet_id").equals(reference.calls.collect().drop("facet_id"))
+    assert refused.warnings == reference.warnings
+    assert any(f"{namespace}/{key} (Type={kind}" in w and "not carried" in w for w in refused.warnings), refused.warnings
+    assert f"{namespace}/{key}" in refused.facets.collect()["dropped_fields"][0]
 
 
 @pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.3", "VCFv4.5"])

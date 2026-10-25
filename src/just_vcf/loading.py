@@ -726,6 +726,13 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             + ", ".join(f"{name} (Type={kind}, {version[0]}.{version[1]} reserves {reserved[name]})" for name, kind in sorted(refused.items()))
         )
     if gt_type := vcf.retyped_gt(header):
+        if binary:
+            # A BCF is read as stored, and polars-bio refuses its header for such a GT (under 4.3+ with an
+            # "invalid record" that names nothing); no copy can declare it String without re-encoding the records.
+            raise vcf.HeaderRefused(
+                f"{sniffed.path}: a BCF declaring FORMAT/GT Type={gt_type}, which VCF reserves String: polars-bio "
+                "refuses its header, and a BCF is read as stored, with no copy to declare it String"
+            )
         warnings.append(
             f"FORMAT/GT declared Type={gt_type}, which VCF reserves String: its values are read as the genotypes "
             "they are written as, through a copy declaring Type=String"

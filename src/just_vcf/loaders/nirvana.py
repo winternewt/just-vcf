@@ -22,6 +22,7 @@ from typing import BinaryIO
 
 import polars as pl
 
+from just_vcf.loaders.text import READABLE_GT, UNREADABLE_WARNING, genotype_indices, genotype_phase, past_alts
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import CALLS, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
 
@@ -128,9 +129,6 @@ def calls_rows(positions: pl.LazyFrame, index: int) -> pl.LazyFrame:
     alts = pl.col("altAlleles").fill_null(pl.lit([], dtype=pl.List(pl.String))).list.eval(
         pl.when(pl.element() == "<NON_REF>").then(pl.lit("<*>")).otherwise(pl.element())
     )
-    gt = text.str.replace_all(r"\|", "/").str.split("/").list.eval(
-        pl.when(pl.element() == ".").then(None).otherwise(pl.element()).cast(pl.UInt8, strict=False)
-    )
     alleles = pl.concat_list(pl.col("source_ref"), pl.col("alts"))
     depths = entry.struct.field("alleleDepths")
     return (
@@ -151,8 +149,8 @@ def calls_rows(positions: pl.LazyFrame, index: int) -> pl.LazyFrame:
             pl.lit(EvidenceBasis.ASSAY.value).alias("evidence_basis"),
         )
         .with_columns(
-            gt.alias("gt"),
-            pl.concat_list(~text.str.contains("/", literal=True), text.str.extract_all(r"[/|]").list.eval(pl.element() == "|")).alias("phased"),
+            genotype_indices(text).alias("gt"),
+            genotype_phase(text).alias("phased"),
             pl.when(pl.col("_gq").is_between(0, 65535)).then(pl.col("_gq")).otherwise(None).cast(pl.UInt16).alias("gq"),
         )
         .with_columns(
@@ -170,13 +168,14 @@ def calls_rows(positions: pl.LazyFrame, index: int) -> pl.LazyFrame:
 
 
 def stats(rows: pl.LazyFrame) -> dict:
-    """Counts the warnings need."""
+    """Counts the warnings need; a genotype is counted as unreadable or past the ALTs, never both."""
     return (
         rows.select(
             pl.len().alias("rows"),
             pl.col("source_gt").is_null().sum().alias("no_genotype"),
-            (pl.col("gt").list.max() > pl.col("alts").list.len()).fill_null(False).sum().alias("past_alts"),
-            (pl.col("source_gt").is_not_null() & ~pl.col("source_gt").str.contains(r"^(\d+|\.)([/|](\d+|\.))*$")).sum().alias("unreadable"),
+            # From the text, as the key=value table counts it: `gt` is UInt8, so `1/300` reads `[1, null]` there.
+            past_alts(pl.col("source_gt"), pl.col("alts").list.len()).fill_null(False).sum().alias("past_alts"),
+            (pl.col("source_gt").is_not_null() & ~pl.col("source_gt").str.contains(READABLE_GT)).sum().alias("unreadable"),
             pl.col("chrom").is_null().sum().alias("no_chrom"),
         )
         .collect()
@@ -191,7 +190,7 @@ def warnings_for(counts: dict, other_lines: int) -> list[str]:
     if counts["no_genotype"]:
         found.append(f"{counts['no_genotype']} position(s) whose sample has no genotype kept with gt null")
     if counts["unreadable"]:
-        found.append(f"{counts['unreadable']} genotype(s) not readable as allele indices kept with a null in gt and gt_alleles for each slot that is not an index, and the text in source_gt")
+        found.append(f"{counts['unreadable']} {UNREADABLE_WARNING}")
     if counts["past_alts"]:
         found.append(f"{counts['past_alts']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there")
     return found

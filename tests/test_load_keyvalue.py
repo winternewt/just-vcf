@@ -145,42 +145,61 @@ def test_an_index_past_the_alts_is_counted(tmp_path: Path) -> None:
     assert "freeBayes facet: 1 genotype(s) index an allele past the row's ALT list; gt_alleles has a null there" in loaded.warnings
 
 
-UNREADABLE = ("not readable as allele indices kept with a null in gt and gt_alleles for each slot that is "
-              "not an index, and the text in source_gt")
+UNREADABLE = "not readable as allele indices kept with gt, gt_alleles and phased null, and the text in source_gt"
 
 
-def test_no_row_reaches_the_gather_without_a_genotype(tmp_path: Path) -> None:
-    """A caller's genotype never reaches `gt_alleles` null: a NULL genotype (or `.`) drops the row before `gt`
-    is read, and a no-call or an unreadable one reads as a list of null indices, not a null list. So
-    polars' `list.gather` over all-null index lists (a list of a Null inner type the spill's parquet
-    sink cannot write) cannot happen here, even when one caller is NULL on every row and the other
-    holds only no-calls: the first caller's facet is empty and the other's indices are all null."""
-    genotypes = ["./.", "./.", ".|.", "N/A"]
-    lines = [row("chr1", 1000 + i, "A", "G", (gt, "NULL", "NULL", str(10 + i)), NULLS) for i, gt in enumerate(genotypes)]
+def test_each_genotype_is_counted_under_one_reason(tmp_path: Path) -> None:
+    """A genotype not readable as allele indices is counted as that alone, even where its digits name an
+    allele past the ALT list (`1:2`, `x/5` on a one-ALT row): unreadable comes first, and the past-ALT
+    count is over the readable genotypes (`0/2`), where an index too long for 64 bits is past too (it
+    failed the load). So the two counts add up to the genotypes they name."""
+    genotypes = {"1:2": "unreadable", "x/5": "unreadable", "0/2": "past", "2/2": "past", "0/" + "9" * 20: "past", "0/1": None}
+    lines = [row("chr1", 1000 + i, "A", "G", (gt, "NULL", "NULL", "10"), NULLS) for i, gt in enumerate(genotypes)]
+    loaded = frames(write(tmp_path, lines))[0]
+    counts = {reason: sum(1 for why in genotypes.values() if why == reason) for reason in ("unreadable", "past")}
+    found = [w for w in loaded.warnings if "past the row's ALT list" in w or "not readable as allele indices" in w]
+    assert sorted(found) == sorted([
+        f"freeBayes facet: {counts['past']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there",
+        f"freeBayes facet: {counts['unreadable']} genotype(s) {UNREADABLE}",
+    ]), found
+
+
+def test_no_row_reaches_the_gather_with_all_null_indices(tmp_path: Path) -> None:
+    """A NULL genotype (or `.`) drops the row before `gt` is read, a no-call reads as a list of null
+    indices, and an unreadable genotype has `gt` null, guarded at the gather. So polars' `list.gather`
+    over all-null index lists (a list of a Null inner type the spill's parquet sink cannot write) cannot
+    happen here, even when one caller holds only no-calls and the other only unreadable genotypes."""
+    no_calls, unreadable = ["./.", "./.", ".|."], ["N/A", "x", "0/x"]
+    lines = [
+        row("chr1", 1000 + i, "A", "G", (fb, "NULL", "NULL", str(10 + i)), (vs, "NULL", "NULL", "10"))
+        for i, (fb, vs) in enumerate(zip(no_calls, unreadable, strict=True))
+    ]
     loaded, _, _, rows, calls, _ = frames(write(tmp_path, lines))
     assert calls.schema == CALLS
-    assert rows["VarScan2"].height == 0, "a NULL genotype is no row"
-    fb = rows["freeBayes"]
-    assert fb["source_gt"].to_list() == genotypes and fb["dp"].to_list() == [10 + i for i in range(len(genotypes))]
-    assert fb["gt"].null_count() == 0, "no row's gt is a null list"
-    assert fb["gt"].to_list() == [[None] * len(gt.replace("|", "/").split("/")) for gt in genotypes]
+    fb, vs = rows["freeBayes"].sort("pos"), rows["VarScan2"].sort("pos")
+    assert fb["source_gt"].to_list() == no_calls and fb["dp"].to_list() == [10 + i for i in range(len(no_calls))]
+    assert fb["gt"].to_list() == [[None] * len(gt.replace("|", "/").split("/")) for gt in no_calls]
     assert fb["gt_alleles"].to_list() == fb["gt"].to_list()
-    assert f"freeBayes facet: 1 genotype(s) {UNREADABLE}" in loaded.warnings, loaded.warnings
+    assert vs["source_gt"].to_list() == unreadable
+    assert vs["gt"].to_list() == vs["gt_alleles"].to_list() == [None] * len(unreadable)
+    assert f"VarScan2 facet: {len(unreadable)} genotype(s) {UNREADABLE}" in loaded.warnings, loaded.warnings
 
 
-def test_an_unreadable_genotype_is_kept_with_a_null_in_each_slot_that_is_no_index(tmp_path: Path) -> None:
-    """A genotype that is not allele indices keeps its text in `source_gt`, and `gt` is a list with one
-    slot per haplotype the text separates, never a null list: a slot that is not an index is null, and
-    one that is (the `0` of `0/x`) is read. The warning says what the row holds."""
-    genotypes = ["N/A", "0/x", "x", "-"]
+def test_an_unreadable_genotype_is_withheld_whole(tmp_path: Path) -> None:
+    """A genotype that is not allele indices keeps its text in `source_gt`, and `gt`, `gt_alleles` and
+    `phased` are null: the genotype is unknown, so none of it is read, not the `0` of `0/x` either. A
+    `[0, null]` would be the frame of `0/.`, a half-call the file did not write (SCHEMA.md Decision 2).
+    The warning says what the row holds."""
+    genotypes = ["N/A", "0/x", "x", "-", "1:2", "0/1"]
     lines = [row("chr1", 1000 + i, "A", "G", (gt, "NULL", "NULL", "10"), NULLS) for i, gt in enumerate(genotypes)]
     loaded, _, _, rows, _, _ = frames(write(tmp_path, lines))
     fb = rows["freeBayes"].sort("pos")
-    expected = [[int(part) if part.isdigit() else None for part in gt.split("/")] for gt in genotypes]
     assert fb["source_gt"].to_list() == genotypes
-    assert fb["gt"].to_list() == expected
-    assert fb["gt_alleles"].to_list() == [[None if i is None else ["A", "G"][i] for i in gt] for gt in expected]
-    assert f"freeBayes facet: {len(genotypes)} genotype(s) {UNREADABLE}" in loaded.warnings, loaded.warnings
+    withheld = [None] * (len(genotypes) - 1)
+    assert fb["gt"].to_list() == [*withheld, [0, 1]]
+    assert fb["gt_alleles"].to_list() == [*withheld, ["A", "G"]]
+    assert fb["phased"].to_list() == [*withheld, [False, False]]
+    assert f"freeBayes facet: {len(withheld)} genotype(s) {UNREADABLE}" in loaded.warnings, loaded.warnings
 
 
 def test_loading_twice_gives_the_same_frames(tmp_path: Path) -> None:

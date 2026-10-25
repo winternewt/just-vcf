@@ -20,6 +20,7 @@ from typing import BinaryIO
 
 import polars as pl
 
+from just_vcf.loaders.text import READABLE_GT, UNREADABLE_WARNING, genotype_indices, genotype_phase, past_alts
 from just_vcf.schema import CALLS, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
@@ -103,10 +104,6 @@ def caller_rows(rows: pl.LazyFrame, prefix: str) -> pl.LazyFrame:
     not NULL, plus `source_chrom` for the facet's `contig_map`."""
     genotype = _value(f"{prefix}GenoType")
     text = pl.col("source_gt")
-    seps = text.str.extract_all(r"[/|]")
-    gt = text.str.replace_all(r"\|", "/").str.split("/").list.eval(
-        pl.when(pl.element() == ".").then(None).otherwise(pl.element()).cast(pl.UInt8, strict=False)
-    )
     alleles = pl.concat_list(pl.col("source_ref"), pl.col("alts"))
     return (
         rows.filter(~malformed(rows))
@@ -121,31 +118,29 @@ def caller_rows(rows: pl.LazyFrame, prefix: str) -> pl.LazyFrame:
             pl.lit(RefCheck.NOT_RUN.value).alias("ref_check"),
             pl.col("alt").str.split(",").alias("alts"),
             pl.col("source_gt"),
-            gt.alias("gt"),
-            # The first haplotype's phase is read from the first separator, as for VCF before 4.4.
-            pl.concat_list(~text.str.contains("/", literal=True), seps.list.eval(pl.element() == "|")).alias("phased"),
+            genotype_indices(text).alias("gt"),
+            genotype_phase(text).alias("phased"),
             _value(f"{prefix}TotalDepth").cast(pl.UInt32, strict=False).alias("dp"),
             pl.lit(EvidenceBasis.ASSAY.value).alias("evidence_basis"),
         )
-        .with_columns(alleles.list.gather(pl.col("gt"), null_on_oob=True).alias("gt_alleles"))
+        # Guarded: an unreadable genotype has `gt` null, and a batch of only those gathers a Null inner type.
+        .with_columns(pl.when(pl.col("gt").is_not_null()).then(alleles.list.gather(pl.col("gt"), null_on_oob=True)).alias("gt_alleles"))
     )
 
 
 def stats(rows: pl.LazyFrame) -> dict:
-    """Counts the warnings need, over every row: malformed rows, genotypes per caller, and genotype
-    indices past a row's ALT list."""
+    """Counts the warnings need, over every row: malformed rows, genotypes per caller, genotypes not
+    readable as allele indices, and readable ones indexing past a row's ALT list; each genotype in one
+    of the last two at most."""
     alts = pl.col("alt").str.split(",").list.len()
     exprs = [malformed(rows).sum().alias("malformed")]
     for _, prefix, _ in CALLERS:
         genotype = _value(f"{prefix}GenoType")
-        indices = genotype.str.extract_all(r"\d+").list.eval(pl.element().cast(pl.Int64)).list.max()
+        readable = genotype.str.contains(READABLE_GT)
         exprs += [
             (genotype.is_not_null() & ~malformed(rows)).sum().alias(f"{prefix}_rows"),
-            ((indices > alts) & ~malformed(rows)).fill_null(False).sum().alias(f"{prefix}_past_alts"),
-            (genotype.is_not_null() & ~genotype.str.contains(r"^(\d+|\.)([/|](\d+|\.))*$") & ~malformed(rows))
-            .fill_null(False)
-            .sum()
-            .alias(f"{prefix}_unreadable"),
+            (past_alts(genotype, alts) & ~malformed(rows)).fill_null(False).sum().alias(f"{prefix}_past_alts"),
+            (genotype.is_not_null() & ~readable & ~malformed(rows)).fill_null(False).sum().alias(f"{prefix}_unreadable"),
         ]
     exprs.append(pl.col("chromosome").filter(~malformed(rows)).unique().sort().alias("chroms").implode())
     return rows.select(exprs).collect().row(0, named=True)
@@ -157,7 +152,7 @@ def warnings_for(counts: dict, prefix: str) -> list[str]:
     if counts[f"{prefix}_past_alts"]:
         found.append(f"{counts[f'{prefix}_past_alts']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there")
     if counts[f"{prefix}_unreadable"]:
-        found.append(f"{counts[f'{prefix}_unreadable']} genotype(s) not readable as allele indices kept with a null in gt and gt_alleles for each slot that is not an index, and the text in source_gt")
+        found.append(f"{counts[f'{prefix}_unreadable']} {UNREADABLE_WARNING}")
     return found
 
 

@@ -212,17 +212,15 @@ def _per_slot(values: list[pl.Expr]) -> pl.Expr:
 
 def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
     """Every multi-allelic row as one row per ALT; rows that are biallelic, or cannot be split, as they are."""
-    if rows.is_empty():
-        # polars 1.x cannot type `list.contains` on a gathered list over zero rows.
-        return rows
     multi = (pl.col("alts").list.len() >= 2).fill_null(False)
     # `<*>` (DeepVariant's non-reference allele beside the ALTs of a variant record) names no allele:
     # it gets no row of its own. Any other symbolic allele keeps its site as written.
     symbolic = pl.col("alts").list.eval(pl.element().str.contains(_SYMBOLIC) & (pl.element() != UNSPECIFIED)).list.any()
     star = pl.col("alts").list.contains(UNSPECIFIED)
     # A genotype calling `<*>` says a haplotype carries some other allele, which no split row can hold.
-    # Guarded: over a contig whose every `gt` is null, `list.gather` makes a list of a Null inner type,
-    # on which `list.contains` raises (records without GT failed normalize).
+    # Guarded: over zero rows, or a contig whose every `gt` is null, `list.gather` makes a list of a Null
+    # inner type, on which `list.contains` raises (records without GT failed normalize), in a select and
+    # in a filter predicate alike.
     called = pl.when(pl.col("gt").is_not_null()).then(pl.concat_list(pl.lit(""), pl.col("alts")).list.gather(pl.col("gt"), null_on_oob=True))
     star_called = called.list.contains(UNSPECIFIED).fill_null(False)
     unindexed = pl.col("gt").is_null() & pl.col("gt_alleles").is_not_null()
@@ -235,8 +233,6 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
     counts["unsplit_star_called"] += n_star_called
     counts["unsplit_unindexed"] += n_unindexed
     target = multi & ~symbolic & ~star_called & ~unindexed
-    # Evaluated once as a mask: polars cannot type the gathered list in a filter predicate.
-    target = rows.select(target.alias("_target")).to_series()
     work = rows.filter(target)
     if work.is_empty():
         return rows

@@ -139,3 +139,14 @@ def test_a_bcf_declaring_gt_another_type_is_refused_naming_it(tmp_path: Path, ve
     text = load(write(tmp_path, vcf_text(record, fmt=(), extra_meta=meta, version=version), "gt_integer.vcf"))
     assert text.calls.collect()["gt"].to_list() == [[0, 1]]
     assert [w for w in text.warnings if w.startswith("FORMAT/GT declared Type=Integer")], text.warnings
+
+
+def test_a_bcf_float_integer_key_is_read_as_stored_with_no_retype_warning(tmp_path: Path) -> None:
+    """A BCF stores a Float as a 32-bit float and its header cannot be rewritten, so no copy declares
+    the key String: the text VCF's retype warning would name a read that never happened."""
+    meta = ('##FORMAT=<ID=DP,Number=1,Type=Float,Description="x">',)
+    text = write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:DP\t0/1:30"], extra_meta=meta), "float.vcf")
+    bcf = to_bcf(text, tmp_path / "float.bcf")
+    retyped = [[w for w in loaded.warnings if w.startswith("integer key(s) declared Type=Float")] for loaded in (load(text), load(bcf))]
+    assert [len(found) for found in retyped] == [1, 0], retyped
+    assert load(bcf).calls.collect()["dp"].to_list() == [30]

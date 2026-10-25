@@ -113,6 +113,16 @@ meanwhile. The desk carries the ones filed there.
   the GT retype, no warning names it); a PS declared but not carried, or negative, withholds the phase of every phased
   record it would have set, haploid calls included, while a record whose PSL names a set keeps it; one PGP Final
   Report (no Chr/MapInfo columns) waits for its chip manifest, HumanOmni2.5-8v1_A, which is not on disk.
+- **Layer 1, more of the lead's calls on loading (built, listed for veto):** a key=value or Nirvana genotype that is
+  not allele indices (`0/x`) is withheld whole (`gt`, `gt_alleles`, `phased` null, the text in `source_gt`), not read
+  as `[0, null]`, which would look like a written half-call; under VCF 4.3+ a carried key left out of the copy is
+  declared `Number=.` with its reserved Type there so its values are skipped unread (`REWRITE_VERSION` 16). GRCh36:
+  UCSC's public hg19ToHg18 chain was downloaded to derive the Y region set (md5 checked); GRCh36 arrays are
+  estimated, GRCh36 genomes answer `uncalibrated_build`; one test pins two counts read off the carried chain file.
+- **Layer 1, open (no decision), next builder:** a VCF `0/300` loads as `gt [0, null]` with no past-ALT warning;
+  reserved keys the loader never carries (INFO DP, FORMAT MQ) still fail a 4.3+ retry on a malformed value; INFO
+  parse failures escape the retry in every version (the stats pass reads no INFO, the spill does). A single `0/x` GT
+  fails a whole VCF load in polars-bio/noodles: the upstream-liaison seat's to file.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

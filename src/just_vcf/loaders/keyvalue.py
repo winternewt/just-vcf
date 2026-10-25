@@ -157,7 +157,7 @@ def warnings_for(counts: dict, prefix: str) -> list[str]:
     if counts[f"{prefix}_past_alts"]:
         found.append(f"{counts[f'{prefix}_past_alts']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there")
     if counts[f"{prefix}_unreadable"]:
-        found.append(f"{counts[f'{prefix}_unreadable']} genotype(s) not readable as allele indices; gt and gt_alleles null")
+        found.append(f"{counts[f'{prefix}_unreadable']} genotype(s) not readable as allele indices kept with a null in gt and gt_alleles for each slot that is not an index, and the text in source_gt")
     return found
 
 

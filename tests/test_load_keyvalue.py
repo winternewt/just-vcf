@@ -145,6 +145,10 @@ def test_an_index_past_the_alts_is_counted(tmp_path: Path) -> None:
     assert "freeBayes facet: 1 genotype(s) index an allele past the row's ALT list; gt_alleles has a null there" in loaded.warnings
 
 
+UNREADABLE = ("not readable as allele indices kept with a null in gt and gt_alleles for each slot that is "
+              "not an index, and the text in source_gt")
+
+
 def test_no_row_reaches_the_gather_without_a_genotype(tmp_path: Path) -> None:
     """A caller's genotype never reaches `gt_alleles` null: a NULL genotype (or `.`) drops the row before `gt`
     is read, and a no-call or an unreadable one reads as a list of null indices, not a null list. So
@@ -161,7 +165,22 @@ def test_no_row_reaches_the_gather_without_a_genotype(tmp_path: Path) -> None:
     assert fb["gt"].null_count() == 0, "no row's gt is a null list"
     assert fb["gt"].to_list() == [[None] * len(gt.replace("|", "/").split("/")) for gt in genotypes]
     assert fb["gt_alleles"].to_list() == fb["gt"].to_list()
-    assert any("1 genotype(s) not readable" in w for w in loaded.warnings), loaded.warnings
+    assert f"freeBayes facet: 1 genotype(s) {UNREADABLE}" in loaded.warnings, loaded.warnings
+
+
+def test_an_unreadable_genotype_is_kept_with_a_null_in_each_slot_that_is_no_index(tmp_path: Path) -> None:
+    """A genotype that is not allele indices keeps its text in `source_gt`, and `gt` is a list with one
+    slot per haplotype the text separates, never a null list: a slot that is not an index is null, and
+    one that is (the `0` of `0/x`) is read. The warning says what the row holds."""
+    genotypes = ["N/A", "0/x", "x", "-"]
+    lines = [row("chr1", 1000 + i, "A", "G", (gt, "NULL", "NULL", "10"), NULLS) for i, gt in enumerate(genotypes)]
+    loaded, _, _, rows, _, _ = frames(write(tmp_path, lines))
+    fb = rows["freeBayes"].sort("pos")
+    expected = [[int(part) if part.isdigit() else None for part in gt.split("/")] for gt in genotypes]
+    assert fb["source_gt"].to_list() == genotypes
+    assert fb["gt"].to_list() == expected
+    assert fb["gt_alleles"].to_list() == [[None if i is None else ["A", "G"][i] for i in gt] for gt in expected]
+    assert f"freeBayes facet: {len(genotypes)} genotype(s) {UNREADABLE}" in loaded.warnings, loaded.warnings
 
 
 def test_loading_twice_gives_the_same_frames(tmp_path: Path) -> None:

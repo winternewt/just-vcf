@@ -730,6 +730,13 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             f"FORMAT/GT declared Type={gt_type}, which VCF reserves String: its values are read as the genotypes "
             "they are written as, through a copy declaring Type=String"
         )
+    # A BCF's Float is its stored value, read as it is; a key not carried is named by its own warning.
+    if not binary and (whole_as_text := sorted(vcf.retyped_whole(header) - vcf.left_out_of_copy(header))):
+        warnings.append(
+            "integer key(s) declared Type=Float, which polars-bio reads as a 32-bit float that rounds a written "
+            "fraction away: read as text through a copy declaring Type=String, a whole number kept and any other "
+            "value left out and counted: " + ", ".join(f"{name} (Type={header.types[name]})" for name in whole_as_text)
+        )
     if typed_otherwise := vcf.text_keys_typed_otherwise(header):
         warnings.append(
             "text key(s) declared with a Type other than String, which does not hold their values, not carried: "

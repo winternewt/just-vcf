@@ -224,6 +224,29 @@ def test_a_contig_without_genotypes_splits_with_the_genotype_unknown(tmp_path: P
     assert contig.filter(pl.col("pos") == p)["dp"].to_list() == [12, 12]
 
 
+def test_a_contig_whose_every_row_is_pre_split_reaches_the_split_with_no_rows(tmp_path: Path, store: ReferenceStore) -> None:
+    """Rows flagged as one record of a pre-split site are held back before the split, so a contig of
+    only such rows reaches it with none, and its `<*>` check gathers over zero rows: the same list of
+    a Null inner type an all-null `gt` makes. The rows are kept as written, and the other contig's
+    multi-allelic site is split as ever."""
+    end_t = HOMOPOLYMER + 7
+    ref = at("1", end_t - 1, 2)
+    p = 60
+    a, b = [x for x in "ACGT" if x != at("2", p)][:2]
+    # bcftools -m- output on contig 1: one site written as two rows, the other ALT as 0.
+    records = [
+        record("1", end_t - 1, ref, ref[0], "1/0", vectors=False),
+        record("1", end_t - 1, ref[0], other(ref[0]), "0/1", vectors=False),
+        record("2", p, at("2", p), f"{a},{b}", "1/2", vectors=False),
+    ]
+    parent, out = normalized(tmp_path, store, records)
+    held, calls = parent.calls.filter(pl.col("chrom") == "1").collect(), out.calls.collect()
+    assert held["split_signal"].null_count() == 0, "every row of contig 1 is flagged"
+    assert calls.filter(pl.col("chrom") == "1").select("pos", "source_ref", "alts", "gt").rows() == held.select("pos", "source_ref", "alts", "gt").rows()
+    split = calls.filter(pl.col("chrom") == "2")
+    assert sorted(tuple(alts) for alts in split["alts"].to_list()) == sorted([(a,), (b,)])
+
+
 # --- left-alignment and trimming ----------------------------------------------------------------
 
 

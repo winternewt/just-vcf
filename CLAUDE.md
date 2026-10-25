@@ -325,7 +325,8 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
   (measured 2026-10-25). In a lazy plan a batch whose every index list is null has that type whatever
   the plan's schema says, and a parquet sink fails with `InvalidOperationError`; zero rows, and an
   eager frame (which carries `List(Null)` in its own schema), still sink. A `list.contains` on the
-  result fails in every case, eager or lazy, zero rows or all null. The guard gives the typed list.
+  result fails in every case, eager or lazy, zero rows or all null, and in a filter predicate even
+  where only some index lists are null. The guard gives the typed list in all of them.
 - **Heed terminal warnings, deprecations especially.** A deprecation in code you touched is a
   **blocker**: find the current upstream API, fix it, and update this file.
 - **Refactor internals aggressively** — no dead code, no old API kept for nostalgia. The contract —

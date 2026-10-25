@@ -109,3 +109,14 @@ def test_a_bcf_header_states_its_build_as_a_text_header_does(tmp_path: Path) -> 
     assert sniff(bcf).build is None, "the binary head carries no build hint"
     facets = [load(path).facets.collect().row(0, named=True) for path in (text, bcf)]
     assert [(f["assembly_label"], f["assembly_label_basis"]) for f in facets] == [("GRCh37", "stated")] * 2
+
+
+def test_a_bcf_float_integer_key_is_read_as_stored_with_no_retype_warning(tmp_path: Path) -> None:
+    """A BCF stores a Float as a 32-bit float and its header cannot be rewritten, so no copy declares
+    the key String: the text VCF's retype warning would name a read that never happened."""
+    meta = ('##FORMAT=<ID=DP,Number=1,Type=Float,Description="x">',)
+    text = write(tmp_path, vcf_text(["1\t100\t.\tA\tG\t50\t.\t.\tGT:DP\t0/1:30"], extra_meta=meta), "float.vcf")
+    bcf = to_bcf(text, tmp_path / "float.bcf")
+    retyped = [[w for w in loaded.warnings if w.startswith("integer key(s) declared Type=Float")] for loaded in (load(text), load(bcf))]
+    assert [len(found) for found in retyped] == [1, 0], retyped
+    assert load(bcf).calls.collect()["dp"].to_list() == [30]

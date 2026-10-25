@@ -4,6 +4,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `sex_chromosome_evidence` reads array facets (RM269), which answered `not_wgs` before. From the
+  letters as written (no REF needed): X copies from the het share of two-letter base calls on non-PAR
+  X over the autosomes' (one X at most 0.1875, two or more from 0.5625, the central half of the gap
+  between 0 and the 3/4 that two X carry under the neutral expectation), and a Y line from the
+  X-degenerate Y probes' called share over the autosomes' (absent at most 0.25, present from 0.75).
+  An X written with one letter is the vendor's call and answers `caller_asserted_only`. The Y line is
+  read only with the new `array_y=True`, since a vendor may no-call Y for every sample it calls female;
+  without it `y_reason` is the new `vendor_asserted` and the karyotype unknown. The counts are on the
+  result's new nullable `array` field (`just_vcf.karyotype.ArrayLines`). PGP-HMS check in
+  docs/ROADMAP.md RM269. Minor.
+
 - `sex_chromosome_evidence(loaded, coverage=…)` counts copies past two from the coverage facet
   (RM269): each copy reads half chr20's depth, so X reads one to three copies and Y none to two, each
   0.125 either side of its value, and names `XXX`, `XYY`, `XXYY`, `XXXY`, and `OTHER_KARYOTYPE` for

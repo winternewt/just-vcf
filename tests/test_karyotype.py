@@ -681,3 +681,104 @@ def test_the_coverage_bands_are_copy_number() -> None:
     assert [band[:2] for band in COVERAGE_Y_BANDS] == [(None, 0.125), (0.375, 0.625), (0.875, 1.125)]
     edge = with_coverage(frame(chr20(), x_calls(1200, 800, THREE_X_DP), XX[1]), coverage_facet(41.25, 3.75))  # 1.375, 0.125
     assert (edge.x_copy_count, edge.y_copy_count) == (3, 0)
+
+
+# --- Array exports: letters as written, no REF ---------------------------------------------------
+
+
+def letters(chrom: str, start: int, n: int, alleles: list[str | None], *, step: int = 10) -> pl.DataFrame:
+    """Array rows as a loader writes them before `resolve_ref`: letters in `gt_alleles`, no `gt`."""
+    return pl.DataFrame(
+        {
+            "facet_id": "f",
+            "chrom": chrom,
+            "pos": pl.int_range(0, n, eager=True) * step + start,
+            "gt_alleles": [alleles] * n,
+            "evidence_basis": "assay",
+        },
+        schema_overrides={"facet_id": pl.String, "chrom": pl.String, "pos": pl.UInt32, "gt_alleles": pl.List(pl.String), "evidence_basis": pl.String},
+    )
+
+
+def autosomes(hets: int = 600, homs: int = 1400, no_calls: int = 0) -> pl.DataFrame:
+    """Autosomal het share 0.3 by default (600 of 2,000 two-letter calls)."""
+    return pl.concat([
+        letters("1", 1_000_000, hets, ["A", "G"]), letters("2", 1_000_000, homs, ["C", "C"]),
+        letters("3", 1_000_000, no_calls, [None, None]),
+    ])  # fmt: skip
+
+
+def array_x(hets: int, homs: int, *, one_letter: int = 0) -> pl.DataFrame:
+    return pl.concat([
+        letters("X", X_START, hets, ["A", "G"]), letters("X", X_START + 1_000_000, homs, ["T", "T"]),
+        letters("X", X_START + 2_000_000, one_letter, ["T"]),
+    ])  # fmt: skip
+
+
+def array_y(called: int, no_calls: int) -> pl.DataFrame:
+    return pl.concat([letters("Y", Y_START, called, ["G"], step=20), letters("Y", Y_START + 20 * called, no_calls, [None], step=20)])
+
+
+def on_array(*parts: pl.DataFrame, read_y: bool = False, build: str = "GRCh38") -> SexChromosomeEvidence:
+    return estimate(measure(frame(*parts), build), "f", build, CallsetType.ARRAY, array_y=read_y)
+
+
+def test_an_array_with_two_letters_on_x_reads_two_x_from_its_hets() -> None:
+    # X het share 500/2,000 = 0.25 over the autosomes' 0.3: ratio 0.833, two X. Y no-called throughout.
+    found = on_array(autosomes(), array_x(500, 1500), array_y(0, 700))
+    lines = found.array
+    assert (lines.x_base_pairs, lines.x_hets, lines.autosome_base_pairs, lines.autosome_hets) == (2000, 500, 2000, 600)
+    assert lines.x_het_ratio == pytest.approx((500 / 2000) / (600 / 2000))
+    assert (lines.y_rows, lines.y_called, lines.y_call_ratio) == (700, 0, 0.0)
+    assert (found.x_copies, found.x_copy_count) == (XCopies.TWO_OR_MORE, None)
+    # The vendor's Y no-calls follow its own sex call: by default they are not read.
+    assert (found.y_present, found.y_reason, found.reason) == (None, "vendor_asserted", "y_unusable")
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+    read = on_array(autosomes(), array_x(500, 1500), array_y(0, 700), read_y=True)
+    assert (read.y_present, read.y_copy_count, read.inferred_karyotypic_sex) == (False, 0, KaryotypicSex.XX)
+
+
+def test_an_arrays_one_letter_x_is_the_vendors_assertion() -> None:
+    # 23andMe writes a one-X sample's X with one letter: its call, not evidence. Y called (one letter).
+    found = on_array(autosomes(), array_x(0, 0, one_letter=2000), array_y(650, 50), read_y=True)
+    assert found.array.x_called_one_letter == 2000 and found.array.x_het_ratio is None
+    assert (found.x_copies, found.x_copies_reason) == (None, "caller_asserted_only")
+    assert found.y_present is True
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+
+
+def test_an_array_writing_one_x_with_two_letters_reads_one_x() -> None:
+    # Doubled letters with a genotyping error's few hets: ratio (4/2000)/0.3, about 0.007.
+    found = on_array(autosomes(), array_x(4, 1996), array_y(650, 50), read_y=True)
+    assert (found.x_copies, found.x_copy_count) == (XCopies.ONE, 1)
+    assert found.array.y_call_ratio == pytest.approx(650 / 700)
+    assert (found.inferred_karyotypic_sex, found.reason) == (KaryotypicSex.XY, None)
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "x_reason", "y_reason"),
+    [
+        (array_x(300, 1700), array_y(0, 700), "intermediate", None),  # ratio 0.5, between one and two X
+        (array_x(500, 1500), array_y(350, 350), None, "intermediate"),  # Y called half as often as the autosomes
+        (array_x(500, 1500), array_y(100, 100), None, "too_few_sites"),  # 200 X-degenerate Y rows
+    ],
+)
+def test_weak_array_lines_are_unknown(x: pl.DataFrame, y: pl.DataFrame, x_reason: str | None, y_reason: str | None) -> None:
+    found = on_array(autosomes(), x, y, read_y=True)
+    assert (found.x_copies_reason, found.y_reason) == (x_reason, y_reason)
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+
+
+def test_array_rows_without_two_bases_are_not_het_evidence() -> None:
+    # 23andMe's I/D letters and written no-calls are neither base pairs nor hets; no-calls lower the
+    # autosomes' called share, which the Y ratio divides by.
+    indels = letters("X", X_START + 3_000_000, 3000, ["I", "D"])
+    found = on_array(autosomes(no_calls=500), array_x(500, 1500), indels, array_y(560, 140), read_y=True)
+    assert (found.array.x_base_pairs, found.array.x_hets) == (2000, 500)
+    assert (found.array.autosome_called, found.array.autosome_rows) == (2000, 2500)
+    assert found.array.y_call_ratio == pytest.approx((560 / 700) / (2000 / 2500))
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XXY
+
+
+def test_a_genome_carries_no_array_lines() -> None:
+    assert evidence(frame(chr20(), *XY)).array is None

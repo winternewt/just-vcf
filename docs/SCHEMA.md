@@ -1464,6 +1464,21 @@ and the answer is the calls' alone. So is a coverage facet whose chr20 depth is 
 genome (`coverage_uneven`: under 75% of its bases within half to twice the median, an exome's or a
 panel's shape). The field defaults to null, so nothing changes without coverage.
 
+An array facet (`callset_type = array`) gets its own lines, on the result's `array` field
+(`just_vcf.karyotype.ArrayLines`, null for every other facet), read from `gt_alleles` as the export
+wrote them, so no REF and no `gt` are needed: rows, called rows, one-letter rows, two-letter base
+calls and their hets, per autosomes, non-PAR X and the X-degenerate Y. X copies come from the het
+share of two-letter base calls on non-PAR X over the autosomes' het share (`x_het_ratio`): one X at
+most 0.1875, two or more from 0.5625, the central half of the gap between 0 (one X, genotyping errors
+only) and 3/4 (two X, the neutral expectation of X diversity against an autosome's). An X written
+with one letter on most called rows is the vendor's decision (23andMe), counted, never read
+(`caller_asserted_only`). Y comes from the X-degenerate Y probes' called share over the autosomes'
+(`y_call_ratio`): absent at most 0.25, present from 0.75. It is read only with
+`sex_chromosome_evidence(…, array_y=True)`: a vendor that no-calls Y for the samples it calls female
+makes the line its own sex call, and the file cannot tell that mask from a chip that saw no Y.
+Without it `y_reason` is `vendor_asserted` and the karyotype unknown. Arrays never count copies, so
+they name at most `XO`, `XY`, `XX` and `XXY`. Computed, not stored: no schema change.
+
 ## CisPhasedBlock export: computed on demand, not stored (RM284)
 
 The person chose columns with an export on demand: phase sets stay the three `calls` columns of

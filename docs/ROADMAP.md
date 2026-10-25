@@ -1143,7 +1143,7 @@ store:
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY, XXYY and XXXY from a coverage facet's copy counts built 2026-10-25; arrays wait) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY, XXYY and XXXY from a coverage facet's copy counts built 2026-10-25; arrays' X from their hets and Y behind `array_y` built 2026-10-25, checked on 270 PGP-HMS exports) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -1390,11 +1390,64 @@ was rejected:
 - Three X with two Y is `OTHER_KARYOTYPE`, the standard's own term for a karyotype it does not list.
   Rejected: unknown, which would say the evidence was weak when the counts are not.
 
+**Built 2026-10-25: array facets.** A facet with `callset_type = array` gets lines from its letters
+as written (`ArrayLines` on the result's `array` field; no REF or `gt` needed). X: the het share of
+two-letter base calls on non-PAR X over the autosomes' het share. One X expects 0 (genotyping errors
+only), two X 3/4 (Ne_X = 3/4 Ne_A, the neutral expectation), and the bands are the gap's central
+half: one X at most 0.1875, two or more from 0.5625. An X written with one letter on most called rows
+is the vendor's call (`caller_asserted_only`), never read, as a sex-aware caller's haploid GT is not.
+Y: the called share of the X-degenerate Y probes over the autosomes' called share, absent at most
+0.25, present from 0.75 (none 0, a Y 1; the gap's central half). Arrays cannot count copies.
+
+Checked 2026-10-25 on PGP-HMS through `load` and the estimate (the 229 GRCh37 23andMe exports, the 41
+AncestryDNA exports and 109 other array tables; labels as in the VCF table above, the survey's
+`Sex/Gender` and `Anatomical sex at birth` and `demographics.tsv`'s `Gender`, unverified; aggregates
+only):
+
+| Vendor | X written | X het ratio | Y call ratio | Files |
+|---|---|---|---|---|
+| 23andMe | two letters | 0.72–1.52 (91; v5's autosomal het share is about half the others') | exactly 0 (91) | 91 |
+| 23andMe | one letter | not read | 0.76–0.99 | 137 |
+| AncestryDNA | two letters, women | 0.83–0.95 (8) | 0.008–0.099 | 8 |
+| AncestryDNA | two letters, men | 0.0002–0.0059 (17) | 0.746–0.999 | 17 |
+| AncestryDNA | two letters, unlabelled | 9 at 0.0002–0.0069, 7 at 0.76–0.94 | 0.0008–1.0 | 16 |
+
+- **23andMe's sex chromosomes follow one switch, the vendor's.** Every one of its 228 exports with
+  a usable Y line has either a two-letter X and every X-degenerate Y probe no-called, or a one-letter
+  X and the Y called. No two-letter X read a low het ratio. Exactly 0 over 709–2,841 probes, where
+  AncestryDNA's women call a few, reads as a mask. So for 23andMe the Y line and
+  the letter count are the vendor's sex call, and only the two-letter X's hets are independent.
+- **AncestryDNA calls what it measures.** Its women call a few Y probes (0.8–9.9%), its men's X carry
+  a genotyping error's hets (0.01–0.2% of two-letter calls): neither is a mask.
+- **The Y line is read only with `array_y=True`** (default off, `y_reason = vendor_asserted`): nothing
+  in a file tells a mask from a chip that saw no Y. With it on: AncestryDNA, every labelled woman `XX`
+  (8), 16 of 17 men `XY`, one man unknown (Y 0.746, in the band); 23andMe, 73 of 76 women `XX` (3
+  have a one-letter X, the vendor's male call, and answer `caller_asserted_only`), 106 of 108 men
+  `caller_asserted_only`, one too few Y probes, and one self-reported man `XX` (two-letter X at 0.91,
+  Y masked: vendor and hets agree against the self-report). No AncestryDNA file read against its label.
+  Off, every array answers unknown, `x_copies` filled wherever the X is written with two letters.
+- 23andMe on GRCh36 (250 exports) answers `unsupported_build`; FTDNA (103), FTDNA space (2), rsid
+  tables (3) and one Final Report state no build at load and answer `no_build` (`resolve_ref` can
+  infer one, F9; the estimate reads the label `load` set). One Final Report did not load
+  (`TableLayoutError`).
+
+Decisions, each with what was rejected:
+
+- The two-X expectation is 3/4, not 1. Rejected: 1 (X as diverse as an autosome), whose bands 0.25
+  and 0.75 match PLINK `--check-sex`'s F cut-offs 0.2 and 0.8 (F from allele-frequency expected het,
+  which one export cannot supply); it puts 3 of the 106 two-X exports (23andMe v4, 0.72) in the
+  unknown band. The 3/4 is population genetics, not read off these files; the person may prefer the
+  PLINK-shaped edges.
+- The Y line behind an argument, default off, for every vendor. Rejected: reading it by default
+  (23andMe's is a mask), and a per-vendor list of trusted vendors (one measured property of
+  PGP-HMS exports, which a vendor's next release can change silently).
+- An array's absent site is unknown (charter 11); only probes the export writes count, and a probe
+  it writes as a no-call counts as not called.
+
 **Left:** whether a VCF alone may name `XY`/`XXY` when it cannot count the Y, or must answer unknown
-until a coverage facet counts it, is the person's decision. An array's female Y probes are no-calls, which may be the absence signal
-arrays have and genomes lack. Arrays (no `gt`
-before RM3, no depth) and exomes answer unknown; an array's own lines (female Y probes no-calls,
-AncestryDNA's doubled X letters) are not built. Liftovers of one callset are not yet weighed as one
+until a coverage facet counts it, is the person's decision. Whether `array_y` should be on for
+AncestryDNA by default, and the array two-X expectation (3/4 or PLINK's shape), are the person's
+too. Exomes answer unknown. Liftovers of one callset are not yet weighed as one
 piece of evidence (`facets_disagree` belongs to the person-level layer). GRCh37's last X-degenerate
 interval may reach about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md). The somalier question in the
 critique is not answered.

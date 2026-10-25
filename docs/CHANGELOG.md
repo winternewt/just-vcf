@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Nirvana JSON counts a genotype indexing past the row's ALT list from the genotype text, as the
+  key=value table does: `1/300` reads `gt [1, null]` (a `u8` list) and was counted from `gt`, so it
+  went unwarned. Each genotype is counted under one reason there too (`1:2` is unreadable only).
+
 - The key=value table counts each genotype under one warning reason: one not readable as allele
   indices (`1:2`) was counted there and again as indexing past the row's ALT list, from its digits; a
   readable genotype alone is checked against the ALTs now. A genotype with an index too long for 64

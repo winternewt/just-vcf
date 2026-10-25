@@ -354,13 +354,14 @@ its own phase set. So:
 The VRS CisPhasedBlock is built from `phase_sets` at export, by `cis_phased_blocks` ("CisPhasedBlock
 export" below). It is not stored per row.
 
-**Genotype text that is not allele indices** (2026-10-25; the key=value table, whose genotypes the
-loader reads from text itself). A genotype is readable when each slot is an index or `.`, separated by
+**Genotype text that is not allele indices** (2026-10-25; the key=value table and Nirvana JSON, whose
+genotypes the loader reads from text itself). A genotype is readable when each slot is an index or `.`, separated by
 `/` or `|`. Each genotype is counted under one reason at most: one not readable is counted as that
 alone, and only a readable one is checked against the row's ALT list. So `1:2` or `x/5` on a one-ALT
 row is unreadable, never also past the ALTs, though its digits name an allele the row lacks. The
-indices are read from the text's digits, and an index too long for 64 bits is past the ALTs (it
-failed the load).
+indices are read from the text's digits, never from `gt`: `gt` is a `u8` list, so `1/300` reads
+`[1, null]` there and is still counted past the ALTs, and an index too long for 64 bits is past them
+too (it failed the key=value table's load).
 
 ## Decision 3: graded evidence (charter 7)
 

@@ -136,6 +136,24 @@ def test_an_unreadable_genotype_is_kept_with_a_null_in_each_slot_that_is_no_inde
     assert f"{len(genotypes)} genotype(s) {unreadable}, and the text in source_gt" in loaded.warnings, loaded.warnings
 
 
+def test_an_index_past_the_alts_is_counted_from_the_text(tmp_path: Path) -> None:
+    """An index past the ALT list is counted from the genotype text's digits, as the key=value table
+    counts it: `gt` is a UInt8 list, so `1/300` reads `[1, null]`, and the count taken from `gt` missed
+    it. Each genotype is counted under one reason: `1:2` is unreadable, never also past the ALTs."""
+    genotypes = {"1/300": "past", "0/2": "past", "0/" + "9" * 20: "past", "1:2": "unreadable", "0/1": None}
+    positions = [_position("chr1", 100 + i, "A", ["G"], [{"totalDepth": 10, "genotype": gt}]) for i, gt in enumerate(genotypes)]
+    loaded = load(_write(tmp_path / "s1.json", positions))
+    calls = loaded.calls.collect().sort("pos")
+    assert calls.filter(pl.col("source_gt") == "1/300")["gt"].to_list() == [[1, None]]
+    counts = {reason: sum(1 for why in genotypes.values() if why == reason) for reason in ("unreadable", "past")}
+    found = [w for w in loaded.warnings if "past the row's ALT list" in w or "not readable as allele indices" in w]
+    assert sorted(found) == sorted([
+        f"{counts['past']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there",
+        f"{counts['unreadable']} genotype(s) not readable as allele indices kept with a null in gt and gt_alleles "
+        "for each slot that is not an index, and the text in source_gt",
+    ]), found
+
+
 def test_real_nirvana_json(pgp_participants: Path) -> None:
     found: Sniffed | None = None
     for path in sorted(pgp_participants.glob("*/upload-*/*")):

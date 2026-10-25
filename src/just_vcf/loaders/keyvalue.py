@@ -20,6 +20,7 @@ from typing import BinaryIO
 
 import polars as pl
 
+from just_vcf.loaders.text import READABLE_GT, past_alts
 from just_vcf.schema import CALLS, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
@@ -129,20 +130,6 @@ def caller_rows(rows: pl.LazyFrame, prefix: str) -> pl.LazyFrame:
         )
         .with_columns(alleles.list.gather(pl.col("gt"), null_on_oob=True).alias("gt_alleles"))
     )
-
-
-READABLE_GT = r"^(\d+|\.)([/|](\d+|\.))*$"
-"""Genotype text readable as allele indices: each slot an index or `.`, separated by `/` or `|`."""
-
-
-def past_alts(genotype: pl.Expr, alts: pl.Expr) -> pl.Expr:
-    """True on a genotype readable as allele indices (`READABLE_GT`) with an index past the row's `alts`
-    ALT alleles, read from the text's digits: `1/300` is past where `gt`, a UInt8 list, nulls the 300,
-    and an index too long for 64 bits is past too. An unreadable genotype is counted as that alone, so
-    `1:2` is never also past (SCHEMA.md, the unreadable genotype)."""
-    biggest = pl.lit(2**63 - 1, dtype=pl.Int64)
-    indices = genotype.str.extract_all(r"\d+").list.eval(pl.element().cast(pl.Int64, strict=False).fill_null(biggest))
-    return genotype.str.contains(READABLE_GT) & (indices.list.max() > alts)
 
 
 def stats(rows: pl.LazyFrame) -> dict:

@@ -22,6 +22,7 @@ from typing import BinaryIO
 
 import polars as pl
 
+from just_vcf.loaders.text import READABLE_GT, past_alts
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import CALLS, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
 
@@ -170,13 +171,14 @@ def calls_rows(positions: pl.LazyFrame, index: int) -> pl.LazyFrame:
 
 
 def stats(rows: pl.LazyFrame) -> dict:
-    """Counts the warnings need."""
+    """Counts the warnings need; a genotype is counted as unreadable or past the ALTs, never both."""
     return (
         rows.select(
             pl.len().alias("rows"),
             pl.col("source_gt").is_null().sum().alias("no_genotype"),
-            (pl.col("gt").list.max() > pl.col("alts").list.len()).fill_null(False).sum().alias("past_alts"),
-            (pl.col("source_gt").is_not_null() & ~pl.col("source_gt").str.contains(r"^(\d+|\.)([/|](\d+|\.))*$")).sum().alias("unreadable"),
+            # From the text, as the key=value table counts it: `gt` is UInt8, so `1/300` reads `[1, null]` there.
+            past_alts(pl.col("source_gt"), pl.col("alts").list.len()).fill_null(False).sum().alias("past_alts"),
+            (pl.col("source_gt").is_not_null() & ~pl.col("source_gt").str.contains(READABLE_GT)).sum().alias("unreadable"),
             pl.col("chrom").is_null().sum().alias("no_chrom"),
         )
         .collect()

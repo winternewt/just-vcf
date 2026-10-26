@@ -169,11 +169,16 @@ keeps 20 components (just-prs's choice, for fine structure within Europe); `knn_
 The build before numbered sub-groups were kept (rule 5 then excluded every `-` qualifier) chose 2,556
 individuals and 184,833 sites, leave-one-out 0.944; hu6ABACE was placed the same way.
 
-The regions overlap where the populations form a cline. `tests/test_ancestry_panels.py`'s check that
-each panel's first reference sample of every group lands in its group fails on this panel: the first
-Central Asian sample (a Karakalpak, 10 Central Asian and 9 European neighbours in its own leave-one-out)
-is placed in Europe, and Eastern Asia's first (a Xibo) would follow. That is the panel, not the check,
-so the check is left as it is; RM5 lists it.
+The regions overlap where the populations form a cline. `tests/test_ancestry_panels.py` rebuilds each
+region's first reference sample from the panel's factors and places it. On this panel two land across
+a border (2026-10-26, the build above): the first Central Asian sample, a Karakalpak, is placed in
+Europe with 0.35 of its neighbours Central Asian and 0.60 European, and Eastern Asia's first, a Xibo,
+in Central Asia, 0.40 Eastern Asian and 0.60 Central Asian. The check accepts that (the person's choice,
+2026-10-26): a sample is placed well when it is in its own region, or when the vote is two-way (its own
+region and the leader hold at least 0.9 of it together) and its own region holds at least a third. The
+same panel with its region labels shuffled fails the check for six of its seven regions (their votes
+spread over four to six regions), and the test asserts that it fails for at least one, so the looser
+rule still catches a panel that places its samples among unrelated regions.
 
 AADR is a published research dataset. The builder reads it from the caller's path and nothing derived
 from it is in the repository: the tests write synthetic EIGENSTRAT files with made-up individuals.
@@ -186,4 +191,6 @@ from it is in the repository: the tests write synthetic EIGENSTRAT files with ma
 PGP-HMS hu6ABACE, read from `JUST_VCF_SAMPLES_DIR`, with the GRCh37 store `JUST_VCF_TEST_REFERENCE_DIR`
 names; it skips without any of the three. `tests/test_ancestry_panels.py`
 draws people from the Privé groups' own frequencies, and rebuilds each PCA panel's reference samples
-from its stored factors, and checks each lands where it was drawn from. Both skip without the variable.
+from its stored factors, and checks each lands in its own group or on that group's border with one
+other (above), and that a shuffled copy of the panel fails the same check. Both skip without the
+variable; the check's rule itself is tested always, on a synthetic panel.

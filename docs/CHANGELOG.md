@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `tests/test_ancestry_panels.py`'s own-sample check accepts a reference sample placed on its region's
+  border with one other region (the person's option 1, 2026-10-26): in its own region, or a two-way vote
+  (its own region and the leader at least 0.9 together) with its own region at least a third. It
+  failed on `aadr_ho`, whose regions meet along clines: a Karakalpak 0.35 Central Asian and 0.60
+  European, a Xibo 0.40 Eastern Asian and 0.60 Central Asian. Not a skip: the test also shuffles the
+  panel's region labels and asserts the check then fails (on `aadr_ho` it fails six of seven regions),
+  and an always-on test shows the same on a synthetic panel. Tests only; no library change.
 - `build_aadr_panel` refuses an `.anno` that lists one Genetic ID more than once, with a `ValueError`
   naming how many repeat, before reading any genotype (audit 12). The `.ind` was left-joined to the
   `.anno` with no check, so a repeated row selected that person's `.geno` column twice and weighed

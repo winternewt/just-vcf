@@ -18,6 +18,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   counted nowhere, since it is not past the ALTs. A genotype past the ALTs is counted as that alone.
   The frame does not change; widening `gt` to `u16`, a retype, is left to the person.
 
+- A VCF 4.3+ refused because a key the version reserves as a Flag (INFO DB, SOMATIC) is written with a
+  value (`DB=1`) now names the key: `HeaderRefused` says `INFO/DB written with a value: VCF 4.3 reserves
+  DB as a Flag…`, with `key` set, where polars-bio's error ("invalid flag") named none. Where no record
+  read ahead writes one, it says so and lists the version's Flags. The file is still refused, also when
+  its own line declares the key otherwise (`Number=1,Type=Integer`), which the docs had said it was not:
+  the reader refuses that line and the copy leaves it out, so the key is read as its Flag.
+
 - A VCF 4.3+ key its version reserves and the loader never carries (FORMAT MQ, NQ, INFO DP, AN, and
   the rest of the reader's table) is skipped unread in the retry whatever its values, declared in the
   file or not: the structural copy left its line out, polars-bio's reader parsed it under the

@@ -94,7 +94,7 @@ another path is named.
 | P16 | `import polars_bio` adds a stderr handler to the root logger and sets its level to WARNING; Python's logging HOWTO says a library adds only a `NullHandler` | polars-bio | the CLI turns logging off while a command runs (`cli.py:149-152`); a library user still gets the handler |
 | P17 | `depth()` returns a depth over 32,767 wrapped negative; mosdepth and samtools count in 32 bits | datafusion-bio-functions | a negative depth is left out of its window and counted in a warning (`coverage.py`) |
 | P18 | 1-based `depth()` in block mode emits nothing for a run of coverage that reaches a contig's last base; 0-based and per-base mode count it | datafusion-bio-functions | per-base mode, folded into windows here (`coverage.py`) |
-| P22 | a key the scan drops for being undeclared (P1) still fails the whole scan when its value does not parse as the type the spec reserves for its name | datafusion-bio-formats | under 4.3+ the copy declares every undeclared reserved key `Number=.` and skips it (`c5daa78`, `READER_DEFINITIONS`); an undeclared Flag still fails |
+| P22 | a key the scan drops for being undeclared (P1) still fails the whole scan when its value does not parse as the type the spec reserves for its name | datafusion-bio-formats | under 4.3+ the copy declares every undeclared reserved key `Number=.` and skips it (`c5daa78`, `READER_DEFINITIONS`); a reserved Flag written with a value still fails, whatever the file declares, refused naming the key |
 
 ### Feature requests: works as designed, we want more
 
@@ -569,9 +569,11 @@ Mitigation: under VCF 4.3+ the structural copy declares every key the reader res
 not declare, carried or not (FORMAT `MQ`, INFO `DP`), `Number=.` with the reader's Type for that version,
 so it is read as text and skipped (`7c37f1a`, `c5daa78`; `READER_DEFINITIONS`, `loaders/vcf.py:176`,
 `REWRITE_VERSION` 17). Flags are the exception: noodles refuses a Flag declared with a Number other than
-0, so an undeclared `DB=1` still fails a 4.3+ read. The stats pass reads every INFO column the frames
-read, so an INFO failure reaches the retry rather than escaping from the spill (`5f976d3`). The GT case
-still refuses the file. Not filed.
+0, so `DB=1` still fails a 4.3+ read whatever the file declares (its own `Type=Integer` line is
+refused and left out of the copy); the refusal names the key from the records read ahead
+(`named_flag_refusal`). The stats pass reads every INFO column the frames read, so an INFO failure
+reaches the retry rather than escaping from the spill (`5f976d3`). The GT case still refuses the file.
+Not filed.
 
 `READER_DEFINITIONS` is copied by hand from the noodles fork at `42a3c01`
 (`header/record/value/map/{info,format}/definition/v4_*.rs`): **re-extract it whenever the noodles pin

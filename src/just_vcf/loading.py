@@ -987,7 +987,7 @@ def _read_text_records(
         if not isinstance(read, vcf.HeaderRefused):
             break
         if not vcf.can_leave_out(header, read.key):
-            raise read
+            raise vcf.named_flag_refusal(header, data, read)
         header.unparsed[read.key] = read.reason or ""
         warnings.append(
             f"{read.key} not carried: polars-bio cannot parse a value of it under its declaration "

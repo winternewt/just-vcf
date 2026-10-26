@@ -699,8 +699,11 @@ def skipped_declarations(header: Header, declared: set[str]) -> list[str]:
     accepted. Every such key is declared, not only those the rows read ahead use, since a record past
     them may use another, and a declared key no record uses costs nothing. Two are not: GT, which the
     reader parses as a genotype whatever its line says, and a Flag (INFO DB, SOMATIC), which the reader
-    refuses under any Number but 0 ("invalid number for type"), so a Flag written with a value (`DB=1`)
-    still fails the read, as it fails under the file's own line.
+    refuses under any Number but 0 ("invalid number for type"). So the reader holds a reserved Flag as
+    one whatever the file declares, and a Flag written with a value (`DB=1`) fails every read, even where
+    the file's own line makes it valid (`DB` `Number=1,Type=Integer`): that line is refused under 4.3+ and
+    left out of the copy like any key not carried. The refusal names the key where a record read ahead
+    shows it (`named_flag_refusal`).
     Under VCF 4.2 the reader holds no definitions, and an undeclared key is read as text, which never
     fails: no line is needed."""
     definitions = READER_DEFINITIONS.get(header.version_tuple or (0, 0), {})
@@ -714,6 +717,51 @@ def skipped_declarations(header: Header, declared: set[str]) -> list[str]:
             'Description="Declared by just-vcf: not carried, so its values are skipped unread">'
         )
     return lines
+
+
+_FLAG_WITH_VALUE = "Error reading INFO field: invalid flag"
+"""polars-bio's error, naming no key, when its reader meets a value on an INFO key it holds as a Flag."""
+
+
+def named_flag_refusal(header: Header, data: list[bytes], refused: HeaderRefused) -> HeaderRefused:
+    """`refused`, naming the key where it is the reader's "invalid flag" and the records read ahead
+    (`data`) show which key it is; else `refused` as it is.
+
+    Under VCF 4.3+ the reader holds a reserved Flag (INFO DB, SOMATIC) as one whatever the file
+    declares: the structural copy leaves a key it does not carry out, and no line can be written in its
+    place, since the reader refuses a Flag under any Number but 0 and any other Type for the key
+    (`skipped_declarations`). So a Flag written with a value (`DB=1`) fails every read, and polars-bio's
+    error names no key. The keys named are those of the version's Flags that a record read ahead writes
+    with a value; where none does, the refusal says so and lists the version's Flags, naming no key."""
+    flags = sorted(
+        name.split("/", 1)[1]
+        for name, kind in READER_DEFINITIONS.get(header.version_tuple or (0, 0), {}).items()
+        if kind == "Flag" and name.startswith("INFO/")
+    )
+    if refused.key is not None or _FLAG_WITH_VALUE not in str(refused) or not flags:
+        return refused
+    written: set[str] = set()
+    for raw in data:
+        fields = raw.decode("utf-8", errors="replace").rstrip("\r\n").split("\t")
+        if len(fields) > 7:
+            written.update(item.split("=", 1)[0] for item in fields[7].split(";") if "=" in item)
+    found = [key for key in flags if key in written]
+    version = header.version.removeprefix("VCFv") if header.version else ""
+    if not found:
+        return HeaderRefused(
+            f"polars-bio's reader refused an INFO Flag written with a value (invalid flag): VCF {version} reserves "
+            f"{', '.join(flags)} as Flags, which hold no value, and none of the first {len(data)} records writes "
+            f"one with a value ({refused})",
+            reason="invalid flag",
+        )
+    names = " and ".join(f"INFO/{key}" for key in found)
+    as_flags = f"{found[0]} as a Flag, which holds" if len(found) == 1 else f"{' and '.join(found)} as Flags, which hold"
+    return HeaderRefused(
+        f"{names} written with a value: VCF {version} reserves {as_flags} no value, whatever the file "
+        f"declares, so polars-bio's reader refuses the record (invalid flag; {refused})",
+        key=f"INFO/{found[0]}" if len(found) == 1 else None,
+        reason="invalid flag",
+    )
 
 
 def can_leave_out(header: Header, name: str | None) -> bool:

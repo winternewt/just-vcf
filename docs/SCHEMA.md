@@ -1257,8 +1257,16 @@ declares every key the version reserves and the copy does not declare otherwise 
 reserved Type (`READER_DEFINITIONS`, the pinned noodles fork's own table; `REWRITE_VERSION` 17), every
 one, not only those the rows read ahead use, since a later record may use another and a declared key
 no record uses costs nothing. Two are not declared: GT, which the reader parses as a genotype whatever
-its line says, and a Flag (INFO DB, SOMATIC), which the reader holds under no Number but 0, so a Flag
-written with a value (`DB=1`) still fails the read, as it does under the file's own line.
+its line says, and a Flag (INFO DB, SOMATIC), which the reader holds under no Number but 0. So under
+4.3+ the reader holds a reserved Flag as one whatever the file declares, and a Flag written with a
+value (`DB=1`) fails every read with `HeaderRefused`, even where the file's own line makes the value
+valid (`##INFO=<ID=DB,Number=1,Type=Integer>`): the reader refuses that line, the copy leaves it out
+like any key not carried, and the reader reads `DB` as its Flag ("invalid flag"). polars-bio's error
+names no key, so the refusal names it from the records read ahead (2026-10-26): `INFO/DB written with a
+value`, with `HeaderRefused.key` set where it is one key; where no record read ahead writes a Flag with
+a value, it says so and lists the version's Flags. Under 4.2, whose reader holds no definitions, the
+copy reads such a key as text and the file loads. Rejected: dropping the value from the copy's records,
+which rewrites the data polars-bio reads, as for the keys above.
 
 GT is never left out (2026-10-25): a facet without genotypes is not a calls facet, and GT's values are
 genotype text whatever its line says. Declared `Integer`, `Float` or `Character`, it is read as written

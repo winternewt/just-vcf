@@ -17,6 +17,11 @@ each reset.
    finding against the code before a fix builder gets it. Both runs together count as the one item at a time.
 0. **Queued next** (one at a time): loosen `test_pca_panels_place_their_own_reference_samples` for regions on a
    cline (the person chose option 1 for the AADR panel's own-sample failure, 2026-10-26).
+0. **Audit 12's fix builder carries** (the person, 2026-10-26: "keep numbered AADR groups, fix the stats
+   sweep"): AADR rule 5 keeps numbered groups (`Kumyk-1`, `Uzbek-2`, about 22 people), excluding only
+   `Ignore_` and the named QC qualifiers; `_STATS_CODE` joins `stats_versions()` so the sweep retires old
+   stats entries; Sol's two (a duplicate `.anno` key refused; `build_pca_panel` validates before writing);
+   the own-sample test loosened; and whatever of Grok's report survives the check.
 1. **The data cache holds whole private genomes** (RM268, shipped 731d38c): stale versions are swept on each
    step, and `clear_cache(source=...)` removes every copy of a deleted genome. Entries written before the
    index (REWRITE_VERSION 7) are swept as stale.

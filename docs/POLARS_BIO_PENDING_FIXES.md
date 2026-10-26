@@ -72,6 +72,7 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P20 an indexed BAM `depth()` reads the file twice (2026-10-24) | seen on real 30x BAMs, not reproduced on a 12 MB synthetic one | unconfirmed |
 | P21 a scalar INFO/FORMAT value that fails to parse is refused without its key (2026-10-25) | noodles parses scalars inside its iterator and drops the key with the error; dbf wraps it bare, while its list paths name the key | datafusion-bio-formats |
 | P22 an undeclared key's bad value fails the scan though the key is dropped; an unparsable GT fails it too (2026-10-26) | the first: noodles reads an undeclared reserved key by its reserved type, and dbf parses every key before it drops the undeclared ones; the second is dbf's stated choice | datafusion-bio-formats (the first, with P21); the second by design |
+| P23 `replace` with a mapping holds every column of a streaming sink (2026-10-26) | polars, not polars-bio: `replace` and `replace_strict` run as a columnar function the streaming engine does not split; already open as pola-rs/polars #24393 | pola-rs/polars (optional comment on #24393) |
 
 ## Verdicts by kind (2026-09-30)
 
@@ -106,6 +107,7 @@ another path is named.
 | P19 | block-mode `depth()` emits contig by contig, as per-base mode does (22.6 GB peak on a 27 GB BAM against per-base mode's 13.3 GB) | datafusion-bio-functions | per-base mode (`coverage.py`) |
 | P13 | warn or refuse when `write_vcf`/`sink_vcf` drop an undeclared column; see open pb #474 | polars-bio | nothing until we write VCF through polars-bio |
 | P21 | name the key in every INFO/FORMAT parse error, as the list-valued paths already do | datafusion-bio-formats | the retry without a named key (`loaders/vcf.py:262`, `:609`); a keyless refusal still refuses the file |
+| P23 | `replace` and `replace_strict` streamed batch by batch, as an elementwise map is | pola-rs/polars | `schema.canonical_chrom_expr` maps per batch (`map_batches(..., is_elementwise=True)`, `85dcebd`); `tests/test_spill_streams.py` flips when polars streams it |
 | P5 | document the `fmt_` rename, and that one sample gives flat columns while several give a `genotypes` struct | polars-bio (docs) | map columns by the header's own namespace (done) |
 | P11 | document that FILTER `.` reads as `""` | polars-bio (docs) | `""` → null (done, `:455`) |
 | P12 | document that multi-allelic ALT is joined with `\|` | polars-bio (docs) | split on `\|` (done, `:390`) |
@@ -585,6 +587,35 @@ datafusion-bio-formats, with P21**: one change covers both. On an error from the
 failing key with `get` (cost only on a bad record); if it has no column, skip it and go on; if it has,
 fail naming it. The GT case is their stated choice; at most a wish for an opt-in lenient read that nulls
 an undecodable value and counts it. Not worth filing on its own.
+
+## P23 — `replace` with a mapping holds every column of a streaming sink
+
+Not polars-bio's: polars itself, which polars-bio and just-vcf both build on. Found by the lead seat as
+F26 (`docs/PREVIOUS_ISSUES.md`): a WGS gVCF `load` held 8 GB for 2.6 GB of rows. In a streaming sink,
+polars 1.44 runs `pl.col(x).replace(mapping)` as a `columnar-function` node behind an in-memory engine
+fallback, so the stream splits there and every other column of the plan is held until the function
+has seen its whole column.
+
+Reproduced on 1.44.2 with synthetic data only (30M rows; a constant string column mapped, an integer
+and a formatted string beside it; `sink_parquet`): peak RSS 0.84 GB without the replace, 2.74 GB with
+it, 0.91 GB with the same mapping inside `map_batches(..., is_elementwise=True)`. The physical graph
+(`show_graph(engine="streaming", plan_stage="physical")`) shows the fallback node for
+`replace(mapping)`, `replace(old_list, new_list)` and `replace_strict(mapping, default=...)` alike, and
+none for the `map_batches` form.
+
+Mitigation: `schema.canonical_chrom_expr` maps one batch at a time (`85dcebd`).
+`tests/test_spill_streams.py` asserts a plain `replace` still falls back, so it fails once polars
+streams it and the plain expression can return. Any new `replace`/`replace_strict` in a plan that
+should stream needs the same form (CLAUDE.md §5 says so).
+
+*Upstream (2026-10-26).* Already open as **pola-rs/polars #24393** (2025-09-07, labels `bug`,
+`needs triage`, no maintainer reply): "Streaming `replace_strict` does in-memory-map, unless
+`eval`uated in a list"; two later comments say it persists in 1.42.0 and show a `when/then` chain as
+a workaround, and it links #23040 (the same function's memory inside `list.eval`). The issue names
+only `replace_strict`; plain `replace` goes through the same fallback, which is the one thing a
+comment would add, with 1.44.2 and the `map_batches` form. Nothing to file new. Not put to the
+person on its own: the mitigation holds, and the issue's fix covers ours if `replace` shares the
+code path, which is likely but not read in the source. Comment only alongside another batch.
 
 ## Harvested and closed without an entry (2026-09-30)
 

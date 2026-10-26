@@ -37,7 +37,7 @@ from gtars.vrs import normalize_allele
 
 from just_vcf import cache
 from just_vcf.callset import NOT_A_VARIANT
-from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
+from just_vcf.loading import SPILL_ROW_GROUP, Loaded, bounded_groups, cache_dir
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _span, _store_for
 from just_vcf.schema import CALLS, SCHEMA_VERSION, RefCheck, empty
 
@@ -45,6 +45,15 @@ logger = logging.getLogger(__name__)
 
 MINT_VERSION = 3
 """Part of the spill key: bumped whenever the rule changes what `mint_vrs_ids` writes."""
+
+VRS_LAYOUT = 1
+"""How a VRS spill's id files hold the ids, a key in its manifest and in its generation's key: 1 is one
+part per group of consecutive runs of one contig, up to `loading.SPILL_PART_ROWS` rows unless one run
+alone has more (`loading.bounded_groups`), each group minted in one pass (F24). A spill without the key
+was minted a pass per run, its parts cut after the first run that brought them to a million rows. Its
+generation key lacks the key, so no run of this version finds it, and the sweep retires such an entry
+once it is unused past the grace period. Not a `MINT_VERSION` bump: the ids are the same. Not
+`cache.SPILL_LAYOUT` either, which every other step's spill carries too."""
 
 MINT_ERRORS: frozenset[str] = frozenset({"no_contig", "refused"})
 """What minting itself reports in `vrs_errors`: the collection has no single sequence for the
@@ -177,14 +186,16 @@ def mint_vrs_ids(loaded: Loaded, reference: "ReferenceStore | Path | str | None"
     the same order; the input is not changed. Withheld alleles are counted per reason in the
     warnings (`vrs_withheld`).
 
-    The input is spilled to parquet once, then read one contig at a time, only the columns minting
-    reads; the ids are written to their own files and put beside the spilled rows by position. Memory
-    holds one contig's alleles and, while its indels are justified, its sequence.
+    The input is spilled to parquet once, then read a group of whole runs of one contig at a time, in
+    row order, up to `loading.SPILL_PART_ROWS` rows unless one run alone has more, only the columns
+    minting reads; each group is minted in one pass and its ids written to a file of their own, put
+    beside the spilled rows by position. Memory holds one group's alleles and, while a contig's indels
+    are justified, that contig's sequence.
 
     Raises `ValueError` when REF was never read, and `ReferenceMismatchError` when the store does not
     hold the facet's collection.
     """
-    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "MINT_VERSION": MINT_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "MINT_VERSION": MINT_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT, "VRS_LAYOUT": VRS_LAYOUT}
     cache.sweep_stale(cache.VRS_SPILL, versions)
     facets = loaded.facets.collect()
     if facets.height != 1:
@@ -213,21 +224,18 @@ def mint_vrs_ids(loaded: Loaded, reference: "ReferenceStore | Path | str | None"
             tally = _Tally()
             parts: list[Path] = []
             calls_spill = pl.scan_parquet(staged)
-            # Walked run by run of one contig, in row order: a loader groups rows by contig (Decision 11),
-            # so a run is a contig, and the ids come out in the input's order with nothing to sort.
-            runs = calls_spill.select(pl.col("chrom").rle()).collect().unnest("chrom")
-            batch: list[pl.DataFrame] = []
+            # Walked a group of whole runs of one contig at a time, in row order: a loader groups rows by
+            # contig (Decision 11), so a run is a contig, and the ids come out in the input's order with
+            # nothing to sort. A group is one slice, one pass and one part however many contigs it holds,
+            # where it was a slice and a pass per run (F24); on a frame in canonical order, as
+            # `resolve_ref` writes it, the groups are `canonical_batches`'.
+            lengths = calls_spill.select(pl.col("chrom").rle()).collect().unnest("chrom")["len"].to_list()
             offset = 0
-            for length, chrom in runs.select("len", "value").iter_rows():
+            for group in bounded_groups(lengths):
+                length = sum(lengths[index] for index in group)
                 rows = calls_spill.slice(offset, length).select(_READ).collect().with_row_index("_row", offset=offset)
-                matches = by_chrom.get(chrom, [])
-                batch.append(_mint_rows(rows, store, matches[0] if len(matches) == 1 else None, tally))
+                parts.append(_write_part(_mint_rows(rows, store, by_chrom, tally), spill.stage, len(parts)))
                 offset += length
-                if sum(frame.height for frame in batch) >= _IDS_PER_PART:
-                    parts.append(_write_part(batch, spill.stage, len(parts)))
-                    batch = []
-            if batch:
-                parts.append(_write_part(batch, spill.stage, len(parts)))
             done = spill.commit(key, {"calls": [staged], "ids": parts}, tally.warnings(digest))
     # Read from where the generation was committed, never from the staging directory.
     calls_spill = pl.scan_parquet(done.files("calls")[0])
@@ -251,13 +259,9 @@ def mint_vrs_ids(loaded: Loaded, reference: "ReferenceStore | Path | str | None"
     )
 
 
-_IDS_PER_PART = 1_000_000
-"""Rows of ids gathered before a part file is written: few files, and a bounded batch in memory."""
-
-
-def _write_part(batch: list[pl.DataFrame], spill: Path, index: int) -> Path:
+def _write_part(ids: pl.DataFrame, spill: Path, index: int) -> Path:
     part = spill / f"ids-{index:05d}.parquet"
-    pl.concat(batch).write_parquet(part, row_group_size=SPILL_ROW_GROUP)
+    ids.write_parquet(part, row_group_size=SPILL_ROW_GROUP)
     return part
 
 
@@ -307,16 +311,28 @@ _JUSTIFIED = {"_start": pl.Int64, "_end": pl.Int64, "_length": pl.Int64, "_cycle
 reference `_length` with its repeat `_cycle`), or `_error` when gtars refused it."""
 
 
-def _mint_rows(rows: pl.DataFrame, store: ReferenceStore, contig: Contig | None, tally: _Tally) -> pl.DataFrame:
-    """One contig's `_row`, `vrs_allele_ids` and `vrs_errors`, in `_row` order."""
+def _mint_rows(rows: pl.DataFrame, store: ReferenceStore, by_chrom: dict[str, list[Contig]], tally: _Tally) -> pl.DataFrame:
+    """A group's `_row`, `vrs_allele_ids` and `vrs_errors`, in `_row` order.
+
+    The rows may lie on several contigs. Each allele is placed on its contig's one sequence in the
+    collection (`by_chrom`), named by its index in the group's list of them (`_contig`); on a contig with
+    none, or more than one, it is withheld as `no_contig`. A contig's indels are justified together, its
+    sequence read once and let go before the next contig's is read."""
+    chroms = [chrom for chrom in rows["chrom"].unique(maintain_order=True).to_list() if len(by_chrom.get(chrom, [])) == 1]
+    contigs = [by_chrom[chrom][0] for chrom in chroms]
+    index = {chrom: i for i, chrom in enumerate(chroms)}
     ref_length = pl.col("ref").str.len_chars().cast(pl.Int64)
     start, _ = _span(pl.col("pos"), ref_length)
     slots = (
         _slots(rows.lazy())
-        .with_columns(start.alias("_start"), pl.col("_allele").str.to_uppercase())  # VCF bases are case-insensitive
+        .with_columns(
+            start.alias("_start"),
+            pl.col("_allele").str.to_uppercase(),  # VCF bases are case-insensitive
+            pl.col("chrom").replace_strict(index, default=None, return_dtype=pl.UInt32).alias("_contig"),
+        )
         .collect()
     )
-    todo = slots.filter(pl.col("_static").is_null()).select("_row", "_slot", "_start", "ref", "_allele")
+    todo = slots.filter(pl.col("_static").is_null()).select("_row", "_slot", "_start", "ref", "_allele", "_contig")
     # The reference allele (2.a) and single-base substitutions (2.b) need no bases and no trimming.
     identity = pl.col("_allele") == pl.col("ref")
     snv = (ref_length == 1) & (pl.col("_allele").str.len_chars() == 1)
@@ -328,20 +344,21 @@ def _mint_rows(rows: pl.DataFrame, store: ReferenceStore, contig: Contig | None,
         pl.when(identity).then(ref_length).alias("_length"),
         pl.when(identity).then(ref_length).alias("_cycle"),
         pl.when(identity).then(None).otherwise(pl.col("_allele")).alias("_sequence"),
-        pl.lit(None, dtype=pl.String).alias("_error"),
+        pl.when(pl.col("_contig").is_null()).then(pl.lit("no_contig")).otherwise(None).alias("_error"),
+        "_contig",
     )
     rest = todo.filter(~(identity | snv))
-    if contig is None:
-        simple = simple.with_columns(pl.lit("no_contig").alias("_error"))
-        justified = rest.select("_row", "_slot").with_columns(
-            [pl.lit(None, dtype=dtype).alias(name) for name, dtype in _JUSTIFIED.items() if name != "_error"] + [pl.lit("no_contig").alias("_error")]
-        )
-    else:
-        sequence = _ContigSequence(store, contig)
-        results = [_justify(*args, sequence, tally) for args in zip(rest["_start"].to_list(), rest["ref"].to_list(), rest["_allele"].to_list())]
-        justified = rest.select("_row", "_slot").hstack(pl.DataFrame(results, schema=_JUSTIFIED, orient="row"))
-    states = pl.concat([simple, justified.select(simple.columns)])
-    ids = _identify(states, f"SQ.{contig.digest}") if contig is not None else states.with_columns(pl.lit(None, dtype=pl.String).alias("_id"))
+    justified = [rest.select("_row", "_slot", "_contig").clear().hstack(pl.DataFrame(schema=_JUSTIFIED))]
+    for (number,), alleles in rest.partition_by("_contig", as_dict=True, maintain_order=True).items():
+        if number is None:
+            results = [(None, None, None, None, None, "no_contig")] * alleles.height
+        else:
+            sequence = _ContigSequence(store, contigs[number])
+            results = [_justify(*args, sequence, tally) for args in zip(alleles["_start"].to_list(), alleles["ref"].to_list(), alleles["_allele"].to_list())]
+            del sequence
+        justified.append(alleles.select("_row", "_slot", "_contig").hstack(pl.DataFrame(results, schema=_JUSTIFIED, orient="row")))
+    states = pl.concat([simple, *(frame.select(simple.columns) for frame in justified)])
+    ids = _identify(states, [f"SQ.{contig.digest}" for contig in contigs])
 
     slots = slots.join(ids.select("_row", "_slot", "_id", "_error"), on=["_row", "_slot"], how="left").sort("_row", "_slot")
     tally.minted["ref"] += slots.filter(pl.col("_id").is_not_null() & (pl.col("_slot") == 0)).height
@@ -359,11 +376,16 @@ def _mint_rows(rows: pl.DataFrame, store: ReferenceStore, contig: Contig | None,
     )
 
 
-def _location_json(accession: str) -> pl.Expr:
-    """A SequenceLocation over `_start`/`_end` on `accession`, as canonical JSON."""
-    reference = '"sequenceReference":{"refgetAccession":"' + accession + '","type":"SequenceReference"}'
+def _location_json() -> pl.Expr:
+    """A SequenceLocation over `_start`/`_end` on the sequence `_accession` names, as canonical JSON."""
     return pl.concat_str(
-        pl.lit('{"end":'), pl.col("_end").cast(pl.String), pl.lit("," + reference + ',"start":'), pl.col("_start").cast(pl.String), pl.lit(',"type":"SequenceLocation"}')
+        pl.lit('{"end":'),
+        pl.col("_end").cast(pl.String),
+        pl.lit(',"sequenceReference":{"refgetAccession":"'),
+        pl.col("_accession"),
+        pl.lit('","type":"SequenceReference"},"start":'),
+        pl.col("_start").cast(pl.String),
+        pl.lit(',"type":"SequenceLocation"}'),
     )
 
 
@@ -393,12 +415,15 @@ def _digest(texts: pl.Series) -> pl.Series:
     return pl.Series([sha512t24u_digest(text) for text in texts.to_list()], dtype=pl.String)
 
 
-def _identify(states: pl.DataFrame, accession: str) -> pl.DataFrame:
-    """`states` with `_id`, the VRS Allele id, where the state is known."""
+def _identify(states: pl.DataFrame, accessions: list[str]) -> pl.DataFrame:
+    """`states` with `_id`, the VRS Allele id, where the state is known. A state with no `_error` has a
+    `_contig`, its index in `accessions`: only an allele on a contig with no single sequence lacks one,
+    and it has `no_contig`."""
     ok = states.filter(pl.col("_error").is_null())
-    spans = ok.select("_start", "_end").unique(maintain_order=True)
-    spans = spans.with_columns(_digest(spans.select(_location_json(accession)).to_series()).alias("_location"))
-    ok = ok.join(spans, on=["_start", "_end"], how="left", maintain_order="left")
+    spans = ok.select("_contig", "_start", "_end").unique(maintain_order=True)
+    named = spans.with_columns(pl.col("_contig").replace_strict(dict(enumerate(accessions)), return_dtype=pl.String).alias("_accession"))
+    spans = spans.with_columns(_digest(named.select(_location_json()).to_series()).alias("_location"))
+    ok = ok.join(spans, on=["_contig", "_start", "_end"], how="left", maintain_order="left")
     ok = ok.with_columns(("ga4gh:VA." + _digest(ok.select(_allele_json()).to_series())).alias("_id")).drop("_location")
     refused = states.filter(pl.col("_error").is_not_null()).with_columns(pl.lit(None, dtype=pl.String).alias("_id"))
     return pl.concat([ok, refused])

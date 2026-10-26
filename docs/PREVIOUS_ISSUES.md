@@ -183,6 +183,54 @@ the derived `facet_id`s carry, so the facets would be renamed for the same rows;
 already writes its ids in parts of `_IDS_PER_PART` rows, but still collects a slice per contig run
 (not measured here); `_segments` is a Python loop per chain contig.
 
+*Amended 2026-10-26:* `mint_vrs_ids` measured and repaired the same way. It wrote its ids in few parts
+already, but made a slice-`collect` and a `_mint_rows` pass per run of one contig, about twenty
+`collect`s each, so each contig with rows paid a fixed pass. It now reads a group of whole runs at a
+time, consecutive in row order, up to `SPILL_PART_ROWS` rows unless one run alone has more
+(`loading.bounded_groups`, the rule `canonical_batches` now groups by too; on `resolve_ref`'s output,
+which is in canonical order, the groups are `canonical_batches`'): one slice, one pass and one ids part
+per group. A pass places each allele on its contig's sequence through an integer column naming the
+group's contigs (`_contig`, the accession joined in only on the distinct locations), withholds
+the alleles of a contig with no single sequence as `no_contig` in the same pass, and justifies each
+contig's indels together, its sequence read once per group and let go before the next contig's (it was
+read once per run). Measured on the two files above (library only, after a cached `load` and
+`resolve_ref`, the VRS spill written fresh, counts, timings and digests; 12 and 24 GB caps; load
+average 3 to 8, so times are rough). Every output hashes the same before and after, on every run: the
+minted calls (ids, `vrs_errors`, every other column, row order, dtypes), `vrs_withheld` and the
+warnings.
+
+- hu416394's Manta file (9,373 rows on 942 contigs): 18.6–18.8 s with 942 passes and 1,886 `collect`
+  calls (about 20,000 inside polars) → 11.4 s, three runs, with 1 pass and 4 `collect`s; one ids part
+  before and after; the process's peak 840 MB → 850 MB. What is left is 24 whole-contig fetches for
+  4,225 indels: 7.2 s in `get_substrings` and 3.7 s in `fetch`'s `isupper` guard (profiled).
+- hu416394's bcftools gVCF (9,651,143 calls on 2,057 contigs, 876,559 indel alleles justified):
+  97.5–108.8 s with 2,057 passes, 4,116 `collect`s and 8 ids parts → 70.5–75.0 s with 12 passes, 26
+  `collect`s and 12 parts (polars' own collect time 21.2 s → 2.0 s, profiled). Peak RSS sampled during
+  the mint 4.72–4.75 GB before, 4.71–4.72 GB after (3.0–3.5 GB above the start before, 3.9–4.0 GB
+  after, from a lower start); a group of up to a million rows holds about what the largest contig did.
+  What is left is per allele: 24.4 million `sha512t24u_digest` calls (18.5 s profiled), the Python
+  justification of each indel (about 17 s profiled, gtars' roll 0.8 s of it), and 25 whole-contig
+  fetches (11 s).
+
+`VRS_LAYOUT` (1) is in the spill's versions and generation key: an old generation would read the same
+(its ids are row-aligned whatever their parts), but is written once more under the key, so the manifest
+says what it holds and the sweep retires the old entry. `MINT_VERSION` stays 3 (it names the cache
+entry only, no derived id). Code: `vrs.mint_vrs_ids`, `_mint_rows`, `_identify`, `_location_json`,
+`loading.bounded_groups`; tests in `tests/test_step_spill_order.py` (minted ids, reasons and warnings
+against the per-run oracle at three bounds, on the canonical frame and on one interleaved by position;
+a contig with no sequence beside stored ones; one pass and one part per group; each contig's sequence
+read once per group; an old-layout generation not read, and swept; the last four fail on main).
+Rejected: filtering the staged input by `canonical_batches`, which would hand ids back out of row
+order for an input not in canonical order and need a sort to put them beside the rows; keeping
+`_IDS_PER_PART` apart from the group bound, two rules for one shape. Left open, both measured above
+and neither F24's pattern: a whole contig is fetched to justify its first indel, about 0.3 s for
+chromosome 1 in `get_substrings` and 0.15 s more in `ReferenceStore.fetch`'s `isupper` guard, so on
+the Manta file 24 fetches for 4,225 indels are nearly all that remains (a window around each indel
+would need a widen-and-retry rule to be shown output-preserving, as gtars rolls over an unbounded
+region; dropping the guard is a store contract question); and one `sha512t24u_digest` call per
+location and per allele, about 24 million on the gVCF, a Python loop over gtars that only a vectorised
+digest in gtars would shorten.
+
 ## F30 — `write_vcf`'s contig names do not reach a breakend's mate inside ALT
 
 Severity: low · Found 2026-10-26 dogfooding RM6's breakend lift on hu1C1368's Manta file.

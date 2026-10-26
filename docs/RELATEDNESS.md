@@ -68,7 +68,9 @@ not about who their people are.
   kind, when the pedigree reaches it some other way (a twin's child and the other twin).
   `check_pedigree` sets that beside the measured relatedness of the facets whose
   `subject` is each individual's id: `agrees` when every band the measured interval (kinship ± 2 SE)
-  reaches is allowed, `disagrees` when none is, otherwise `cannot_tell` with a reason. A disagreement
+  reaches is allowed, `disagrees` when none is, otherwise `cannot_tell` with a reason: `between_bands`
+  when the interval reaches allowed and other bands, `kind_not_told` when it lies wholly in the first
+  degree and the IBS0 count cannot tell parent from sibling where the pedigree expects one. A disagreement
   is a row and, through `people(..., pedigree=...)`, a warning naming facet ids. It never corrects the
   pedigree or relabels a facet.
 

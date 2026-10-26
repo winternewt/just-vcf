@@ -1609,10 +1609,14 @@ supplies, read into frames of its own. docs/RELATEDNESS.md has the method.
   then `facet_a` (the individual's) and `facet_b` (the relative's), the measured `band`, `kinship`,
   `kinship_se`, `ibs0`, `n_sites` and `relatedness_reason`, and `agreement` (`agrees`: every band the
   measured interval reaches is allowed; `disagrees`: none is; `cannot_tell`), with `reason` for
-  `cannot_tell` (`no_facet`, a pedigree reason, a relatedness reason, or `between_bands` when the
-  interval reaches allowed and other bands). The two first-degree kinds are bands of their own here,
-  and `first_degree` on either side stands for both: a parent link measured `full_siblings`
-  disagrees, one measured `first_degree` (the kind not told) is `cannot_tell`, `between_bands`. A pedigree individual is matched to facets by its
+  `cannot_tell` (`person.PEDIGREE_CHECK_REASONS`: `no_facet`, a pedigree reason, a relatedness
+  reason, `between_bands` when the interval reaches allowed and other bands, or `kind_not_told`
+  when it lies wholly in the first degree and the IBS0 count does not tell the kind the pedigree
+  needs; an open vocabulary, checked where the row is built). The two first-degree kinds are bands of
+  their own here, and `first_degree` on either side stands for both: a parent link measured
+  `full_siblings` disagrees, one measured `first_degree` (the kind not told, a thin IBS0 interval or
+  no count) is `cannot_tell`, `kind_not_told`; it read `between_bands` until 2026-10-26, which said the
+  kinship crossed a band boundary when it did not. A pedigree individual is matched to facets by its
   `individual_id` as `subject` (RM273), each source once as `Person.checks` stands it; one row per pair
   of those facets, one row with null facets when an individual has none. The pedigree is never changed
   and nothing is relabelled (charter invariant 8). `people(..., pedigree=...)` runs it and warns each

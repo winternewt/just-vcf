@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `check_pedigree` gives a pair whose kinship lies wholly in the first degree, but whose IBS0 count
+  cannot tell parent from sibling where the pedigree expects one, the reason `kind_not_told`
+  (`person.KIND_NOT_TOLD`). It read `between_bands`, which says the kinship's interval crosses a band
+  boundary: kinship 0.25 ± 0.01 with no IBS0 over 300 sites against a parent link was reported as
+  between bands. The reasons a check row may carry are now one vocabulary,
+  `person.PEDIGREE_CHECK_REASONS`, checked where the row is built. **Values change** for a reader of
+  `reason`: those rows read `kind_not_told`; `agreement` is unchanged (docs/SCHEMA.md, "Relatedness
+  and pedigrees").
+
 - `loaders.text.GT_INDEX_MAX` is an int (255), read from `gt`'s dtype. It was `pl.UInt8.max()`, an
   expression annotated `int`; the warning for an index `gt` cannot hold printed "(255)" only because
   polars renders that literal bare. No value changes.

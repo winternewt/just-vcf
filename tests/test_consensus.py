@@ -343,6 +343,25 @@ def test_a_reference_block_speaks_with_its_likelihoods(tmp_path: Path, store: Re
     assert at[155]["gp"] == pytest.approx(asserted, rel=1e-5)
 
 
+def test_every_overlapping_block_is_read(tmp_path: Path, store: ReferenceStore) -> None:
+    """Blocks that overlap (a lifted gVCF keeps them): a `ref` block 90–300 with likelihoods and a
+    `no_call` block 120–150 inside it. The block over a position was the last one starting at or before
+    it, so at 200, past the inner block's end, the outer block was missed and Y read as silent. Inside
+    both, the nearest-starting block answers, as `reference_support`: Y called nothing there."""
+    pls = [0, 30, 300]
+    outer = ("1", 90, base("1", 90), "<*>", "0/0", ".", {"END": "300", "PL": ",".join(map(str, pls))})
+    inner = ("1", 120, base("1", 120), "<*>", "./.", ".", {"END": "150"})
+    x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "0/1"), snv("1", 130, "0/1"), snv("1", 200, "0/1")], store)
+    y = facet(tmp_path, "y", "Y", "1", [outer, inner], store)
+    at = {row["pos"]: row for row in rows_of(consensus([x, y], atlas=TRIANGLE))}
+    rates = {r["caller"]: r for r in method_error_rates(TRIANGLE).filter(pl.col("variant_class") == "snv").iter_rows(named=True)}
+    graded = posterior([hard(1, rates["X"]["genotype_error"]), tempered(flat(pls), rates["Y"]["silence_error"])])
+    for pos in (100, 200):
+        assert (at[pos]["s_supported"], at[pos]["s_contradicted"], at[pos]["s_silent"]) == (1, 1, 0), pos
+        assert at[pos]["gp"] == pytest.approx(graded, rel=1e-5), pos
+    assert at[130]["s_silent"] == 1, "the no-call block inside answers: Y called nothing there"
+
+
 def test_each_block_rule_is_how_a_reference_block_speaks(tmp_path: Path, store: ReferenceStore) -> None:
     """Desk #94 in the consensus: X states a het inside each of Y's reference blocks; Y's block speaks by
     the rule asked, and a block lacking what the rule reads speaks as zero copies, unquantified."""

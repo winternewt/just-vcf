@@ -6,6 +6,7 @@ earn (an exome, a CGI-style `reference` genome) are the loaded facet with its `f
 `tests/test_evidence.py` does; the whole-genome gates run on whole-genome-shaped files loaded for real.
 """
 
+import random
 from pathlib import Path
 
 import polars as pl
@@ -22,13 +23,18 @@ from just_vcf import (
     GradeBasis,
     Loaded,
     RecordReason,
+    ReferenceStore,
     SupportKind,
+    genotype_evidence_at,
+    liftover,
     load,
     reference_support,
+    resolve_ref,
 )
 from just_vcf.schema import enum_dtype
 from test_content_filter import genome_vcf
 from test_evidence import BLOCKS, GVCF, _block_records, _expected_block, _flat_pl, _phred_top, _vcf
+from test_reference import write_fasta
 
 SNV_HET = "0/1:99:51,0,36:."
 """A het SNV with a PL, at positions the tests choose."""
@@ -166,6 +172,51 @@ def test_calls_tied_on_every_grade_are_ordered_by_their_alleles(tmp_path: Path) 
         assert row["genotype_alleles"] == ["A", "C"]
         answers.append(answer.drop("facet_id"))
     assert answers[0].equals(answers[1]), "the file's row order does not reach the answer"
+
+
+def lifted_overlapping_blocks(tmp_path: Path) -> Loaded:
+    """A gVCF lifted through a chain that sends two source regions to one place, so its lifted blocks
+    overlap, as `liftover` keeps them (charter 8): target 1–100 from source 1–100 (a `ref` block, PL
+    0,30,300) and target 51–70 from source 151–170 (a `no_call` block)."""
+    rng = random.Random(3)
+    source, target = "".join(rng.choice("ACGT") for _ in range(300)), "".join(rng.choice("ACGT") for _ in range(200))
+    store = ReferenceStore.open(tmp_path / "store")
+    source_digest = store.add_fasta(write_fasta(tmp_path / "s.fa", {"1": source}), assembly_label="GRCh37")
+    target_digest = store.add_fasta(write_fasta(tmp_path / "t.fa", {"1": target}), assembly_label="GRCh38")
+    chain = tmp_path / "overlap.chain"
+    chain.write_text("chain 100 1 300 + 0 100 1 200 + 0 100 1\n100\n\nchain 90 1 300 + 150 170 1 200 + 50 70 2\n20\n\n")
+    header = [
+        "##fileformat=VCFv4.2", "##contig=<ID=1,length=300>", '##ALT=<ID=NON_REF,Description="Any other allele">',
+        '##INFO=<ID=END,Number=1,Type=Integer,Description="End">', '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+        '##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred likelihoods">', "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1",
+    ]  # fmt: skip
+    records = [f"1\t1\t.\t{source[0]}\t<NON_REF>\t.\t.\tEND=100\tGT:PL\t0/0:0,30,300", f"1\t151\t.\t{source[150]}\t<NON_REF>\t.\t.\tEND=170\tGT:PL\t./.:."]
+    vcf = tmp_path / "source.g.vcf"
+    vcf.write_text("\n".join([*header, *records]) + "\n")
+    return liftover(resolve_ref(load(vcf), store, collection=source_digest), chain, store, target=target_digest).loaded
+
+
+def test_every_overlapping_block_of_a_lifted_facet_covers_its_positions(tmp_path: Path) -> None:
+    """A lifted facet's blocks overlap. The block over a position was taken to be the last one starting
+    at or before it, so past the inner block's end (71–100) the outer block was missed and the position
+    read `none`, and inside both one record was counted. Every covering block is found now: the
+    nearest-starting one answers, `records` counts both, and `genotype_evidence_at` gives a row each."""
+    lifted = lifted_overlapping_blocks(tmp_path)
+    assert sorted(lifted.blocks.select("pos", "end_pos", pl.col("kind").cast(pl.String)).collect().rows()) == [(1, 100, "ref"), (51, 70, "no_call")]
+    answer = _support(lifted, [("1", 30), ("1", 60), ("1", 70), ("1", 71), ("1", 100), ("1", 101)])
+    ref_block = [(SupportKind.BLOCK.value, RecordReason.REF_BLOCK.value, 1, 1, 100)]
+    for pos in (30, 71, 100):
+        row = answer[("1", pos)]
+        assert [(row["support"], row["reason"], row["records"], row["record_pos"], row["record_end_pos"])] == ref_block, pos
+        assert row["genotype_probabilities"] == pytest.approx(_flat_pl([0, 30, 300])), pos
+    for pos in (60, 70):
+        row = answer[("1", pos)]
+        assert (row["support"], row["reason"], row["records"], row["record_pos"], row["record_end_pos"]) == ("block", "no_call_block", 2, 51, 70), pos
+    assert answer[("1", 101)]["support"] == SupportKind.NONE.value
+
+    sites = pl.DataFrame({"chrom": ["1"] * 3, "pos": [60, 80, 101]})
+    rows = genotype_evidence_at(lifted, sites, variant_class="snv").select("pos", "record_pos", "record_end_pos", pl.col("evidence_basis").cast(pl.String)).rows()
+    assert sorted(rows) == [(60, 1, 100, "ref_block"), (60, 51, 70, "ref_block"), (80, 1, 100, "ref_block"), (101, None, None, "absence")]
 
 
 def test_positions_come_out_in_canonical_order_once(tmp_path: Path) -> None:

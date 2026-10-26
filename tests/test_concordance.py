@@ -291,6 +291,18 @@ def test_a_silent_facet_says_what_its_absence_means(tmp_path: Path, store: Refer
     assert any("neither declared nor called" in line for line in result.warnings)
 
 
+def test_every_overlapping_block_of_the_other_facet_is_read(tmp_path: Path, store: ReferenceStore) -> None:
+    """Blocks that overlap (a lifted gVCF keeps them: two source regions a chain sends to one place):
+    a `ref` block 90–300 and a `no_call` block 120–150 inside it. The block over a position was the last
+    one starting at or before it, so at 200, past the inner block's end, the outer block was missed and
+    the allele read `unknown`. Inside both, the nearest-starting block answers, as `reference_support`."""
+    a = facet(tmp_path, "a", [snv("1", 100, "0/1"), snv("1", 130, "0/1"), snv("1", 200, "0/1"), snv("1", 400, "0/1")], store)
+    gvcf = [("1", 90, base("1", 90), "<*>", "0/0", {"END": "300"}), ("1", 120, base("1", 120), "<*>", "./.", {"END": "150"}), snv("1", 1200, "0/1")]
+    b = facet(tmp_path, "b", gvcf, store)
+    by_pos = {row["pos"]: row["absence"] for row in concordance(a, b).sites.collect().iter_rows(named=True) if row["agreement"] == "only_a"}
+    assert by_pos == {100: "ref_block", 130: "no_call_block", 200: "ref_block", 400: "unknown"}
+
+
 def _flat(pl_values: list[int]) -> list[float]:
     weights = [10 ** (-v / 10) for v in pl_values]
     total = sum(weights)

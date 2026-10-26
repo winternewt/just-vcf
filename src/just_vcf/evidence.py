@@ -22,6 +22,7 @@ import polars as pl
 
 from just_vcf.callset import AbsenceReason, absence_is_reference, absence_support
 from just_vcf.coverage import Coverage, callable_sites
+from just_vcf.intervals import covering
 from just_vcf.loading import Loaded
 from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, BlockKind, EvidenceBasis, GlSource, VariantClass, enum_dtype
 
@@ -447,8 +448,8 @@ def _covering(loaded: Loaded, asked: pl.DataFrame) -> tuple[pl.LazyFrame, pl.Laz
     The records are matched first and only the matched rows graded, so a genome's millions of rows
     are never graded to answer a panel, and every join is pre-filtered to the asked contigs. A call
     starting at the site is an equality join, and only calls spanning more than their first base go
-    through the range join. A facet's blocks do not overlap one another (a gVCF's and CGI's tile the
-    genome), so the block over a site is the last one starting at or before it, found by an as-of join.
+    through the range join. Every block over a site is found (`intervals.covering`): a gVCF's and CGI's
+    tile the genome and cost an as-of join, and a lifted facet's overlapping blocks are all found too.
     """
     contigs = asked["chrom"].unique().to_list()
     ask = asked.lazy().select("_site", pl.col("chrom").alias("_site_chrom"), pl.col("pos").alias("_site_pos"))
@@ -467,13 +468,9 @@ def _covering(loaded: Loaded, asked: pl.DataFrame) -> tuple[pl.LazyFrame, pl.Laz
         for contig in sorted(contigs)
     ]  # fmt: skip
     hit_calls = pl.concat([at_start, *inside], how="vertical_relaxed")
-    blocks = loaded.blocks.filter(pl.col("chrom").is_in(contigs)).with_columns(pl.col("pos").cast(pl.Int64).alias("_start")).sort("chrom", "_start")
-    hit_blocks = (
-        ask.rename({"_site_chrom": "chrom"}).sort("chrom", "_site_pos")
-        .join_asof(blocks, left_on="_site_pos", right_on="_start", by="chrom", strategy="backward", check_sortedness=False)
-        .filter(pl.col("facet_id").is_not_null() & (pl.col("_site_pos") <= pl.col("end_pos").cast(pl.Int64)))
-        .drop("_site_pos", "_start")
-    )  # fmt: skip
+    blocks = loaded.blocks.with_columns(pl.col("pos").cast(pl.Int64).alias("_start"), pl.col("end_pos").cast(pl.Int64).alias("_end"))
+    probes = ask.select("_site", pl.col("_site_chrom").alias("chrom"), "_site_pos")
+    hit_blocks = covering(probes, blocks, contigs, at="_site_pos", start="_start", end="_end").drop("_site_pos", "_start", "_end")
     return hit_calls, hit_blocks
 
 
@@ -633,6 +630,8 @@ def reference_support(
     calls of one span, one stating an ALT before one stating nothing before one stating hom-ref, then
     a quantified one before an unquantified one, the least confidence first, then by allele list, so
     a reference statement never hides a variant stated at the same site and no tie depends on row order.
+    Blocks are ranked alike: a lifted facet keeps overlapping blocks, and of several over a position the
+    one starting nearest before it answers, then the shortest, then a `no_call` before a `ref`.
     `variant_class` is the class the question is about; a facet's silence speaks only for the classes
     it called. `gq_on_reference` and `block_grade` are `genotype_evidence`'s. Rows come out in
     canonical order (contig rank, then position), whatever order `sites` came in.

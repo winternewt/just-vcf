@@ -1141,7 +1141,9 @@ more than one target, on a target contig the collection lacks, or on a source co
 not cover or covers at another size stays behind with the row reason of the same name, and is counted
 in bases: `Lifted.block_reasons` (bases per reason) and a warning line per reason with the pieces and
 bases. Lifted pieces are sorted into canonical order per target contig. Two source regions the chain
-sends to one place give overlapping lifted blocks; both are kept and counted (charter 8). The lifted
+sends to one place give overlapping lifted blocks; both are kept and counted (charter 8), and every
+reader of blocks finds both where they cover a position (`reference_support`, `genotype_evidence_at`,
+`concordance`, `consensus`; one answers where one must, by `reference_support`'s order). The lifted
 facet's `absence_means` stays `unknown`: a position no lifted block or row covers says nothing, which
 is what `blocks` would say too (`absence_is_reference` answers `None` for both), and `unknown` keeps
 one rule for every lifted facet. Checked against pyliftover base by base on synthetic blocks over the
@@ -2066,10 +2068,13 @@ positive sum. Otherwise the row falls to the next basis; nothing is patched.
 `loaded` at each `chrom, pos` (`GENOTYPE_EVIDENCE_AT`): one row per record that covers the site (a
 `calls` row from `pos` to `end_pos`, or its `pos` alone where the span is unknown; a `blocks` row over
 its span), graded as above, with the record's span as `record_pos`, `record_end_pos`. A site inside a
-called deletion is not absent. A facet's blocks are taken not to overlap one another (a gVCF's and
-CGI's tile the genome; none of 10.8M CGI `var` blocks or 14.6M DeepVariant blocks overlaps its
-predecessor), so the block over a site is the last one starting at or before it; only the
-matched records are graded, so a panel's answer does not grade a genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:
+called deletion is not absent. Every block over a site is found, overlapping ones included: a
+gVCF's and CGI's blocks tile the genome (none of 10.8M CGI `var` blocks or 14.6M DeepVariant blocks
+overlaps its predecessor), so the block over a site is the last one starting at or before it, an
+as-of join; a lifted facet's do not (two source regions a chain sends to one place give overlapping
+blocks, "Lifting blocks"), and a block that reaches its successor goes through a range join instead
+(`intervals.covering`). Only the matched records are graded, so a panel's answer does not grade a
+genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:
 `absent_reference` (asserted, no number, `genotype_index` 0) where `absence_is_reference(facet,
 variant_class, force=force)` is True, else `absent_unknown`; `force` lifts a content filter's hold for
 the class it kept, as there. Decision 3 rejected a made-up number for an
@@ -2137,8 +2142,8 @@ below every record's: Decision 3 makes up no number for an unquantified statemen
 one. A number would have to come from the method's own false-negative rate per region (RM279's atlas),
 not from a constant; until the person asks for one, none is given. `records` counts the records
 covering the position (0 for `absence` and `none`). Where several do, one answers: a call starting at
-the position, else the call starting nearest before it, else the block (a facet's blocks do not
-overlap one another, so there is at most one); among calls of one span, one stating an ALT before one
+the position, else the call starting nearest before it, else the block starting nearest before it
+(a lifted facet's blocks can overlap), the shortest first, a `no_call` block before a `ref` one; among calls of one span, one stating an ALT before one
 stating nothing before one stating hom-ref, then a quantified one before an unquantified one, the
 least `confidence` first, then by allele list (and, past that, the genotype, the basis and the
 vector), so no tie depends on the order a join emits rows. A GATK gVCF does start a

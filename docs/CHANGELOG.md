@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- Overlapping blocks are read whole. `liftover` keeps the overlapping blocks two source regions sent
+  to one place give (a lifted WGS gVCF carries hundreds of thousands), but `genotype_evidence_at`,
+  `reference_support`, `concordance` and `consensus` took the block over a position to be the last one
+  starting at or before it. Past an inner block's end the outer block was missed: `reference_support`
+  answered `none`, `concordance` read the absence `unknown` and `consensus` counted the facet silent,
+  and `records` undercounted inside both. Every covering block is found now (`intervals.covering`: an
+  as-of join where blocks tile, a range join only for blocks that reach their successor), and where
+  one block must answer it is the nearest-starting, then the shortest, then a `no_call` before a `ref`.
+  **Values change** on facets with overlapping blocks; a tiled gVCF's answers do not.
+
 - A consensus facet records its parents' REF states (`facets.resolve_inputs`, schema 0.0.21). Its
   `facet_id` digests its parents' ids, which `resolve_ref` keeps, and its `resolve_version` is null
   wherever the parents differ, so two builds over parents read by other `RESOLVE_VERSION`s had the same

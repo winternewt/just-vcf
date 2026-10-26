@@ -55,6 +55,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
+from just_vcf.intervals import covering, nearest_block
 from just_vcf.loading import Loaded
 from just_vcf.reference import PRIMARY, ReferenceMismatchError, ReferenceStore, _store_for
 from just_vcf.schema import CONTIG_RANK, BlockKind, VariantClass, canonical_chrom, canonical_chrom_expr, enum_dtype
@@ -787,17 +788,15 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
 
 
 def _block_reading(mine: pl.DataFrame, other: Loaded) -> pl.DataFrame:
-    """`_block`: the kind of the other facet's block over the position, where no row of it is there."""
+    """`_block`: the kind of the other facet's block over the position, where no row of it is there.
+    Where several cover it (a lifted facet keeps overlapping blocks), the one `reference_support`
+    answers with (`intervals.nearest_block`)."""
+    probe = mine.with_row_index("_probe")
+    silent = probe.filter(pl.col("_rows").is_null()).select("_probe", "chrom", pl.col("pos").cast(pl.Int64).alias("_at"))
     blocks = other.blocks.select("chrom", pl.col("pos").cast(pl.Int64).alias("_start"), pl.col("end_pos").cast(pl.Int64).alias("_end"), pl.col("kind").cast(pl.String))
-    probe = mine.with_columns(pl.col("pos").cast(pl.Int64).alias("_at"))
-    needed = probe.filter(pl.col("_rows").is_null()).select("chrom").unique()
-    blocks = blocks.join(needed.lazy(), on="chrom", how="semi").sort("chrom", "_start").collect()
-    if blocks.is_empty():
-        return mine.with_columns(pl.lit(None, dtype=pl.String).alias("_block"))
-    hit = probe.sort("chrom", "_at").join_asof(blocks, left_on="_at", right_on="_start", by="chrom", strategy="backward", check_sortedness=False)
-    return hit.with_columns(
-        pl.when(pl.col("_rows").is_null() & pl.col("_end").is_not_null() & (pl.col("_at") <= pl.col("_end"))).then(pl.col("kind")).alias("_block")
-    ).drop("_at", "_start", "_end", "kind")
+    hits = covering(silent.lazy(), blocks, silent["chrom"].unique().to_list(), at="_at", start="_start", end="_end").collect()
+    chosen = nearest_block(hits, "_probe", start="_start", end="_end").select("_probe", pl.col("kind").alias("_block"))
+    return probe.join(chosen, on="_probe", how="left", maintain_order="left").drop("_probe")
 
 
 def _declared_contigs(loaded: Loaded, facet: Mapping) -> set[str]:

@@ -1126,8 +1126,9 @@ event goes to five columns, each just-vcf's own shape (VRS has no Allele for the
 
 Each of these is null on a row that is no SV. `normalize` leaves symbolic sites as written; on a
 sequence site it splits, each row keeps its own ALT's pair and copy number, and a row it moves loses
-`cipos` and `ciend` (offsets from the POS the source wrote), as a lifted row does. Comparing SV calls
-across facets (truvari, docs/LANDSCAPE.md) is not built.
+`cipos` and `ciend` (offsets from the POS the source wrote), as a lifted row does. `concordance`
+compares SV calls across facets by type and extent, as truvari does ("Concordance between two
+facets", RM282); breakends are not compared yet.
 
 Measured 2026-10-23 on the PGP-HMS SV and CNV files (aggregates): a Manta `.sv.` file, 9,373 calls
 (4,366 sequence-written indels, 3,350 breakends, 848 `<DEL>`, 558 `<DUP:TANDEM>`, 251 `<INS>`); a
@@ -2288,9 +2289,10 @@ match stay unread either way), and the rest are counted as `contig_not_shared`. 
 on both is compared with a warning, since a label is not the assembly (charter 3); anything else is
 refused. Rejected: comparing by label alone. GRCh37 and hg19 share it and differ in MT.
 
-**The unit is one ALT allele**, Decision 1's per-allele view. Only sequence alleles are compared:
-`<*>`, `*`, symbolic alleles and breakends, ALTs that are no VCF allele, rows whose REF was never
-read, and array rows whose `alts` are still null are counted in `excluded`. An allele meets the other
+**The unit is one ALT allele**, Decision 1's per-allele view. Sequence alleles meet as below;
+symbolic structural-variant alleles meet by type and extent ("Structural variants", below, RM282).
+`<*>`, `*`, breakends (`breakend`), ALTs that are no VCF allele, rows whose REF was never read, and
+array rows whose `alts` are still null are counted in `excluded`. A sequence allele meets the other
 facet's in this order, each row saying which in `key`:
 
 1. `vrs`: both rows minted an id for it (the ALT's slot of `vrs_allele_ids`, never the REF slot: a
@@ -2390,9 +2392,9 @@ reading `reference` or a block as `0/0` would turn graded absence into a call.
 | Column | Dtype | Meaning |
 |---|---|---|
 | `chrom`, `pos`, `ref`, `alt` | `str`, `u32`, `str`, `str` | the allele as the facet stating it wrote it, `a` first |
-| `variant_class` | `Enum` | `snv`, `mnv` or `indel` (Decision 5's rule) |
+| `variant_class` | `Enum` | `snv`, `mnv`, `indel` or `sv` (Decision 5's rule) |
 | `vrs_allele_id` | `str` | either facet's id for the allele; null where neither minted one |
-| `key` | `Enum` | `vrs`, `position`, `site`; null on a one-sided allele |
+| `key` | `Enum` | `vrs`, `position`, `site`, `extent` (an SV pair); null on a one-sided allele |
 | `agreement` | `Enum` | above |
 | `absence` | `Enum` | above; null where both facets state the allele |
 | `basis` | `Enum` | `gl_flat_prior`, `gp`, `hard`; null on a one-sided allele |
@@ -2402,9 +2404,16 @@ reading `reference` or a block as `0/0` would turn graded absence into a call.
 | `a_copies`, `b_copies` | `u8` | copies of the allele; null where a haplotype is uncalled or unreadable |
 | `ploidy_differs` | `bool` | the two genotypes were written with different numbers of haplotypes; null on a one-sided allele |
 | `a_filters`, `b_filters`, `a_gq`, `b_gq` | `list[str]`, `u16` | each row's FILTER and GQ, so a consumer can restrict to PASS |
+| `sv_kind` | `str` | an SV allele's type as matched (below); null on a sequence allele |
+| `b_alt` | `str` | on an `extent` pair, `b`'s ALT as written (`<DUP>` beside `a`'s `<DUP:TANDEM>`); null otherwise |
+| `a_end_pos`, `b_end_pos` | `u32` | an SV allele's `end_pos` on each side stating it; null on a sequence allele |
+| `size_similarity`, `reciprocal_overlap` | `f64` | truvari's measures of an `extent` pair (below); `size_similarity` null where either size is unknown |
+| `ci_needed` | `bool` | on an `extent` pair, True where the two met only once CIPOS/CIEND widened them; null otherwise |
+
+The last seven columns came with RM282 (2026-10-26), after the rest: added, nothing redefined.
 
 **`summary`** (`summarize(sites)`) counts alleles per `(agreement, ploidy_differs, key, absence,
-variant_class, basis)` with the mean `p_same`; its counts sum to the height of `sites`. Run it on a filtered `sites`
+variant_class, sv_kind, basis)` with the mean `p_same`; its counts sum to the height of `sites`. Run it on a filtered `sites`
 (PASS only, alleles either facet carries) to summarize that subset.
 
 **`region`** keeps the alleles whose `pos` lies in one of its intervals: a frame with `chrom`, `pos`
@@ -2413,6 +2422,84 @@ contig spelling. Both facets are cut before they meet, so an indel met by VRS id
 straddle an edge counts on each side alone. RM279's atlas does not cut per stratum: it compares once
 and places each allele in its strata ("A method-error atlas"). Rejected: carrying the region's own
 columns (a stratum name) into `sites`, which overlapping strata would duplicate.
+
+**Structural variants (RM282)** meet by type and extent, as truvari bench matches them (truvari 5.5,
+MIT; its wiki page "bench", "Matching Parameters", and the code those defaults run:
+`VariantParams.DEFAULTS` and `VariantRecord.var_match`, read 2026-10-26). A symbolic allele
+(`<DEL>`, `<DUP:TANDEM>`, `<INV>`, `<INS>`, `<CNV>`, `<CN0>`) is not paired by VRS id or spelling,
+since the frame withholds its id (`sv_no_vrs_model`) and two callers rarely write one END. The
+thresholds are `SvMatching`'s, named and defaulted as truvari's:
+
+| Parameter | Default | Rule |
+|---|---|---|
+| `refdist` | 500 | the two extents lie within this many bases: truvari's `overlaps(start - refdist, end + refdist, other start, other end)`, strict, so a call 500 bases past the other's end still meets it, 501 does not. Looser than the wiki's "within from the base call's start/end": the code is followed |
+| `pctsize` | 0.7 | `min(size) / max(size)`; a zero size counts as one base, two zeros are equal (truvari's `sizesim`) |
+| `pctovl` | 0.0 | shared bases over the longer extent (truvari's `reciprocal_overlap`), so 0.0 takes any pair within `refdist` |
+| `typeignore` | False | True pairs across types (truvari's `--typeignore`) |
+
+Coordinates: a call's extent is truvari's half-open `[pos - 1, end_pos)`, the anchor base and the
+event, converted from the frame's 1-based closed positions in one place (`concordance._sv_side`).
+Size is `end_pos - pos` for the types whose `end_pos` is the event's end (`<DEL>`, `<DUP>`, `<INV>`,
+`<CNV>`, `<CNn>`), as `write_vcf` writes SVLEN and as truvari reads a stated SVLEN; truvari's
+fallback where SVLEN is missing, `end - start` on its half-open extent, is one base more. Where the record has several ALTs, its `end_pos` is the site's, the largest of
+its alleles' ends.
+
+What differs from truvari, each with its reason:
+
+- **Type from the ALT, not SVTYPE.** truvari reads INFO `SVTYPE` first. The frame's `sv_type` is the
+  record's claim, and DRAGEN's copy-number caller writes `SVTYPE=CNV` on both its `<DEL>` and its
+  `<DUP>`, Canvas `LOH` on `<CN0>,<CN2>`: read first, it would pair a loss with a gain and never meet
+  another caller's `<DEL>`. The type is the symbolic ALT's name before any `:`, so `<DUP:TANDEM>` is
+  `DUP` (truvari also drops subtypes); a copy-number allele keeps its number (`CN0`), so a loss of
+  both copies does not meet a loss of one.
+- **No size where the frame keeps none.** truvari takes SVLEN, else `end - start`. The frame keeps
+  no SVLEN (above, the person's open call), so an `<INS>`'s length, and any type's whose `end_pos` is
+  its anchor (Delly's `<TRA>`), is unknown: `size_similarity` is null, the size threshold is not
+  checked, and the pair is counted in a warning. truvari without SVLEN sizes an insertion by its
+  `end - start`, one base, so any two insertions are equal in size (similarity 1) on no evidence.
+  Such pairs meet by type and distance only, which is weaker than truvari's match with SVLEN.
+- **CIPOS and CIEND widen the distance test.** truvari reads them only for breakends (`bnd_match`).
+  Here each call's extent is widened to the earliest its start and the latest its end can be: the
+  start by `|CIPOS[0]|`, the end by `|CIEND[1]|`, or by `|CIPOS[1]|` where CIEND is missing (VCF 4.5:
+  assume CIPOS; the frame leaves that to its consumer, which this is). Only the `refdist` test uses
+  the widened extents; size and overlap use the stated ones. A `.` in an interval widens nothing.
+  `ci_needed` says when a pair met only by the widening.
+- **No sequence similarity.** truvari's `pctseq` (0.7) runs only when both calls carry sequence; no
+  symbolic allele carries one in the frame, so it is never run, as with `--pctseq 0`. A deletion
+  written out base by base is an `indel`, compared allele by allele above, never against a symbolic
+  call: matching across the two representations is not built.
+- **Breakends are not compared** (`excluded`, `breakend`). truvari matches them by `bnddist` (100)
+  around both breakpoints and the join's direction and strand, and decomposes a `<DEL>` into
+  breakends to meet them. Neither is built.
+- **No size filter.** truvari leaves out calls under `sizemin` (50). A symbolic allele is an SV by
+  its writer's statement whatever its length, and every one is compared.
+
+**One pair per allele.** Each allele is taken at most once (truvari's `--pick single`): the passing
+pairs are taken best first, by score (size similarity plus reciprocal overlap, truvari's TruScore
+without its sequence term; a withheld size counts 0), then the nearer start, then the nearer end, then
+each side's row order, which truvari leaves to its sort and is the tie-break that makes the pick
+deterministic. A sequence allele stated twice keeps every pairing, since its pairing is identity; an
+extent match is a judgement of nearness, and taking a call twice would count one event as two.
+
+**Genotypes of a pair** compare as copies of each side's own ALT, with the agreement, ploidy flag and
+graded `p_same` above. A haplotype holding another allele of its record (`<CN2>` beside `<CN0>`, GT
+`1/2`) is not a copy: a symbolic allele has no bases for the sequence reading above to trim.
+
+**A one-sided SV** reads the silent facet's SVs first: an SV of its own whose extent lies within
+`refdist` of this one's (widened as above), of any type or size, makes `other_alleles`. Otherwise the
+facet's rule for the `sv` class (`absence_is_reference`): `reference` only for a whole-genome
+callset without blocks that counted `sv` alleles and was not filtered to one class, `unknown`
+otherwise. So an array, an exome, a small-variant WGS callset, a `.sv.` or `.cnv.` file (filtered to
+SVs, so it says nothing even about its own class without `force`) leave an SV the other facet called
+`unknown`, never `mismatch` and never `reference`. Blocks are not read: a block states the bases a
+small-variant caller saw, and an SV's anchor base lies outside the event. The `site` reading of a
+sequence allele is not done either: a row at the anchor says nothing about the event after it.
+
+Measured 2026-10-26 on hu416394's Manta, Canvas and bcftools gVCF facets (one sequencing run;
+aggregates only): Manta against Canvas meets no pair at the defaults, every Canvas allele being a
+`<CNn>`; with `typeignore` 35 meet, 10 of them `<INS>` beside copy-number alleles, unsized. Against the
+gVCF every SV is one-sided and `unknown`. Whether a copy-number allele should meet a `<DEL>` or `<DUP>`
+as a loss or a gain is open (RM282).
 
 ## A method-error atlas (RM279)
 
@@ -2900,6 +2987,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 - **No version change** (2026-10-23, RM278 coverage facets): no column of `facets`, `calls` or
   `blocks` changes. `read_coverage`, `alignment_coverage` and `callable_sites` return their own
   `Coverage` shape beside the frames ("Coverage facets", above).
+
+- **No version change** (2026-10-26, RM282 SV concordance): no column of `facets`, `calls` or
+  `blocks` changes. `concordance`'s own frames gain what an SV pair needs: `sites` adds `sv_kind`,
+  `b_alt`, `a_end_pos`, `b_end_pos`, `size_similarity`, `reciprocal_overlap` and `ci_needed`, `key`
+  adds `extent`, `summary` groups by `sv_kind` too, and `excluded` counts breakends as `breakend`.
+  **Values change**: a symbolic allele, counted in `excluded` as `symbolic` before, is now a row of
+  `sites`, so `sites`, `summary` and RM279's atlas (class `sv`) count it. Additive otherwise.
 
 - **No version change** (2026-10-23, RM277 concordance): no column changes to `facets`, `calls` or
   `blocks`. `concordance` returns its own frames ("Concordance between two facets"), a measurement

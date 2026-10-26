@@ -33,18 +33,26 @@ and why. Disagreement is kept as rows, never resolved to a winner. The rules are
 5. **One-sided alleles** say what the silent facet's silence means: a `ref` or `no_call` block over
    the position, `other_alleles` (rows at the position, none holding the allele), else the facet's
    own rule (`absence_is_reference`: `reference`, or `unknown`, never a negative).
+6. **Structural variants meet by type and extent** (RM282), as truvari bench matches them
+   (`SvMatching`, its defaults): a symbolic allele (`<DEL>`, `<DUP:TANDEM>`, `<CN0>`) pairs with at
+   most one of the other facet's, of the same type (the ALT's name before any `:`), whose extent lies
+   within `refdist` of its own (each widened by its CIPOS/CIEND), of similar size (`pctsize`) and
+   overlap (`pctovl`); the best-scoring pair is taken first (key `extent`). Genotypes compare as in 3
+   and 4. A one-sided SV reads the silent facet's SVs within `refdist` (`other_alleles`), else its
+   absence rule for the `sv` class, so a facet that called no SVs leaves it `unknown`. Breakends are
+   not compared (`breakend`).
 
 Coordinates: every position column is 1-based (charter 13); `region` takes 1-based closed intervals.
 """
 
 import logging
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import Enum
 from pathlib import Path
 
 import polars as pl
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
 from just_vcf.loading import Loaded
@@ -86,6 +94,9 @@ class PairKey(str, Enum):
     SITE = "site"
     """The other facet does not state the allele, and wrote exactly one row at its position: the
     genotype of that row is read for copies of the allele."""
+    EXTENT = "extent"
+    """Two structural-variant alleles of one type whose extents meet under `SvMatching`'s thresholds
+    (truvari's matching), each taken once."""
 
 
 class AbsenceReading(str, Enum):
@@ -139,6 +150,13 @@ SITES = pl.Schema(
         "b_copies": pl.UInt8,
         "b_filters": pl.List(pl.String),
         "b_gq": pl.UInt16,
+        "sv_kind": pl.String,
+        "b_alt": pl.String,
+        "a_end_pos": pl.UInt32,
+        "b_end_pos": pl.UInt32,
+        "size_similarity": pl.Float64,
+        "reciprocal_overlap": pl.Float64,
+        "ci_needed": pl.Boolean,
     }
 )
 """One row per allele either facet states. `pos`, `ref` and `alt` are the spelling of the facet that
@@ -146,7 +164,13 @@ states it (`a` first); `a_pos` and `b_pos` are where each facet wrote it, which 
 the two spelled at different positions and met by VRS id. `a_copies` and `b_copies` are the copies of
 the allele in each genotype, null where a haplotype is uncalled. `ploidy_differs` is True where the two
 genotypes were written with different numbers of haplotypes, False where with the same, null where
-either side has no genotype."""
+either side has no genotype.
+
+The last seven columns are a structural-variant allele's, null on any other: `sv_kind` is the type it
+was matched by; on a pair met by extent, `b_alt` is `b`'s ALT as written (`<DUP>` beside `a`'s
+`<DUP:TANDEM>`), `size_similarity` and `reciprocal_overlap` are truvari's measures of the two
+extents, and `ci_needed` is True where the two met only once their confidence intervals widened them;
+`a_end_pos` and `b_end_pos` are each stating side's extent."""
 
 SUMMARY = pl.Schema(
     {
@@ -155,6 +179,7 @@ SUMMARY = pl.Schema(
         "key": enum_dtype(PairKey),
         "absence": enum_dtype(AbsenceReading),
         "variant_class": enum_dtype(VariantClass),
+        "sv_kind": pl.String,
         "basis": enum_dtype(ComparisonBasis),
         "alleles": pl.UInt32,
         "p_same_mean": pl.Float64,
@@ -162,12 +187,28 @@ SUMMARY = pl.Schema(
 )
 
 EXCLUDED_REASONS: frozenset[str] = frozenset(
-    {"unspecified", "spanning_deletion", "not_a_variant", "symbolic", "not_sequence", "ref_unread", "alts_unread", "contig_not_shared"}
+    {"unspecified", "spanning_deletion", "not_a_variant", "breakend", "not_sequence", "ref_unread", "alts_unread", "contig_not_shared"}
 )
 """Why an allele was left out of the comparison. An open vocabulary."""
 
 _MAX_GENOTYPE_ALLELES = 64
 """The largest allele list whose diploid genotype order the graded comparison enumerates."""
+
+
+class SvMatching(BaseModel):
+    """How `concordance` matches structural-variant alleles by type and extent (docs/SCHEMA.md,
+    "Concordance"). The names and defaults are truvari bench's (truvari 5.5, `VariantParams.DEFAULTS`;
+    its `VariantRecord.var_match` is the rule): `refdist` bases between the two extents, `pctsize` the
+    least size similarity, `pctovl` the least reciprocal overlap, `typeignore` to pair across types.
+    truvari's `pctseq` has no counterpart: no symbolic allele carries its sequence in the frame, as with
+    truvari's `--pctseq 0`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    refdist: int = Field(500, ge=0)
+    pctsize: float = Field(0.7, ge=0.0, le=1.0)
+    pctovl: float = Field(0.0, ge=0.0, le=1.0)
+    typeignore: bool = False
 
 
 class Concordance(BaseModel):
@@ -180,18 +221,18 @@ class Concordance(BaseModel):
     sites: pl.LazyFrame
     """`SITES`' columns, one row per allele, in canonical order."""
     summary: pl.DataFrame
-    """`summarize(sites)`: alleles per agreement, ploidy flag, key, absence, variant class and basis."""
+    """`summarize(sites)`: alleles per agreement, ploidy flag, key, absence, variant class, SV type and basis."""
     excluded: pl.DataFrame
     """Alleles not compared, per facet (`a`, `b`) and reason (`EXCLUDED_REASONS`)."""
     warnings: tuple[str, ...] = ()
 
 
 def summarize(sites: pl.LazyFrame | pl.DataFrame) -> pl.DataFrame:
-    """Alleles per `(agreement, ploidy_differs, key, absence, variant_class, basis)`, with the mean `p_same` of the
-    graded ones; every count sums to the height of `sites`. Run it again on a filtered `sites` (PASS
+    """Alleles per `(agreement, ploidy_differs, key, absence, variant_class, sv_kind, basis)`, with the mean
+    `p_same` of the graded ones; every count sums to the height of `sites`. Run it again on a filtered `sites` (PASS
     only, alleles either facet carries) to summarize that subset."""
     frame = sites.lazy() if isinstance(sites, pl.DataFrame) else sites
-    groups = ["agreement", "ploidy_differs", "key", "absence", "variant_class", "basis"]
+    groups = ["agreement", "ploidy_differs", "key", "absence", "variant_class", "sv_kind", "basis"]
     return (
         frame.group_by(groups)
         .agg(pl.len().cast(pl.UInt32).alias("alleles"), pl.col("p_same").mean().alias("p_same_mean"))
@@ -208,13 +249,15 @@ def concordance(
     *,
     region: pl.LazyFrame | pl.DataFrame | None = None,
     reference: "ReferenceStore | Path | str | None" = None,
+    sv: SvMatching | None = None,
 ) -> Concordance:
     """Compare facet `a` with facet `b`, allele by allele (module docstring, docs/SCHEMA.md).
 
     Each `Loaded` holds one facet. `region` keeps only the alleles whose position lies in one of its
     intervals: a frame with `chrom`, `pos` and `end_pos`, 1-based and closed, as `blocks` writes them
     (a BED's 0-based start is `pos - 1`). `reference` is the store holding both facets' collections,
-    read only when the collections differ (default: `reference_dir()`).
+    read only when the collections differ (default: `reference_dir()`). `sv` sets how structural-variant
+    alleles are matched (default: `SvMatching()`, truvari's defaults).
 
     Raises `ReferenceMismatchError` when the two are not on one assembly (lift one first) and
     `ValueError` when a `Loaded` holds several facets or the assembly cannot be told.
@@ -226,6 +269,9 @@ def concordance(
     excluded: Counter[tuple[str, str]] = Counter()
     side_a = _alleles(a.calls, shared, region, excluded, "a")
     side_b = _alleles(b.calls, shared, region, excluded, "b")
+    is_sv = pl.col("variant_class") == VariantClass.SV.value
+    sv_a, sv_b = side_a.filter(is_sv), side_b.filter(is_sv)
+    side_a, side_b = (side.filter(~is_sv).drop(_SV_INPUTS) for side in (side_a, side_b))
 
     pairs = _pair(side_a, side_b, warnings)
     paired_a = pairs.select("_a_row", "_a_k").unique()
@@ -236,6 +282,8 @@ def concordance(
     alone_b = _one_sided(rest_b, a, fa, "b", "a", warnings) if rest_b.height else None
 
     pieces = [_two_sided(pairs, warnings) if pairs.height else None, alone_a, alone_b]
+    if sv_a.height or sv_b.height:
+        pieces += _sv_sites(sv_a, sv_b, (a, fa), (b, fb), sv or SvMatching(), warnings)
     present = [_conform(piece) for piece in pieces if piece is not None]
     sites = pl.concat(present, how="vertical") if present else pl.DataFrame(schema={**SITES, **_ROWS})
     sites = _ordered(sites).select(SITES.names())
@@ -295,7 +343,7 @@ def _shared_contigs(fa: Mapping, fb: Mapping, reference: "ReferenceStore | Path 
 
 def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame | pl.DataFrame | None, excluded: Counter, side: str) -> pl.DataFrame:
     """One row per sequence ALT allele of the facet, with what the comparison reads."""
-    rows = calls.select("chrom", "pos", "ref", "source_ref", "alts", "vrs_allele_ids", "gt_alleles", "source_alleles", "gl", "gp", "filters", "gq")
+    rows = calls.select("chrom", "pos", "ref", "source_ref", "alts", "vrs_allele_ids", "gt_alleles", "source_alleles", "gl", "gp", "filters", "gq", *_SV_INPUTS)
     rows = rows.with_row_index("_row")
     unread = rows.filter(pl.col("alts").is_null() & pl.col("gt_alleles").is_not_null()).select(pl.len()).collect().item()
     if unread:
@@ -320,8 +368,10 @@ def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame 
         .then(pl.lit("spanning_deletion"))
         .when(pl.col("alt").is_in(list(NOT_A_VARIANT)))
         .then(pl.lit("not_a_variant"))
+        .when((pl.col("variant_class") == VariantClass.SV.value) & ~pl.col("alt").str.starts_with("<"))
+        .then(pl.lit("breakend"))
         .when(pl.col("variant_class") == VariantClass.SV.value)
-        .then(pl.lit("symbolic"))
+        .then(None)
         .when(pl.col("_ref").is_null())
         .then(pl.lit("ref_unread"))
         .when(pl.col("variant_class").is_null())
@@ -457,9 +507,21 @@ def _holds(ref: str, alt: str, held: str) -> int:
     return HOLDS_NOT if pure(a_start, a_end, a_bases) and pure(h_start, h_end, h_bases) else UNREADABLE
 
 
-def _codes(frame: pl.DataFrame, alleles: str, ref: str, alt: str) -> pl.Series:
+def _another_allele(ref: str, alt: str, held: str) -> int:
+    """A structural-variant allele's reading of a haplotype that is neither it nor REF: another allele
+    of its record (Canvas's `<CN2>` beside `<CN0>`), so not a copy. A symbolic allele has no bases to
+    trim, so `_holds` cannot read it."""
+    return HOLDS_NOT
+
+
+Reader = Callable[[str, str, str], int]
+"""Reads a haplotype `held` for the allele `alt` over `ref`: `HOLDS`, `HOLDS_NOT` or `UNREADABLE`."""
+
+
+def _codes(frame: pl.DataFrame, alleles: str, ref: str, alt: str, reader: Reader = _holds) -> pl.Series:
     """Per row, what each entry of the list column `alleles` says of `alt`'s change over `ref`
-    (`_holds`), null where the entry is null; a null or empty list gives null."""
+    (`reader`: `_holds` for a sequence allele, `_another_allele` for a structural one), null where the
+    entry is null; a null or empty list gives null."""
     work = frame.select(
         pl.col(alleles).alias("_h"), pl.col(ref).str.to_uppercase().alias("_r"), pl.col(alt).str.to_uppercase().alias("_x")
     ).with_row_index("_i")
@@ -479,17 +541,17 @@ def _codes(frame: pl.DataFrame, alleles: str, ref: str, alt: str) -> pl.Series:
     other = long.filter(pl.col("_h").is_not_null() & pl.col("_code").is_null())
     if other.height:
         read = other.select("_i", "_s").with_columns(
-            pl.Series("_read", [_holds(r, x, h) for r, x, h in other.select("_r", "_x", "_h").iter_rows()], dtype=pl.Int8)
+            pl.Series("_read", [reader(r, x, h) for r, x, h in other.select("_r", "_x", "_h").iter_rows()], dtype=pl.Int8)
         )
         long = long.join(read, on=["_i", "_s"], how="left").with_columns(pl.coalesce("_code", "_read").alias("_code"))
     lists = long.group_by("_i").agg(pl.col("_code").sort_by("_s"))
     return work.select("_i").join(lists, on="_i", how="left").sort("_i")["_code"]
 
 
-def _read(frame: pl.DataFrame, gt: str, ref: str, alt: str, name: str) -> tuple[pl.DataFrame, tuple[str, str, str, str]]:
-    """`frame` with the genotype `gt` read for `alt`'s change over `ref` (`_holds`): the haplotypes
+def _read(frame: pl.DataFrame, gt: str, ref: str, alt: str, name: str, reader: Reader = _holds) -> tuple[pl.DataFrame, tuple[str, str, str, str]]:
+    """`frame` with the genotype `gt` read for `alt`'s change over `ref` (`reader`): the haplotypes
     holding it, the null ones, the unreadable ones and the ploidy, as columns `_{name}_c`, `_n`, `_u`, `_p`."""
-    codes = _codes(frame, gt, ref, alt)
+    codes = _codes(frame, gt, ref, alt, reader)
     columns = (f"_{name}_c", f"_{name}_n", f"_{name}_u", f"_{name}_p")
     read = frame.with_columns(
         codes.list.eval(pl.element() == HOLDS).list.sum().fill_null(0).cast(pl.Int32).alias(columns[0]),
@@ -575,7 +637,7 @@ def _two_sided(pairs: pl.DataFrame, warnings: list[str]) -> pl.DataFrame:
     return sites
 
 
-def _distribution(pairs: pl.DataFrame, side: str, vector: str) -> pl.DataFrame:
+def _distribution(pairs: pl.DataFrame, side: str, vector: str, reader: Reader = _holds) -> pl.DataFrame:
     """Per pair, the probability of each share of copies of the allele under `side`'s `vector`, as
     `_dose`: the copies on a diploid scale (a haploid copy counts 2), so two ploidies compare.
 
@@ -588,7 +650,7 @@ def _distribution(pairs: pl.DataFrame, side: str, vector: str) -> pl.DataFrame:
     if usable.is_empty():
         return pl.DataFrame(schema={"_pair": pl.UInt32, "_dose": pl.Int32, "_p": pl.Float64})
     width = min(_max_ploidy(usable, alleles), _MAX_GENOTYPE_ALLELES)
-    usable = usable.with_columns(_codes(usable, alleles, f"_{side}_ref", alt).alias("_carry"))
+    usable = usable.with_columns(_codes(usable, alleles, f"_{side}_ref", alt, reader).alias("_carry"))
     hits = pl.sum_horizontal([(pl.col(alleles).list.get(j, null_on_oob=True) == pl.col(alt)).fill_null(False).cast(pl.Int32) for j in range(width)])
     n = pl.col(alleles).list.len().cast(pl.Int64)
     length = pl.col(values).list.len().cast(pl.Int64)
@@ -635,13 +697,13 @@ def _diploid_order() -> pl.DataFrame:
     return pl.DataFrame(rows, schema={"_g": pl.Int64, "_j": pl.Int32, "_k": pl.Int32}, orient="row")
 
 
-def _graded(pairs: pl.DataFrame) -> pl.DataFrame:
+def _graded(pairs: pl.DataFrame, reader: Reader = _holds) -> pl.DataFrame:
     """`basis` and `p_same` for the pairs both of whose rows carry a usable vector of one kind."""
     found = []
     taken = pl.DataFrame(schema={"_pair": pl.UInt32})
     for vector, basis in (("gl", ComparisonBasis.GL_FLAT_PRIOR), ("gp", ComparisonBasis.GP)):
-        da = _distribution(pairs, "a", vector)
-        db = _distribution(pairs, "b", vector)
+        da = _distribution(pairs, "a", vector, reader)
+        db = _distribution(pairs, "b", vector, reader)
         both = da.select("_pair").unique().join(db.select("_pair").unique(), on="_pair").join(taken, on="_pair", how="anti")
         if both.is_empty():
             continue
@@ -744,6 +806,169 @@ def _declared_contigs(loaded: Loaded, facet: Mapping) -> set[str]:
     for frame in (loaded.calls, loaded.blocks):
         declared |= set(frame.select(pl.col("chrom").unique()).collect()["chrom"].to_list())
     return declared
+
+
+_SV_INPUTS = ("end_pos", "cipos", "ciend")
+"""The `calls` columns only a structural-variant allele's comparison reads."""
+
+LENGTH_KINDS: frozenset[str] = frozenset({"DEL", "DUP", "INV", "CNV"})
+"""SV types whose `end_pos` is the end of the event (docs/SCHEMA.md, `end_pos`), so that `end_pos -
+pos` is its size, as `write_vcf` writes SVLEN; the copy-number alleles `<CN0>`, `<CN2>`… are too. Any
+other type (`<INS>`, whose length the frame does not keep; Delly's `<TRA>`) has no size."""
+
+_COPY_NUMBER_KIND = r"^CN\d+$"
+
+
+def _sv_side(side: pl.DataFrame, name: str) -> pl.DataFrame:
+    """One facet's SV alleles with what matching reads, named for side `name` as `_pair` names them:
+    the type, the size, the extent as truvari's half-open `[pos - 1, end_pos)` (the anchor base and the
+    event; the one place 1-based closed positions turn into it), and that extent widened by the
+    allele's own CIPOS and CIEND (VCF 4.5: a missing CIEND is CIPOS)."""
+    k2 = pl.col("_k").cast(pl.Int64) * 2
+    kind = pl.col("alt").str.extract(r"^<([^:>]+)", 1)
+    lo = pl.col("cipos").list.get(k2, null_on_oob=True)
+    hi = pl.coalesce(pl.col("ciend").list.get(k2 + 1, null_on_oob=True), pl.col("cipos").list.get(k2 + 1, null_on_oob=True))
+    frame = side.with_columns(
+        kind.alias("_kind"),
+        pl.when(kind.is_in(sorted(LENGTH_KINDS)) | kind.str.contains(_COPY_NUMBER_KIND))
+        .then(pl.col("end_pos").cast(pl.Int64) - pl.col("pos").cast(pl.Int64))
+        .alias("_size"),
+        (pl.col("pos").cast(pl.Int64) - 1).alias("_s"),
+        pl.col("end_pos").cast(pl.Int64).alias("_e"),
+    ).with_columns(
+        (pl.col("_s") - lo.abs().cast(pl.Int64).fill_null(0)).alias("_ws"),
+        (pl.col("_e") + hi.abs().cast(pl.Int64).fill_null(0)).alias("_we"),
+    )
+    return frame.rename({column: f"_{name}_{column.lstrip('_')}" if column.startswith("_") else f"{name}_{column}" for column in frame.columns})
+
+
+def _sv_candidates(a: pl.DataFrame, b: pl.DataFrame, params: SvMatching) -> pl.DataFrame:
+    """Every pair of `a`'s and `b`'s SV alleles on one contig whose widened extents lie within
+    `refdist` of each other (truvari's `overlaps(start - refdist, end + refdist, ...)`, strict), with
+    truvari's measures and whether the pair passes the rest of the thresholds (`_passes`)."""
+    r = params.refdist
+    pairs = a.join_where(
+        b, pl.col("a_chrom") == pl.col("b_chrom"), pl.col("_a_ws") - r < pl.col("_b_we"), pl.col("_b_ws") < pl.col("_a_we") + r
+    )
+    sa, sb = pl.col("_a_size"), pl.col("_b_size")
+    # truvari's `sizesim`: a zero size counts as one base, two zeros are the same size.
+    za, zb = pl.max_horizontal(sa, pl.lit(1)), pl.max_horizontal(sb, pl.lit(1))
+    similarity = pl.when((sa == 0) & (sb == 0)).then(pl.lit(1.0)).otherwise(pl.min_horizontal(za, zb) / pl.max_horizontal(za, zb))
+    shared = pl.min_horizontal("_a_e", "_b_e") - pl.max_horizontal("_a_s", "_b_s")
+    longest = pl.max_horizontal(pl.col("_a_e") - pl.col("_a_s"), pl.col("_b_e") - pl.col("_b_s"))
+    stated = (pl.col("_a_s") - r < pl.col("_b_e")) & (pl.col("_b_s") < pl.col("_a_e") + r)
+    pairs = pairs.with_columns(
+        pl.when(sa.is_not_null() & sb.is_not_null()).then(similarity).alias("size_similarity"),
+        pl.when(shared > 0).then(shared / longest).otherwise(pl.lit(0.0)).alias("reciprocal_overlap"),
+        (~stated).alias("ci_needed"),
+    )
+    same_type = pl.lit(True) if params.typeignore else pl.col("_a_kind") == pl.col("_b_kind")
+    # A size withheld on either side (an `<INS>`) leaves the size threshold unchecked, never passed.
+    sized = pl.col("size_similarity").is_null() | (pl.col("size_similarity") >= params.pctsize)
+    return pairs.with_columns((same_type & sized & (pl.col("reciprocal_overlap") >= params.pctovl)).alias("_passes"))
+
+
+def _pick_single(candidates: pl.DataFrame) -> pl.DataFrame:
+    """truvari's `--pick single`: the passing pairs best first (score, then the nearer start and end),
+    each allele taken at most once. truvari's score is `(pctseq + pctsize + pctovl) / 3` with `pctseq`
+    0 for a symbolic allele; a size withheld counts 0. Ties, which truvari leaves to its sort, fall to
+    each side's row order, so the pick is deterministic."""
+    passing = candidates.filter(pl.col("_passes")).with_columns(
+        (pl.col("size_similarity").fill_null(0.0) + pl.col("reciprocal_overlap")).alias("_score"),
+        (pl.col("a_pos").cast(pl.Int64) - pl.col("b_pos").cast(pl.Int64)).abs().alias("_start"),
+        (pl.col("_a_e") - pl.col("_b_e")).abs().alias("_end"),
+    )
+    order = ["_score", "_start", "_end", "_a_row", "_a_k", "_b_row", "_b_k"]
+    passing = passing.sort(order, descending=[True, False, False, False, False, False, False])
+    used_a: set[tuple[int, int]] = set()
+    used_b: set[tuple[int, int]] = set()
+    keep = []
+    for index, (ar, ak, br, bk) in enumerate(passing.select("_a_row", "_a_k", "_b_row", "_b_k").iter_rows()):
+        if (ar, ak) in used_a or (br, bk) in used_b:
+            continue
+        used_a.add((ar, ak))
+        used_b.add((br, bk))
+        keep.append(index)
+    return passing[keep].drop("_score", "_start", "_end")
+
+
+def _sv_sites(
+    sv_a: pl.DataFrame, sv_b: pl.DataFrame, a: tuple[Loaded, Mapping], b: tuple[Loaded, Mapping], params: SvMatching, warnings: list[str]
+) -> list[pl.DataFrame]:
+    """The SV alleles' rows of `sites`: pairs met by extent, then each side's alleles left alone."""
+    side_a, side_b = _sv_side(sv_a, "a"), _sv_side(sv_b, "b")
+    candidates = _sv_candidates(side_a, side_b, params)
+    pairs = _pick_single(candidates)
+    pieces = []
+    if pairs.height:
+        pairs = pairs.with_row_index("_pair")
+        pairs, ra = _read(pairs, "a_gt_alleles", "_a_ref", "a_alt", "a", _another_allele)
+        pairs, rb = _read(pairs, "b_gt_alleles", "_b_ref", "b_alt", "b", _another_allele)
+        graded = _graded(pairs, _another_allele)
+        unsized = pairs.filter(pl.col("size_similarity").is_null()).height
+        if unsized:
+            warnings.append(
+                f"{unsized} SV pairs met without a size: the frame keeps no length for their type (an <INS> has no SVLEN), so size similarity was not checked"
+            )
+        pieces.append(
+            pairs.join(graded, on="_pair", how="left").with_columns(
+                pl.col("a_chrom").alias("chrom"),
+                pl.col("a_pos").alias("pos"),
+                pl.col("_a_ref").alias("ref"),
+                pl.col("a_alt").alias("alt"),
+                pl.col("a_variant_class").alias("variant_class"),
+                pl.lit(PairKey.EXTENT.value).alias("key"),
+                _agreement(ra, rb).alias("agreement"),
+                _ploidy_differs(ra, rb).alias("ploidy_differs"),
+                pl.coalesce("basis", pl.lit(ComparisonBasis.HARD.value)).alias("basis"),
+                pl.when((pl.col(ra[1]) == 0) & (pl.col(ra[2]) == 0)).then(pl.col(ra[0])).alias("a_copies"),
+                pl.when((pl.col(rb[1]) == 0) & (pl.col(rb[2]) == 0)).then(pl.col(rb[0])).alias("b_copies"),
+                pl.col("_a_kind").alias("sv_kind"),
+            )
+        )
+    for side, other, own in (("a", b, side_a), ("b", a, side_b)):
+        taken = pairs.select(f"_{side}_row", f"_{side}_k")
+        rest = own.join(taken, on=[f"_{side}_row", f"_{side}_k"], how="anti")
+        if rest.height:
+            near = candidates.select(f"_{side}_row", f"_{side}_k").unique()
+            pieces.append(_sv_one_sided(rest, near, other, side, params, warnings))
+    return pieces
+
+
+def _sv_one_sided(rest: pl.DataFrame, near: pl.DataFrame, other: tuple[Loaded, Mapping], side: str, params: SvMatching, warnings: list[str]) -> pl.DataFrame:
+    """SV alleles of `side` the other facet matched to none of its own, with what its silence means:
+    SVs of its own within `refdist` (`other_alleles`), else its absence rule for the `sv` class
+    (`absence_is_reference`). Its blocks are not read: a block states the bases a small-variant caller
+    saw, and an SV's anchor base lies outside the event."""
+    other_loaded, other_facet = other
+    other_side = "b" if side == "a" else "a"
+    declared = _declared_contigs(other_loaded, other_facet)
+    reference = absence_is_reference(other_facet, VariantClass.SV) is True
+    marked = rest.join(near.with_columns(pl.lit(True).alias("_near")), on=[f"_{side}_row", f"_{side}_k"], how="left")
+    absence = (
+        pl.when(pl.col("_near").fill_null(False))
+        .then(pl.lit(AbsenceReading.OTHER_ALLELES.value))
+        .when(pl.lit(reference) & pl.col(f"{side}_chrom").is_in(sorted(declared)))
+        .then(pl.lit(AbsenceReading.REFERENCE.value))
+        .otherwise(pl.lit(AbsenceReading.UNKNOWN.value))
+    )
+    marked = marked.with_columns(absence.alias("absence"))
+    unknown = marked.filter(pl.col("absence") == AbsenceReading.UNKNOWN.value).height
+    if unknown:
+        why = "its absence is read as reference for SVs only on a whole-genome callset that called SVs and was not filtered"
+        warnings.append(f"{unknown} SV alleles of facet {side} meet no SV of facet {other_side} and its silence there is unknown: {why}")
+    marked, own = _read(marked, f"{side}_gt_alleles", f"_{side}_ref", f"{side}_alt", side, _another_allele)
+    return marked.with_columns(
+        pl.col(f"{side}_chrom").alias("chrom"),
+        pl.col(f"{side}_pos").alias("pos"),
+        pl.col(f"_{side}_ref").alias("ref"),
+        pl.col(f"{side}_alt").alias("alt"),
+        pl.col(f"{side}_variant_class").alias("variant_class"),
+        pl.lit(Agreement.ONLY_A.value if side == "a" else Agreement.ONLY_B.value).alias("agreement"),
+        pl.when((pl.col(own[1]) == 0) & (pl.col(own[2]) == 0)).then(pl.col(own[0])).alias(f"{side}_copies"),
+        pl.col(f"_{side}_kind").alias("sv_kind"),
+        pl.lit(None, dtype=pl.String).alias("b_alt"),
+    )
 
 
 _ROWS = pl.Schema({"_a_row": pl.UInt32, "_b_row": pl.UInt32})

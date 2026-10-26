@@ -124,6 +124,12 @@ meanwhile. The desk carries the ones filed there.
   tells them apart; the alternative is withholding such a genotype whole in 4.4+ VCFs. `READER_DEFINITIONS` mirrors the
   pinned noodles fork and needs re-extracting when the pin moves. A Flag written with a value (`DB=1`) still fails a
   4.3+ read. A single `0/x` GT fails a whole VCF load upstream (P22).
+- **Layers 4/8, the lead's calls on coverage and SV export (built, listed for veto):** a coverage facet is paired
+  with a callset by build, since no frame records which alignment a callset came from (whether a callset should
+  carry its alignment's digest is open); several usable coverage facets on one build pair with none and are all
+  named; the coverage spill is keyed on polars-bio's version as well as `COVERAGE_VERSION`. SVLEN is written from
+  END on length-type ALTs (desk #148 asks whether to store it as written); a CIPOS/CIEND offset of -1 or -2 collides
+  with VCF Zarr's integer missing/fill sentinels, so such an interval is written missing and counted.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

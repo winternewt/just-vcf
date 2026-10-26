@@ -2318,16 +2318,24 @@ frame stops working when its files go.
   directory per generation. A run writes into a staging directory inside the entry, under the entry's
   lock, and renames it to `<key>/` when it is complete, `<key>` being a sha256 of the content the
   result was computed from (the staged input's bytes, or for `rejoin_split` and `load` the result's,
-  and the facet row) and `result.json` in it listing its files and the step's row warnings. A run whose key is
+  and the facet row) and of the generation's shape (the step's versions, as its manifest records them,
+  and the set of file groups it holds), and `result.json` in it listing its files by group and the
+  step's row warnings. A run whose key is
   already there reuses that generation and writes nothing; a run on other rows under the same
   `facet_id` (a filtered `Loaded`) commits a second generation beside the first. No run rewrites or
   removes a complete generation, so a frame an earlier run returned, in this process or another,
-  keeps working. A staging directory left by a writer that died, and a generation missing a file,
-  are removed by the next run. Rejected: keying reuse on the facet id and versions alone, which would
-  hand a filtered `Loaded` the full facet's rows; and replacing the files in place, which broke the
+  keeps working. A staging directory left by a writer that died, and a generation missing a file or
+  holding other groups than its step's, are removed by the next run. A step that adds or drops a group,
+  or changes a version, so writes a generation of its own beside the old one and never reads the old
+  shape: a lift generation 45126a2 wrote, without the `mate_contigs` group 0d3599a added at the same
+  `LIFT_VERSION`, made 0d3599a's `liftover` fail with a `KeyError` while the key covered the input
+  alone. Rejected: keying reuse on the facet id and versions alone, which would
+  hand a filtered `Loaded` the full facet's rows; reading a missing group as empty, which would hand
+  back a `contig_map` silently missing the mates' contigs; and replacing the files in place, which broke the
   earlier frame (`Invalid thrift` on its next `collect`). The manifest's `SPILL_LAYOUT` key (2) retires,
-  through the sweep, entries written before generations. `liftover`'s generation holds four groups,
-  the lifted `calls`, the `report`, the lifted `blocks` and the `block_report`; its key is the bytes of
+  through the sweep, entries written before generations. `liftover`'s generation holds five groups,
+  the lifted `calls`, the `report`, the lifted `blocks`, the `block_report` and the `mate_contigs`
+  lifted breakends name; its key is the bytes of
   the staged parent `calls` and `blocks` (the blocks since `LIFT_VERSION` 8, when they began to be
   lifted; before, only their count), and takes the chain's file name and the two collections' labels,
   which its warnings name. `Lifted.reasons` and `Lifted.block_reasons` are read back from the two

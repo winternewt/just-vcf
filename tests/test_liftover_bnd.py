@@ -9,6 +9,7 @@ from the source by VCF 4.3 §5.4's four sentences, must be the sequence the lift
 target, read either way along the molecule.
 """
 
+import json
 import random
 import re
 from pathlib import Path
@@ -17,6 +18,7 @@ import polars as pl
 import pytest
 
 from just_vcf import ReferenceStore, liftover, load, resolve_ref, write_vcf
+from just_vcf.cache import cache_dir
 from just_vcf.liftover import UNLIFTED_REASONS
 
 rng = random.Random(11)
@@ -375,3 +377,21 @@ def test_a_lifted_breakend_writes_and_reloads(tmp_path: Path, setup) -> None:
     assert set(again) == set(calls) and calls
     for case, r in calls.items():
         assert (again[case]["chrom"], again[case]["pos"], again[case]["source_ref"], again[case]["alts"]) == (r["chrom"], r["pos"], r["ref"], r["alts"])
+
+
+def test_a_generation_without_the_mate_contigs_group_is_written_again(tmp_path: Path, setup) -> None:
+    """45126a2 committed lift generations without `mate_contigs` at the `LIFT_VERSION` 0d3599a kept, and
+    0d3599a's lift found one and failed with a `KeyError`. A generation holding other groups than the
+    lift's is never read: the key covers the groups, and one found under it anyway (here its
+    `result.json` edited, the group dropped) is written again."""
+    store, source, _, forward, _ = setup
+    resolved, lifted = lift_cases(tmp_path, store, source, forward)
+    first = lifted.loaded.facets.collect().row(0, named=True)["contig_map"]
+    (result,) = [path for path in cache_dir().glob("frames/*/*/result.json") if "mate_contigs" in json.loads(path.read_text())["files"]]
+    record = json.loads(result.read_text())
+    assert record["files"]["mate_contigs"]  # pm_* name chr3 as a mate, so the group is not empty
+    del record["files"]["mate_contigs"]
+    result.write_text(json.dumps(record))
+    again = liftover(resolved, forward, store)
+    assert again.loaded.facets.collect().row(0, named=True)["contig_map"] == first
+    assert "mate_contigs" in json.loads(result.read_text())["files"]

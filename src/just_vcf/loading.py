@@ -553,7 +553,7 @@ def _spill_files(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origi
     fix does not bump `SCHEMA_VERSION`.
     """
     entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-    with cache.spilling(entry, cache.FRAMES_SPILL, _FRAMES_VERSIONS, origin.model_copy(update={"facet_id": facet_id})) as spill:
+    with cache.spilling(entry, cache.FRAMES_SPILL, _FRAMES_VERSIONS, origin.model_copy(update={"facet_id": facet_id}), ("calls", "blocks")) as spill:
         staged_calls, staged_blocks = spill.stage / "calls.parquet", spill.stage / "blocks.parquet"
         pl.collect_all(
             [
@@ -561,7 +561,7 @@ def _spill_files(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origi
                 blocks.sink_parquet(staged_blocks, row_group_size=SPILL_ROW_GROUP, lazy=True),
             ]
         )
-        key = cache.content_key([staged_calls, staged_blocks], {"facet_id": facet_id, "FRAMES_LAYOUT": FRAMES_LAYOUT})
+        key = spill.key([staged_calls, staged_blocks], {"facet_id": facet_id})
         done = spill.find(key)
         if done is None:
             parts = {"calls": canonical_parts(staged_calls, "calls"), "blocks": canonical_parts(staged_blocks, "blocks")}

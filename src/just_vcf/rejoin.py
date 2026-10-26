@@ -78,13 +78,13 @@ def rejoin_split(loaded: Loaded) -> Loaded:
         rest = loaded.calls.filter(pl.col("split_signal").is_null())
         rebuilt = pl.DataFrame(kept + joined, schema=CALLS).lazy()
         entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-        with cache.spilling(entry, cache.REJOIN_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id)) as spill:
+        with cache.spilling(entry, cache.REJOIN_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id), ("calls",)) as spill:
             staged = spill.stage / "calls.parquet"
             pl.concat([rest, rebuilt], how="vertical").with_columns(pl.lit(facet_id).alias("facet_id")).sink_parquet(
                 staged, row_group_size=SPILL_ROW_GROUP
             )
             # Keyed by what it holds: the join is cheap next to the sink, so the result itself is the key.
-            key = cache.content_key([staged], {**facet, "REJOIN_LAYOUT": REJOIN_LAYOUT})
+            key = spill.key([staged], facet)
             done = spill.find(key)
             if done is None:
                 parts = canonical_parts(staged, "calls")

@@ -639,13 +639,14 @@ def alignment_coverage(
     facet_id = _facet_id({**source, "assembly_label": assembly_label})
     key = _facet_id({**source, "polars_bio": POLARS_BIO_VERSION})
     origin = cache.Origin(source_sha256=sha256, source_path=str(path.resolve()), facet_id=facet_id)
-    with cache.spilling(cache_dir() / "coverage" / key, cache.COVERAGE_SPILL, versions, origin) as spill:
-        done = spill.find(key)
+    with cache.spilling(cache_dir() / "coverage" / key, cache.COVERAGE_SPILL, versions, origin, ("intervals",)) as spill:
+        generation = spill.key([], {"key": key})
+        done = spill.find(generation)
         if done is None:
             finished, depth_warnings = _alignment_windows(path, window, filter_flag, min_mapping_quality, lengths)
             part = spill.stage / "intervals.parquet"
             finished.write_parquet(part)
-            done = spill.commit(key, {"intervals": [part]}, depth_warnings)
+            done = spill.commit(generation, {"intervals": [part]}, depth_warnings)
     warnings = done.warnings
     label, basis, label_warnings = _assembly(assembly_label, lengths)
     warnings += label_warnings

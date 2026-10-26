@@ -112,12 +112,12 @@ def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = 
 
     facet_id = _derived_id(facet["facet_id"], digest)
     entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-    with cache.spilling(entry, cache.NORMALIZE_SPILL, versions, cache.derived_origin(facet, facet_id)) as spill:
+    with cache.spilling(entry, cache.NORMALIZE_SPILL, versions, cache.derived_origin(facet, facet_id), ("calls",)) as spill:
         # Streamed to parquet once, so each contig below is a filtered scan, not a replay of the input's
         # plan; its bytes key the result, so a run on the same input reuses what an earlier one wrote.
         staged = spill.stage / "input.parquet"
         loaded.calls.sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
-        key = cache.content_key([staged], facet)
+        key = spill.key([staged], facet)
         done = spill.find(key)
         if done is None:
             counts: Counter[str] = Counter()

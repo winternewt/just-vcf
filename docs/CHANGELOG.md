@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A spill's generation key covers the step's versions and the set of file groups its generations
+  hold (`cache.Spill.key`), besides the input it was computed from, and a generation found holding
+  other groups than its step's is written again. `liftover` from 0d3599a on failed with
+  `KeyError: 'mate_contigs'` on a generation 45126a2 had written at the same `LIFT_VERSION` 11, before
+  the group existed. Every step's key changes with this, so each cached generation (load, rejoin,
+  resolve, normalize, VRS, lift, alignment coverage) is written once more on its next run, the old one
+  kept beside it until `clear_cache`, as after a polars upgrade. `load`'s and `rejoin_split`'s keys no
+  longer name `FRAMES_LAYOUT` and `REJOIN_LAYOUT` by hand: they are in the versions.
+
 - `concordance` pairs symbolic SV alleles by one range join per contig too (`intervals.contig_join`),
   where the contig equality beside the two `refdist` inequalities held every pair of SVs on a contig
   at once. Same candidate pairs, so the same rows, order and ties. 1,500 deletions on one contig

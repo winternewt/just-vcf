@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A reference collection with two sequences whose canonical name is `1` (`chr1` and `1`) no longer gets
+  an assembly label from its lengths (audit 12). `ReferenceStore._label_from_lengths` built a dict of
+  canonical name to length, so the later sequence overwrote the earlier one: GRCh37's `chr1` followed
+  by a GRCh38-length `1` was labelled GRCh38. It now answers unknown when contig 1 is served twice, as
+  `contigs_by_chrom` already lists both and `resolve_ref` and `build_aadr_panel` read neither.
+  `assembly_label` then falls back to a label the caller asserted with `add_fasta`, as for a reference
+  without contig 1; without one, `collection_for` finds the collection under no assembly.
 - `ReferenceStore.fetch` uppercases what it returns itself, as its docstring promised (audit 12). It
   returned gtars's substrings as they came; `liftover`, `resolve_ref` and `normalize` uppercased after
   it, `build_aadr_panel`'s REF read did not. gtars already stores every sequence uppercased (checked:

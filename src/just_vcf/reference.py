@@ -309,9 +309,12 @@ class ReferenceStore:
         return [text if text.isupper() else text.upper() for text in self.store.get_substrings(contig.digest, ranges)]
 
     def _label_from_lengths(self, digest: str) -> str | None:
+        """The assembly contig 1's length names (`CHR1_LENGTHS`); None where the collection has no
+        contig 1, or more than one sequence whose canonical name is `1` (`chr1` and `1`), since which
+        length is contig 1's is then unknown (`contigs_by_chrom` lists both, and no caller reads one)."""
         level2 = self.store.get_collection_level2(digest)
-        lengths = {canonical_chrom(name): int(length) for name, length in zip(level2["names"], level2["lengths"])}
-        return CHR1_LENGTHS.get(lengths.get("1", -1))
+        ones = [int(length) for name, length in zip(level2["names"], level2["lengths"]) if canonical_chrom(name) == "1"]
+        return CHR1_LENGTHS.get(ones[0]) if len(ones) == 1 else None
 
     def _namespaces(self) -> list[str]:
         return list(self.store.list_collection_alias_namespaces())

@@ -624,6 +624,23 @@ GRCH36_CHR1 = 247_249_719
 """NCBI36/hg18 chr1's length (UCSC hg18.chrom.sizes), a domain constant."""
 
 
+def test_a_collection_serving_contig_1_twice_names_no_assembly(tmp_path: Path) -> None:
+    """`chr1` at GRCh37's length, then `1` at GRCh38's (all N, so the file stays small): which length
+    is contig 1's is not known, so the lengths name no assembly, as `contigs_by_chrom` lists both and
+    a caller reads neither. Before, the later sequence overwrote the earlier one and named GRCh38."""
+    lengths = {"GRCh37": 249_250_621, "GRCh38": 248_956_422}
+    fasta = tmp_path / "two_ones.fa.gz"
+    with gzip.open(fasta, "wb", compresslevel=1) as handle:
+        for name, assembly in (("chr1", "GRCh37"), ("1", "GRCh38")):
+            full, rest = divmod(lengths[assembly], 60)
+            handle.write(f">{name}\n".encode() + (b"N" * 60 + b"\n") * full + b"N" * rest + b"\n")
+        handle.write(f">2\n{SEQ['2']}\n".encode())
+    s = ReferenceStore.in_memory()
+    digest = s.add_fasta(fasta)
+    assert [c.name for c in s.contigs_by_chrom(digest)["1"]] == ["chr1", "1"]
+    assert s.assembly_label(digest) is None
+
+
 def test_a_grch36_reference_is_named_by_its_contig_1_and_cannot_vouch_for_mt(tmp_path: Path) -> None:
     """Contig 1 of GRCh36's length (all N, so the file stays small) names the collection GRCh36."""
     fasta = tmp_path / "hg18_like.fa.gz"

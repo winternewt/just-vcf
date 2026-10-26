@@ -1168,8 +1168,15 @@ mate's contig canonically and writes it under the `contig_names` style's one can
 mapping, the one CHROM is written under, and declares every contig a written ALT names in a
 `##contig` line, rows or none (VCF 4.3 §1.4.7). `stored` writes the mate canonical (a lifted `chr2`
 becomes `2`), `chr` writes `chr2`, and `source` writes it as `contig_map` spells it, so a lifted
-facet's ALTs come back as the lift wrote them. A mate the style has no other name for keeps its
-canonical name, as such a CHROM does. Single breakends and symbolic alleles are written as held.
+facet's ALTs come back as the lift wrote them. Under `stored` and `chr`, a mate the style has no other
+name for keeps its canonical name, as such a CHROM does. Under `source` (2026-10-26, the lead's call)
+a mate is written as the source spelled that contig: as the facet spells it (`contig_map`, then
+`header_contigs`) where it knows the contig, even where the ALT spelled it otherwise (CHROM `2` beside
+an ALT's `chr2` writes `2`, so the file agrees with its own CHROM column), and as the ALT spelled it
+where the facet does not (a chr-named file with no `##contig` lines writes `A[chr2:500[` and declares
+`chr2`, where it wrote `A[2:500[`). A contig only ALTs name, spelled two ways by them (`chr3`, `3`), is
+refused under `source`, as a contig its CHROM or header spells two ways is: which spelling the source
+meant cannot be told. Single breakends and symbolic alleles are written as held.
 So is a mate in angle brackets (`]<ctg1>:7]T`, VCF 4.3 §5.4.2's large insertion): `<ctg1>` is a
 contig of the `##assembly` file, not of the reference (§1.6.1), so it gets no `##contig` line under
 any style (2026-10-26; htslib warned "Invalid contig name" on the line it got before). Only the
@@ -3119,6 +3126,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **No version change** (2026-10-26, F30's `source` mates): no column changes. Under
+  `contig_names="source"`, `write_vcf` writes a breakend mate on a contig the facet does not know as
+  the ALT spelled it, where it wrote the canonical name, and refuses one ALTs spelled two ways; a
+  contig the facet knows keeps the facet's spelling ("Lifting breakends" above). **Values change** in
+  the written file only, under `source`: a chr-named source's mate on a contig with no row and no
+  header line comes back `chr2`, where it was written `2`.
 - **No version change** (2026-10-26, F30's assembly mates): no column changes. `write_vcf` declares
   no `##contig` line for a breakend mate in angle brackets (`]<ctg1>:7]T`, a contig of the
   `##assembly` file) and writes that ALT as held under every style, and declares only the mates of

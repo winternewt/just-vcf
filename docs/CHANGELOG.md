@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf(..., contig_names="source")` writes a breakend mate as the source spelled it (F30,
+  amended; the lead's call). A mate on a contig the facet does not know (no row, no `##contig` line)
+  was written under its canonical name: a chr-named VCF's `A[chr2:500[` came back `A[2:500[`, declared
+  `##contig=<ID=2>`. It now comes back as the ALT wrote it, declared under that spelling. A contig the
+  facet knows keeps the facet's spelling, so an ALT's `chr2` beside CHROM `2` still writes `2`. A
+  contig only ALTs name, spelled two ways by them, is refused under `source`, as a contig CHROM spells
+  two ways already was. `stored` and `chr` are unchanged. **Bytes change** under `source`. No version
+  constant changes.
+
 - `write_vcf` declares no `##contig` line for a breakend mate in angle brackets (F30, amended). VCF
   4.3 §5.4.2's large insertion, `]<ctg1>:7]T`, names a contig of the `##assembly` file, which is no
   reference contig; it was declared `##contig=<ID=<ctg1>>`, which htslib warns is an invalid contig

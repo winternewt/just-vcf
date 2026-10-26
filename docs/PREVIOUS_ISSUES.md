@@ -107,6 +107,22 @@ declared. Tests: `test_an_assembly_mate_is_written_verbatim_and_declared_nowhere
 `test_htslib_reads_an_assembly_mates_header_without_a_warning` (pysam, skipped without the
 `[reference]` extra) and `test_a_skipped_rows_mate_is_not_declared`.
 
+**Amended 2026-10-26** (the same audit; the lead's call). "Under `source` a lifted facet's ALTs come
+back verbatim" held because a lifted facet's `contig_map` lists every mate contig. A loaded facet's
+lists only the contigs with rows, so "a mate the style has no other name for keeps its canonical
+name" made `source` rewrite a source's own spelling: a chr-named VCF with no `##contig` lines wrote
+`chr1 100 A[chr2:500[` as `A[2:500[` with `##contig=<ID=2>`, and one declaring chr1 and chr2 wrote a
+mate on chr3 as `A[3:500[`. Under `source` a mate is now written as the source spelled the contig:
+the facet's spelling (`contig_map`, then `header_contigs`) where it has one, so an ALT's `chr2`
+beside CHROM `2` still writes `2` and the file agrees with its own CHROM column; otherwise the ALT's
+own spelling, declared under it. A contig only ALTs name, spelled two ways by them, is refused, as a
+contig CHROM or the header spells two ways already was. `stored` and `chr` are unchanged. Code:
+`writing._contig_names` (`mates`), `writing._mate_chroms` (now each canonical with its spelling).
+Tests: `test_source_writes_a_mate_the_file_alone_names_as_it_spelled_it`,
+`test_source_prefers_the_chrom_spelling_of_a_mate_with_rows`,
+`test_source_refuses_a_contig_only_alts_name_spelled_two_ways`, and the chr-named source with its
+header declaring only the rows' contigs and with none, under every style.
+
 ## F29 — Reading blocks over a facet with hundreds of contigs exhausts memory
 
 Severity: medium · Found 2026-10-26 dogfooding RM282's breakends on the PGP-HMS Manta files.

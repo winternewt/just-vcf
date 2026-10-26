@@ -97,6 +97,16 @@ million-row VCF without breakends; the mate read runs only on a facet that has o
 `tests/test_write_breakends.py` and `tests/test_liftover_bnd.py`
 (`test_a_lifted_facet_written_with_chr_names_declares_every_mate`).
 
+**Amended 2026-10-26** (an audit of the repair). "Every contig a written ALT names" took in two it
+should not have. A mate in angle brackets (VCF 4.3 §5.4.2's `]<ctg1>:7]T`) names a contig of the
+`##assembly` file, not of the reference; it was declared `##contig=<ID=<ctg1>>` under every style,
+which htslib warns is an invalid contig name. It is now written as held and declared nowhere, by
+rule (`breakends.assembly_mate`) rather than because no mapping named it. And a row
+`resolved_only=True` left out still declared its mate; now only the written rows' mates are
+declared. Tests: `test_an_assembly_mate_is_written_verbatim_and_declared_nowhere`,
+`test_htslib_reads_an_assembly_mates_header_without_a_warning` (pysam, skipped without the
+`[reference]` extra) and `test_a_skipped_rows_mate_is_not_declared`.
+
 ## F29 — Reading blocks over a facet with hundreds of contigs exhausts memory
 
 Severity: medium · Found 2026-10-26 dogfooding RM282's breakends on the PGP-HMS Manta files.

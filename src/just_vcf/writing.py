@@ -68,7 +68,10 @@ What is written, and the rules it follows:
   whether or not a row stands on it (VCF 4.3 §1.4.7; F30). A mate the style has no other name for
   keeps its canonical name, as such a CHROM does. Two canonical names written as one name (a lifted
   scaffold under the chain's name and the FASTA's) get one `##contig` line. Single breakends, symbolic
-  alleles and brackets that are none of the four forms are written as held.
+  alleles and brackets that are none of the four forms are written as held. So is a mate in angle
+  brackets (`]<ctg1>:7]T`, VCF 4.3 §5.4.2): it names a contig of the `##assembly` file, not of the
+  reference, and gets no `##contig` line (htslib refuses `<ctg1>` as a contig name). Only the written
+  rows' mates are declared: a row `resolved_only` leaves out declares none.
 
 - **A tabix index** (`<path>.tbi`) is written beside BGZF output by default, from the byte offsets
   the writer itself produced (`just_vcf.tabix`), so the file is region-queryable by htslib without a
@@ -96,7 +99,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.bgzf import BgzfWriter
-from just_vcf.breakends import breakend_parts, mate_renamed
+from just_vcf.breakends import assembly_mate, breakend_parts, mate_renamed
 from just_vcf.loaders.vcf import _SV_PATTERN, FORMAT_KEYS, INFO_KEYS, SPLIT_INFO_KEY, V43_RESERVED_TYPES
 from just_vcf.loading import Loaded
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _store_for
@@ -748,13 +751,20 @@ def _bracketed(alt: pl.Expr) -> pl.Expr:
 
 
 def _mate_chroms(calls: pl.LazyFrame) -> list[str]:
-    """The canonical contigs breakend ALTs name as mates, as `breakend_parts` reads them, over every
-    row (as the header is decided). A pass of its own over the bracketed ALTs alone, run only when
-    `_scan`'s first pass found one (on 4.8 million rows without a breakend, the bracket search 0.1 s,
-    this pass 0.2 s; the regex read inside each row's list, 1.9 s). Not an expression in `_scan`'s
-    one select: over `alts` exploded there, polars 1.44's common-subexpression pass mixes the
-    exploded length with the rows' and raises a ShapeError."""
-    alts = calls.select(pl.col("alts").explode(empty_as_null=False).alias("_alt")).filter(_bracketed(pl.col("_alt")))
+    """The canonical contigs the written rows' breakend ALTs name as mates, as `breakend_parts` reads
+    them. A row left out as unwritable (`_unwritable`) declares nothing, and a mate on a contig of
+    the assembly file (`<ctg1>`, `breakends.assembly_mate`) is no reference contig and gets no
+    `##contig` line. A pass of its own over the bracketed ALTs alone, run only when `_scan`'s first
+    pass found one (on 4.8 million rows without a breakend, the bracket search 0.1 s, this pass 0.2 s;
+    the regex read inside each row's list, 1.9 s). Not an expression in `_scan`'s one select: over
+    `alts` exploded there, polars 1.44's common-subexpression pass mixes the exploded length with the
+    rows' and raises a ShapeError."""
+    alts = (
+        calls.filter(pl.col("_unwritable").is_null())
+        .select(pl.col("alts").explode(empty_as_null=False).alias("_alt"))
+        .filter(_bracketed(pl.col("_alt")))
+        .filter(~assembly_mate(pl.col("_alt")).fill_null(False))
+    )
     return alts.select(breakend_parts(pl.col("_alt"))[1]).drop_nulls().unique().sort("_mate_chrom").collect()["_mate_chrom"].to_list()
 
 

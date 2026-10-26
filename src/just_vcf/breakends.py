@@ -11,7 +11,8 @@ joined before t" (right, left); `[p[t` "reverse comp piece extending right of p 
 
 `concordance` reads the form and the mate to meet breakends (truvari's `bnd_match`); `liftover` turns
 the form when an end lands on a minus-strand chain block (`turned`); `write_vcf` names the mate as it
-names CHROM (`mate_renamed`, F30).
+names CHROM (`mate_renamed`, F30), except a mate on a contig of the `##assembly` file, `<ctg1>`, which
+is no reference contig and is written as it came (`assembly_mate`).
 """
 
 import re
@@ -73,15 +74,18 @@ def breakend_parts(alt: pl.Expr) -> list[pl.Expr]:
 def mate_renamed(alt: pl.Expr, mapping: dict[str, str]) -> pl.Expr:
     """`alt` with its mate's contig read canonically (as `breakend_parts`'s `_mate_chrom`) and renamed
     by `mapping` (canonical name → the name to write), on each of the four forms. A mate `mapping`
-    does not name keeps its canonical name. Every other allele, a single breakend or brackets that are
-    none of the four forms included, comes back as it is. The bases, brackets and position text stay
-    as written."""
+    does not name keeps its canonical name. A mate on a contig of the assembly file (`assembly_mate`)
+    is not a reference contig and comes back as written, as does every other allele, a single
+    breakend or brackets that are none of the four forms included. The bases, brackets and position
+    text stay as written."""
     first, last, form, _ = _read(alt)
     name = mate_contig(alt).replace(CONTIG_ALIASES).replace(mapping)
     bases_first = pl.concat_str(first.struct.field("1"), first.struct.field("2"), name, pl.lit(":"), first.struct.field("4"), first.struct.field("5"))
     bases_last = pl.concat_str(last.struct.field("1"), name, pl.lit(":"), last.struct.field("3"), last.struct.field("4"), last.struct.field("5"))
     return (
-        pl.when(form.is_in(["t[p[", "t]p]"]))
+        pl.when(assembly_mate(alt).fill_null(False))
+        .then(alt)
+        .when(form.is_in(["t[p[", "t]p]"]))
         .then(bases_first)
         .when(form.is_in(["]p]t", "[p[t"]))
         .then(bases_last)
@@ -92,6 +96,18 @@ def mate_renamed(alt: pl.Expr, mapping: dict[str, str]) -> pl.Expr:
 def mate_contig(alt: pl.Expr) -> pl.Expr:
     """The mate's contig as a breakend ALT spells it, null on any other allele."""
     return pl.coalesce(alt.str.extract(_BASES_FIRST, 3), alt.str.extract(_BASES_LAST, 2))
+
+
+ASSEMBLY_CONTIG = r"^<.+>$"
+"""A contig in angle brackets: one of the `##assembly` file's, not of the reference (VCF 4.3 §1.6.1's
+CHROM; §5.4.2's large insertion, `C[<ctg1>:7[`)."""
+
+
+def assembly_mate(alt: pl.Expr) -> pl.Expr:
+    """True where a breakend ALT's mate is a contig of the assembly file (`ASSEMBLY_CONTIG`), False on
+    any other mate, null on an allele that names none. Such a mate has no `##contig` line and no other
+    name: the reference does not hold it."""
+    return mate_contig(alt).str.contains(ASSEMBLY_CONTIG)
 
 
 @dataclass(frozen=True)

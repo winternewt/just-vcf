@@ -181,3 +181,50 @@ def test_one_contig_under_two_canonical_names_is_declared_once(tmp_path: Path) -
         rows = written_rows(out)
         assert {row[0] for row in rows} == chroms
         assert {mate for row in rows for _, _, mate, _ in mates(row[4].split(","))} == {accession}
+
+
+# VCF 4.3 §5.4.2's large insertion: the mate is a contig of the `##assembly` file, in angle brackets
+# (§1.6.1 reads an `<ID>` CHROM the same way), not a contig of the reference.
+ASSEMBLY = ["##fileformat=VCFv4.2", "##contig=<ID=13,length=400000>", "##assembly=file:///assembly.fa", GT, COLUMNS]
+ASSEMBLY_RECORDS = [record("13", 321682, "]<ctg1>:7]T", ref="T"), record("13", 321683, "A[<ctg1>:214[")]
+
+
+@pytest.mark.parametrize("style", list(ContigNames))
+def test_an_assembly_mate_is_written_verbatim_and_declared_nowhere(tmp_path: Path, style: ContigNames) -> None:
+    path = tmp_path / "in.vcf"
+    path.write_text("\n".join([*ASSEMBLY, *ASSEMBLY_RECORDS]) + "\n")
+    out = write_vcf(load(path), tmp_path / "out.vcf.gz", contig_names=style).path
+
+    given = [line.split("\t") for line in ASSEMBLY_RECORDS]
+    assert [row[4] for row in written_rows(out)] == [fields[4] for fields in given]
+    assert header_contigs(out) == {written_name(style, fields[0], ["13"], ASSEMBLY_RECORDS) for fields in given}
+
+
+@pytest.mark.parametrize("style", list(ContigNames))
+def test_htslib_reads_an_assembly_mates_header_without_a_warning(tmp_path: Path, style: ContigNames, capfd: pytest.CaptureFixture) -> None:
+    pysam = pytest.importorskip("pysam")
+    path = tmp_path / "in.vcf"
+    path.write_text("\n".join([*ASSEMBLY, *ASSEMBLY_RECORDS]) + "\n")
+    out = write_vcf(load(path), tmp_path / "out.vcf.gz", contig_names=style).path
+    capfd.readouterr()
+    with pysam.VariantFile(str(out)) as vcf:
+        alts = [row.alts for row in vcf]
+    # htslib writes its warnings to the C-level stderr, which `capfd` reads and `capsys` would not.
+    err = capfd.readouterr().err
+    assert alts == [(line.split("\t")[4],) for line in ASSEMBLY_RECORDS]
+    assert "[W::" not in err and "[E::" not in err, err
+
+
+def test_a_skipped_rows_mate_is_not_declared(tmp_path: Path) -> None:
+    # The second record's GT names an ALT it does not have, so `resolved_only` leaves it out; its mate's
+    # contig (7: no row, not in the source header) must not reach the written header.
+    records = [record("1", 100, "A[2:500["), record("1", 200, "A[7:500[").replace("0/1", "0/2")]
+    path = tmp_path / "in.vcf"
+    path.write_text(source_text(["1"], records))
+    written = write_vcf(load(path), tmp_path / "out.vcf.gz", resolved_only=True)
+    assert written.rows_skipped == {"genotype_index_past_alts": 1}
+
+    rows = written_rows(written.path)
+    assert [row[1] for row in rows] == ["100"]
+    named = {mate for row in rows for _, _, mate, _ in mates(row[4].split(","))}
+    assert header_contigs(written.path) == {"1"} | named

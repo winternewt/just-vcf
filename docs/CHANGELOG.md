@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf` declares no `##contig` line for a breakend mate in angle brackets (F30, amended). VCF
+  4.3 §5.4.2's large insertion, `]<ctg1>:7]T`, names a contig of the `##assembly` file, which is no
+  reference contig; it was declared `##contig=<ID=<ctg1>>`, which htslib warns is an invalid contig
+  name. The ALT is written as held under every style (`breakends.assembly_mate`). A row
+  `resolved_only=True` leaves out no longer declares its mate either. **Bytes change** in such a
+  header. No version constant changes.
+
 - NCBI36's RefSeq accessions name contigs (RM4). A build-36 VCF whose chromosomes are named
   `NC_000001.9` … `NC_000024.8` reads them as `1`…`Y` in `calls.chrom` and `contig_map`, and its
   `##contig` lengths name `GRCh36`, as GRCh37's and GRCh38's accessions already did. The names come

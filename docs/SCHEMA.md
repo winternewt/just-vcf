@@ -1170,6 +1170,10 @@ mapping, the one CHROM is written under, and declares every contig a written ALT
 becomes `2`), `chr` writes `chr2`, and `source` writes it as `contig_map` spells it, so a lifted
 facet's ALTs come back as the lift wrote them. A mate the style has no other name for keeps its
 canonical name, as such a CHROM does. Single breakends and symbolic alleles are written as held.
+So is a mate in angle brackets (`]<ctg1>:7]T`, VCF 4.3 §5.4.2's large insertion): `<ctg1>` is a
+contig of the `##assembly` file, not of the reference (§1.6.1), so it gets no `##contig` line under
+any style (2026-10-26; htslib warned "Invalid contig name" on the line it got before). Only the
+written rows' mates are declared: a row `resolved_only` leaves out declares none.
 
 Mate records stay consistent without pairing them: each lifts the same two points by the same
 function, so the record at `p` lands where its mate's ALT now points, whatever the strands (checked on
@@ -3115,6 +3119,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **No version change** (2026-10-26, F30's assembly mates): no column changes. `write_vcf` declares
+  no `##contig` line for a breakend mate in angle brackets (`]<ctg1>:7]T`, a contig of the
+  `##assembly` file) and writes that ALT as held under every style, and declares only the mates of
+  the rows it writes ("Lifting breakends" above). **Values change** in the written header only: the
+  `##contig=<ID=<ctg1>>` line, and a line for a mate only a left-out row named, are gone.
 - **No version change** (2026-10-26, F30: a breakend's mate written as CHROM is): no column
   changes. `write_vcf` writes the mate contig inside a breakend ALT under the `contig_names` style
   CHROM is written under, and declares every contig a written ALT names ("Lifting breakends" above).

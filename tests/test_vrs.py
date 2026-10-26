@@ -5,17 +5,26 @@ position, REF and allele, so the tests compare two implementations of the VRS 2.
 digest over identical sequence, never an id copied from a run.
 """
 
+import logging
 import random
+import re
+from collections import Counter
 from pathlib import Path
 
 import polars as pl
 import pytest
-from vrs_oracle import StoreProxy, oracle_id
 
-from just_vcf import ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, resolve_ref, vrs_withheld
-from just_vcf.loading import Loaded
-from just_vcf.schema import CALLS
-from just_vcf.vrs import WITHHELD_REASONS, _ContigSequence, _justify, _Tally
+pytest.importorskip("ga4gh.vrs", reason="vrs-python, the oracle, is a dev dependency")
+
+from vrs_oracle import StoreProxy, oracle_id  # noqa: E402  (after the skip: it imports vrs-python)
+
+from just_vcf import ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, resolve_ref, sniff, vrs_withheld  # noqa: E402
+from just_vcf.assembly import ASSEMBLY_LENGTHS  # noqa: E402
+from just_vcf.loading import Loaded  # noqa: E402
+from just_vcf.schema import BLOCKS, CALLS  # noqa: E402
+from just_vcf.vrs import WITHHELD_REASONS, _ContigSequence, _justify, _Tally  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 def _contig_one(rng: random.Random) -> str:
@@ -312,3 +321,341 @@ def test_a_store_without_the_facets_collection_is_refused(tmp_path: Path, store:
     other_store.add_fasta(write_fasta(tmp_path / "other.fa", sequences(seed=99)))
     with pytest.raises(ReferenceMismatchError, match="does not hold collection"):
         mint_vrs_ids(resolved, other_store)
+
+
+# Opt-in: the real refget store `JUST_VCF_TEST_REFERENCE_DIR` names (GRCh37 and GRCh38), the same
+# comparison on real sequence. Inputs are synthetic alleles placed on that sequence, and slices of
+# consented-public PGP-HMS uploads; aggregates only are logged, never a row.
+
+REAL_ASSEMBLIES = ("GRCh37", "GRCh38")
+WINDOW = (30_000_000, 30_400_000)
+"""0-based half-open: a stretch of chromosome 22 with no N on either assembly, where the repeats the
+synthetic alleles need are found at test time."""
+ABSENT_CONTIG = {"GRCh37": "hs37d5", "GRCh38": "chrEBV"}
+"""A real contig of each assembly's analysis set that the primary-assembly collection lacks
+(1000 Genomes' decoy, the Epstein-Barr virus sequence), checked absent at test time."""
+
+Real = tuple[str, int, str, str, "list[str | None] | None"]
+"""`(chrom, pos, ref, alt text, expected reasons)`: reasons per slot of `[ref] + alts` as SCHEMA's
+"Why an id is missing" gives them, or None where every slot must mint."""
+
+
+def real_collection(store: ReferenceStore, label: str) -> str:
+    digests = [digest for digest in store.collections() if store.assembly_label(digest) == label]
+    if len(digests) != 1:
+        pytest.skip(f"the store holds {len(digests)} {label} collection(s)")
+    return digests[0]
+
+
+def real_sequence(store: ReferenceStore, digest: str, chrom: str) -> str:
+    (contig,) = store.contigs_by_chrom(digest)[chrom]
+    return store.fetch(contig, [(0, contig.length)])[0]
+
+
+def oracle_slots(proxy: StoreProxy, store: ReferenceStore, digest: str, row: dict, slots: list[int] | None = None) -> list[str]:
+    """vrs-python's id for each of `slots` (every one by default) of the row's `[ref] + alts`, from its
+    own pos, REF and allele."""
+    (contig,) = store.contigs_by_chrom(digest)[row["chrom"]]
+    alleles = [row["ref"], *(row["alts"] or [])]
+    return [oracle_id(proxy, f"SQ.{contig.digest}", row["pos"], row["ref"], alleles[slot]) for slot in (slots if slots is not None else range(len(alleles)))]
+
+
+def repeats(window: str, offset: int) -> list[tuple[int, str, int]]:
+    """`(1-based start, unit, length)` of runs in `window` (which starts at 0-based `offset`):
+    homopolymers of 10 or more, and di-, tri- and tetranucleotide repeats of five units or more."""
+    found = []
+    for size, floor in ((1, 10), (2, 6), (3, 5), (4, 5)):
+        for match in re.finditer(rf"(?=(([ACGT]{{{size}}})\2{{{floor - 1},}}))", window):
+            unit = match.group(2)
+            if size > 1 and len(set(unit)) == 1:
+                continue
+            found.append((offset + match.start() + 1, unit, len(match.group(1))))
+    # A match inside a longer run of the same unit is the same repeat; keep the run's first start.
+    kept: list[tuple[int, str, int]] = []
+    for start, unit, length in sorted(found):
+        if kept and start < kept[-1][0] + kept[-1][2]:
+            continue
+        kept.append((start, unit, length))
+    return kept
+
+
+def real_records(label: str, seq: str, mt: str, rng: random.Random) -> list[Real]:
+    """Every kind of allele on chromosome 22 and MT, the withheld cases, and a random batch."""
+    prefix = "chr" if label == "GRCh38" else ""
+    c22, cmt = f"{prefix}22", f"{prefix}M" if prefix else "MT"
+    used: set[tuple[str, int]] = set()
+    records: list[Real] = []
+
+    def b(pos: int, n: int = 1, on: str = seq) -> str:
+        return on[pos - 1 : pos - 1 + n]
+
+    def add(chrom: str, pos: int, ref: str, alt: str, reasons: "list[str | None] | None" = None) -> None:
+        """One record, unless it would overlap another (each row is then its own site)."""
+        span = {(chrom, p) for p in range(pos - 2, pos + len(ref) + 2)}
+        if span & used:
+            return
+        used.update(span)
+        records.append((chrom, pos, ref, alt, reasons))
+
+    # Fixed kinds at spaced places in the window, as the synthetic test lays them out.
+    start = WINDOW[0] + 1
+    p = start + 100
+    mnv = b(p + 40, 3)
+    add(c22, p, b(p), other(b(p)))  # SNV
+    add(c22, p + 20, b(p + 20, 2), other(b(p + 20)) + other(b(p + 21)))  # MNV
+    add(c22, p + 40, mnv, mnv[0] + other(mnv[1]) + mnv[2])  # MNV whose flanks trim to an SNV
+    add(c22, p + 60, b(p + 60), b(p + 60) + "TTGCA")  # insertion
+    add(c22, p + 80, b(p + 80, 5), b(p + 80))  # deletion
+    add(c22, p + 100, b(p + 100, 3), other(b(p + 100)))  # deletion-insertion
+    multi = b(p + 120, 3)
+    alts = sorted({multi[0], other(multi[0]) + multi[1:], multi + "G", multi[0] + "AT" + multi[1:]})
+    add(c22, p + 120, multi, ",".join(alts))  # multi-allelic: deletion, MNV, insertions
+    add(c22, p + 140, b(p + 140), f"{other(b(p + 140))},{b(p + 140)}AC")  # multi-allelic: SNV and insertion
+    add(c22, p + 160, b(p + 160), other(b(p + 160)).lower())  # lowercase ALT
+    add(c22, p + 180, b(p + 180), ".")  # monomorphic: the REF slot only
+
+    # Alleles inside the repeats the window holds: VOCA's expansion has to roll each one.
+    runs = repeats(seq[WINDOW[0] : WINDOW[1]], WINDOW[0])
+    by_size: dict[int, list[tuple[int, str, int]]] = {}
+    for run in runs:
+        by_size.setdefault(len(run[1]), []).append(run)
+    for _, found in sorted(by_size.items()):
+        for run_start, unit, length in found[:4]:
+            k = len(unit)
+            inside = run_start + k  # an anchor inside the run
+            add(c22, inside, b(inside), b(inside) + b(inside + 1, k))  # one unit inserted: a cycle of the repeat
+            two = run_start + length - 2  # two units inserted near the run's right end
+            add(c22, two, b(two), b(two) + b(two - 2 * k + 1, 2 * k))
+            right = run_start + length - k - 1  # one unit deleted, written at the run's right end
+            add(c22, right, b(right, k + 1), b(right))
+            if k > 1:  # part of a unit deleted: inside the run, but no cycle of it
+                add(c22, run_start + length // 2, b(run_start + length // 2, 2), b(run_start + length // 2))
+            else:  # inserted bases that continue the run, then leave it
+                add(c22, run_start + 3, b(run_start + 3), b(run_start + 3) + unit * 2 + other(unit))
+    # The first bases after chromosome 22's leading Ns.
+    first = re.search(r"N[ACGT]", seq).start() + 2
+    add(c22, first - 1, b(first - 1, 3), b(first - 1))  # a deletion anchored on the last N
+    add(c22, first + 5, b(first + 5), other(b(first + 5)))  # an SNV a few bases in
+
+    # MT, the rCRS: its D-loop C run, a deletion, a multi-allelic row, and REF reaching past its end.
+    def m(pos: int, n: int = 1) -> str:
+        return b(pos, n, mt)
+
+    poly_c = re.search(r"C{7,}", mt).start() + 1
+    add(cmt, 73, m(73), other(m(73)))
+    add(cmt, poly_c + 2, m(poly_c + 2), m(poly_c + 2) + "C")
+    add(cmt, poly_c + 30, m(poly_c + 30, 3), m(poly_c + 30))
+    add(cmt, 750, m(750, 2), f"{m(750)},{other(m(750))}{m(751)}")
+    add(cmt, len(mt) - 1, m(len(mt) - 1, 2) + "AC", m(len(mt) - 1), ["ref_unchecked", "ref_unchecked"])
+
+    # The withheld cases, each with the reason SCHEMA's ordered rules give it.
+    q = start + 1000
+    snv = other(b(q))
+    add(c22, q, b(q), f"{snv},*", [None, None, "spanning_deletion"])
+    add(c22, q + 20, b(q + 20), "<DEL>", [None, "sv_no_vrs_model"])
+    add(c22, q + 40, b(q + 40), f"{b(q + 40)}[{c22}:{q + 5000}[", [None, "sv_no_vrs_model"])
+    add(c22, q + 60, b(q + 60), "<NON_REF>", [None, "unspecified"])
+    add(c22, q + 80, b(q + 80), "R", [None, "not_sequence"])
+    add(c22, q + 100, other(b(q + 100)), b(q + 100), ["ref_mismatch", "ref_mismatch"])
+    add(ABSENT_CONTIG[label], 10, "A", "G", ["ref_unchecked", "ref_unchecked"])
+
+    # A random batch over the window and inside its repeats.
+    places = rng.sample(range(start + 2000, WINDOW[1] - 20), 500)
+    places += [run_start + rng.randrange(0, length) for run_start, _, length in rng.sample(runs, min(150, len(runs)))]
+    for pos in sorted(places):
+        kind = rng.choice(["snv", "mnv", "ins", "rep_ins", "del", "delins"])
+        if kind == "snv":
+            ref, alt = b(pos), other(b(pos))
+        elif kind == "mnv":
+            ref, alt = b(pos, 3), "".join(rng.choice("ACGT") for _ in range(3))
+        elif kind == "ins":
+            ref = b(pos)
+            alt = ref + "".join(rng.choice("ACGT") for _ in range(rng.randint(1, 6)))
+        elif kind == "rep_ins":
+            ref = b(pos)
+            alt = ref + b(pos + 1, rng.randint(1, 8))
+        elif kind == "del":
+            ref = b(pos, rng.randint(2, 9))
+            alt = ref[0]
+        else:
+            ref = b(pos, rng.randint(2, 4))
+            alt = "".join(rng.choice("ACGT") for _ in range(rng.randint(1, 3)))
+        if ref != alt:
+            add(c22, pos, ref, alt)
+    order = {c22: 0, cmt: 1, ABSENT_CONTIG[label]: 2}
+    return sorted(records, key=lambda record: (order[record[0]], record[1]))
+
+
+def real_vcf(tmp_path: Path, label: str, records: list[Real]) -> Path:
+    """A one-sample VCF whose header states the assembly's primary-chromosome lengths (domain
+    constants, `assembly.ASSEMBLY_LENGTHS`, never read from the store that checks them)."""
+    prefix = "chr" if label == "GRCh38" else ""
+    contigs = []
+    for chrom, lengths in ASSEMBLY_LENGTHS[label].items():
+        name = (f"{prefix}M" if prefix else "MT") if chrom == "MT" else f"{prefix}{chrom}"
+        contigs.append(f"##contig=<ID={name},length={min(lengths)}>")  # GRCh37's MT: the rCRS, 16569
+    contigs.append(f"##contig=<ID={ABSENT_CONTIG[label]}>")
+    meta = ["##fileformat=VCFv4.2", *contigs, '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">']
+    header = "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "S1"])
+    body = [f"{c}\t{p}\t.\t{r}\t{a}\t.\tPASS\t.\tGT\t0/1" for c, p, r, a, _ in records]
+    path = tmp_path / f"{label}.vcf"
+    path.write_text("\n".join([*meta, header, *body]) + "\n")
+    return path
+
+
+def allele_kind(ref: str, allele: str, slot: int) -> str:
+    """The path an allele takes through the normalization, for the counts."""
+    if slot == 0:
+        return "ref"
+    if len(allele) == len(ref):
+        return "snv" if len(ref) == 1 else "mnv"
+    return "insertion" if len(allele) > len(ref) else "deletion"
+
+
+@pytest.mark.parametrize("label", REAL_ASSEMBLIES)
+def test_real_store_ids_equal_vrs_python(label: str, test_reference_dir: Path, tmp_path: Path) -> None:
+    """Opt-in: every kind of allele, on real chromosome 22 and MT of GRCh37 and GRCh38, minted and
+    compared slot by slot with vrs-python's id; every withheld slot has SCHEMA's reason."""
+    store = ReferenceStore.open(test_reference_dir)
+    digest = real_collection(store, label)
+    assert ABSENT_CONTIG[label].removeprefix("chr") not in store.contigs_by_chrom(digest)
+    assert ABSENT_CONTIG[label] not in store.contigs_by_chrom(digest)
+    seq, mt = real_sequence(store, digest, "22"), real_sequence(store, digest, "MT")
+    assert "N" not in seq[WINDOW[0] : WINDOW[1]]
+    records = real_records(label, seq, mt, random.Random(271))
+    by_pos = {record[1]: record for record in records}  # chromosome 22, MT and the absent contig never share a position here
+    assert len(by_pos) == len(records)
+
+    result = mint_vrs_ids(resolve_ref(load(real_vcf(tmp_path, label, records)), store), store)
+    assert result.facets.collect()["ref_seqcol_digest"].item() == digest
+    calls = vrs_withheld(result.calls).collect()
+    assert calls.height == len(records)
+    assert calls["vrs_errors"].null_count() == calls.height  # minting itself refused nothing
+
+    proxy = StoreProxy(store, [digest])
+    compared: Counter[str] = Counter()
+    withheld: Counter[str] = Counter()
+    for row in calls.iter_rows(named=True):
+        expected = by_pos[row["pos"]][4]
+        slots = 1 + len(row["alts"] or [])
+        ids = row["vrs_allele_ids"] or [None] * slots
+        assert len(ids) == len(row["vrs_withheld"]) == slots
+        if expected is None:
+            assert row["ref_check"] == "match"
+            expected = [None] * slots
+        assert row["vrs_withheld"] == expected, f"{label}, a {row['chrom']} row: reasons"
+        mintable = [slot for slot, reason in enumerate(expected) if reason is None]
+        if mintable:
+            oracle = oracle_slots(proxy, store, digest, row, mintable)
+            assert [ids[slot] for slot in mintable] == oracle, f"{label}, a {row['chrom']} row: ids"
+        alleles = [row["ref"] or row["source_ref"], *(row["alts"] or [])]
+        compared.update(allele_kind(alleles[0], alleles[slot], slot) for slot in mintable)
+        withheld.update(reason for reason in expected if reason is not None)
+
+    assert sum(withheld.values()) == sum(reason is not None for record in records for reason in record[4] or [])
+    minted = sum(compared.values())
+    assert any(f"for {minted} of {minted + sum(withheld.values())} allele(s)" in warning for warning in result.warnings)
+    logger.info(
+        "%s: %d rows, %d alleles equal to vrs-python %s; withheld %s",
+        label, calls.height, minted, dict(sorted(compared.items())), dict(sorted(withheld.items())),
+    )
+
+
+def test_real_store_array_rows(test_reference_dir: Path, tmp_path: Path) -> None:
+    """Opt-in: a 23andMe-shaped build 37 export placed on real chromosome 22. Called rows mint the
+    ids vrs-python gives; an I/D code is `array_code` and a no-call `ref_unresolved`."""
+    store = ReferenceStore.open(test_reference_dir)
+    digest = real_collection(store, "GRCh37")
+    seq = real_sequence(store, digest, "22")
+    start = WINDOW[0] + 1
+    rows = [
+        ("rs1", start + 10, seq[start + 9] * 2),  # hom-ref: the REF slot only
+        ("rs2", start + 20, other(seq[start + 19]) + seq[start + 19]),  # het
+        ("i3", start + 30, "DI"),  # indel codes
+        ("rs4", start + 40, "--"),  # no-call
+    ]
+    path = tmp_path / "genome.txt"
+    path.write_text(PREAMBLE_23 + "".join(f"{rsid}\t22\t{pos}\t{gt}\n" for rsid, pos, gt in rows))
+    result = mint_vrs_ids(resolve_ref(load(path), store), store)
+    assert result.facets.collect()["ref_seqcol_digest"].item() == digest
+    calls = vrs_withheld(result.calls).collect()
+    by_id = {row["ids"][0]: row for row in calls.iter_rows(named=True)}
+
+    proxy = StoreProxy(store, [digest])
+    for rsid, slots in (("rs1", 1), ("rs2", 2)):
+        row = by_id[rsid]
+        assert row["vrs_allele_ids"] == oracle_slots(proxy, store, digest, row)
+        assert len(row["vrs_allele_ids"]) == slots and row["vrs_withheld"] == [None] * slots
+    assert by_id["i3"]["vrs_allele_ids"] is None and by_id["i3"]["vrs_withheld"] == ["array_code"]
+    assert by_id["rs4"]["vrs_allele_ids"] is None and by_id["rs4"]["vrs_withheld"] == ["ref_unresolved"]
+
+
+PGP_SLICE = {"22": 3000, "MT": 500}
+"""Rows taken from each PGP-HMS upload, per contig, in file order."""
+
+
+def test_pgp_hms_slices_equal_vrs_python(pgp_participants: Path, test_reference_dir: Path) -> None:
+    """Opt-in: the smallest PGP-HMS VCF uploads the store can place, one per assembly it holds; the
+    first rows of chromosome 22 and MT of each, every minted allele compared with vrs-python's id and
+    every withheld one checked to carry a reason (those the row alone decides, checked by name).
+    Aggregates only.
+
+    Skips when the PGP-HMS tree is not under `JUST_VCF_SAMPLES_DIR`."""
+    store = ReferenceStore.open(test_reference_dir)
+    wanted = {store.assembly_label(digest) for digest in store.collections()} & set(REAL_ASSEMBLIES)
+    sizes = sorted(pgp_participants.glob("*/upload-*/*.vcf*"), key=lambda p: p.stat().st_size)
+    found: dict[str, Loaded] = {}
+    for path in [p for p in sizes if p.stat().st_size > 5_000_000]:
+        if found.keys() == wanted:
+            break
+        sniffed = sniff(path)
+        if sniffed.format != "vcf" or sniffed.build not in wanted - found.keys():
+            continue  # the build the header states picks the candidates; resolve_ref still checks it
+        try:
+            loaded = load(path)
+        except ValueError:  # several samples, or a shape the loader refuses: not this test's subject
+            continue
+        rows = pl.concat([loaded.calls.filter(pl.col("chrom") == chrom).head(n) for chrom, n in PGP_SLICE.items()])
+        if rows.filter(pl.col("chrom") == "22").select(pl.len()).collect().item() < 1000:
+            continue
+        window = Loaded(facets=loaded.facets, calls=rows, blocks=pl.LazyFrame(schema=BLOCKS))
+        try:
+            resolved = resolve_ref(window, store)
+        except ReferenceMismatchError:  # not an assembly the store holds
+            continue
+        label = store.assembly_label(resolved.facets.collect()["ref_seqcol_digest"].item())
+        if label in wanted and label not in found:
+            found[label] = mint_vrs_ids(resolved, store)
+    if not found:
+        pytest.skip("no PGP-HMS VCF upload the store can place")
+
+    for label, result in sorted(found.items()):
+        digest = result.facets.collect()["ref_seqcol_digest"].item()
+        proxy = StoreProxy(store, [digest])
+        calls = vrs_withheld(result.calls).collect()
+        compared: Counter[str] = Counter()
+        withheld: Counter[str] = Counter()
+        for row in calls.iter_rows(named=True):
+            alleles = [row["ref"] or row["source_ref"], *(row["alts"] or [])]
+            ids = row["vrs_allele_ids"] or [None] * len(row["vrs_withheld"])
+            assert len(ids) == len(row["vrs_withheld"])
+            for slot, (minted, reason) in enumerate(zip(ids, row["vrs_withheld"])):
+                assert (minted is None) != (reason is None)
+                if minted is not None:
+                    assert [minted] == oracle_slots(proxy, store, digest, row, [slot]), f"{label}, a {row['chrom']} row: slot {slot}"
+                    compared[allele_kind(alleles[0], alleles[slot], slot)] += 1
+                    continue
+                withheld[reason] += 1
+                assert reason in WITHHELD_REASONS
+                allele = alleles[slot]
+                if allele == "*":
+                    assert reason == "spanning_deletion"
+                elif allele is not None and allele.startswith("<"):
+                    assert reason in {"unspecified", "sv_no_vrs_model", "symbolic"}
+                elif row["ref_check"] == "mismatch" and allele is not None and re.fullmatch(r"[ACGTNacgtn]*", allele):
+                    assert reason == "ref_mismatch"
+        assert compared["snv"] + compared["insertion"] + compared["deletion"] > 0
+        logger.info(
+            "PGP-HMS %s slice: %d rows, %d alleles equal to vrs-python %s; withheld %s",
+            label, calls.height, sum(compared.values()), dict(sorted(compared.items())), dict(sorted(withheld.items())),
+        )

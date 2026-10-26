@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- An opt-in test of VRS ids on a real assembly (RM271): `tests/test_vrs.py` mints on the refget
+  store `JUST_VCF_TEST_REFERENCE_DIR` names, GRCh37 and GRCh38, and compares every allele with
+  vrs-python's id on the same store. Synthetic alleles of every kind placed on real chromosome 22 and
+  MT (repeats found at test time, multi-allelic rows, the N boundary, MT under both names), the withheld
+  cases with SCHEMA's reasons, a 23andMe-shaped export, and slices of the smallest PGP-HMS upload per
+  build. Measured 2026-10-26: 2,776 synthetic and 12,113 PGP-HMS alleles, 0 mismatch. It skips without
+  the variable, and the whole file skips without vrs-python. No library change.
+
 - `write_vcf` names a breakend's mate inside ALT as it names CHROM, and declares it (F30). The mate's
   contig in each of the four bracket forms is read canonically and written through the same
   `contig_names` mapping as CHROM (`breakends.mate_renamed`), and every contig a written ALT names

@@ -1378,7 +1378,7 @@ with `chr` declares all 1,216 mates.
 
 
 ## RM271 — VRS allele ids
-Severity: high · Status: in progress (`mint_vrs_ids` and `vrs_withheld` shipped 2026-10-22 for VCF and array rows, merge b41bda5, equal to vrs-python on 19,000 real alleles. Left, buildable now: an opt-in test in `tests/test_vrs.py` minting on the real store `JUST_VCF_TEST_REFERENCE_DIR` names against vrs-python (`scripts/vrs_oracle.py`); today only `tests/test_phasing.py`'s Genes for Good test (39506f4, 2026-10-23) checks minted alleles on a real assembly, through CisPhasedBlock ids, on 1,500 rows. Waiting on the person: filing the gtars gap, G1 in docs/GTARS_PENDING_FIXES.md, not filed, needs the person's go per batch, the upstream-liaison seat's) · Owner: lead
+Severity: high · Status: in progress (`mint_vrs_ids` and `vrs_withheld` shipped 2026-10-22 for VCF and array rows, merge b41bda5, equal to vrs-python on 19,000 real alleles. The opt-in test in `tests/test_vrs.py` that mints on the real store `JUST_VCF_TEST_REFERENCE_DIR` names and compares every slot with vrs-python (`scripts/vrs_oracle.py`) shipped 2026-10-26 on a builder branch, waiting for the lead's merge; measured below, 0 mismatch. Waiting on the person: filing the gtars gap, G1 in docs/GTARS_PENDING_FIXES.md, not filed, needs the person's go per batch, the upstream-liaison seat's) · Owner: lead
 
 Charter invariant 4: a call's identity is the VRS Allele id of its fully justified allele on a
 refget-addressed sequence, and that id is the join key between facets on the same assembly. Today
@@ -1432,6 +1432,32 @@ store:
   s wall with the cache under `data/interim/` on the NTFS disk, which `dd` measured at 2.5 MB/s during
   the runs (other sessions were writing to it; the workspace note says about 350 MB/s). Peak RSS of the
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
+
+**Measured 2026-10-26**, the opt-in tests in `tests/test_vrs.py` on the store at
+`/data/just-dna-cache/reference/store` (GRCh37 and GRCh38) and PGP-HMS uploads from the Krypton copy,
+aggregates only; every expected id computed by vrs-python at test time:
+
+- Synthetic alleles on real chromosome 22 (a 400 kb window, its repeats found at test time) and MT:
+  SNVs, MNVs, insertions, deletions, delins, one and two units into homopolymer and di-, tri- and
+  tetranucleotide repeats, part-unit deletions, a deletion anchored on the last leading N,
+  multi-allelic rows, a lowercase ALT, a monomorphic row, MT written `MT` (GRCh37) and `chrM`
+  (GRCh38), and a seeded random batch over the window and inside its repeats. GRCh37: 700 rows, 1,394
+  alleles equal (697 REF, 120 SNV, 122 MNV, 273 insertions, 182 deletions); GRCh38: 694 rows, 1,382
+  equal (691 REF, 118 SNV, 118 MNV, 278 insertions, 177 deletions). 11 alleles withheld on each, every
+  one with SCHEMA's reason: `spanning_deletion`, `sv_no_vrs_model` (`<DEL>`, a breakend),
+  `unspecified`, `not_sequence`, `ref_mismatch` (2), `ref_unchecked` (2 for REF past MT's end, 2 on
+  a contig the collection lacks, `hs37d5` and `chrEBV`).
+- A 23andMe-shaped build 37 export on real chromosome 22: hom-ref and het ids equal; `DI` is
+  `array_code`, `--` is `ref_unresolved`.
+- PGP-HMS, the smallest upload per build the store places, the first 3,000 chromosome 22 rows and up
+  to 500 MT rows: GRCh37, 3,295 rows, 6,000 alleles equal (3,000 REF, 2,940 SNV, 27 insertions, 33
+  deletions), the 590 MT alleles `ref_unchecked` (`resolve_ref` left that file's MT unread); GRCh38,
+  3,032 rows, 6,113 equal (3,032 REF, 2,596 SNV, 233 insertions, 252 deletions), none withheld.
+- Sensitivity: a deletion's `repeatSubunitLength` taken from the expanded REF instead of the
+  deleted length fails both synthetic runs.
+- Not reachable on the real store: `refused` and `no_contig`. After `resolve_ref`, REF was read from
+  the very sequence minting rolls on, and neither collection holds a name twice; `_justify` is driven
+  directly for `refused` in the synthetic suite.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
 Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22. Shipped: half 1 as the `source` detector's caller, version and `ploidy_statements` (RM2, merge bd5c02e, 2026-10-22); the evidence layer, X copies and an XY/XXY estimate per WGS facet, merge 7384428, 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet, merge dd11011 (RM278), 2026-10-23; XXX, XYY, XXYY and XXXY from a coverage facet's copy counts, and arrays' X from their hets with Y behind `array_y`, merge 5ccbffc, 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, with tables that state no build estimated on `resolve_ref`'s output, merge e73b320, 2026-10-25, checked on 109 PGP-HMS tables; GRCh36's region set, its arrays estimated and its genomes measured only, merge 3a80fc0, 2026-10-25, checked on 250 PGP-HMS 23andMe exports and 69 resolved tables. Waiting on the person: desk #135 (whether a VCF alone may name XY and XXY), desk #136 (`array_y` on for AncestryDNA by default); the lead's calls listed for veto in docs/LAYERS.md, layer 4 (`OTHER_KARYOTYPE`, the 3/4 array two-X expectation against PLINK's shape, `x_copy_count`/`y_copy_count`, GRCh36 genomes left `uncalibrated_build`). Buildable now: liftovers of one callset weighed as one piece of evidence, with `facets_disagree`, at the person level now that `Person` exists (RM273); an answer to the critique's somalier question. Open, no desk number: whether GRCh37's last X-degenerate interval reaches about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md). Exomes answer unknown) · Owner: lead

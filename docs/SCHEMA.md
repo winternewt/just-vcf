@@ -1161,6 +1161,14 @@ breakend (`t.`, `.t`), with a REF of one base, is lifted by its own position and
    held the old; `gt`, `sv_type`, `dosage` and the rest carry, the phase cleared on another contig as
    for any row. The lifted facet's `contig_map` lists every contig an ALT names, rows or none.
 
+Written back out, a breakend's mate is a contig of the file like CHROM (F30): `write_vcf` reads the
+mate's contig canonically and writes it under the `contig_names` style's one canonical → written
+mapping, the one CHROM is written under, and declares every contig a written ALT names in a
+`##contig` line, rows or none (VCF 4.3 §1.4.7). `stored` writes the mate canonical (a lifted `chr2`
+becomes `2`), `chr` writes `chr2`, and `source` writes it as `contig_map` spells it, so a lifted
+facet's ALTs come back as the lift wrote them. A mate the style has no other name for keeps its
+canonical name, as such a CHROM does. Single breakends and symbolic alleles are written as held.
+
 Mate records stay consistent without pairing them: each lifts the same two points by the same
 function, so the record at `p` lands where its mate's ALT now points, whatever the strands (checked on
 676 lifted records of synthetic translocations through `hg19ToHg38`, every one). Manta's mates stated
@@ -3097,6 +3105,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **No version change** (2026-10-26, F30: a breakend's mate written as CHROM is): no column
+  changes. `write_vcf` writes the mate contig inside a breakend ALT under the `contig_names` style
+  CHROM is written under, and declares every contig a written ALT names ("Lifting breakends" above).
+  **Values change** in the written file only: under `stored` a mate the source spelled `chr2` is
+  written `2`, and the header gains a `##contig` line per mate contig no row stands on.
 - **No version change** (2026-10-26, RM6: breakends lifted): no column changes. `liftover` lifts
   breakends by their own position and each mate's ("Lifting breakends" above), where it left every
   one behind as `breakend_not_lifted`. `UNLIFTED_REASONS` gains `breakend_mate_not_lifted`,

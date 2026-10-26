@@ -168,7 +168,9 @@ def write_vcf_zarr(
     block_count = loaded.blocks.select(pl.len()).collect().item()
 
     names = _contig_names(contig_names, facet, rows["chrom"].unique().to_list())
-    contig_index = {chrom: index for index, chrom in enumerate(names.mapping)}
+    # By written name: two canonical names written as one share one `contig_id` entry (`_contig_names`).
+    position = {contig["name"]: index for index, contig in enumerate(names.contigs)}
+    contig_index = {chrom: position[name] for chrom, name in names.mapping.items()}
     warnings: list[str] = []
     if skipped:
         warnings.append(f"{sum(skipped.values())} row(s) not written: " + ", ".join(f"{n} {r}" for r, n in skipped.items()))

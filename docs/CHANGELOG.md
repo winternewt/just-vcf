@@ -4,6 +4,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `ReferenceStore.fetch` no longer scans every text it returns for lowercase. Case is settled where a
+  sequence enters the store: a collection `add_fasta` added came in through gtars' FASTA import, which
+  uppercases every sequence line (gtars 0.10.0, `FastaReader::next_record`, the only version `uv.lock`
+  has pinned), and its `just_vcf_fasta` alias is the store's record of that, read once per
+  `ReferenceStore` from metadata and again after `add_fasta` adds a collection. Those sequences are
+  returned as gtars gives them. Any other sequence keeps the `isupper` guard, because gtars does not
+  uppercase every path in: a `SequenceRecord` whose `sequence` was set by hand is stored as given in a
+  raw store, and a store another tool built carries no such record. The "Uppercase" promise and every
+  output are unchanged. On hu416394's Manta file (942 contigs, 24 whole-contig fetches) `mint_vrs_ids`
+  11.27–11.29 s → 7.45–7.55 s, three runs each, minted calls, `vrs_withheld` and warnings hashing the
+  same. The soft-masked FASTA test now runs on an in-memory, an on-disk and a reopened store and checks
+  that the unscanned path is taken, so a gtars that stopped uppercasing fails it; the stand-in store
+  test gave way to a real gtars raw store holding a hand-set lowercase sequence.
 - `mint_vrs_ids` mints a group of whole runs of one contig at a time (F24, amended), where it made a
   slice-`collect` and a pass of about twenty `collect`s per run, so a header full of decoys paid a fixed
   pass per contig. The groups are consecutive in row order, up to `SPILL_PART_ROWS` rows unless one run

@@ -94,7 +94,8 @@ ASSEMBLY_NAMESPACE = "just_vcf_assembly"
 
 _FASTA_NAMESPACE = "just_vcf_fasta"
 """Collection-alias namespace mapping a FASTA file's fingerprint to its collection, so a FASTA already
-added is not digested again."""
+added is not digested again. It is also the store's record of case: a collection here came in through
+gtars' FASTA import, which uppercases every base (`ReferenceStore.fetch`)."""
 
 CHR1_LENGTHS: dict[int, str] = {247_249_719: "GRCh36", 249_250_621: "GRCh37", 248_956_422: "GRCh38", 248_387_328: "T2T-CHM13"}
 """Contig 1's length per assembly, the fingerprint that names a reference's assembly. Domain constants."""
@@ -190,6 +191,7 @@ class ReferenceStore:
         store.set_quiet(True)
         self.store = store
         self.path = path
+        self._uppercase: set[str] | None = None
 
     @classmethod
     def open(cls, path: Path | str | None = None) -> "ReferenceStore":
@@ -223,6 +225,7 @@ class ReferenceStore:
             meta, _ = self.store.add_sequence_collection_from_fasta(str(fasta))
             digest = meta.digest
             self.store.add_collection_alias(_FASTA_NAMESPACE, fingerprint, digest)
+            self._uppercase = None
         if assembly_label is not None:
             measured = sorted({CHR1_LENGTHS[length] for length in self._contig_1_lengths(digest) if length in CHR1_LENGTHS} - {assembly_label})
             if measured:
@@ -303,12 +306,36 @@ class ReferenceStore:
     def fetch(self, contig: Contig, ranges: list[tuple[int, int]]) -> list[str]:
         """The bases over 0-based half-open `ranges` of `contig`, in order. Uppercase.
 
-        gtars stores every sequence uppercased, so this is a guard: a soft-masked FASTA's lowercase
-        never reaches a caller, whatever store holds it. A text already uppercase is returned as it
-        is, not copied (a whole chromosome is one text)."""
+        The case is settled where a sequence enters the store, not here. A collection `add_fasta`
+        added came in through gtars' FASTA import, which uppercases every sequence line as it reads it
+        (gtars 0.10.0, `gtars_refget::fasta::FastaReader::next_record`, reached from
+        `add_sequence_collection_from_fasta` in `store/import.rs`), so its bases are returned as gtars
+        gives them, never scanned: a whole chromosome is one text. That is checked by the suite on
+        a soft-masked FASTA, so a gtars that stopped uppercasing fails it.
+
+        Any other sequence keeps the guard: gtars does not uppercase every path in. A
+        `SequenceRecord` whose `sequence` was set by hand goes into a raw store as given, and a store
+        another tool built is not known to have come from a FASTA. Its texts are uppercased when they
+        are not already."""
         if not ranges:
             return []
-        return [text if text.isupper() else text.upper() for text in self.store.get_substrings(contig.digest, ranges)]
+        texts = self.store.get_substrings(contig.digest, ranges)
+        if contig.digest in self._uppercase_sequences():
+            return texts
+        return [text if text.isupper() else text.upper() for text in texts]
+
+    def _uppercase_sequences(self) -> set[str]:
+        """The digests of the sequences whose case the store records: those of every collection
+        `add_fasta` added (`_FASTA_NAMESPACE`). Read once from the store's metadata, never its bases,
+        and read again after `add_fasta` adds a collection."""
+        if self._uppercase is None:
+            found: set[str] = set()
+            if _FASTA_NAMESPACE in self._namespaces():
+                for fingerprint in self.store.list_collection_aliases(_FASTA_NAMESPACE):
+                    digest = self.store.get_collection_metadata_by_alias(_FASTA_NAMESPACE, fingerprint).digest
+                    found.update(sequence.removeprefix("SQ.") for sequence in self.store.get_collection_level2(digest)["sequences"])
+            self._uppercase = found
+        return self._uppercase
 
     def _label_from_lengths(self, digest: str) -> str | None:
         """The assembly contig 1's length names (`CHR1_LENGTHS`); None where the collection has no

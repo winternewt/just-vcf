@@ -2171,7 +2171,9 @@ step: a store keeps the values its load gave until the source is loaded again.
 - **Cut off, finished or undone on the next call.** A migration directory without `READY` is a
   migration cut off before every facet was checked; the store is as it was, and the next
   `migrate_store` removes it. One with `READY` is finished by the next `migrate_store`, each move
-  skipped where it is already done. `open` reports a `.migrating-*` or `.previous-*` directory with a
+  skipped where it is already done; one cut off after its commit, with only the cleanup left, is
+  cleaned up and its record, read from the committed manifest's `migrations`, is what that call
+  returns, so the call does not read as nothing applied. `open` reports a `.migrating-*` or `.previous-*` directory with a
   warning. Rejected: renaming the old `facets/` aside and relying on a crash never landing between the
   two renames; parking old facet directories under `facets/`, where an add would take them for a dead
   writer's and remove them.

@@ -398,8 +398,10 @@ def migrate_store(path: Path | str, keep_previous: bool = False) -> StoreMigrati
     reader meanwhile is refused, by the version its manifest names, as before.
 
     Returns what was done, also recorded in the manifest's `migrations`: the steps, the facets, and
-    every value filled unknown (`FilledUnknown`), which `Store.loaded()` repeats as warnings. A store
-    already at this version is left as it is (nothing applied). Refused with `StoreVersionError`: a
+    every value filled unknown (`FilledUnknown`), which `Store.loaded()` repeats as warnings. A call
+    that finishes a migration an earlier one committed but did not clean up after returns that
+    migration, as the manifest records it. A store already at this version, with nothing left to
+    finish, is left as it is (nothing applied, `migrated` null). Refused with `StoreVersionError`: a
     store of a later version (no downgrade), or of one no store was written under.
     """
     where = Path(path)
@@ -498,7 +500,8 @@ def _digest(frame: pl.LazyFrame, columns: list[str]) -> pl.LazyFrame:
 
 def _finish_migration(where: Path) -> StoreMigration | None:
     """Under the store's lock: finish a migration whose files were all written and checked (its `READY`
-    marker), and remove one that was cut off before. Returns the migration this call committed.
+    marker), and remove one that was cut off before. Returns the migration this call committed, or the
+    one an earlier call committed (the live manifest's last) when only its cleanup was left; else None.
 
     Each move is skipped when it is already done, so a call cut off anywhere finishes on the next. The
     order: the old manifest copied to `.previous-<version>`, the old `facets/` moved there, the new
@@ -531,6 +534,11 @@ def _finish_migration(where: Path) -> StoreMigration | None:
             finished = _read_manifest(stage).migrations[-1]
             os.replace(staged_manifest, where / _MANIFEST)
             _fsync_dir(where)
+        else:
+            # Committed by an earlier call cut off before its cleanup: the live manifest records it.
+            live = _read_manifest(where)
+            if live.migrations and live.migrations[-1].from_version == ready["from_version"]:
+                finished = live.migrations[-1]
         if not ready["keep_previous"]:
             shutil.rmtree(previous, ignore_errors=True)
         shutil.rmtree(stage, ignore_errors=True)

@@ -11,6 +11,7 @@ added null. Every fixture is synthetic; every store is under `tmp_path`.
 import json
 import logging
 import os
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,6 +19,7 @@ import polars as pl
 import pytest
 
 from just_vcf import load
+from just_vcf import store as store_module
 from just_vcf.loaders.cgi import FORMATS as CGI_FORMATS
 from just_vcf.loading import Loaded
 from just_vcf.schema import BLOCKS, CALLS, FACETS, LINKS, SCHEMA_VERSION
@@ -357,6 +359,41 @@ def test_a_migration_cut_off_after_its_check_finishes_on_the_next_call(
     got = _read_back(store)
     assert all(got[name].equals(expected[name]) for name in FRAMES)
     assert not list(root.glob(".migrating-*")) and not list(root.glob(".previous-*"))
+
+
+def test_a_migration_cut_off_after_its_commit_reports_it_on_the_next_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cut off after the new manifest is committed, before the old version's files and the migration's
+    directory are removed: the store reads at this version, and the next `migrate_store` removes what
+    was left and reports the migration the manifest records, not "nothing applied"."""
+    root = tmp_path / "store"
+    expected = _old_store(root, STORE_FIRST_VERSION, _sources(tmp_path))
+    real = shutil.rmtree
+
+    def cut(path: object, *args: object, **kwargs: object) -> None:
+        if Path(str(path)).name.startswith(".previous-"):
+            raise OSError("cut off")
+        real(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store_module.shutil, "rmtree", cut)
+        with pytest.raises(OSError):
+            migrate_store(root)
+    store = Store.open(root)
+    assert store.schema_version == SCHEMA_VERSION
+    assert list(root.glob(".migrating-*")) and list(root.glob(".previous-*"))
+
+    report = migrate_store(root)
+    assert (report.from_version, report.to_version) == (STORE_FIRST_VERSION, SCHEMA_VERSION)
+    assert report.migrated is not None and report.steps
+    assert report == store.manifest.migrations[-1]
+    assert not list(root.glob(".migrating-*")) and not list(root.glob(".previous-*"))
+    got = _read_back(store)
+    assert all(got[name].equals(expected[name]) for name in FRAMES)
+    # Once finished, a further call applies nothing and says so.
+    again = migrate_store(root)
+    assert (again.from_version, again.migrated) == (SCHEMA_VERSION, None)
 
 
 def test_keep_previous_keeps_the_old_versions_files(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

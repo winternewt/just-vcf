@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `migrate_store` called after a migration that was cut off between committing the new manifest and
+  removing the old version's files returns that migration, read from the manifest's `migrations`,
+  and finishes the cleanup. It returned `from_version = to_version`, `migrated` null, which reads as
+  nothing applied though the store had just been migrated (docs/SCHEMA.md, "Store migration").
+
 - `check_pedigree` gives a pair whose kinship lies wholly in the first degree, but whose IBS0 count
   cannot tell parent from sibling where the pedigree expects one, the reason `kind_not_told`
   (`person.KIND_NOT_TOLD`). It read `between_bands`, which says the kinship's interval crosses a band

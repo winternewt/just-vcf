@@ -548,7 +548,6 @@ allele; before a contig's first base it takes the base after, at POS 1 (VCF's ru
 REF over its stated span, whatever its length. `normalize` aligns the anchored rows, and anchors a
 deletion at POS 1 on the base after its span (it was left unanchored). Choices, each with the
 alternative rejected:
-*Corrected 2026-10-26 (audit 8):* a point whose every called haplotype is the empty allele (`""/""`, Genos `-/-`) was anchored as a hom-ref call at the base before, a genotype no source stated; since `RESOLVE_VERSION` 11 it is left unread and counted (`point_no_insertion`), and facets record `resolve_version` (schema 0.0.20).
 
 - **`ref_check` null on an anchored point**, not `match`: the file wrote no REF base, and `match`
   would be the anchor compared with the sequence it was read from. `normalize`'s gate takes such a row
@@ -561,6 +560,8 @@ alternative rejected:
   `resolve_ref` writes is 0, a zero-length locus before the first base, which becomes 1.
 - **An insertion point where nothing was called stays unread**, counted: REF with no ALT would state a
   no-call at the anchor base.
+
+*Corrected 2026-10-26 (audit 8):* a point whose every called haplotype is the empty allele (`""/""`, Genos `-/-`) was anchored as a hom-ref call at the base before, a genotype no source stated; since `RESOLVE_VERSION` 11 it is left unread and counted (`point_no_insertion`), and facets record `resolve_version` (schema 0.0.20).
 
 Measured 2026-10-26 on PGP-HMS hu1B2689 (consented-public, read from the Krypton share through the
 library, aggregates only) against the GRCh37 store: the `var` holds 628,682 insertion points; 272,697

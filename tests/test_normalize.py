@@ -406,7 +406,7 @@ def test_a_dash_deletion_is_anchored_on_the_base_before(tmp_path: Path, store: R
     end_t = HOMOPOLYMER + 7
     wrong = other(at("1", 60))
     records = [
-        record("1", 1, at("1", 1), "-", "0/1", vectors=False),  # nothing before position 1 to anchor on
+        record("1", 1, at("1", 1), "-", "0/1", vectors=False),  # nothing before position 1: the base after anchors it
         record("1", 30, at("1", 30, 2), "-", "0/1"),
         record("1", 60, wrong, "-", "0/1", vectors=False),  # REF does not match: not anchored
         record("1", end_t, at("1", end_t), "-", "1/1"),
@@ -417,8 +417,11 @@ def test_a_dash_deletion_is_anchored_on_the_base_before(tmp_path: Path, store: R
     got = {(row["pos"], row["source_ref"] or row["ref"], row["alts"][0]) for row in calls.iter_rows(named=True)}
     assert (29, at("1", 29, 3), at("1", 29)) in got
     assert (HOMOPOLYMER - 1, "CT", "C") in got
-    assert (1, at("1", 1), "") in got and (60, wrong, "") in got, "an unanchored deletion's ALT is the empty allele"
-    for pos, ref, alt in [(29, at("1", 29, 3), at("1", 29)), (HOMOPOLYMER - 1, "CT", "C")]:
+    assert (60, wrong, "") in got, "an unanchored deletion's ALT is the empty allele"
+    # VCF's rule at a contig's first base: the base after the deleted ones is the anchor, at POS 1.
+    assert (1, at("1", 1, 2), at("1", 2)) in got
+    assert apply("1", 1, at("1", 1, 2), at("1", 2)) == SEQ1[1:]
+    for pos, ref, alt in [(29, at("1", 29, 3), at("1", 29)), (HOMOPOLYMER - 1, "CT", "C"), (1, at("1", 1, 2), at("1", 2))]:
         assert is_normalized(pos, ref, alt)
     # The haplotype is the one the source stated: its REF bases removed.
     assert apply("1", 29, at("1", 29, 3), at("1", 29)) == SEQ1[:29] + SEQ1[31:]
@@ -428,13 +431,14 @@ def test_a_dash_deletion_is_anchored_on_the_base_before(tmp_path: Path, store: R
     assert anchored["gl"] == source["gl"] and anchored["ad"] == source["ad"]
     assert anchored["source_alleles"] == [at("1", 29, 3), at("1", 29)]
     assert anchored["source_ref"] is None and anchored["ref_check"] is None
-    assert any(w.startswith("2 deletion(s) written without their anchor base") for w in out.warnings), out.warnings
+    assert any(w.startswith("3 deletion(s) written without their anchor base") for w in out.warnings), out.warnings
+    assert any(w.startswith("1 deletion(s) at a contig's first base anchored on the base after") for w in out.warnings), out.warnings
     assert out.calls.filter(pl.col("alts").list.contains("") & (pl.col("pos") == 29)).select(pl.len()).collect().item() == 0
-    assert any("1 row(s) not left-aligned or trimmed: a deletion without its anchor base at a contig's first base" in w for w in out.warnings)
+    assert not any("a deletion without its anchor base at a contig's first base" in w for w in out.warnings)
     assert any("1 row(s) not left-aligned or trimmed: REF differs from the reference" in w for w in out.warnings)
-    # What could not be anchored is still no VCF allele: write_vcf leaves it out, counted.
+    # What could not be anchored (its REF did not match) is not written: write_vcf leaves it out, counted.
     written = write_vcf(out, tmp_path / "out.vcf.gz", resolved_only=True)
-    assert written.rows_skipped == {"alt_not_an_allele": 1, "ref_mismatch": 1}
+    assert written.rows_skipped == {"ref_mismatch": 1}
 
 
 # --- dedup, determinism, the derived facet ------------------------------------------------------

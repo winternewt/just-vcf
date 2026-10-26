@@ -12,7 +12,7 @@ What is written, and the rules it follows:
 
 - **REF** is `ref` (read from the assembly sequence) when there is one, else `source_ref` (what the
   file wrote). It is never taken from the genotype (charter 10). A row with neither, or with the
-  empty REF `""` (an insertion point whose anchor base was not read), a row without
+  empty REF `""` (an insertion point whose anchor base `resolve_ref` did not read), a row without
   `alts` (an array row before RM3, or one RM3 withheld in a mixed-strand facet, F13), a row whose
   `ref_check` is `mismatch`, a row with an ALT that is no VCF allele (the empty allele `""` of a
   deletion written without its anchor base, F12's `-` among them, until `normalize` anchors it), a row with a genotype that
@@ -522,8 +522,9 @@ def _written_ref() -> pl.Expr:
 def _unwritable() -> pl.Expr:
     """Why a row cannot be written as valid VCF, first reason first; null when it can."""
     return (
-        # An empty REF is an insertion point whose anchor base was not read (CGI's native files): VCF's
-        # REF is at least one base, and that base is the reference's, so the row's REF is unresolved.
+        # An empty REF is an insertion point whose anchor base `resolve_ref` did not read (CGI's native
+        # files, a CASAVA indel table): VCF's REF is at least one base, and that base is the reference's,
+        # so the row's REF is unresolved.
         pl.when(_written_ref().is_null() | (_written_ref() == EMPTY_ALLELE))
         .then(pl.lit("ref_unresolved"))
         .when(pl.col("ref_check") == RefCheck.MISMATCH.value)

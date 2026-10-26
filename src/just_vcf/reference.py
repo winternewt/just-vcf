@@ -10,7 +10,12 @@ gtars `RefgetStore`, and returns the same facet with the slots SCHEMA.md leaves 
   the genotype; the genotype only decides which of its alleles are not REF;
 - a Living DNA row whose genotype is two allele sequences written back to back (`CCA`, F4): split
   where exactly one split fits the reference (`_split_concatenated`), and given REF and ALT only where
-  the two alleles say which of them is the reference.
+  the two alleles say which of them is the reference;
+- an insertion point (an empty `source_ref`: CGI's native files, a CASAVA indel table; a Genos row of
+  zero length): the anchor base VCF writes, the reference base at `pos` (the base after, at a contig's
+  start), is `ref` and is written into every allele (`_anchor_points`);
+- a Genos row (`SPANNED_GENOTYPES`): REF over the span the row states, whatever its length, and its
+  alleles derived against it as an array row's are.
 
 Before any base is read the reference has to be shown to be the facet's assembly, contig by contig
 (`ContigCheck`). A facet that stated contig lengths (VCF `##contig`) is checked by length and md5;
@@ -42,18 +47,29 @@ from just_vcf import cache
 from just_vcf.contig_names import scaffold_names
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.probes import IndelSite, Manifest, catalog_digest, id_calibration, indel_catalog, locate_indel, place_indel, snv_catalog, window_for
-from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, StrandCheck, canonical_chrom, canonical_order, empty
+from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, StrandCheck, canonical_chrom, canonical_order, empty
 from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_reason
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 9
-"""Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes."""
+RESOLVE_VERSION = 10
+"""Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes (10: an insertion
+point's anchor base, and REF over a Genos row's stated span)."""
 
 CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
 """Formats whose multi-letter genotype text is the two allele sequences written back to back, as the
 vendor states it ("both allele sequences concatenated"). Only these are split against the reference:
 another format's long genotype text may mean something else."""
+
+SPANNED_GENOTYPES: frozenset[str] = frozenset({"genos"})
+"""Genotype-table formats whose rows state their reference span (Genos's 0-based half-open BEGIN/END,
+loaded as `pos`..`end_pos`) and spell each allele as a plus-strand sequence, `""` the empty allele. REF
+is read over that span, whatever its length, and a row of zero length (an insertion site: `end_pos`
+null) is anchored. Only these: in an array export a null `end_pos` means the span is unknown (`I`/`D`
+codes), not that it is empty."""
+
+_SEQUENCE_ALLELE = r"^[ACGTN]*$"
+"""A spanned row's allele that REF and ALT can be read against: bases, or the empty allele."""
 
 _CONCATENATED = r"^[ACGT]{3,}$"
 """A genotype text that can be two allele sequences: bases only, at least one of them two long."""
@@ -338,6 +354,7 @@ def resolve_ref(
         warnings.append(strand.summary())
     withhold = strand is not None and strand.check is StrandCheck.MIXED
     concatenated = facet["format_id"] in CONCATENATED_ALLELES
+    spanned = facet["format_id"] in SPANNED_GENOTYPES
     codes = _code_catalog(loaded, facet, plan.label)
     pairs = _pair_catalog() if withhold else None
     entry = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
@@ -356,7 +373,7 @@ def resolve_ref(
             for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
                 rows = source.filter(pl.col("chrom") == chrom).collect()
                 contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
-                resolved = _resolve_rows(rows, store, contig, counts, withhold, concatenated, codes, pairs) if contig is not None else rows
+                resolved = _resolve_rows(rows, store, contig, counts, withhold, concatenated, codes, pairs, spanned) if contig is not None else rows
                 part = spill.stage / f"calls-{index:05d}.parquet"
                 canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
                 parts.append(part)
@@ -595,19 +612,29 @@ def _resolve_rows(
     concatenated: bool = False,
     codes: "_Codes | None" = None,
     pairs: "_Codes | None" = None,
+    spanned: bool = False,
 ) -> pl.DataFrame:
     """One contig's rows with REF read; `counts` gathers the outcome per reason. `withhold`: the facet's
     strand is mixed (F13), so array rows whose genotype is not strand-safe get no `alts` or `gt`.
     `concatenated`: the format writes an indel genotype as its two allele sequences back to back (F4).
     `codes`: the manifests' indel probes an `I`/`D` row is resolved against (RM281). `pairs`: the
-    manifests' SNV allele pairs a mixed facet's withheld rows are read against (RM281)."""
+    manifests' SNV allele pairs a mixed facet's withheld rows are read against (RM281). `spanned`: the
+    format states each row's REF span and spells its alleles as sequences (`SPANNED_GENOTYPES`)."""
     if rows.is_empty():
         return rows
-    is_vcf = pl.col("source_ref").is_not_null()
+    rows = _anchor_points(rows, store, contig, counts, spanned)
+    # An empty source REF is an insertion point (`_anchor_points` read its anchor): no REF bases to compare.
+    is_vcf = pl.col("source_ref").is_not_null() & (pl.col("source_ref") != EMPTY_ALLELE)
     called = pl.col("gt_alleles").list.drop_nulls()
     single_bases = pl.col("gt_alleles").list.eval(pl.element().is_null() | pl.element().is_in(_BASES)).list.all()
-    array_ok = pl.col("source_ref").is_null() & pl.col("gt_alleles").is_not_null() & (called.list.len() > 0) & single_bases
-    length = pl.when(is_vcf).then(pl.col("source_ref").str.len_chars()).when(array_ok).then(pl.lit(1)).otherwise(None)
+    # A spanned row (Genos) is read over the span it states, its alleles any sequence; an insertion site
+    # has its span by now, the anchor base.
+    stated_span = pl.lit(spanned) & pl.col("end_pos").is_not_null()
+    sequences = pl.col("gt_alleles").list.eval(pl.element().is_null() | pl.element().str.contains(_SEQUENCE_ALLELE)).list.all()
+    alleles_ok = pl.when(stated_span).then(sequences).otherwise(single_bases)
+    array_ok = pl.col("source_ref").is_null() & pl.col("gt_alleles").is_not_null() & (called.list.len() > 0) & alleles_ok
+    array_length = pl.when(stated_span).then(pl.col("end_pos").cast(pl.Int64) - pl.col("pos").cast(pl.Int64) + 1).otherwise(pl.lit(1))
+    length = pl.when(is_vcf).then(pl.col("source_ref").str.len_chars()).when(array_ok).then(array_length).otherwise(None)
     start, end = _span(pl.col("pos"), length)
     work = rows.with_row_index("_row").with_columns(start.alias("_start"), end.alias("_end"), is_vcf.alias("_vcf"), array_ok.alias("_array"))
     work = work.with_columns(pl.when(pl.col("_start").is_not_null()).then(_read(work, store, contig)).otherwise(None).alias("_bases"))
@@ -619,13 +646,14 @@ def _resolve_rows(
     vcf = work.filter(pl.col("_vcf"))
     if vcf.height:
         _count_vcf(vcf, counts)
-    array_rows = work.filter(~pl.col("_vcf"))
+    array_rows = work.filter(~pl.col("_vcf") & pl.col("source_ref").is_null())
     if array_rows.height:
         _count_array_unreadable(array_rows, counts)
 
     agree = pl.col("source_ref").str.to_uppercase() == pl.col("_bases")
     work = work.with_columns(
-        pl.coalesce("_bases", "_split_ref").alias("ref"),
+        # `ref` is null on input (a facet already read is refused) but on an anchored insertion point.
+        pl.coalesce("_bases", "_split_ref", "ref").alias("ref"),
         pl.when(pl.col("_vcf") & pl.col("_bases").is_not_null())
         .then(pl.when(agree).then(pl.lit(RefCheck.MATCH.value)).otherwise(pl.lit(RefCheck.MISMATCH.value)))
         .otherwise(pl.col("ref_check").cast(pl.String))
@@ -638,6 +666,74 @@ def _resolve_rows(
         *[pl.when(split).then(pl.col(f"_split_{name}")).otherwise(pl.col(name)).alias(name) for name in ("alts", "gt", "end_pos")]
     )
     return work.select(CALLS.names())
+
+
+_ANCHORED = ("pos", "end_pos", "ref", "ref_check", "alts", "gt_alleles", "source_alleles")
+"""The columns `_anchor_points` rewrites on an insertion point it anchors."""
+
+
+def _anchor_points(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], spanned: bool) -> pl.DataFrame:
+    """Insertion points given VCF's anchor base, read from the reference.
+
+    An insertion point is a row over no reference base: `source_ref` empty (CGI's native files, a
+    CASAVA indel table), or, in a spanned format (`SPANNED_GENOTYPES`: Genos), a row with no `end_pos`.
+    Every loader places it at the base before the point (1-based `pos = begin` of a zero-length 0-based
+    locus), where VCF puts the anchor, so the anchor is the reference base at `pos`, prefixed onto every
+    allele. A point before a contig's first base (`pos` 0) has no base before: VCF's rule takes the base
+    after, appended to every allele, at `pos` 1. The row gets `end_pos` (the anchor's position) and its
+    alleles in `gt_alleles`, `alts` and `source_alleles` anchored in place, so `gt` and the vectors stay
+    indexed; a partly called allele (`?A`) gets the anchor too and stays one. A row with a source REF
+    gets `ref` (the anchor) and `ref_check` null: the source wrote no base to compare. A Genos row gets
+    REF from the span like any spanned row, after this. A point where no haplotype was called (`gt_alleles`
+    all null: CGI's zero-length no-calls) has no allele to anchor, and REF with no ALT would state a
+    no-call at the anchor base; it is left as loaded, counted.
+    """
+    point = (pl.col("source_ref") == EMPTY_ALLELE).fill_null(False)
+    if spanned:
+        point = point | (pl.col("source_ref").is_null() & pl.col("end_pos").is_null() & pl.col("gt_alleles").is_not_null())
+    indexed = rows.with_row_index("_p")
+    targets = indexed.filter(point)
+    if targets.is_empty():
+        return rows
+    any_called = pl.col("gt_alleles").list.drop_nulls().list.len() > 0
+    counts["point_no_call"] += targets.filter(~any_called.fill_null(False)).height
+    targets = targets.filter(any_called.fill_null(False))
+    inside = targets.filter(pl.col("pos").cast(pl.Int64) <= contig.length)
+    counts["point_outside"] += targets.height - inside.height
+    if inside.is_empty():
+        return rows
+    # The anchor: the base at 1-based `pos`, 0-based [pos - 1, pos); before the first base, base 1.
+    starts = [max(pos, 1) - 1 for pos in inside["pos"].to_list()]
+    spans = sorted(set(starts))
+    bases = dict(zip(spans, (text.upper() for text in store.fetch(contig, [(start, start + 1) for start in spans]))))
+    found: dict[str, list] = {"_p": [], **{f"_a_{name}": [] for name in _ANCHORED}}
+    for (index, pos, source_ref, alts, gt_alleles, source_alleles), start in zip(
+        inside.select("_p", "pos", "source_ref", "alts", "gt_alleles", "source_alleles").iter_rows(), starts
+    ):
+        anchor = bases[start]
+        before = pos >= 1
+        at = max(pos, 1)
+        counts["point_anchored"] += 1
+        counts["point_at_start"] += not before
+        values = (
+            index, at, at, anchor if source_ref is not None else None, None,
+            _with_anchor(alts, anchor, before), _with_anchor(gt_alleles, anchor, before), _with_anchor(source_alleles, anchor, before),
+        )  # fmt: skip
+        for name, value in zip(found, values):
+            found[name].append(value)
+    fixed = pl.DataFrame(found, schema={"_p": pl.UInt32, **{f"_a_{name}": CALLS[name] for name in _ANCHORED}})
+    hit = pl.col("_hit")
+    joined = indexed.join(fixed.with_columns(pl.lit(True).alias("_hit")), on="_p", how="left", maintain_order="left")
+    return joined.with_columns(
+        *[pl.when(hit.fill_null(False)).then(pl.col(f"_a_{name}")).otherwise(pl.col(name)).alias(name) for name in _ANCHORED]
+    ).select(rows.columns)
+
+
+def _with_anchor(alleles: list[str | None] | None, anchor: str, before: bool) -> list[str | None] | None:
+    """Each allele with the anchor base written before it (after it, at a contig's start); null stays null."""
+    if alleles is None:
+        return None
+    return [None if allele is None else (anchor + allele if before else allele + anchor) for allele in alleles]
 
 
 def _split_concatenated(work: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], withhold: bool) -> pl.DataFrame:
@@ -971,8 +1067,8 @@ def _derive_array_alleles(work: pl.DataFrame, counts: Counter[str], withhold: bo
         .otherwise(pl.col("alts"))
         .alias("alts")
     )
-    # Vectorised over haplotype slots and alt positions: each allele is a single base, so a slot's
-    # index is 0 when it is REF and j + 1 when it is the j-th sorted alt.
+    # Vectorised over haplotype slots and alt positions: a slot's index is 0 when its allele is REF and
+    # j + 1 when it is the j-th sorted alt (a single base, or a spanned row's sequence).
     widths = work.filter(target).select(alleles.list.len().max().alias("slots"), pl.col("alts").list.len().max().alias("alts")).row(0)
     indexes = []
     for slot in range(widths[0]):
@@ -985,7 +1081,7 @@ def _derive_array_alleles(work: pl.DataFrame, counts: Counter[str], withhold: bo
     work = work.with_columns(pl.when(target).then(gt).otherwise(pl.col("gt")).alias("gt"))
     derived = work.filter(target)
     counts["array_read"] += derived.height
-    counts["array_ref_not_acgt"] += derived.filter(~pl.col("ref").is_in(_BASES)).height
+    counts["array_ref_not_acgt"] += derived.filter(pl.col("ref").str.contains("[^ACGT]")).height
     counts["array_no_ref_allele"] += derived.filter(~pl.col("gt").list.contains(0)).height
     return work
 
@@ -1042,6 +1138,17 @@ def _row_warnings(counts: Counter[str], digest: str, codes: _Codes | None = None
         lines.append(line)
     if counts["vcf_outside"]:
         lines.append(f"{counts['vcf_outside']} row(s) with a source REF reaching past their contig, or at POS 0: REF left unread")
+    if counts["point_anchored"]:
+        at_start = counts["point_at_start"]
+        start = f" ({at_start} at a contig's start, anchored on the base after)" if at_start else ""
+        lines.append(
+            f"{counts['point_anchored']} insertion point(s) given their anchor base from the reference{start}: REF is that "
+            "base and every allele carries it, as VCF writes an insertion; the source wrote no REF base to compare it with"
+        )
+    if counts["point_no_call"]:
+        lines.append(f"{counts['point_no_call']} insertion point(s) with no haplotype called: REF left unread (no allele to anchor)")
+    if counts["point_outside"]:
+        lines.append(f"{counts['point_outside']} insertion point(s) past the end of their contig: REF left unread")
     if counts["array_rows"]:
         lines.append(
             f"REF read from collection {digest} for {counts['array_read']} of {counts['array_rows']} array row(s) "

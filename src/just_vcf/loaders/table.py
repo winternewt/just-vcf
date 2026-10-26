@@ -415,7 +415,8 @@ def _genos(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
     `begin == end`: it sits between two bases, and VCF places it at the base before (1-based `begin`),
     which is where `pos` goes. Its REF span is that anchor base, unknown until the reference is read, so
     `end_pos` is null. Genos's `-` is the empty allele, `""` in `gt_alleles` (`source_gt` keeps `-`);
-    the alleles stay unanchored until RM3 reads the anchor.
+    the alleles stay unanchored until `resolve_ref` reads the anchor (`reference.SPANNED_GENOTYPES`),
+    which also reads REF over every other row's span.
     """
     frame = _positions(frame, "begin", 0, table).rename({"_pos": "_begin"})
     frame = _positions(frame, "end", 0, table).rename({"_pos": "_end"})
@@ -441,6 +442,6 @@ def _genos(frame: pl.DataFrame, table: Table) -> pl.DataFrame:
     if sites:
         table.warnings.append(
             f"{sites} insertion site(s) (begin == end) placed at the base before them with end_pos null; their "
-            'alleles stay unanchored (`-` is read as the empty allele "") until the anchor base is read from the reference'
+            'alleles stay unanchored (`-` is read as the empty allele "") until resolve_ref reads the anchor base from the reference'
         )
     return frame

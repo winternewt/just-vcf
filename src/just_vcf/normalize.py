@@ -19,7 +19,8 @@ The rules are in docs/SCHEMA.md ("Normalizing"); in short:
 2. **Left-align and trim** each biallelic sequence row whose REF matched the reference
    (`ref_check = match`), or whose REF the facet's relation read from its collection (a lifted
    facet, `REREADS_REF`), or, in a facet read from a file, whose REF `resolve_ref` read with no
-   source REF to check (an array row, a split Living DNA genotype), with the standard algorithm (Tan et al. 2015, vt, `bcftools norm -f`):
+   source REF base to check (an array row, a Genos row, a split Living DNA genotype, an insertion
+   point's anchor), with the standard algorithm (Tan et al. 2015, vt, `bcftools norm -f`):
    drop a common last base, and when an allele runs empty, extend both to the left with the
    reference base before them; repeat; then drop common first bases while both alleles keep one. A
    row that moved or changed has `source_ref`, `ref_check`, `source_gt`, its VRS ids and its confidence
@@ -28,9 +29,9 @@ The rules are in docs/SCHEMA.md ("Normalizing"); in short:
    `ref_check = match` on bases read from the very sequence it checks would be a check agreeing with
    itself. `ref` holds the new REF, read from the reference. Rows whose REF was not shown to match
    pass through unchanged, counted. A deletion written without its anchor base, as the empty ALT
-   `""` (F12's `-`, which the loader reads so; CGI's native deletions: the REF bases at POS deleted),
-   is anchored on the base before, then aligned like any deletion; at a contig's first base there is
-   none, and it stays as written, counted.
+   `""` (F12's `-`, which the loader reads so; CGI's native deletions and Genos's `-`: the REF bases at
+   POS deleted), is anchored on the base before, then aligned like any deletion; at a contig's first
+   base there is none, and VCF's rule anchors it on the base after its REF span instead.
 3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
    but the ones a move clears (`_POSITIONAL`), so a moved indel and its unmoved twin with the same
    genotype and evidence are one row, the unmoved one. Rows for the same allele at the same position
@@ -61,10 +62,11 @@ from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, Re
 
 logger = logging.getLogger(__name__)
 
-NORMALIZE_VERSION = 8
+NORMALIZE_VERSION = 9
 """Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits (6: RM282's
 per-ALT SV columns split with their ALT, the intervals of a moved row cleared; 7: F19's scaffold aliases;
-8: a split row's `hq` null on each GT slot it writes `.`)."""
+8: a split row's `hq` null on each GT slot it writes `.`; 9: RM3's anchored insertion points aligned, and
+a deletion at a contig's first base anchored on the base after)."""
 
 RELATION = NORMALIZED
 """The derived facet's `relation`."""
@@ -252,7 +254,10 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
     counts["split_rows"] += pieces.filter(pl.col("_concrete") >= 2).height
     alt = pl.col("alts").list.get(k - 1)
     other_alt = pl.any_horizontal([(g.is_not_null() & (g != 0) & (g != k)).fill_null(False) for g in slots]) if slots else pl.lit(False)
-    indexable = (pl.col("source_alleles") == pl.concat_list(pl.col("source_ref"), pl.col("alts"))).fill_null(False)
+    # An anchored insertion point's vectors are indexed over its anchored alleles, REF the anchor base:
+    # its source REF is the empty allele.
+    indexed_ref = pl.when(pl.col("source_ref") == EMPTY_ALLELE).then(pl.col("ref")).otherwise(pl.col("source_ref"))
+    indexable = (pl.col("source_alleles") == pl.concat_list(indexed_ref, pl.col("alts"))).fill_null(False)
     pieces = pieces.with_columns(other_alt.alias("_other"), indexable.alias("_indexable"))
 
     def pair(name: str) -> pl.Expr:
@@ -351,7 +356,10 @@ def _align(
             | empty_alt
         )
     ).fill_null(False)
-    unchecked_read = pl.col("source_ref").is_null() & pl.col("ref_check").is_null() & pl.lit(from_file)
+    # No source REF base to check: an array row, a Genos row, or an insertion point (`source_ref` the
+    # empty allele) whose anchor `resolve_ref` read.
+    no_source_base = pl.col("source_ref").is_null() | (pl.col("source_ref") == EMPTY_ALLELE)
+    unchecked_read = no_source_base & pl.col("ref_check").is_null() & pl.lit(from_file)
     read = pl.col("ref").is_not_null() & ((pl.col("ref_check") == RefCheck.MATCH.value).fill_null(False) | pl.lit(rereads) | unchecked_read)
     reason = (
         pl.when(~read)
@@ -382,6 +390,7 @@ def _align(
 
     changed: dict[str, list] = {"_row": [], "_pos": [], "_ref": [], "_alt": []}
     pending = list(candidates.iter_rows())
+    first_base: list[tuple[int, int, str, str]] = []
     width = _FIRST_WINDOW
     while pending:
         windows = _windows(store, contig, [(pos, width) for _, pos, _, _ in pending])
@@ -391,8 +400,8 @@ def _align(
             if result is None:
                 if start == 1:
                     # The window already reaches the contig's first base: an allele empty at POS 1 (an
-                    # unanchored deletion there) has no base before it to anchor on, and a wider read cannot help.
-                    counts["unaligned_no_anchor"] += 1
+                    # unanchored deletion there) has no base before it, and VCF anchors it on the base after.
+                    first_base.append((index, pos, ref, alt_text))
                 else:
                     retry.append((index, pos, ref, alt_text))
                 continue
@@ -404,6 +413,15 @@ def _align(
                     changed[key].append(value)
         pending = retry
         width *= _WINDOW_GROWTH
+    for index, pos, ref, alt_text in first_base:
+        anchored = _anchor_after(store, contig, ref, alt_text)
+        if anchored is None:
+            counts["unaligned_no_anchor"] += 1
+            continue
+        counts["empty_anchored"] += alt_text == EMPTY_ALLELE
+        counts["anchored_after"] += 1
+        for key, value in zip(changed, (index, pos, *anchored)):
+            changed[key].append(value)
     if not changed["_row"]:
         return rows.drop("_row")
     moved = pl.DataFrame(changed, schema={"_row": pl.UInt32, "_pos": pl.UInt32, "_ref": pl.String, "_alt": pl.String})
@@ -422,6 +440,16 @@ def _windows(store: ReferenceStore, contig: Contig, requests: list[tuple[int, in
     for index, text in zip(reads, bases):
         windows[index] = text.upper()
     return list(zip(windows, starts))
+
+
+def _anchor_after(store: ReferenceStore, contig: Contig, ref: str, alt: str) -> tuple[str, str] | None:
+    """`(REF, ALT)` of an indel at position 1 with an empty allele, anchored on the base after its REF
+    span, as VCF writes an event at a contig's first base; None when the span reaches the contig's end."""
+    if len(ref) >= contig.length:
+        return None
+    # 1-based base len(ref) + 1 is 0-based [len(ref), len(ref) + 1).
+    after = store.fetch(contig, [(len(ref), len(ref) + 1)])[0].upper()
+    return ref + after, alt + after
 
 
 def _left_align(pos: int, ref: str, alt: str, window: str, start: int) -> tuple[int, str, str, bool] | None:
@@ -525,7 +553,12 @@ def _warnings(counts: Counter[str]) -> list[str]:
     if counts["empty_anchored"]:
         lines.append(
             f'{counts["empty_anchored"]} deletion(s) written without their anchor base (the empty ALT "": an ALT `-`, F12, '
-            "or CGI's unpadded deletions) anchored on the base before, as VCF writes them"
+            "CGI's unpadded deletions, Genos's `-`) anchored on the base before (after, at a contig's first base), as VCF writes them"
+        )
+    if counts["anchored_after"]:
+        lines.append(
+            f"{counts['anchored_after']} deletion(s) at a contig's first base anchored on the base after their REF span, "
+            "as VCF writes an event with no base before it"
         )
     if counts["aligned_at_start"]:
         lines.append(f"{counts['aligned_at_start']} row(s) reached their contig's start and stay anchored on the base after")
@@ -537,7 +570,7 @@ def _warnings(counts: Counter[str]) -> list[str]:
         "unaligned_unindexed": "a genotype that is not indexed",
         "unaligned_index_past_alts": "a genotype index past the row's ALTs",
         "unaligned_contig": "a contig the collection names twice",
-        "unaligned_no_anchor": "a deletion without its anchor base at a contig's first base, with no base before it to anchor on (F12)",
+        "unaligned_no_anchor": "a deletion without its anchor base covering its whole contig, with no base before or after it to anchor on (F12)",
         "unaligned_not_an_allele": "an ALT that is not a VCF allele",
     }
     for key, reason in reasons.items():

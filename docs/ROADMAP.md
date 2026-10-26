@@ -491,7 +491,7 @@ Header evidence found while declaring the VCF formats:
 Not identifiable from the header: 23andMe's exome VCF, the Dante- and Nebula-named uploads (generic GATK).
 
 ## RM3 — REF lookup and padding
-Severity: high · Status: in progress (the FASTA tier shipped 2026-10-22 as `resolve_ref` on a gtars refget store, for VCF and array rows, merge db67f83; an array without a stated build inferred from its rows and GRCh36 in the store (F9), merge 2ff9b00; UCSC scaffold names met through NCBI's assembly reports (F19), merge cec1831; a facet refused only on an autosome mismatch (F20), merge eeaf293; the 2026-10-23 reading of I/D codes is RM281's. Left, buildable now: the anchor base of a CGI or Genos insertion point, and REF for Genos's multi-base rows, so `normalize` can reach them (`reference.py`, `normalize.py`); emitting reference-supported positions, a function materialising hom-ref from `blocks` and absence under `callset.absence_is_reference`'s gates, which does not exist yet. Waiting: Living DNA's run-together indels past the 4 of 83 resolved need the Sirius chip's alleles (F17, no source); a facet whose file states no build gets no REF check until desk #92) · Owner: lead
+Severity: high · Status: in progress (the FASTA tier shipped 2026-10-22 as `resolve_ref` on a gtars refget store, for VCF and array rows, merge db67f83; an array without a stated build inferred from its rows and GRCh36 in the store (F9), merge 2ff9b00; UCSC scaffold names met through NCBI's assembly reports (F19), merge cec1831; a facet refused only on an autosome mismatch (F20), merge eeaf293; the 2026-10-23 reading of I/D codes is RM281's; the anchor base of a CGI, CASAVA or Genos insertion point and REF over a Genos row's span, with a deletion at a contig's first base anchored on the base after, 2026-10-26 (below). Left, buildable now: emitting reference-supported positions, a function materialising hom-ref from `blocks` and absence under `callset.absence_is_reference`'s gates, which does not exist yet. Waiting: Living DNA's run-together indels past the 4 of 83 resolved need the Sirius chip's alleles (F17, no source); a facet whose file states no build gets no REF check until desk #92) · Owner: lead
 
 Port just-prs `reference_allele.py` (reference-panel tier, FASTA tier, FASTA build check). New work:
 ALT derivation from genotype against REF, indel anchor bases, chr-prefixed FASTA support, emitting
@@ -540,13 +540,38 @@ on PGP-HMS files read from the Krypton share, aggregates only:
 Order with `rejoin_split`: re-join first, then `resolve_ref`. The other way round, the re-joined rows
 carry no `ref` while the facet keeps `ref_seqcol_digest`, and `resolve_ref` refuses it as already read.
 
-Left: indel anchor bases (no loaded format lacks them: 23andMe I/D codes need the chip manifest, and
-Living DNA's run-together `CCA` is split against the reference since 2026-10-22, F4, and gets REF on 4
-of 83 rows; the rest need the site's alleles, F17. Checked 2026-10-23: CGI's native files and Genos do
-write indels without the anchor base, as the empty allele `""`. A CGI deletion's REF is read and
-`normalize` anchors it; a CGI or Genos insertion point's anchor base is not read, and neither is REF
-for Genos's multi-base rows, whose span the file states, so `normalize` cannot reach them yet); emitting
-reference-supported positions; an opt-in test against a real assembly. UCSC's scaffold names meet
+**Shipped 2026-10-26: insertion points and Genos spans** (`RESOLVE_VERSION` 10, `NORMALIZE_VERSION` 9;
+docs/SCHEMA.md, "How RM3 fills these slots"). CGI's native files and Genos write indels without VCF's
+anchor base, as the empty allele `""` (checked 2026-10-23). `resolve_ref` now reads an insertion
+point's anchor, the base at `pos` where every loader placed it, as `ref`, and writes it before every
+allele; before a contig's first base it takes the base after, at POS 1 (VCF's rule). A Genos row gets
+REF over its stated span, whatever its length. `normalize` aligns the anchored rows, and anchors a
+deletion at POS 1 on the base after its span (it was left unanchored). Choices, each with the
+alternative rejected:
+
+- **`ref_check` null on an anchored point**, not `match`: the file wrote no REF base, and `match`
+  would be the anchor compared with the sequence it was read from. `normalize`'s gate takes such a row
+  as one whose REF was read with nothing to check, as an array row.
+- **The alleles rewritten with the anchor in `resolve_ref`**, not left unanchored beside `ref` = the
+  anchor: every reader of `[ref] + alts` (VRS, `write_vcf`, concordance, `genotype_evidence`) would read
+  `G` against `GG` as an SNV. `source_ref = ""` keeps what the file wrote.
+- **Deletions are still anchored by `normalize`**, not `resolve_ref`: anchoring one moves `pos`, which
+  is a derivation, while an insertion point's `pos` already is the anchor's. The one `pos` that
+  `resolve_ref` writes is 0, a zero-length locus before the first base, which becomes 1.
+- **An insertion point where nothing was called stays unread**, counted: REF with no ALT would state a
+  no-call at the anchor base.
+
+Measured 2026-10-26 on PGP-HMS hu1B2689 (consented-public, read from the Krypton share through the
+library, aggregates only) against the GRCh37 store: the `var` holds 628,682 insertion points; 272,697
+anchored, 355,984 left unread with nothing called, 1 on a contig not read. Of the 263,690 anchored
+points carrying an ALT, 263,689 have a record at the same POS in CGI's own vcfBeta of the assembly with
+the same REF and the same ALT set; the other has none there. Shifted one base either way, at most 18
+agree, so the loaders' `pos = begin` is the anchor and CGI's `var` coordinates are read as CGI
+writes them. A CASAVA indel table's points take the same rule, but such a facet states no build and
+has no SNV rows to infer one from (F9), so `resolve_ref` refuses it before reading a row; that gap is
+not this item's.
+
+Left: emitting reference-supported positions. UCSC's scaffold names meet
 Ensembl's accessions since 2026-10-23, through NCBI's assembly reports rather than the accession inside
 the name (F19, docs/PREVIOUS_ISSUES.md). A VCF with neither
 `##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array

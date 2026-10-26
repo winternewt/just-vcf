@@ -18,8 +18,9 @@ What a `calls` row of a CGI locus holds (SCHEMA.md Decision 2):
 - No anchor base: CGI writes no base before an insertion or deletion, and REF only ever comes from the
   assembly sequence (charter 10). So a deletion's allele is `""`, and a locus of zero length (an
   insertion point) has `source_ref = ""`, sits at the base before it (`pos = begin`, where VCF puts
-  it) and has `end_pos` null until RM3 reads that base, as Genos insertion sites do. An insertion
-  point CGI could not call (a zero-length no-call) is such a row too, with every haplotype null.
+  it) and has `end_pos` null until `resolve_ref` reads that base and writes it into every allele, as
+  for Genos insertion sites. An insertion point CGI could not call (a zero-length no-call) is such a
+  row too, with every haplotype null, and stays unanchored: it has no allele to anchor.
 - `sample_filters` are the haplotypes' `varFilter` tokens (`varQuality` before format 2.5, kept
   verbatim), with PASS left out beside another token, as CGI's own VCF writes FT. `ids` are the rs
   ids of `xRef`, sorted. `dp` is masterVarBeta's `totalReadCount`.

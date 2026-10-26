@@ -3,6 +3,25 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F28 — Manta's breakend mates do not state each other's positions exactly
+
+Severity: medium · Found 2026-10-26 dogfooding RM282's breakends on the PGP-HMS Manta files.
+
+Folding mates by the exact ends they state left hu416394's 3,350 breakend records as 1,899
+adjacencies, not 1,675, and hu1C1368's 1,228 as 785, not 614: 448 and 342 records stood alone, each
+mate counted as a second junction. Every lone record had a partner a few bases off (most under 10)
+pointing back at it, joined the same way. Manta places a breakend's POS at one end of the junction's
+microhomology, which CIPOS spans, while the mate's ALT points at the other end. The frame carries no
+MATEID (`dropped_fields`), so the file's own pairing is not there to read.
+
+Resolved 2026-10-26: two records whose mate contig and side are each other's own, and whose mate
+position lies within the other's `[POS + CIPOS[0], POS + CIPOS[1]]`, are one adjacency, where the
+pairing is one-to-one (`concordance._fold_mates`). Every one of the 224 and 171 pairs lay inside the
+intervals, none ambiguous, and the counts are now 1,675 and 614, half the records each.
+Rejected: pairing by `ids` (`MantaBND:…:0` beside `:1`), which is Manta's naming and no other
+caller's; and carrying MATEID into `calls`, a schema change for the person, which these files do not
+need. Test: `tests/test_concordance_bnd.py::test_mates_written_apart_within_their_intervals_count_once`.
+
 ## F22 — A haploid call against the same allele's diploid homozygous call counts as discordant
 
 Severity: medium · Found 2026-10-23 by RM279 on the PGP-HMS CGI against freeBayes pairs.

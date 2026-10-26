@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `concordance` compares breakends (RM282), as truvari 5.5's `bnd_match` does: one contig and
+  positions less than `2 * bnddist` apart (plus each record's `|CIPOS[1]|`), the mates parsed from ALT
+  on one contig and as near (`|CIEND[1]|`), and the same one of the four bracket forms. `SvMatching`
+  gains `bnddist` (100), `key` gains `breakend`. The unit is the adjacency: mates written as two
+  records are one row, found by the ends they state (MATEID is not carried), including Manta's mates
+  that state their ends within each other's CIPOS. **Breaking (pre-1.0):** `excluded` no longer
+  counts breakends as `breakend`; they are rows of `sites`, so `summary` and the atlas count them, and
+  `EXCLUDED_REASONS` drops `breakend` and adds `single_breakend` and `breakend_unparsed`.
+  docs/SCHEMA.md, "Breakends".
+
 - `genotype_evidence_at` orders a site's records over one span by what they state (block kind, basis,
   confidence, alleles, genotype) after start, origin and end, so blocks two source regions sent to one
   identical target span come out in one order whatever the file's. Before, their order was the file's.

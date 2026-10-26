@@ -1223,8 +1223,8 @@ Each of these is null on a row that is no SV. `normalize` leaves symbolic sites 
 sequence site it splits, each row keeps its own ALT's pair and copy number, and a row it moves loses
 `cipos` and `ciend` (offsets from the POS the source wrote), as a lifted sequence row does. `liftover`
 lifts a symbolic site by both ends and keeps its intervals ("Lifting symbolic SVs"). `concordance`
-compares SV calls across facets by type and extent, as truvari does ("Concordance between two
-facets", RM282); breakends are not compared yet.
+compares SV calls across facets by type and extent, and breakends by both ends and the join, as
+truvari does ("Concordance between two facets", RM282).
 
 Measured 2026-10-23 on the PGP-HMS SV and CNV files (aggregates): a Manta `.sv.` file, 9,373 calls
 (4,366 sequence-written indels, 3,350 breakends, 848 `<DEL>`, 558 `<DUP:TANDEM>`, 251 `<INS>`); a
@@ -2428,9 +2428,10 @@ on both is compared with a warning, since a label is not the assembly (charter 3
 refused. Rejected: comparing by label alone. GRCh37 and hg19 share it and differ in MT.
 
 **The unit is one ALT allele**, Decision 1's per-allele view. Sequence alleles meet as below;
-symbolic structural-variant alleles meet by type and extent ("Structural variants", below, RM282).
-`<*>`, `*`, breakends (`breakend`), ALTs that are no VCF allele, rows whose REF was never read, and
-array rows whose `alts` are still null are counted in `excluded`. A sequence allele meets the other
+symbolic structural-variant alleles meet by type and extent ("Structural variants", below, RM282),
+breakends by their adjacency ("Breakends", below). `<*>`, `*`, single breakends (`single_breakend`),
+breakend ALTs that do not parse (`breakend_unparsed`), ALTs that are no VCF allele, rows whose REF
+was never read, and array rows whose `alts` are still null are counted in `excluded`. A sequence allele meets the other
 facet's in this order, each row saying which in `key`:
 
 1. `vrs`: both rows minted an id for it (the ALT's slot of `vrs_allele_ids`, never the REF slot: a
@@ -2532,7 +2533,7 @@ reading `reference` or a block as `0/0` would turn graded absence into a call.
 | `chrom`, `pos`, `ref`, `alt` | `str`, `u32`, `str`, `str` | the allele as the facet stating it wrote it, `a` first |
 | `variant_class` | `Enum` | `snv`, `mnv`, `indel` or `sv` (Decision 5's rule) |
 | `vrs_allele_id` | `str` | either facet's id for the allele; null where neither minted one |
-| `key` | `Enum` | `vrs`, `position`, `site`, `extent` (an SV pair); null on a one-sided allele |
+| `key` | `Enum` | `vrs`, `position`, `site`, `extent` (an SV pair), `breakend` (a pair of breakend adjacencies); null on a one-sided allele |
 | `agreement` | `Enum` | above |
 | `absence` | `Enum` | above; null where both facets state the allele |
 | `basis` | `Enum` | `gl_flat_prior`, `gp`, `hard`; null on a one-sided allele |
@@ -2542,11 +2543,11 @@ reading `reference` or a block as `0/0` would turn graded absence into a call.
 | `a_copies`, `b_copies` | `u8` | copies of the allele; null where a haplotype is uncalled or unreadable |
 | `ploidy_differs` | `bool` | the two genotypes were written with different numbers of haplotypes; null on a one-sided allele |
 | `a_filters`, `b_filters`, `a_gq`, `b_gq` | `list[str]`, `u16` | each row's FILTER and GQ, so a consumer can restrict to PASS |
-| `sv_kind` | `str` | an SV allele's type as matched (below); null on a sequence allele |
-| `b_alt` | `str` | on an `extent` pair, `b`'s ALT as written (`<DUP>` beside `a`'s `<DUP:TANDEM>`); null otherwise |
-| `a_end_pos`, `b_end_pos` | `u32` | an SV allele's `end_pos` on each side stating it; null on a sequence allele |
-| `size_similarity`, `reciprocal_overlap` | `f64` | truvari's measures of an `extent` pair (below); `size_similarity` null where either size is unknown |
-| `ci_needed` | `bool` | on an `extent` pair, True where the two met only once CIPOS/CIEND widened them; null otherwise |
+| `sv_kind` | `str` | an SV allele's type as matched (below), `BND` for a breakend; null on a sequence allele |
+| `b_alt` | `str` | on an `extent` or `breakend` pair, `b`'s ALT as written (`<DUP>` beside `a`'s `<DUP:TANDEM>`); null otherwise |
+| `a_end_pos`, `b_end_pos` | `u32` | an SV allele's `end_pos` on each side stating it (a breakend's own position); null on a sequence allele |
+| `size_similarity`, `reciprocal_overlap` | `f64` | truvari's measures of an `extent` pair (below); `size_similarity` null where either size is unknown; null on a `breakend` pair |
+| `ci_needed` | `bool` | on an `extent` or `breakend` pair, True where the two met only once CIPOS/CIEND widened them; null otherwise |
 
 The last seven columns came with RM282 (2026-10-26), after the rest: added, nothing redefined.
 
@@ -2598,8 +2599,8 @@ What differs from truvari, each with its reason:
   Such pairs meet by type and distance only, which is weaker than truvari's match with SVLEN. truvari
   also widens each insertion by half its size before the overlap; with no size that cannot be done,
   so under a `pctovl` above 0 two insertions meet only at one anchor.
-- **CIPOS and CIEND widen the distance test.** truvari reads them only for breakends (`bnd_match`).
-  Here each call's extent is widened to the earliest its start and the latest its end can be: the
+- **CIPOS and CIEND widen the distance test.** truvari reads them only for breakends (`bnd_match`,
+  below). Here each call's extent is widened to the earliest its start and the latest its end can be: the
   start by `|CIPOS[0]|`, the end by `|CIEND[1]|`, or by `|CIPOS[1]|` where CIEND is missing (VCF 4.5:
   assume CIPOS; the frame leaves that to its consumer, which this is). Only the `refdist` test uses
   the widened extents; size and overlap use the stated ones. A `.` widens nothing,
@@ -2609,9 +2610,11 @@ What differs from truvari, each with its reason:
   symbolic allele carries one in the frame, so it is never run, as with `--pctseq 0`. A deletion
   written out base by base is an `indel`, compared allele by allele above, never against a symbolic
   call: matching across the two representations is not built.
-- **Breakends are not compared** (`excluded`, `breakend`). truvari matches them by `bnddist` (100)
-  around both breakpoints and the join's direction and strand, and decomposes a `<DEL>` into
-  breakends to meet them. Neither is built.
+- **A symbolic allele never meets a breakend.** truvari's default `decompose` turns a `<DEL>`,
+  `<DUP>` or `<INV>` into the breakends it implies to meet another caller's breakends
+  (`VariantRecord.cpx_match`). Not built: whether a `<DEL>` and the breakend pair one caller writes
+  for it are one call is a judgement the roadmap has not made (RM282, open). Breakends meet
+  breakends ("Breakends", below).
 - **No size filter.** truvari leaves out calls under `sizemin` (50). A symbolic allele is an SV by
   its writer's statement whatever its length, and every one is compared.
 
@@ -2641,6 +2644,82 @@ aggregates only): Manta against Canvas meets no pair at the defaults, every Canv
 `<CNn>`; with `typeignore` 35 meet, 10 of them `<INS>` beside copy-number alleles, unsized. Against the
 gVCF every SV is one-sided and `unknown`. Whether a copy-number allele should meet a `<DEL>` or `<DUP>`
 as a loss or a gain is open (RM282).
+
+**Breakends (RM282)** meet as truvari bench's `bnd_match` meets them (truvari 5.5, MIT;
+`truvari/variant_record.py`, `VariantRecord.bnd_match`, `bnd_position` and `bnd_direction_strand`;
+`truvari/comparisons.py`, `overlaps`; read from the 5.5.0 sdist 2026-10-26). An ALT is one of VCF
+4.2-4.5's four forms, `t[p[`, `t]p]`, `]p]t` or `[p[t` (`t` the bases at POS, `p` the mate's
+`contig:position`). Two breakend records meet when all of these hold:
+
+1. **One contig**, and their positions' windows overlap strictly: each window is `pos - bnddist - c`
+   to `pos + bnddist + c` (`SvMatching.bnddist`, truvari's default 100; `c` the record's
+   `|CIPOS[1]|`), and truvari's `overlaps` is `max(starts) < min(ends)`. So two positions meet when
+   they lie less than `2 * bnddist + ca + cb` apart: 199 bases apart at the default, not 200. As
+   with `refdist` above, the code is followed, not the parameter's description ("Maximum allowed
+   distance for breakend (BND) comparisons").
+2. **The mates parsed from ALT lie on one contig**, their windows overlapping the same way, widened
+   by `|CIEND[1]|`. With no CIEND the mate is widened by nothing: truvari does not fall back to CIPOS
+   here, unlike the symbolic rule above.
+3. **The same one of the four forms**: truvari's `(direction, strand)`, `[` or `]` and whether the
+   bases come first, which is exactly the form.
+
+Index 1 of CIPOS and CIEND, the upper offset, is truvari's as it runs: `bounds()` sets `key = 'CI' +
+key` before `idx = 0 if key == 'POS' else 1`, so index 0 is never read. The code is followed, so a
+lower offset alone (`CIPOS=-30,5`) widens by 5. `ci_needed` is True where a pair met only by the
+widening. `bnddist` 0 meets only by an interval, as in truvari.
+
+**The unit is the adjacency, not the record.** A junction is usually written twice, once from each
+side (Manta's `MantaBND:…:0` and `:1`). Each record states two ends, a `(contig, position, side)`
+each, the side being where the sequence that takes part in the join lies: left of POS for `t[p[`
+and `t]p]`, right for `]p]t` and `[p[t`; right of `p` for `t[p[` and `[p[t`, left for the other two.
+VCF's mate pairs (`t[p[` beside `]p]t`, `t]p]` beside `t]p]`, `[p[t` beside `[p[t`) state one pair
+of ends. Records stating one pair of ends are one adjacency and one row. Records whose ends differ by
+no more than their intervals are one adjacency too: each one's mate contig and side are the other's
+own, and its mate position lies in the other's `[POS + CIPOS[0], POS + CIPOS[1]]`. Manta writes a
+mate's POS at one end of the junction's microhomology, which CIPOS spans, and the ALT pointing at it
+from the other record at the other end; on the PGP-HMS Manta files 448 of 3,350 and 342 of 1,228
+records pair only that way, every one inside the interval and none ambiguous (F28). Only a
+one-to-one pairing folds; a record that could be the mate of several stays alone, counted in a
+warning. MATEID and EVENT are not read: the frame does not carry them (`dropped_fields`), and the
+ends are what VCF requires mates to agree on. A record whose mate is missing (not written, cut by
+`region`, on a contig the comparison leaves out) is its adjacency alone. An EVENT of several
+adjacencies (an inversion's two) is several rows. An adjacency that joins an end to itself (a
+foldback, `t]p]` pointing at its own POS) has both mates at one end; more records than its ends
+hold are counted in a warning, as are mates whose genotypes differ.
+
+Two adjacencies meet when any record of one meets any record of the other (truvari compares records,
+and a pair of mates is two). The row shows the pair of records that met best, by truvari's score
+`max(0, 1 - mean(|start distance|, |mate distance|) / (2 * bnddist))` times 100 (0 at `bnddist` 0),
+then the nearer start and mate (its `MatchResult` order), then the record at the adjacency's first
+end, so `a_pos` and `b_pos` lie on `chrom`. Each adjacency is taken once, best first (`--pick
+single`), ties to each side's record order. Key `breakend`, `sv_kind` `BND`; `size_similarity` and
+`reciprocal_overlap` are null, and `a_end_pos`/`b_end_pos` are the positions (a breakend's `end_pos`).
+Genotypes compare as for symbolic alleles. A one-sided adjacency reads the silent facet's breakends
+whose position window meets one of its records' (truvari's first test, any mate or form;
+`other_alleles`), else the facet's absence rule for `sv` on a contig it declared, at both ends. A
+symbolic SV of the other facet near a breakend does not make `other_alleles`.
+
+What differs from truvari, each with its reason:
+
+- **Mate contigs by canonical name.** truvari compares the ALT's contig text; here it is read with
+  `canonical_chrom`, as `chrom` is, so Ensembl `2` and UCSC `chr2` are one contig, and a mate on a
+  contig the two collections do not share is `contig_not_shared`.
+- **A contig name may hold `:`.** truvari's `[^\[\]:]+` refuses `HLA-A*01:01:01:01`; here the name
+  runs to the last `:` before the digits.
+- **Brackets must pair.** truvari reads `A[2:100]` as a right-direct join (it tests the first and last
+  characters only); VCF has no such form, and it is `breakend_unparsed`.
+- **Single breakends are counted, not dropped silently.** truvari's default `no_single_bnd` leaves
+  `.A` and `A.` out of the comparison; here too, as `single_breakend` in `excluded`. A single
+  breakend has no mate to compare, and truvari's `bnd_position` cannot read one either.
+- **Adjacencies, not records.** truvari bench counts each record, so a mate pair met by a mate pair
+  is two true positives; here it is one row.
+
+Measured 2026-10-26 (aggregates only): hu416394's Manta file (GRCh38, 3,350 breakend records) holds
+1,675 adjacencies and hu1C1368's (GRCh37, 1,228) 614; each against itself meets every adjacency
+(`match`, none `ci_needed`). Against itself with the records at odd positions dropped, hu1C1368's
+meets the 467 adjacencies that kept a record and leaves the 147 that kept none `only_a`, none
+`only_b`. Manta against Canvas leaves all 1,675 `only_a`, `unknown`: Canvas writes no breakends. No
+person here has two breakend facets, so no two callers' breakends were compared.
 
 ## A method-error atlas (RM279)
 
@@ -2904,6 +2983,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-26, RM282 breakends in concordance): no column of `facets`, `calls`
+  or `blocks` changes, and `sites` keeps its columns. `concordance` compares breakends ("Breakends",
+  above): `key` adds `breakend`, `sv_kind` takes `BND`, `SvMatching` adds `bnddist` (100).
+  **Values change**: a breakend, counted in `excluded` as `breakend` before, is now a row of
+  `sites`, one per adjacency, so `sites`, `summary` and RM279's atlas (class `sv`) count it.
+  `EXCLUDED_REASONS` drops `breakend`, which nothing emits any more, and adds `single_breakend` and
+  `breakend_unparsed`; `contig_not_shared` also covers a breakend whose mate lies on such a contig.
+  The removal is a break of an open vocabulary, pre-1.0.
 
 - **No version change** (2026-10-26, RM3's reference-supported positions): no column of `facets`,
   `calls` or `blocks` changes. `reference_support` and `absence_support` are computed on demand, as

@@ -91,7 +91,8 @@ from just_vcf.schema import (
     VariantClass,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
-from just_vcf.store import Store, StoreAdded, StoredFacet, StoreError, StoreManifest, StoreVersionError
+from just_vcf.store import Store, StoreAdded, StoredFacet, StoreError, StoreManifest, StoreVersionError, migrate_store
+from just_vcf.store_migration import FilledUnknown, MigrationApplied, StoreMigration
 from just_vcf.vcf_zarr import VCF_ZARR_VERSION, VcfZarrWritten, write_vcf_zarr
 from just_vcf.writing import BlockAllele, ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
 from just_vcf.vrs import mint_vrs_ids, vrs_withheld
@@ -181,6 +182,9 @@ __all__ = [
     "StoreManifest",
     "StoreVersionError",
     "StoredFacet",
+    "StoreMigration",
+    "MigrationApplied",
+    "FilledUnknown",
     "StrandCheck",
     "SubjectCheckOutcome",
     "SubjectError",
@@ -215,6 +219,7 @@ __all__ = [
     "liftover",
     "link_disagreements",
     "load",
+    "migrate_store",
     "mint_vrs_ids",
     "normalize",
     "people",

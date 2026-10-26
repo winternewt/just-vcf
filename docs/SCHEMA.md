@@ -2044,8 +2044,10 @@ layout (charter 2): GA4GH defines no on-disk store for a person's callsets.
 <dir>/manifest.json                    store_layout, schema_version, subject, created; per facet its
                                        facet_id, added and the warnings its load gave
 <dir>/facets/<facet_id>/facets.parquet, calls.parquet, blocks.parquet, links.parquet
-<dir>/.lock                            the OS file lock every add holds (just_vcf.cache's)
+<dir>/.lock                            the OS file lock every add and migration holds (just_vcf.cache's)
 ```
+
+The manifest also lists the store's migrations (`migrations`, below), empty until one runs.
 
 The manifest's warnings are redacted as `query` returns them (`FacetRedactor`: the facets' sample,
 source path and member, and anything shaped like a path): it is the store's one plain-text file, and
@@ -2057,10 +2059,13 @@ a load warning may quote a sample or a file name.
 - **One person, one schema version.** The subject is named at creation. `add` refuses a facet with
   no subject or another one (`SubjectError`, naming facet ids, never the subject), and a `Loaded` of
   another `SCHEMA_VERSION` (`StoreVersionError`). A store of another version opens, so its manifest
-  can be read, but its frames are not read and nothing is added: versions are never mixed, and there
-  is no migration yet (load the sources again into a new store). A later `store_layout` is refused.
+  can be read, but its frames are not read and nothing is added: versions are never mixed, and nothing
+  is migrated on read. The refusal names both versions and what to do: `migrate_store(path)` for an
+  older store ("Store migration", below), upgrading just-vcf for a later one. A later `store_layout`
+  is refused.
 - **Facets accumulate (charter 5).** A facet's directory is written once and never rewritten or
-  removed; adding a facet the store holds, by `facet_id`, is a no-op that writes nothing. The links
+  removed, except by a migration, which rewrites every facet's files with the same facets and rows;
+  adding a facet the store holds, by `facet_id`, is a no-op that writes nothing. The links
   are kept per facet, so adding one never touches a file another facet owns: each facet keeps the
   links of the `Loaded` it came with that end at it or at one of its lineage ancestors, so a facet
   added without its parent still names it. `loaded()` reads them all back once each, in Decision 12's
@@ -2074,11 +2079,63 @@ a load warning may quote a sample or a file name.
   sinking outside the lock and locking only the commit, which lets concurrent adds overlap but leaves
   no safe moment to remove a dead writer's staging directory.
 - **Lazy reads.** `loaded()` returns one `Loaded` over every facet, scans of its files in `facet_id`
-  order (the canonical order, Decision 11), the links each once, and the facets' warnings each once;
-  an empty store gives empty frames. `person(check=...)` is `Person.of` over it; an empty store has
+  order (the canonical order, Decision 11), the links each once, and the facets' warnings each once,
+  then one line per set of values a migration filled unknown (below); an empty store gives empty frames. `person(check=...)` is `Person.of` over it; an empty store has
   no person (`StoreError`). A frame read from a store keeps working after later adds.
 - **Deterministic (charter 12).** The same `Loaded` sinks to the same parquet bytes under one polars
   release. The manifest holds times and differs between two stores of one input.
+
+### Store migration
+
+`migrate_store(path, keep_previous=False)` rewrites a store written under an older `SCHEMA_VERSION`
+to this one and returns a `StoreMigration`: the steps applied, the facets rewritten, and every value
+it filled unknown (`FilledUnknown`: the step, the frame, the columns, the facet ids, the reason). The
+same record goes into the manifest's `migrations`, and `loaded()` repeats each `FilledUnknown` as a
+warning, so a null a migration left is never read as one a load wrote. Nothing migrates on read.
+
+The steps are `just_vcf.store_migration.MIGRATIONS`, one per version bump since the store shipped
+under 0.0.14 (merge 6830fb7, between 0.0.14's merge and 0.0.15's), each a pure function per frame,
+applied in order from the store's version. A bump that changed no stored frame would get an identity
+step; none since 0.0.14 is one. `blocks` and `links` have not changed since the store shipped, so no
+step touches them. Each step states its dtypes as they were at its version, and the suite checks the
+chain runs from 0.0.14 to `SCHEMA_VERSION` and ends in exactly `schema`'s frames, so a bump without
+a step fails it.
+
+| Step | Frames | What it does | Filled unknown, on which facets |
+|---|---|---|---|
+| 0.0.14 → 0.0.15 | calls | adds `phase_set_ordinals`, `phase_set_qualities` (null) after `phase_set_kinds` | facets whose `dropped_fields` list FORMAT `PSL`, `PSO` or `PSQ`: their PSL sets were left out, so `phased`, `phase_sets`, `phase_set_kinds` lack them and the two new columns are null for not read |
+| 0.0.15 → 0.0.16 | facets | adds `reference`, `aligner`, `aligner_version`, `method_steps` (null) after `phasing_method` | VCF facets (`format_id` a VCF loader's): `method_steps` null means not read, not "not a VCF"; the other three null mean not read; `phasing_method` keeps the earlier rule's value |
+| 0.0.16 → 0.0.17 | calls | casts `phase_set_kinds` to the enum with `cgi_haplink` | CGI `var` and masterVarBeta facets: `phased`, `phase_sets`, `phase_set_kinds` null for hapLink not read; masterVarBeta facets: `ad`, `source_alleles` for read counts not read |
+| 0.0.17 → 0.0.18 | facets | adds `gl_source` (null) after `split_marker` | VCF facets: null means not recorded, not "no likelihoods" |
+| 0.0.18 → 0.0.19 | calls | adds `hq` (null) after `gq` | CGI native facets, and facets whose `dropped_fields` list FORMAT `HQ`: `hq` null for not read, so their rows grade `gt_only` |
+
+A step never invents a value: an added column is null, and where that null (or a value an older loader
+left) reads differently from what a load of the same source gives today, the facets it applies to are
+named, with the reason. Loading the source again is the only way to get those values. Rejected:
+deriving `gl_source` from whether a facet's rows have `gl` (it would still guess GL against PL), and
+writing `method_steps = []` for a VCF facet (`[]` says the header was read and recorded no step).
+A value changed by a rule under one version ("No version change" below) is not a bump, so it gets no
+step: a store keeps the values its load gave until the source is loaded again.
+
+- **Refused, with nothing written** (`StoreVersionError`): a store of a later version (no downgrade:
+  upgrade just-vcf), and one of a version no store was written under (before 0.0.14, or not a version).
+  A store at this version is left as it is: nothing applied, `migrated` null.
+- **Written beside, checked, then swapped.** Under the store's lock, every facet is written into
+  `.migrating-<pid>-<random>/facets/<facet_id>/`, with the same sink as `add`, and checked against its
+  old files: this version's schema exactly, the same row count, and the old columns' values unchanged
+  (a digest of every row, the new files cast back to the old dtypes). Only then are the new manifest
+  and a `READY` marker written. The swap: the old manifest is copied and the old `facets/` moved to
+  `.previous-<old version>/`, the new `facets/` moved in, and the new manifest moved over the old, which
+  commits it; then `.previous-*` is removed (kept with `keep_previous=True`) and the migration's
+  directory last. A reader meanwhile reads the manifest's version, which is the old one until the
+  commit, and is refused as before.
+- **Cut off, finished or undone on the next call.** A migration directory without `READY` is a
+  migration cut off before every facet was checked; the store is as it was, and the next
+  `migrate_store` removes it. One with `READY` is finished by the next `migrate_store`, each move
+  skipped where it is already done. `open` reports a `.migrating-*` or `.previous-*` directory with a
+  warning. Rejected: renaming the old `facets/` aside and relying on a crash never landing between the
+  two renames; parking old facet directories under `facets/`, where an add would take them for a dead
+  writer's and remove them.
 
 ### VCF Zarr export
 
@@ -2535,6 +2592,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-26, RM276's store migration): no column of `facets`, `calls`,
+  `blocks` or `links` changes. `migrate_store` rewrites a store of an older version to this one by a
+  step per bump since 0.0.14 ("Store migration" above); the manifest gains `migrations` (empty by
+  default, so `store_layout` stays 1 and every existing manifest reads as before), and `loaded()`'s
+  warnings gain a line per value a migration filled unknown. A store of another version is still
+  refused on read, now with a message naming the call that migrates it, or saying it is from a later
+  just-vcf. Additive: minor. From now on a version bump that changes a stored frame comes with its
+  step in `just_vcf.store_migration`, or the suite fails.
 
 - **Two enum members, outside the three frames** (2026-10-26, RM274's first-degree split):
   `RelationBand.PARENT_CHILD` (`parent_child`) and `RelationBand.FULL_SIBLINGS` (`full_siblings`),

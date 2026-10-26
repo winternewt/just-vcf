@@ -1,8 +1,9 @@
-"""F19: GRCh37's and GRCh38's sequence names from NCBI's assembly reports, and their use where a contig
-name meets a reference store.
+"""F19: NCBI36's, GRCh37's and GRCh38's sequence names from NCBI's assembly reports, and their use where
+a contig name meets a reference store.
 
 Expected names and lengths are read from the reports carried in `assets/`, independently of the
-package table; sequences are synthetic, of the reports' lengths.
+package table; sequences are synthetic, of the reports' lengths. NCBI36's report is RefSeq only: every
+row has GenBank `na` and Relationship `<>`, so its RefSeq accession is the sequence's one accession.
 """
 
 import random
@@ -20,7 +21,16 @@ REPORTS = Path(__file__).resolve().parent.parent / "assets" / "ncbi_assembly_rep
 REPORT_FILES = {
     "GRCh37": REPORTS / "GCA_000001405.14_GRCh37.p13_assembly_report.txt",
     "GRCh38": REPORTS / "GCA_000001405.29_GRCh38.p14_assembly_report.txt",
+    "GRCh36": REPORTS / "GCF_000001405.12_NCBI36_assembly_report.txt",
 }
+
+
+def carried_refseq(row: dict[str, str]) -> str | None:
+    """The RefSeq accession the table carries for a report row: where the report says it is the GenBank
+    sequence (`=`), or where the report names no GenBank sequence for it to differ from (NCBI36)."""
+    if row["RefSeq-Accn"] == "na":
+        return None
+    return row["RefSeq-Accn"] if row["Relationship"] == "=" or row["GenBank-Accn"] == "na" else None
 
 
 def report(assembly: str) -> list[dict[str, str]]:
@@ -42,14 +52,13 @@ def test_the_table_is_the_assembly_reports() -> None:
     expected = []
     for assembly in REPORT_FILES:
         for row in report(assembly):
-            refseq = row["RefSeq-Accn"] if row["Relationship"] == "=" else "na"
             expected.append(
                 (
                     assembly,
                     row["Sequence-Role"],
                     None if row["Assigned-Molecule"] == "na" else row["Assigned-Molecule"],
-                    row["GenBank-Accn"],
-                    None if refseq == "na" else refseq,
+                    None if row["GenBank-Accn"] == "na" else row["GenBank-Accn"],
+                    carried_refseq(row),
                     None if row["UCSC-style-name"] == "na" else row["UCSC-style-name"],
                     int(row["Sequence-Length"]),
                 )
@@ -57,7 +66,12 @@ def test_the_table_is_the_assembly_reports() -> None:
     got = [(s.assembly, s.role, s.molecule, s.genbank, s.refseq, s.ucsc, s.length) for s in SEQUENCES]
     assert got == expected
     # Where the report says the RefSeq sequence is not the GenBank one, it gives no RefSeq accession.
-    assert all(row["RefSeq-Accn"] == "na" for a in REPORT_FILES for row in report(a) if row["Relationship"] != "=")
+    assert all(
+        row["RefSeq-Accn"] == "na" for a in REPORT_FILES for row in report(a) if row["Relationship"] != "=" and row["GenBank-Accn"] != "na"
+    )
+    # NCBI36's report names no GenBank sequence at all, and a RefSeq accession on every row.
+    assert {(row["GenBank-Accn"], row["Relationship"]) for row in report("GRCh36")} == {("na", "<>")}
+    assert all(row["RefSeq-Accn"] != "na" for row in report("GRCh36"))
 
 
 def test_primary_accessions_are_the_assembled_molecules() -> None:
@@ -65,29 +79,77 @@ def test_primary_accessions_are_the_assembled_molecules() -> None:
     for assembly in REPORT_FILES:
         for row in report(assembly):
             if row["Sequence-Role"] == "assembled-molecule":
-                expected[row["GenBank-Accn"]] = row["Assigned-Molecule"]
-                expected[row["RefSeq-Accn"]] = row["Assigned-Molecule"]
+                for name in (row["GenBank-Accn"], carried_refseq(row)):
+                    if name not in (None, "na"):
+                        expected[name] = row["Assigned-Molecule"]
     assert PRIMARY_ACCESSIONS == expected
-    assert len(expected) == 2 * 25 * 2 - 2  # MT is J01415.2 / NC_012920.1 in both reports
+    # GRCh37 and GRCh38: 25 molecules, GenBank and RefSeq, MT (J01415.2 / NC_012920.1) in both reports.
+    # NCBI36: 24 molecules (no mitochondrion), RefSeq only.
+    assert len(expected) == 2 * 25 * 2 - 2 + 24
     for name, chrom in expected.items():
         assert canonical_chrom(name) == chrom
         assert CONTIG_ALIASES[name] == chrom
 
 
+def test_a_primary_accession_names_one_build() -> None:
+    """An accession with its version is one sequence: no assembled molecule's accession is shared by two
+    builds, except the rCRS mitochondrion GRCh37 and GRCh38 both carry, at one length. Each chromosome's
+    RefSeq accession keeps its stem across builds and changes its version (`NC_000001.9`, `.10`, `.11`)."""
+    builds_of: dict[str, set[str]] = {}
+    lengths_of: dict[str, set[int]] = {}
+    refseq_by_chrom: dict[str, dict[str, str]] = {}
+    for assembly in REPORT_FILES:
+        for row in report(assembly):
+            if row["Sequence-Role"] != "assembled-molecule":
+                continue
+            for name in (row["GenBank-Accn"], carried_refseq(row)):
+                if name not in (None, "na"):
+                    builds_of.setdefault(name, set()).add(assembly)
+                    lengths_of.setdefault(name, set()).add(int(row["Sequence-Length"]))
+            refseq_by_chrom.setdefault(row["Assigned-Molecule"], {})[assembly] = row["RefSeq-Accn"]
+    shared = {name for name, builds in builds_of.items() if len(builds) > 1}
+    assert shared == {"J01415.2", "NC_012920.1"}
+    assert builds_of["NC_012920.1"] == {"GRCh37", "GRCh38"}
+    assert all(len(lengths) == 1 for lengths in lengths_of.values())
+    for chrom, by_build in refseq_by_chrom.items():
+        if chrom == "MT":
+            continue
+        assert set(by_build) == set(REPORT_FILES)
+        assert len({accession.split(".")[0] for accession in by_build.values()}) == 1
+        assert len(set(by_build.values())) == len(REPORT_FILES)
+    assert {refseq_by_chrom["1"][a] for a in REPORT_FILES} == {"NC_000001.9", "NC_000001.10", "NC_000001.11"}
+
+
 def test_one_scaffold_name_is_one_sequence() -> None:
-    """Across both reports a scaffold's name points at one GenBank accession, and an accession has one
-    length; only the assembled molecules' UCSC names (`chr1`…) differ between the two."""
+    """Across the reports a scaffold's name points at one sequence, and a sequence has one length; only
+    the assembled molecules' UCSC names (`chr1`…) differ between them. A sequence is its GenBank
+    accession where any report gives one: NCBI36's report names none, and its scaffolds that GRCh37 or
+    GRCh38 kept (`NT_113878.1`, GRCh37's `GL000191.1`) are found by their RefSeq accession."""
+    genbank_of = {
+        row["RefSeq-Accn"]: row["GenBank-Accn"]
+        for assembly in REPORT_FILES
+        for row in report(assembly)
+        if row["Relationship"] == "=" and row["GenBank-Accn"] != "na"
+    }
+
+    def sequence(row: dict[str, str]) -> str:
+        return row["GenBank-Accn"] if row["GenBank-Accn"] != "na" else genbank_of.get(row["RefSeq-Accn"], row["RefSeq-Accn"])
+
     accession_of: dict[str, set[str]] = {}
     length_of: dict[str, set[int]] = {}
     for assembly in REPORT_FILES:
         for row in report(assembly):
-            length_of.setdefault(row["GenBank-Accn"], set()).add(int(row["Sequence-Length"]))
+            length_of.setdefault(sequence(row), set()).add(int(row["Sequence-Length"]))
             if row["Sequence-Role"] != "assembled-molecule":
-                for name in (row["GenBank-Accn"], row["RefSeq-Accn"], row["UCSC-style-name"]):
-                    if name != "na":
-                        accession_of.setdefault(name, set()).add(row["GenBank-Accn"])
+                for name in (row["GenBank-Accn"], carried_refseq(row), row["UCSC-style-name"]):
+                    if name not in (None, "na"):
+                        accession_of.setdefault(name, set()).add(sequence(row))
     assert all(len(found) == 1 for found in accession_of.values())
     assert all(len(found) == 1 for found in length_of.values())
+    # The check reaches NCBI36: some of its scaffolds are GRCh37's too, under one sequence.
+    ncbi36 = {sequence(row) for row in report("GRCh36") if row["Sequence-Role"] != "assembled-molecule"}
+    later = {sequence(row) for a in ("GRCh37", "GRCh38") for row in report(a) if row["Sequence-Role"] != "assembled-molecule"}
+    assert ncbi36 & later and ncbi36 - later
 
 
 def test_scaffold_names_need_the_reports_length() -> None:
@@ -107,24 +169,66 @@ def test_scaffold_names_need_the_reports_length() -> None:
     # The assembled molecules are not scaffolds: the reports' MT row (`chrM`, rCRS) vouches for nothing,
     # since hg19's chrM is another sequence.
     assert scaffold_names("chrM", 16569) == scaffold_names("J01415.2", 16569) == frozenset()
+    # NCBI36's scaffolds have a RefSeq name only. One GRCh37 kept gains GRCh37's names; one it did not
+    # has no other name.
+    kept = next(row for row in report("GRCh36") if row["RefSeq-Accn"] == scaffold("GRCh37", "chr1_gl000191_random")["RefSeq-Accn"])
+    assert scaffold_names(kept["RefSeq-Accn"], int(kept["Sequence-Length"])) == {"GL000191.1", "chr1_gl000191_random"}
+    later = {row["RefSeq-Accn"] for a in ("GRCh37", "GRCh38") for row in report(a)}
+    alone = next(row for row in report("GRCh36") if row["Sequence-Role"] != "assembled-molecule" and row["RefSeq-Accn"] not in later)
+    assert scaffold_names(alone["RefSeq-Accn"], int(alone["Sequence-Length"])) == frozenset()
 
 
-@pytest.mark.parametrize("assembly", list(REPORT_FILES))
-@pytest.mark.parametrize("column", ["GenBank-Accn", "RefSeq-Accn"])
+ACCESSION_COLUMNS = [
+    (assembly, column)
+    for assembly in REPORT_FILES
+    for column in ("GenBank-Accn", "RefSeq-Accn")
+    if any(row[column] != "na" for row in report(assembly) if row["Sequence-Role"] == "assembled-molecule")
+]
+"""Every report's accession columns that name its assembled molecules: NCBI36's has no GenBank one."""
+
+
+def header_vcf(tmp_path: Path, header: list[dict], first: str) -> Path:
+    lines = ["##fileformat=VCFv4.2", *[f"##contig=<ID={c['name']},length={c['length']}>" for c in header]]
+    lines += ['##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">', "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1"]
+    lines.append(f"{first}\t100\t.\tA\tG\t.\tPASS\t.\tGT\t0/1")
+    path = tmp_path / "accessions.vcf"
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_every_report_has_accession_columns_to_test() -> None:
+    assert ("GRCh36", "RefSeq-Accn") in ACCESSION_COLUMNS and ("GRCh36", "GenBank-Accn") not in ACCESSION_COLUMNS
+    assert len(ACCESSION_COLUMNS) == 2 * len(REPORT_FILES) - 1
+
+
+@pytest.mark.parametrize(("assembly", "column"), ACCESSION_COLUMNS)
 def test_an_accession_named_header_names_its_assembly(tmp_path: Path, assembly: str, column: str) -> None:
     rows = [row for row in report(assembly) if row["Sequence-Role"] == "assembled-molecule"]
     header = [{"name": row[column], "length": int(row["Sequence-Length"]), "md5": None} for row in rows]
     inferred = infer_assembly(header)
     assert inferred.label == assembly and inferred.matched == {assembly: 24}
     first = header[0]
-    lines = ["##fileformat=VCFv4.2", *[f"##contig=<ID={c['name']},length={c['length']}>" for c in header]]
-    lines += ['##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">', "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1"]
-    lines.append(f"{first['name']}\t100\t.\tA\tG\t.\tPASS\t.\tGT\t0/1")
-    path = tmp_path / "accessions.vcf"
-    path.write_text("\n".join(lines) + "\n")
-    facet = load(path).facets.collect().row(0, named=True)
+    facet = load(header_vcf(tmp_path, header, first["name"])).facets.collect().row(0, named=True)
     assert facet["assembly_label"] == assembly
     assert {entry["source"]: entry["chrom"] for entry in facet["contig_map"]} == {first["name"]: "1"}
+
+
+def test_a_build_36_header_of_mixed_names_reads_canonical_chroms(tmp_path: Path) -> None:
+    """A build-36 header naming some chromosomes by RefSeq accession, the others `chrN` or bare: every
+    one reads as its canonical `chrom`, and the lengths name GRCh36."""
+    rows = [row for row in report("GRCh36") if row["Sequence-Role"] == "assembled-molecule"]
+    spellings = [row["RefSeq-Accn"] if index % 3 == 0 else f"chr{row['Assigned-Molecule']}" if index % 3 == 1 else row["Assigned-Molecule"] for index, row in enumerate(rows)]
+    header = [{"name": name, "length": int(row["Sequence-Length"]), "md5": None} for name, row in zip(spellings, rows, strict=True)]
+    assert {canonical_chrom(name) for name in spellings} == {row["Assigned-Molecule"] for row in rows}
+    inferred = infer_assembly(header)
+    assert inferred.label == "GRCh36" and inferred.matched == {"GRCh36": len(rows)}
+    accession = rows[0]["RefSeq-Accn"]
+    assert accession.startswith("NC_") and spellings[0] == accession
+    loaded = load(header_vcf(tmp_path, header, accession))
+    facet = loaded.facets.collect().row(0, named=True)
+    assert facet["assembly_label"] == "GRCh36"
+    assert {entry["source"]: entry["chrom"] for entry in facet["contig_map"]} == {accession: rows[0]["Assigned-Molecule"]}
+    assert loaded.calls.collect()["chrom"].to_list() == [rows[0]["Assigned-Molecule"]]
 
 
 # --- matching against a reference store -----------------------------------------------------------

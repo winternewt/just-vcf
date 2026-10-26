@@ -4,6 +4,21 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load` reads a Complete Genomics `var` or `masterVarBeta` one locus range at a time
+  (`loaders.cgi.locus_ranges`, `range_frames`), so a whole file no longer holds every haplotype in
+  memory. The payload is first written as a typed parquet copy of its rows; then each range of whole
+  loci, about `cgi.CHUNK_ROWS` (2,000,000) rows, is read into memory once, its haplotypes made once,
+  and its frames and warning counts all taken from them. Every step from a row to a frame row works
+  within one locus, so the ranges give the same rows, order, dtypes, facet and warnings as the
+  whole-file plan (tested against that plan, kept in the tests as the oracle). Before, the whole file
+  ran as one lazy plan twice: once for the warning counts, seven plans side by side, and once for the
+  spill. On PGP-HMS hu1B2689's `var` (GS000039664, 233 MB bz2, 18.9M rows; 2026-10-26, a shared machine
+  with load average 10 to 38, so the times are rough): peak 17.3 GB → 3.3 GB, 493 s → 85 to 120 s; its
+  `masterVarBeta`: 22.3 GB → 4.3 GB, 631 s → 147 s. The 8.9 GB noted before was one plan alone; the
+  warning counts' plans beside it doubled it. A CGI file loaded by an earlier version writes its spill
+  once more, since the rows come to it in another order and the generation is keyed by those bytes;
+  the frames it gives are the same.
+
 - `rejoin_split` writes its spill in canonical order once, as `load` does, so the rejoined `calls`
   are one scan of the spill's part files with no sort when they are read (F27). Before, every read
   ran one filtered scan and sort per contig of the parent's `contig_map`. Same rows, row order, ties

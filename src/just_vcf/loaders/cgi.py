@@ -541,6 +541,110 @@ def call_rows(haplotypes: pl.LazyFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
     return rows, none_called
 
 
+# --- one locus range at a time --------------------------------------------------------------------
+
+
+CHUNK_ROWS = 2_000_000
+"""About how many file rows a locus range holds (`locus_ranges`). Every step from a row to a `calls`
+or `blocks` row works within one locus (`group_by("locus")`, `over("locus")`, or row by row), so the
+rows of a range give the same rows whatever else the file holds; a whole PGP-HMS `var` (18.9M rows)
+is ten ranges. Measured 2026-10-26 on a whole `var`: the file read in one plan peaked at 9 GB (17.5 GB
+with the warning counts' plans beside it); in ranges of 2M rows the load peaks at 3.3 GB, the process
+included."""
+
+
+def locus_ranges(rows: pl.LazyFrame, size: int) -> list[tuple[int | None, int | None]]:
+    """Half-open `[low, high)` ranges of `locus` values, ascending; None is an open end. A range ends
+    at the first locus that starts `size` rows or more into it, counted in locus order, so it holds
+    fewer than `size` rows plus its last locus's. A row whose locus is null is in no range: it is
+    `malformed`. With no locus at all the one range is open at both ends, so a file of no rows still
+    makes frames of the right shape."""
+    per_locus = rows.group_by("locus").len().drop_nulls("locus").sort("locus")
+    offset = pl.col("len").cum_sum() - pl.col("len")
+    starts = (
+        per_locus.group_by((offset // size).alias("range")).agg(pl.col("locus").min()).sort("range").collect()["locus"].to_list()
+    )
+    if not starts:
+        return [(None, None)]
+    return list(zip(starts, [*starts[1:], None], strict=True))
+
+
+def in_range(low: int | None, high: int | None) -> pl.Expr:
+    """Whether a row's locus lies in `[low, high)`; an open end bounds nothing."""
+    expr = pl.lit(True)
+    if low is not None:
+        expr = expr & (pl.col("locus") >= low)
+    if high is not None:
+        expr = expr & (pl.col("locus") < high)
+    return expr
+
+
+@dataclass
+class Tally:
+    """What a load warns about, counted over the loci of one range and added up over the ranges."""
+
+    problems: dict[str, int] = field(default_factory=dict)
+    """Loci dropped by `locus_checks`, per problem."""
+    uniform_types: dict[str, int] = field(default_factory=dict)
+    """Uniform rows per varType."""
+    ad_withheld: dict[str, int] = field(default_factory=dict)
+    """Rows without `ad`, per reason."""
+    link_conflicts: int = 0
+    hq_out: int = 0
+    vaf_differs: int = 0
+    not_whole: int = 0
+    not_number: int = 0
+
+    def add(self, other: "Tally") -> None:
+        for mine, theirs in ((self.problems, other.problems), (self.uniform_types, other.uniform_types), (self.ad_withheld, other.ad_withheld)):
+            for key, count in theirs.items():
+                mine[key] = mine.get(key, 0) + count
+        self.link_conflicts += other.link_conflicts
+        self.hq_out += other.hq_out
+        self.vaf_differs += other.vaf_differs
+        self.not_whole += other.not_whole
+        self.not_number += other.not_number
+
+
+def range_frames(rows: pl.DataFrame, format_id: str) -> tuple[pl.DataFrame, pl.DataFrame, Tally]:
+    """The `calls` rows (with `source_chrom` and `ad_withheld`, without `facet_id`), the `blocks` rows
+    (with `source_chrom`) and the tally of the `prepare`d rows of whole loci, held in memory: the
+    haplotypes are made once and every frame and count is read from them."""
+    if format_id == VAR:
+        uniform, segments = var_parts(rows.lazy())
+        haplotype_plan = var_haplotypes(segments)
+    else:
+        uniform, haplotype_plan = master_var_parts(rows.lazy())
+    uniform_rows, haplotypes = pl.collect_all([uniform, haplotype_plan])
+    checks = locus_checks(haplotypes.lazy()).collect()
+    good = haplotypes.lazy().join(checks.lazy().filter(pl.col("problem").is_null()).select("locus"), on="locus", how="semi")
+    calls_plan, none_called = call_rows(good)
+    calls, none_rows, scores = pl.collect_all(
+        [
+            calls_plan,
+            none_called,
+            good.select(
+                (pl.col("score").is_not_null() & ~pl.col("score").is_between(0, HQ_MAX)).sum().alias("hq_out"),
+                # Only where the EAF score goes into `hq`: a `?`, partly called or out-of-range haplotype's is not read.
+                (pl.col("vaf_differs") & pl.col("score").is_between(0, HQ_MAX)).fill_null(False).sum().alias("vaf_differs"),
+                pl.col("score_not_whole").sum().alias("not_whole"),
+                pl.col("score_not_number").sum().alias("not_number"),
+            ),
+        ]
+    )
+    stretches = pl.concat([uniform_rows.lazy().select("chromosome", "begin", "end", "varType"), none_rows.lazy()], how="vertical")
+    blocks = block_rows(stretches).collect()
+    score_counts = scores.row(0, named=True)
+    tally = Tally(
+        problems=dict(checks.filter(pl.col("problem").is_not_null()).group_by("problem").len().iter_rows()),
+        uniform_types=dict(uniform_rows.group_by("varType").len().iter_rows()),
+        ad_withheld=dict(calls.filter(pl.col("ad_withheld").is_not_null()).group_by("ad_withheld").len().iter_rows()),
+        link_conflicts=checks.filter(pl.col("problem").is_null())["link_conflicts"].sum() or 0,
+        **{name: score_counts[name] or 0 for name in ("hq_out", "vaf_differs", "not_whole", "not_number")},
+    )
+    return calls, blocks, tally
+
+
 def to_frames(calls: pl.LazyFrame, blocks: pl.LazyFrame, facet_id: str) -> tuple[pl.LazyFrame, pl.LazyFrame]:
     return (
         conform(calls.drop("source_chrom", "ad_withheld").with_columns(pl.lit(facet_id).alias("facet_id")), CALLS),

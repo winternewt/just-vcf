@@ -87,8 +87,9 @@ since neither file's slot order is a phase. Phase comes from `hapLink`, an id pe
 phase set of kind `cgi_haplink`, so the two files give the same sets too. The facet's caller is
 `CGAPipeline` at the file's `#SOFTWARE_VERSION`, as CGI's own VCF names it, its `callset_type` is
 `wgs` where `#TITLE` says whole-genome sequencing (28 of 250 PGP-HMS files have no `#TITLE`), and its
-blocks make `absence_means = blocks`. A whole PGP-HMS `var` (18.9M rows, bz2) loads in about 3.5
-minutes with a peak of 8.9 GB: the haplotype rows are sorted and grouped in memory.
+blocks make `absence_means = blocks`. The rows are read one locus range of about
+`cgi.CHUNK_ROWS` rows at a time, since every step from a row to a frame row works within one locus: a
+whole PGP-HMS `var` (18.9M rows, bz2) loads in about two minutes with a peak of 3.3 GB (2026-10-26).
 
 `loaders.site_tables` reads the tables that write a reference base beside each genotype, as a VCF
 does: `source_ref` is the stated base, `alts` the called alleles other than it (sorted by string, since

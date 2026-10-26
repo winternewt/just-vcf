@@ -689,6 +689,11 @@ itself taking 15 s (11 s for the calls, 4.5 s for the blocks). A load whose fram
 87 s before and 86 s after, at 7.7 and 7.9 GB. hu80855C's Isaac gVCF was not re-run: its `load`
 peaked at 54 GB, more than the machine had free.
 
+*Measured 2026-10-26, `resolve_ref` a group of contigs at a time* (F24, docs/PREVIOUS_ISSUES.md; same
+library-only bench). hu416394's bcftools gVCF: `resolve_ref` 110.5 s with 2,057 part files → 27.8–29.7
+s with 12, 4.6 → 4.7–5.0 GB above its start; its Manta file 4.6–4.9 s → 0.3 s, 942 files → 1. The
+resolved calls hash the same before and after.
+
 UCSC's scaffold names meet
 Ensembl's accessions since 2026-10-23, through NCBI's assembly reports rather than the accession inside
 the name (F19, docs/PREVIOUS_ISSUES.md). A VCF with neither
@@ -1328,6 +1333,13 @@ chr21 rows counted (154,916) 16.9 s → under 0.01 s; the calls collected whole 
 → 0.75 s with no rise above `rejoin_split`'s own 11.0 GB. `rejoin_split` itself 9.9 s → 20.4 s, the
 one sort pass it now runs. The collected calls hash the same, row index included, with the same
 schema. `load` 130 s and 118 s at 7.6 GB, unchanged.
+
+*Measured 2026-10-26, `liftover` and `normalize` a group of contigs at a time* (F24,
+docs/PREVIOUS_ISSUES.md; same library-only bench, `hg38ToHg19`). hu416394's bcftools gVCF: `liftover`
+226.6 s → 65.7 s, report files 2,057 → 12, lifted call and block files 68 and 70 → 10 and 10, memory
+the old lift's within the noise; `normalize` 206.2 s → 71.9–75.7 s, 2,057 files → 12. Its Manta file:
+`liftover` 17–22 s → 3.0–3.3 s, `normalize` 12–33 s → 0.4 s. Every output hashes the same before and
+after (lifted calls and blocks, report, reasons, warnings, `contig_map`, normalized calls).
 
 **Built 2026-10-26: breakends in a lift** (merged 2026-10-26; rules and
 the strand table in docs/SCHEMA.md, "Lifting breakends"; `LIFT_VERSION` 11). POS lifts as one base,

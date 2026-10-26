@@ -40,7 +40,7 @@ from just_vcf import (
     resolve_ref,
 )
 from just_vcf import loading as loading_module
-from just_vcf.liftover import LIFT_VERSION
+from just_vcf.liftover import LIFT_LAYOUT, LIFT_VERSION
 from just_vcf.loaders import vcf as vcf_loader
 from just_vcf.reference import RESOLVE_VERSION
 from just_vcf.schema import SCHEMA_VERSION
@@ -334,7 +334,7 @@ def test_liftover_again_reuses_its_spill_and_touches_no_file(tmp_path: Path, def
     again = manifests(cache.LIFT_SPILL)[f"frames/{entry.name}"]
     assert again.created == manifest.created and again.last_used > manifest.last_used
     assert again.size_bytes == size_on_disk(entry)
-    assert again.versions == {"SCHEMA_VERSION": SCHEMA_VERSION, "LIFT_VERSION": str(LIFT_VERSION), "SPILL_LAYOUT": str(cache.SPILL_LAYOUT)}
+    assert again.versions == {"SCHEMA_VERSION": SCHEMA_VERSION, "LIFT_VERSION": str(LIFT_VERSION), "SPILL_LAYOUT": str(cache.SPILL_LAYOUT), "LIFT_LAYOUT": str(LIFT_LAYOUT)}
     assert (again.facet_id, again.parent_facet_id) == (first.loaded.facets.collect()["facet_id"][0], resolved.facets.collect()["facet_id"][0])
 
 

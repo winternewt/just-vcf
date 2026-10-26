@@ -3,6 +3,87 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F24 — Every source contig costs a fixed pass, so a header full of decoys is slow and heavy
+
+Severity: low · Found 2026-10-26 dogfooding RM6's SV lift on hu416394's Manta file (Sequencing.com,
+GRCh38, a 2,581-contig hs38DH-style header).
+
+`resolve_ref` and `liftover` work contig by contig, each contig a filtered scan, a few `collect`s and a
+parquet file in the spill. The file has 9,373 rows on 942 contigs, 918 of them decoys and scaffolds
+with a handful of rows each (1,228 rows on decoys, which no assembly holds and which stay unread, as
+they should). Profiled on a fresh cache: `resolve_ref` 13.4 s (943 parquet sinks), `liftover` 27.2 s
+(942 `_lift_contig` passes, 13,217 `collect`s, 997 sinks, `_segments` rebuilt 72 times). The same
+rows cut to the 25 primary contigs resolve in 0.4 s at a 1,774 MB peak; all of them take 14.3 s and
+3,757 MB. For scale, hu1C1368's GRCh37 Manta file (7,246 rows on 24 contigs) resolves in 0.5 s and
+lifts in 2.7 s under 430 MB. Nothing is wrong in the output; the cost is per contig, not per row.
+Repairs, each a change to the spill design: batch the small contigs into one pass; send rows on a
+contig the store or the chain does not hold straight to their reason without a pass of their own.
+Neither is free: the per-contig parts are what keep a WGS gVCF within memory, and their layout is a
+cache key (`SPILL_LAYOUT`).
+
+*Updated 2026-10-26:* the first repair is in for `load`'s own spill (F27, PREVIOUS_ISSUES.md): it is
+written in parts of whole contigs, consecutive in canonical order, up to `SPILL_PART_ROWS` rows, so
+contigs with a few rows share a file (`loading.canonical_parts`). hu416394's bcftools gVCF, rows on
+2,179 contigs, is 12 call parts and 11 block parts. `resolve_ref` and `liftover` still make a pass and
+write a file per source contig, which is what this finding measured; it stays open for them.
+
+**Resolved 2026-10-26** by both repairs, for `resolve_ref`, `normalize` and `liftover`. Each reads its
+staged input a group of whole contigs at a time, consecutive in canonical order up to `SPILL_PART_ROWS`
+rows unless one contig alone has more (`loading.canonical_batches`, the rule `canonical_parts` already
+wrote `load`'s spill by, now a function both use): one filtered scan and one part file per group, where
+it was one per contig with rows. A lift's lifted `calls` and `blocks` are then written in parts of whole
+target contigs through `canonical_parts`, and its report in parts of whole source contigs, in the
+parent's order within each. Within a group, the rows on contigs nothing can be done for go to their
+answer together: `resolve_ref` passes the rows of every contig it cannot read through as they are;
+`liftover` gives the rows of every contig the chain does not cover, and of every contig it covers at
+another size, their reason in one call each; `normalize` splits, deduplicates and sorts the rows of
+every contig the collection does not hold in one call (its conflict count now groups by contig, which
+the per-contig call did without saying). A contig whose sequence is read, or that the chain covers, is
+still worked on its own, against its one sequence or through its own chain blocks; a lift places the
+breakend mates of the whole group once per mate contig (`liftover._mate_places`), where it placed them
+once per pair of a source contig and a mate contig. Memory is bounded by the group as it was by the
+contig.
+
+Measured on the two PGP-HMS files of this finding (library only; counts, timings and digests; the
+code before and after over one scratch cache per file, the load spill shared, each step's spill written
+fresh; 40 GB cap; the 62 GB machine shared with other sessions, load average 6 to 16, so times are
+rough). Every output hashes the same before and after, row for row and dtype for dtype: the resolved,
+lifted and normalized calls, the lifted blocks, the lift report, the reasons and block reasons, the
+warnings and the facets' `contig_map`.
+
+- hu416394's Manta file (9,373 rows on 942 contigs; `hg38ToHg19`): `resolve_ref` 4.6–4.9 s with 942
+  part files → 0.3 s with 1; `liftover` 17.0–21.9 s with 942 report files and 30 lifted ones → 3.0–3.3
+  s with one each (`_place` called 462 times → 120, `collect`s 15,040 → about 5,200; most of what is
+  left is `_segments`, the chain's axis built once per chain contig a row or a mate lies on, 96 of
+  them); `normalize` 12.3–32.8 s with 942 files → 0.4 s with 1. Peaks within 100 MB of the load's.
+- hu416394's bcftools gVCF (9,651,143 calls on 2,057 contigs, 9,473,303 blocks; `hg38ToHg19`), in
+  one process after a cached `load` (7.7–7.9 GB): `resolve_ref` 110.5 s → 27.8–29.7 s, 2,057 part files
+  → 12, 4.6 GB above the start → 4.7–5.0 GB; `liftover` 226.6 s → 65.7 s, 2,057 report files → 12,
+  68 lifted call files → 10, 70 block files → 10, 5.9 GB above the start → 4.3 GB; `normalize`
+  206.2 s → 71.9–75.7 s, 2,057 files → 12, 3.1 GB → 3.1–3.4 GB. The run's peak 8.7 GB → 8.3 GB.
+  `liftover` alone in a fresh process, twice each: 169–171 s at 4.8 and 6.1 GB above the start before,
+  64–68 s at 5.7 GB both times after, so the lift's memory is the old one's within the noise; a group of
+  up to a million rows holds about what the largest contig (chr1) did.
+
+Each step's spill names its layout in its versions, as `load`'s and `rejoin_split`'s do (F27):
+`RESOLVE_LAYOUT`, `NORMALIZE_LAYOUT` and `LIFT_LAYOUT`, each 1. A generation an older version wrote, a
+file per contig, is keyed without the key, so no run of this version finds it; the sweep retires its
+entry once unused past the grace period. Code: `loading.canonical_batches`, `reference.resolve_ref`,
+`normalize.normalize`, `liftover._lift_into`, `_lift_group`, `_mate_places`, `_lift_blocks_into`,
+`_target_parts`; tests in `tests/test_step_spill_order.py` (every output against the steps run a contig
+per group, at three bounds; the parts and the plans; an older layout's generation not read, and swept).
+
+Rejected: sorting the input into parts with `canonical_parts` and working part by part, which reuses the
+writer as it is but re-sorts the input, so the lift report would leave the parent's order wherever the
+parent's frame was not in canonical order already, and adds a sort pass over the whole input; one pass
+over every unreadable or unchained row of the file at once, which is not bounded by the group;
+`_normalize_contig` over a whole group, which would align many contigs against one sequence;
+bumping `RESOLVE_VERSION`, `NORMALIZE_VERSION` or `LIFT_VERSION`, which `facets.resolve_version` and
+the derived `facet_id`s carry, so the facets would be renamed for the same rows; and bumping
+`cache.SPILL_LAYOUT`, which would retire the VRS and coverage spills too. Left open: `mint_vrs_ids`
+already writes its ids in parts of `_IDS_PER_PART` rows, but still collects a slice per contig run
+(not measured here); `_segments` is a Python loop per chain contig.
+
 ## F30 — `write_vcf`'s contig names do not reach a breakend's mate inside ALT
 
 Severity: low · Found 2026-10-26 dogfooding RM6's breakend lift on hu1C1368's Manta file.

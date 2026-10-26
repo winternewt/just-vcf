@@ -47,7 +47,7 @@ from gtars.refget import RefgetStore
 from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_snv_rows
 from just_vcf import cache
 from just_vcf.contig_names import scaffold_names
-from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
+from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_batches
 from just_vcf.probes import IndelSite, Manifest, catalog_digest, id_calibration, indel_catalog, locate_indel, place_indel, snv_catalog, window_for
 from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, StrandCheck, canonical_chrom, canonical_order, empty
 from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_reason
@@ -61,6 +61,15 @@ the empty allele is left unread, not anchored as a hom-ref call at the base befo
 the build inference and the strand check score leaves out rows not over one base, a Genos insertion site
 among them, so a facet's inferred label and `strand_check`, and the rows a mixed strand withholds, can
 change; the strand is not in the spill key)."""
+
+RESOLVE_LAYOUT = 1
+"""How a resolve spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
+rows in canonical order in parts of whole contigs, grouped up to `loading.SPILL_PART_ROWS` rows
+(`loading.canonical_batches`), so contigs with a few rows share a file (F24). A spill without the key
+held one file per contig with rows (943 for a decoy-heavy GRCh38 Manta file). Its generation key lacks
+the key, so no run of this version finds it, and the sweep retires such an entry once it is unused past
+the grace period. Not a `RESOLVE_VERSION` bump: the rows are the same, and that version is written into
+`facets.resolve_version`. Not `cache.SPILL_LAYOUT` either, which every other step's spill carries too."""
 
 CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
 """Formats whose multi-letter genotype text is the two allele sequences written back to back, as the
@@ -335,7 +344,7 @@ def resolve_ref(
     fits equally and `collection` does not choose. A stated X, Y or MT that disagrees leaves its rows
     unread, counted per contig in the warnings (F20).
     """
-    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "RESOLVE_VERSION": RESOLVE_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "RESOLVE_VERSION": RESOLVE_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT, "RESOLVE_LAYOUT": RESOLVE_LAYOUT}
     cache.sweep_stale(cache.RESOLVE_SPILL, versions)
     facets = loaded.facets.collect()
     if facets.height != 1:
@@ -368,9 +377,9 @@ def resolve_ref(
     pairs = _pair_catalog() if withhold else None
     entry = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
     with cache.spilling(entry, cache.RESOLVE_SPILL, versions, cache.derived_origin(facet, facet["facet_id"]), ("calls",)) as spill:
-        # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each contig
-        # below is a cheap filtered scan rather than a replay of whatever plan built the input. Its
-        # bytes also key the result: a run on the same input reuses what an earlier one wrote.
+        # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each group
+        # of contigs below is a cheap filtered scan rather than a replay of whatever plan built the
+        # input. Its bytes also key the result: a run on the same input reuses what an earlier one wrote.
         staged = spill.stage / "input.parquet"
         loaded.calls.sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
         key = spill.key([staged], {**facet, "probe_catalog": codes.digest, "pair_catalog": pairs.digest if pairs else None})
@@ -379,12 +388,19 @@ def resolve_ref(
             counts: Counter[str] = Counter()
             source = pl.scan_parquet(staged)
             parts: list[Path] = []
-            for index, chrom in enumerate(sorted(rows_per_chrom, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-                rows = source.filter(pl.col("chrom") == chrom).collect()
-                contig = plan.contigs.get(chrom) if plan.checks.get(chrom) in _READABLE else None
-                resolved = _resolve_rows(rows, store, contig, counts, withhold, concatenated, codes, pairs, spanned) if contig is not None else rows
+            # A part per group of whole contigs (`canonical_batches`), read in one scan and written as
+            # one file. Rows on a contig that cannot be read pass through as they are, all of a group's
+            # at once; each readable contig is read on its own, as REF comes from its one sequence (F24).
+            readable = sorted(chrom for chrom in rows_per_chrom if chrom is not None and plan.checks.get(chrom) in _READABLE and chrom in plan.contigs)
+            for index, batch in enumerate(canonical_batches({chrom: n for chrom, n in rows_per_chrom.items() if chrom is not None})):
+                rows = source.filter(pl.col("chrom").is_in(batch)).collect()
+                pieces = [rows.filter(~pl.col("chrom").is_in(readable))]
+                for chrom in batch:
+                    if chrom in readable:
+                        pieces.append(_resolve_rows(rows.filter(pl.col("chrom") == chrom), store, plan.contigs[chrom], counts, withhold, concatenated, codes, pairs, spanned))
+                del rows
                 part = spill.stage / f"calls-{index:05d}.parquet"
-                canonical_order(resolved.lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
+                canonical_order(pl.concat(pieces, how="vertical").lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
                 parts.append(part)
             staged.unlink()
             done = spill.commit(key, {"calls": parts}, _row_warnings(counts, plan.digest, codes, pairs))

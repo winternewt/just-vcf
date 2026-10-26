@@ -4,6 +4,26 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref`, `normalize` and `liftover` work and spill a group of whole contigs at a time (F24),
+  where each contig with rows cost a filtered scan, a pass and a parquet file. The groups are the ones
+  `load`'s spill is written in, consecutive contigs in canonical order up to `SPILL_PART_ROWS` rows
+  (`loading.canonical_batches`, split out of `canonical_parts`), so reading a step's output is one scan
+  of a few parts. Rows on contigs the store cannot read, or the chain does not cover or covers at
+  another size, or the collection does not hold, take their answer together in one call per group; a
+  contig that is read, aligned or lifted is still worked on its own, and a lift places the group's
+  breakend mates once per mate contig. Same rows, order, ties, dtypes, reasons, warnings and
+  `contig_map`: every output of the two PGP-HMS files below hashes the same before and after. On
+  hu416394's Manta file (942 contigs): `resolve_ref` 4.6–4.9 s → 0.3 s, `liftover` 17–22 s → 3.0–3.3 s,
+  `normalize` 12–33 s → 0.4 s, 942 part files → 1 each. On its bcftools gVCF (9.65M calls on 2,057
+  contigs): `resolve_ref` 110 s → 28 s, `liftover` 227 s → 66 s, `normalize` 206 s → 72 s, 2,057
+  part files → 12, memory the old steps' within the noise (the run's peak 8.7 GB → 8.3 GB, the load's
+  7.7 GB; measurements in docs/PREVIOUS_ISSUES.md, F24). A
+  spill's manifest and generation key carry a new layout key per step, `RESOLVE_LAYOUT`,
+  `NORMALIZE_LAYOUT` and `LIFT_LAYOUT` (1): a generation an older version wrote is never read, and the
+  sweep retires its entry once unused past the grace period; an entry this version has written into
+  since keeps the old generation beside the new one, costing disk only, until `clear_cache`.
+  `RESOLVE_VERSION`, `NORMALIZE_VERSION`, `LIFT_VERSION` and the derived `facet_id`s do not change.
+
 - NCBI36's RefSeq accessions name contigs (RM4). A build-36 VCF whose chromosomes are named
   `NC_000001.9` … `NC_000024.8` reads them as `1`…`Y` in `calls.chrom` and `contig_map`, and its
   `##contig` lengths name `GRCh36`, as GRCh37's and GRCh38's accessions already did. The names come

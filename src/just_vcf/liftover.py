@@ -84,9 +84,9 @@ from just_vcf import cache
 from just_vcf.breakends import parse_breakend, turned
 from just_vcf.links import LIFTOVER_TO, derived_links
 from just_vcf.loaders.vcf import _SV_LENGTH_TYPES
-from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
+from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_batches, canonical_parts
 from just_vcf.reference import PRIMARY, Contig, ReferenceMismatchError, ReferenceStore, _derive_array_alleles, _span, _store_for
-from just_vcf.schema import BLOCKS, CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceMeans, AssemblyLabelBasis, RefCheck, canonical_chrom, canonical_order, empty
+from just_vcf.schema import BLOCKS, CALLS, FACETS, SCHEMA_VERSION, AbsenceMeans, AssemblyLabelBasis, RefCheck, canonical_chrom, empty
 
 logger = logging.getLogger(__name__)
 
@@ -392,7 +392,7 @@ def liftover(
     facet_id = _derived_id(facet["facet_id"], chain.sha256, target_digest)
     entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
     with cache.spilling(entry, cache.LIFT_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id), _GROUPS) as spill:
-        # Streamed to parquet once, so each contig below is a filtered scan; its bytes key the result,
+        # Streamed to parquet once, so each group of contigs below is a filtered scan; its bytes key the result,
         # with what else the warnings name, so a run on the same input reuses what an earlier one wrote.
         staged = spill.stage / "input.parquet"
         loaded.calls.sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
@@ -461,11 +461,21 @@ def liftover(
     return Lifted(loaded=derived, report=report, reasons=reasons, block_reasons=block_reasons)
 
 
-_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "LIFT_VERSION": LIFT_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+LIFT_LAYOUT = 1
+"""How a lift spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
+lifted `calls` and `blocks` in canonical order in parts of whole target contigs (`loading.canonical_parts`)
+and the report in parts of whole source contigs, both grouped up to `loading.SPILL_PART_ROWS` rows, so
+contigs with a few rows share a file (F24). A spill without the key held one file per contig (942
+report files for a decoy-heavy GRCh38 Manta file). Its generation key lacks the key, so no run of this
+version finds it, and the sweep retires such an entry once it is unused past the grace period. Not a
+`LIFT_VERSION` bump: the rows are the same, and that version is part of the derived `facet_id`. Not
+`cache.SPILL_LAYOUT` either, which every other step's spill carries too."""
+
+_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "LIFT_VERSION": LIFT_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT, "LIFT_LAYOUT": LIFT_LAYOUT}
+"""The version keys of a lift spill, in its cache manifest."""
 
 _GROUPS = ("calls", "report", "blocks", "block_report", "mate_contigs")
 """The file groups of a lift's generation, which its key covers with `_VERSIONS` (`cache.Spill.key`)."""
-"""The version keys of a lift spill, in its cache manifest."""
 
 
 def _lift_into(
@@ -481,15 +491,20 @@ def _lift_into(
     source_digest: str,
     target_digest: str,
 ) -> cache.Committed:
-    """Lift the staged `calls` and `blocks` contig by contig into the spill's stage, and commit it as the generation `key`."""
+    """Lift the staged `calls` and `blocks` into the spill's stage, and commit it as the generation `key`.
+
+    The source rows are read a group of whole contigs at a time (`canonical_batches`), each group one
+    filtered scan, its report one file; the lifted rows are then written in canonical order in parts of
+    whole target contigs (`canonical_parts`). Within a group a contig the chain covers is lifted on its
+    own, through its own chain blocks; the rows of the group's other contigs take their reason together
+    (`_lift_group`), with no pass of their own (F24)."""
     source = pl.scan_parquet(staged)
-    chroms = source.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
+    sizes = dict(source.group_by("chrom").len().drop_nulls("chrom").collect().iter_rows())
     counts: Counter[str] = Counter()
     lifted_parts: list[Path] = []
     report_parts: list[Path] = []
-    for index, chrom in enumerate(sorted(chroms, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-        rows = source.filter(pl.col("chrom") == chrom).collect()
-        report, lifted = _lift_contig(rows, chrom, chain, source_ok, store, target_contigs, facet_id, counts)
+    for index, batch in enumerate(canonical_batches(sizes)):
+        report, lifted = _lift_group(_by_contig(source, batch), batch, chain, source_ok, store, target_contigs, facet_id, counts)
         report_parts.append(spill.stage / f"report-{index:05d}.parquet")
         report.write_parquet(report_parts[-1], row_group_size=SPILL_ROW_GROUP)
         if lifted.height:
@@ -497,16 +512,7 @@ def _lift_into(
             lifted.write_parquet(lifted_parts[-1], row_group_size=SPILL_ROW_GROUP)
     staged.unlink()
 
-    calls_parts: list[Path] = []
-    if lifted_parts:
-        scan = pl.scan_parquet(lifted_parts)
-        targets = scan.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
-        for index, chrom in enumerate(sorted(targets, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-            part = spill.stage / f"calls-{index:05d}.parquet"
-            canonical_order(scan.filter(pl.col("chrom") == chrom)).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
-            calls_parts.append(part)
-        for part in lifted_parts:
-            part.unlink()
+    calls_parts = _target_parts(lifted_parts, spill.stage / "lifted.parquet", "calls")
     blocks_parts, block_report = _lift_blocks_into(spill, staged_blocks, chain, source_ok, target_contigs, facet_id, counts)
     block_report_parts: list[Path] = []
     if block_report.height:
@@ -524,36 +530,97 @@ def _lift_into(
     return spill.commit(key, groups, warnings)
 
 
+def _by_contig(source: pl.LazyFrame, batch: list[str]) -> dict[str, pl.DataFrame]:
+    """The rows of a group of contigs, read in one scan, by contig, each in the source's order. The
+    callers take each contig's rows out as they go, so the group is not held twice."""
+    rows = source.filter(pl.col("chrom").is_in(batch)).collect()
+    return {chrom: frame for (chrom,), frame in rows.partition_by("chrom", as_dict=True, maintain_order=True).items()}
+
+
+def _lift_group(
+    rows: dict[str, pl.DataFrame],
+    batch: list[str],
+    chain: Chain,
+    source_ok: dict[str, bool],
+    store: ReferenceStore,
+    targets: dict[str, Contig],
+    facet_id: str,
+    counts: Counter[str],
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """The rows of a group of whole source contigs (`batch`, in canonical order; `rows` by contig,
+    taken out as they are lifted): (the report rows,
+    contig by contig in canonical order and in the parent's order within each, as `_lift_contig` gives
+    them one contig at a time; the lifted rows, contig by contig likewise).
+
+    A contig the chain covers at the source assembly's size is lifted on its own, through its own chain
+    blocks, its breakends' mates placed for the whole group at once (`_mate_places`). The rows of the
+    group's other contigs are passed to `_lift_contig` together, once for the contigs the chain does
+    not name and once for those it names at another size: each of those rows takes its reason before
+    any placement (`contig_not_in_chain`, `chain_contig_mismatch`, or the row's own, which comes
+    first), so none is placed and the contig named is only the fitness's.
+    """
+    reports: dict[str, pl.DataFrame] = {}
+    lifted: list[pl.DataFrame] = []
+    for fit in (None, False):
+        unfit = [chrom for chrom in batch if source_ok.get(chrom) is fit]
+        if unfit:
+            report = _lift_contig(pl.concat([rows.pop(chrom) for chrom in unfit], how="vertical"), unfit[0], chain, source_ok, store, targets, facet_id, counts, {})[0]
+            # Contig by contig as they went in, each in the parent's order.
+            reports |= {chrom: frame for (chrom,), frame in report.partition_by("chrom", as_dict=True, maintain_order=True).items()}
+    covered = [chrom for chrom in batch if source_ok.get(chrom)]
+    mates = _mate_places([rows[chrom] for chrom in covered], chain, source_ok, targets)
+    for chrom in covered:
+        reports[chrom], rows_lifted = _lift_contig(rows.pop(chrom), chrom, chain, source_ok, store, targets, facet_id, counts, mates)
+        lifted.append(rows_lifted)
+    report = pl.concat([reports[chrom] for chrom in batch], how="vertical")
+    return report, pl.concat(lifted, how="vertical") if lifted else pl.DataFrame()
+
+
+def _target_parts(pieces: list[Path], staged: Path, name: str) -> list[Path]:
+    """The lifted rows in `pieces` (in source order), written as `<name>-<n>.parquet` parts in canonical
+    order, of whole target contigs (`canonical_parts`); none when nothing lifted."""
+    if not pieces:
+        return []
+    pl.scan_parquet(pieces).sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
+    for piece in pieces:
+        piece.unlink()
+    parts = canonical_parts(staged, name)
+    staged.unlink()
+    return parts
+
+
 def _lift_blocks_into(
     spill: cache.Spill, staged: Path, chain: Chain, source_ok: dict[str, bool], targets: dict[str, Contig], facet_id: str, counts: Counter[str]
 ) -> tuple[list[Path], pl.DataFrame]:
-    """Lift the staged `blocks` contig by contig: the lifted blocks' files, sorted per target contig,
-    and the `BLOCK_REPORT` of what stayed behind."""
+    """Lift the staged `blocks` a group of whole source contigs at a time, as `_lift_into` lifts the
+    calls: the lifted blocks' files, in canonical order in parts of whole target contigs, and the
+    `BLOCK_REPORT` of what stayed behind."""
     source = pl.scan_parquet(staged)
-    chroms = source.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
+    sizes = dict(source.group_by("chrom").len().drop_nulls("chrom").collect().iter_rows())
     pieces: list[Path] = []
     left: list[pl.DataFrame] = []
-    for index, chrom in enumerate(sorted(chroms, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-        rows = source.filter(pl.col("chrom") == chrom).collect()
-        lifted, behind = _lift_block_contig(rows, chrom, chain, source_ok.get(chrom), targets, facet_id, counts)
-        left.append(behind)
-        if lifted.height:
+    for index, batch in enumerate(canonical_batches(sizes)):
+        rows = _by_contig(source, batch)
+        # The blocks on contigs the chain does not cover, or covers at another size, all stay behind.
+        for fit in (None, False):
+            unfit = [chrom for chrom in batch if source_ok.get(chrom) is fit]
+            if unfit:
+                left.append(_lift_block_contig(pl.concat([rows.pop(chrom) for chrom in unfit], how="vertical"), unfit[0], chain, fit, targets, facet_id, counts)[1])
+        lifted: list[pl.DataFrame] = []
+        for chrom in batch:
+            if source_ok.get(chrom):
+                pieces_of, behind = _lift_block_contig(rows.pop(chrom), chrom, chain, True, targets, facet_id, counts)
+                left.append(behind)
+                lifted.append(pieces_of)
+        if any(frame.height for frame in lifted):
             pieces.append(spill.stage / f"lifted-blocks-{index:05d}.parquet")
-            lifted.write_parquet(pieces[-1], row_group_size=SPILL_ROW_GROUP)
+            pl.concat(lifted, how="vertical").write_parquet(pieces[-1], row_group_size=SPILL_ROW_GROUP)
     staged.unlink()
-    parts: list[Path] = []
-    if pieces:
-        scan = pl.scan_parquet(pieces)
-        present = scan.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
-        for index, chrom in enumerate(sorted(present, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-            part = spill.stage / f"blocks-{index:05d}.parquet"
-            ordered = canonical_order(scan.filter(pl.col("chrom") == chrom)).collect()
-            # Two source regions the chain sends to one place give overlapping blocks; both are kept (charter 8).
-            counts["block_overlaps"] += int(ordered.select((pl.col("pos") <= pl.col("end_pos").cum_max().shift(1)).sum()).item() or 0)
-            ordered.write_parquet(part, row_group_size=SPILL_ROW_GROUP)
-            parts.append(part)
-        for part in pieces:
-            part.unlink()
+    parts = _target_parts(pieces, spill.stage / "lifted-blocks.parquet", "blocks")
+    for part in parts:
+        # Two source regions the chain sends to one place give overlapping blocks; both are kept (charter 8).
+        overlaps = pl.scan_parquet(part).select((pl.col("pos") <= pl.col("end_pos").cum_max().shift(1).over("chrom")).sum()).collect().item()
+        counts["block_overlaps"] += int(overlaps or 0)
     behind = pl.concat(left) if left else pl.DataFrame(schema={"lift_reason": pl.String, "_length": pl.Int64})
     report = (
         behind.group_by("lift_reason")
@@ -723,9 +790,11 @@ def _lift_contig(
     targets: dict[str, Contig],
     facet_id: str,
     counts: Counter[str],
+    mates: "dict[tuple[str, int], _MateFate]",
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """One source contig's rows: (the report rows, the lifted `calls` rows). `source_ok` is every
-    source contig's fitness (`_check_source`): a breakend's mate may lie on any of them."""
+    source contig's fitness (`_check_source`): a breakend's mate may lie on any of them. `mates` is
+    where each breakend mate the rows name lands (`_mate_places`)."""
     contig_ok = source_ok.get(chrom)
     counts["rows"] += rows.height
     alts = pl.col("alts").fill_null(pl.lit([], dtype=CALLS["alts"]))
@@ -764,7 +833,7 @@ def _lift_contig(
         sequence = candidates.filter(~pl.col("_sv") & ~pl.col("_bnd"))
         sequence = _with_nulls(_read_target(_place(sequence, blocks, targets), store, targets).with_columns(pl.lit(None, dtype=pl.Int64).alias("_new_end")), _BND_PLACED)
         svs = _with_nulls(_place_sv(candidates.filter(pl.col("_sv")), blocks, store, targets), _BND_PLACED)
-        bnds = _place_bnd(candidates.filter(pl.col("_bnd")), chrom, blocks, chain, source_ok, store, targets, counts)
+        bnds = _place_bnd(candidates.filter(pl.col("_bnd")), chrom, blocks, chain, store, targets, counts, mates)
         placed = pl.concat([part.select(placed_columns) for part in (sequence, svs, bnds)], how="vertical")
         work = work.join(placed, on="_row", how="left", maintain_order="left")
         work = work.with_columns(pl.coalesce("lift_reason", "_reason2").alias("lift_reason"))
@@ -833,10 +902,10 @@ def _place_bnd(
     chrom: str,
     blocks: pl.DataFrame,
     chain: Chain,
-    source_ok: dict[str, bool],
     store: ReferenceStore,
     targets: dict[str, Contig],
     counts: Counter[str],
+    mates: "dict[tuple[str, int], _MateFate]",
 ) -> pl.DataFrame:
     """Each breakend row's target from its own position and every ALT's mate, or why it has none
     (`_reason2`), with the rewritten ALTs (`_bnd_alts`) and intervals.
@@ -844,7 +913,8 @@ def _place_bnd(
     POS is placed as a one-base span, as an SNV's is, and the target's base there read: it must be
     the source's REF, complemented on a minus-strand block (the base at POS is part of the joined
     sequence, unlike a symbolic SV's padding base). Each mate is placed the same way through the
-    chain blocks of the contig it names (`breakend_mate_not_lifted` where any has no single target).
+    chain blocks of the contig it names, as `mates` holds it (`_mate_places`; `breakend_mate_not_lifted`
+    where any has no single target).
     A mate on the row's own source contig is held to liftoverSV's checks on its two ends: one target
     contig (`breakend_ends_apart`), their order kept on a plus strand and reversed on a minus one when
     both share a strand (`breakend_ends_reversed`), and their distance within `SV_LENGTH_TOLERANCE`
@@ -873,23 +943,9 @@ def _place_bnd(
         read = store.fetch(targets[target], [(start, start + 1) for start in part["_q0"].to_list()])
         bases.update(zip(part["_row"].to_list(), (base.upper() for base in read), strict=True))
 
-    # Every ALT's mate, read and grouped by the contig it names, placed through that contig's blocks.
+    # Every ALT's mate, where `_mate_places` put it.
     parsed = {row: [parse_breakend(alt) for alt in alts] for row, alts in rows.select("_row", "alts").iter_rows()}
-    mates = [(row, k, canonical_chrom(b.mate_contig), b.mate_pos) for row, found in parsed.items() for k, b in enumerate(found) if b.mate_contig is not None]
-    mate_frame = pl.DataFrame(mates, schema={"_row": pl.UInt32, "_k": pl.Int64, "_mchrom": pl.String, "_mpos": pl.Int64}, orient="row")
-    placed_mates: dict[tuple[int, int], tuple[str | None, str | None, int | None, bool | None]] = {}
-    for mate_chrom in sorted(mate_frame["_mchrom"].unique().to_list()):
-        part = mate_frame.filter(pl.col("_mchrom") == mate_chrom).with_row_index("_id")
-        ok = source_ok.get(mate_chrom)
-        mate_blocks = chain.blocks.filter(pl.col("t_chrom") == mate_chrom)
-        if not ok or mate_blocks.is_empty():
-            cause = "contig_not_in_chain" if ok is None else "chain_contig_mismatch" if ok is False else "no_chain_block"
-            placed_mates.update({(row, k): (cause, None, None, None) for row, k in part.select("_row", "_k").iter_rows()})
-            continue
-        s0, e0 = _span(pl.col("_mpos"), pl.lit(1))
-        found = _place(part.select(pl.col("_id").alias("_row"), s0.alias("_s0"), e0.alias("_e0")), mate_blocks, targets, _contig_segments(chain, mate_chrom))
-        for (row, k), (cause, target, q0, minus) in zip(part.select("_row", "_k").iter_rows(), found.select("_reason2", "_q_chrom", "_q0", "_minus").iter_rows(), strict=True):
-            placed_mates[(row, k)] = (cause, target, q0, minus)
+    placed_mates = {(row, k): mates[(canonical_chrom(b.mate_contig), b.mate_pos)] for row, found in parsed.items() for k, b in enumerate(found) if b.mate_contig is not None}
 
     out: dict[str, list] = {name: [] for name in ("_row", "_reason2", "_t_ref", "_bnd_alts", "_bnd_cipos", "_bnd_ciend")}
     for (row, pos, ref, cipos, ciend), (_, cause, target, q0, minus) in zip(
@@ -950,6 +1006,46 @@ def _place_bnd(
         pl.lit(False).alias("_swap"),
         (pl.col("_q0") + 1).alias("_new_end"),
     )
+
+
+_MateFate = tuple[str | None, str | None, int | None, bool | None]
+"""Where a breakend mate lands: why it has no single target (None when it has one), the target contig,
+the 0-based target position, and whether its chain block is on the minus strand."""
+
+
+def _mate_places(frames: list[pl.DataFrame], chain: Chain, source_ok: dict[str, bool], targets: dict[str, Contig]) -> dict[tuple[str, int], _MateFate]:
+    """Where the mate of every breakend ALT among the rows of `frames` lands, keyed by its canonical
+    contig and POS.
+
+    The mates are gathered from every row of a group of source contigs and placed one mate contig at a
+    time, each in one pass through its own chain blocks (`_place`, one base), whichever source contigs
+    name them: a group costs one placement per mate contig, where it cost one per pair of a source
+    contig and a mate contig (F24). A position's fate depends on that position alone, so a mate is
+    placed the same in any company; rows that turn out not to be lifted only add positions nobody asks
+    for. A mate on a contig the chain does not cover, or covers at another size than the source
+    assembly's, has that as its cause.
+    """
+    bracket = pl.col("alts").list.eval(pl.element().str.contains(r"[\[\]]")).list.any().fill_null(False)
+    positions: dict[str, set[int]] = {}
+    for alts in (alts for frame in frames for alts in frame.filter(bracket)["alts"]):
+        for alt in alts:
+            found = parse_breakend(alt) if alt is not None else None
+            if found is not None and found.mate_contig is not None:
+                positions.setdefault(canonical_chrom(found.mate_contig), set()).add(found.mate_pos)
+    fates: dict[tuple[str, int], _MateFate] = {}
+    for mate_chrom in sorted(positions):
+        at = sorted(positions[mate_chrom])
+        ok = source_ok.get(mate_chrom)
+        mate_blocks = chain.blocks.filter(pl.col("t_chrom") == mate_chrom)
+        if not ok or mate_blocks.is_empty():
+            cause = "contig_not_in_chain" if ok is None else "chain_contig_mismatch" if ok is False else "no_chain_block"
+            fates.update({(mate_chrom, pos): (cause, None, None, None) for pos in at})
+            continue
+        s0, e0 = _span(pl.col("_mpos"), pl.lit(1))
+        part = pl.DataFrame({"_mpos": at}, schema={"_mpos": pl.Int64}).with_row_index("_row")
+        found = _place(part.select("_row", s0.alias("_s0"), e0.alias("_e0")), mate_blocks, targets, _contig_segments(chain, mate_chrom))
+        fates.update(zip(((mate_chrom, pos) for pos in at), found.select("_reason2", "_q_chrom", "_q0", "_minus").iter_rows(), strict=True))
+    return fates
 
 
 def _lifted_bnd_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: Counter[str]) -> pl.DataFrame:

@@ -2343,7 +2343,14 @@ frame stops working when its files go.
   hand a filtered `Loaded` the full facet's rows; reading a missing group as empty, which would hand
   back a `contig_map` silently missing the mates' contigs; and replacing the files in place, which broke the
   earlier frame (`Invalid thrift` on its next `collect`). The manifest's `SPILL_LAYOUT` key (2) retires,
-  through the sweep, entries written before generations. `liftover`'s generation holds five groups,
+  through the sweep, entries written before generations. A frame's files are parts of whole contigs in
+  canonical order, consecutive contigs grouped up to `loading.SPILL_PART_ROWS` rows
+  (`loading.canonical_batches`), so the frame is one scan with no sort however many contigs it has:
+  `load`'s and `rejoin_split`'s (F27), `resolve_ref`'s, `normalize`'s and `liftover`'s (F24; a lift's
+  report in parts of whole source contigs, in the parent's order within each). Each of these steps
+  names its layout in its versions (`FRAMES_LAYOUT`, `REJOIN_LAYOUT`, `RESOLVE_LAYOUT`,
+  `NORMALIZE_LAYOUT`, `LIFT_LAYOUT`), so a generation an older version wrote with a file per contig is
+  never read, and the sweep retires its entry. `liftover`'s generation holds five groups,
   the lifted `calls`, the `report`, the lifted `blocks`, the `block_report` and the `mate_contigs`
   lifted breakends name; its key is the bytes of
   the staged parent `calls` and `blocks` (the blocks since `LIFT_VERSION` 8, when they began to be

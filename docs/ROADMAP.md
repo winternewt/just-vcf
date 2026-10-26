@@ -1189,9 +1189,9 @@ reload; counts only). Manta files lift their symbolic SVs: hu1C1368 (GRCh37 → 
 473 of 477 `<DEL>`, 236 of 236 `<DUP>`, 1,047 of 1,049 `<INS>`; hu416394 (GRCh38 → 37, `hg38ToHg19`)
 647 of 848 `<DEL>`, 387 of 558 `<DUP>`, 242 of 251 `<INS>`, most of the rest on decoys and scaffolds
 (`no_chain_block`, `ref_unread`); huBEF5E2's Veritas file 1,654 of 1,668 `<DEL>` and 206 of 216
-`<INV>`, its 3,730 BreakDancer `<ITX>`/`<CTX>` behind as `allele_not_sequence`. Every reason fired
+`<INV>`, its 3,730 BreakDancer `<ITX>`/`<CTX>` behind (3,721 as `allele_not_sequence`, 9 on MT as `ref_unread`). Every `sv_` reason fired
 on real rows (`sv_end_unlifted` 23, `sv_length_changed` 20, `sv_ends_apart` 6, `sv_ends_reversed`
-2). Breakends (1,228, 2,040, 1,310 more unread) stay behind as designed. Checked against pyliftover's
+2); no real SV came near a contig end (`indel_minus_strand`), so that edge rests on the synthetic tests. Breakends (1,228, 2,040, 1,310 more unread) stay behind as designed. Checked against pyliftover's
 placing of both ends: 4,892 of 4,892 lifted SVs agree, 52 on minus-strand blocks and 74 whose span
 crosses a chain gap (lifted length changed within 5%). Reloaded, every lifted SV keeps its `end_pos`,
 `cipos` and `ciend`, with no END/SVLEN disagreement warned. A few seconds per file under 500 MB,

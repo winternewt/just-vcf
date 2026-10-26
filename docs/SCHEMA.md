@@ -613,8 +613,8 @@ under `whole_genome_silence` (`weak_reference`), `omitted_called_reference` (`re
 unknown under `outside_blocks` (`blocks`); under `array`, `targeted` (an exome or a panel), `imputed`
 or `callset_type_unknown`, from the facet's `callset_type`, when `absence_means` is `unknown`; and
 under `class_not_counted`, `class_not_called`, `content_filter_held` (the kept class, without
-`force`) and `class_cut_by_filter`. `absence_is_reference` is its `reads_reference`, so the two
-cannot drift.
+`force`) and `class_cut_by_filter`, which a class the filter cut gets even where the facet wrote none
+of it (the cut is why). `absence_is_reference` is its `reads_reference`, so the two cannot drift.
 
 **On an array, an absence has a cause (RM281).** An array's absence stays `unknown`, but
 `chip_absence(loaded, sites)` says why, per asked site (`chrom` canonical, `pos` 1-based), from the

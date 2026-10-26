@@ -266,6 +266,9 @@ def typed(absence: str, callset_type: str | None) -> dict:
         (WGS_SNP_HALF, "snv", True, AbsenceReason.CONTENT_FILTER_FORCED),
         (WGS_SNP_HALF, "indel", False, AbsenceReason.CLASS_CUT_BY_FILTER),
         (WGS_SNP_HALF, "indel", True, AbsenceReason.CLASS_CUT_BY_FILTER),
+        # A pure cut wrote none of the class: the cut, not the count, is the reason.
+        (facet("weak_reference", [("snv", 4_000_000)], "snv_only"), "indel", True, AbsenceReason.CLASS_CUT_BY_FILTER),
+        (facet("weak_reference", [("snv", 4_000_000)], "snv_only"), "sv", False, AbsenceReason.CLASS_CUT_BY_FILTER),
         (facet("reference", [("snv", 3_000_000), ("indel", 400_000)]), "indel", False, AbsenceReason.OMITTED_CALLED_REFERENCE),
         (facet("reference", [("snv", 3_000_000), ("indel", 12)], "snv_only"), "snv", True, AbsenceReason.CONTENT_FILTER_FORCED),
         (facet("blocks", [("snv", 10)]), "snv", True, AbsenceReason.OUTSIDE_BLOCKS),

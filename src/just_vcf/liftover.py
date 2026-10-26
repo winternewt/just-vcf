@@ -391,7 +391,7 @@ def liftover(
 
     facet_id = _derived_id(facet["facet_id"], chain.sha256, target_digest)
     entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-    with cache.spilling(entry, cache.LIFT_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id)) as spill:
+    with cache.spilling(entry, cache.LIFT_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id), _GROUPS) as spill:
         # Streamed to parquet once, so each contig below is a filtered scan; its bytes key the result,
         # with what else the warnings name, so a run on the same input reuses what an earlier one wrote.
         staged = spill.stage / "input.parquet"
@@ -399,7 +399,7 @@ def liftover(
         staged_blocks = spill.stage / "input-blocks.parquet"
         loaded.blocks.sink_parquet(staged_blocks, row_group_size=SPILL_ROW_GROUP)
         named = {"chain_name": chain.name, "labels": [store.assembly_label(source_digest), store.assembly_label(target_digest)]}
-        key = cache.content_key([staged, staged_blocks], {**facet, "_lift": named})
+        key = spill.key([staged, staged_blocks], {**facet, "_lift": named})
         done = spill.find(key)
         if done is None:
             done = _lift_into(spill, key, staged, staged_blocks, chain, source_ok, store, target_contigs, facet_id, source_digest, target_digest)
@@ -462,6 +462,9 @@ def liftover(
 
 
 _VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "LIFT_VERSION": LIFT_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+
+_GROUPS = ("calls", "report", "blocks", "block_report", "mate_contigs")
+"""The file groups of a lift's generation, which its key covers with `_VERSIONS` (`cache.Spill.key`)."""
 """The version keys of a lift spill, in its cache manifest."""
 
 

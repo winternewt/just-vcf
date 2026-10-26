@@ -426,3 +426,29 @@ def test_manifest_json_is_iso_utc(tmp_path: Path) -> None:
         raw = json.loads((cache.cache_dir() / f"{name}.json").read_text())
         assert raw["created"].endswith("Z") or raw["created"].endswith("+00:00")
         assert "source_path" in raw
+
+
+def test_a_generation_key_covers_the_steps_versions_and_groups(tmp_path: Path) -> None:
+    """The same staged bytes and facet give another generation key under other versions or other
+    groups, so a step that changes its generation's shape never finds one of the old shape; a commit of
+    other groups than the step's is refused."""
+    staged = tmp_path / "input.parquet"
+    staged.write_bytes(b"rows")
+    origin = Origin(source_sha256="0" * 64, source_path=None)
+    facet = {"facet_id": "f" * 32}
+    keys = {}
+    for name, versions, groups in (
+        ("base", {"STEP_VERSION": 1}, ("calls",)),
+        ("version", {"STEP_VERSION": 2}, ("calls",)),
+        ("groups", {"STEP_VERSION": 1}, ("calls", "mates")),
+        ("order", {"STEP_VERSION": 1}, ("mates", "calls")),
+    ):
+        with cache.spilling(tmp_path / "frames" / name, cache.LIFT_SPILL, versions, origin, groups) as spill:
+            keys[name] = spill.key([staged], facet)
+    assert keys["base"] != keys["version"] and keys["base"] != keys["groups"]
+    assert keys["groups"] == keys["order"]  # a set of groups, not a sequence
+    with cache.spilling(tmp_path / "frames" / "commit", cache.LIFT_SPILL, {"STEP_VERSION": 1}, origin, ("calls", "mates")) as spill:
+        part = spill.stage / "calls.parquet"
+        part.write_bytes(b"rows")
+        with pytest.raises(ValueError, match="holds the groups"):
+            spill.commit(keys["groups"], {"calls": [part]}, [])

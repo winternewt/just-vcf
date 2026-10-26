@@ -6,6 +6,8 @@ sends to one place give overlapping blocks, which `liftover` keeps (charter 8; a
 hundreds of thousands), so an outer block can cover a position past an inner one's end, and several
 can cover one position. `covering` finds every covering interval either way, at the as-of join's cost
 where nothing overlaps; `nearest_block` picks the one block that answers for a position.
+`contig_join` pairs the rows of two frames on one contig by inequalities alone, as the range joins
+here do.
 """
 
 from collections.abc import Iterable, Sequence
@@ -59,6 +61,24 @@ def covering(probes: pl.LazyFrame | pl.DataFrame, intervals: pl.LazyFrame, conti
         for contig in contigs
     ]
     return pl.concat([tiled, *inside], how="diagonal_relaxed")
+
+
+def contig_join(left: pl.DataFrame, right: pl.DataFrame, left_chrom: str, right_chrom: str, *inequalities: pl.Expr) -> pl.DataFrame:
+    """Every pair of a `left` row and a `right` row on one contig (`left_chrom` equal to `right_chrom`)
+    that holds `inequalities`: `left`'s columns, then `right`'s, as `join_where` gives them. A null
+    contig pairs with nothing.
+
+    One join per contig with the inequalities alone, which polars runs as an IEJoin. An equality on the
+    contig beside them makes polars 1.44 join on the contig and filter after, holding every pair of rows
+    on a contig at once: 25.7 GB for 20,000 breakend records on 22 contigs, for 23,578 pairs kept.
+    """
+    contigs = sorted(set(left[left_chrom].drop_nulls().to_list()) & set(right[right_chrom].drop_nulls().to_list()))
+    parts = [
+        left.filter(pl.col(left_chrom) == contig).join_where(right.filter(pl.col(right_chrom) == contig), *inequalities)
+        for contig in contigs
+    ]
+    # The empty frames' join gives the schema when no contig is shared.
+    return pl.concat([left.clear().join_where(right.clear(), *inequalities), *parts])
 
 
 def nearest_block(hits: pl.DataFrame, key: str | Sequence[str], *, start: str, end: str, kind: str = "kind", then: Sequence[str] = ()) -> pl.DataFrame:

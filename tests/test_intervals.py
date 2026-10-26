@@ -1,11 +1,13 @@
 """`intervals.covering` against a brute-force scan: every interval over every probe, on frames that tile,
-nest, cross, share a start, touch by one base, repeat exactly, or lie apart, across several contigs."""
+nest, cross, share a start, touch by one base, repeat exactly, or lie apart, across several contigs.
+`intervals.contig_join` against the one `join_where` with the contig equality beside the inequalities,
+which it replaces."""
 
 import random
 
 import polars as pl
 
-from just_vcf.intervals import covering
+from just_vcf.intervals import contig_join, covering
 
 SHAPES = {
     # (start, end) per contig, in no particular order: each shape the as-of join and the range join split.
@@ -72,3 +74,51 @@ def test_seeded_random_intervals_match_the_scan() -> None:
         shapes[chrom] = spans
     probes, intervals = frames(shapes, list(shapes))
     assert found(probes, intervals, list(shapes)) == brute_force(probes, intervals)
+
+
+def windows(rng: random.Random, name: str, contigs: list[str | None], rows: int) -> pl.DataFrame:
+    """`rows` windows on `contigs` (None a row with no contig), with a row number and a list column, as
+    the concordance sides carry."""
+    starts = [rng.randint(1, 600) for _ in range(rows)]
+    return pl.DataFrame(
+        {
+            f"{name}_chrom": [rng.choice(contigs) for _ in range(rows)],
+            f"_{name}_lo": starts,
+            f"_{name}_hi": [start + rng.choice([0, 1, 5, 40, 200]) for start in starts],
+            f"_{name}_row": list(range(rows)),
+            f"{name}_tags": [[rng.randint(0, 3)] * rng.randint(0, 2) for _ in range(rows)],
+        },
+        schema={
+            f"{name}_chrom": pl.String,
+            f"_{name}_lo": pl.Int64,
+            f"_{name}_hi": pl.Int64,
+            f"_{name}_row": pl.UInt32,
+            f"{name}_tags": pl.List(pl.Int64),
+        },
+    )
+
+
+def test_contig_join_gives_what_the_equality_join_gave() -> None:
+    """Seeded random windows on shared, unshared and missing contigs: the same rows, columns and dtypes
+    as `join_where` with the contig equality, for strict and widened inequalities alike (the breakend
+    windows' and the SV extents' shapes), and an empty frame of the same schema when no contig is shared."""
+    rng = random.Random(20261027)
+    cases = [
+        (pl.col("_a_lo") < pl.col("_b_hi"), pl.col("_b_lo") < pl.col("_a_hi")),
+        (pl.col("_a_lo") - 25 < pl.col("_b_hi"), pl.col("_b_lo") < pl.col("_a_hi") + 25),
+    ]
+    pairs = 0
+    for trial in range(20):
+        a = windows(rng, "a", ["1", "2", "X", None], rng.randint(0, 80))
+        b = windows(rng, "b", ["1", "2", "MT", None], rng.randint(0, 80))
+        for inequalities in cases:
+            expected = a.join_where(b, pl.col("a_chrom") == pl.col("b_chrom"), *inequalities)
+            got = contig_join(a, b, "a_chrom", "b_chrom", *inequalities)
+            assert got.schema == expected.schema, trial
+            assert got.sort(got.columns).equals(expected.sort(expected.columns)), trial
+            pairs += got.height
+    assert pairs > 500  # the trials pair plenty of rows, so the comparison is not of empty frames
+    a, b = windows(rng, "a", ["1"], 10), windows(rng, "b", ["2"], 10)
+    expected = a.join_where(b, pl.col("a_chrom") == pl.col("b_chrom"), *cases[0])
+    got = contig_join(a, b, "a_chrom", "b_chrom", *cases[0])
+    assert got.is_empty() and got.schema == expected.schema

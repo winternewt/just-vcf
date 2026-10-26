@@ -367,13 +367,13 @@ def resolve_ref(
     codes = _code_catalog(loaded, facet, plan.label)
     pairs = _pair_catalog() if withhold else None
     entry = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-ref-{plan.digest}-{RESOLVE_VERSION}"
-    with cache.spilling(entry, cache.RESOLVE_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])) as spill:
+    with cache.spilling(entry, cache.RESOLVE_SPILL, versions, cache.derived_origin(facet, facet["facet_id"]), ("calls",)) as spill:
         # The input is streamed to parquet once, in its canonical (contig-grouped) order, so each contig
         # below is a cheap filtered scan rather than a replay of whatever plan built the input. Its
         # bytes also key the result: a run on the same input reuses what an earlier one wrote.
         staged = spill.stage / "input.parquet"
         loaded.calls.sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
-        key = cache.content_key([staged], {**facet, "probe_catalog": codes.digest, "pair_catalog": pairs.digest if pairs else None})
+        key = spill.key([staged], {**facet, "probe_catalog": codes.digest, "pair_catalog": pairs.digest if pairs else None})
         done = spill.find(key)
         if done is None:
             counts: Counter[str] = Counter()

@@ -15,6 +15,8 @@ A pair of mates written as two records is one adjacency, counted once (docs/SCHE
 """
 
 import random
+import threading
+import time
 from pathlib import Path
 
 import polars as pl
@@ -361,3 +363,79 @@ def test_mate_contigs_are_read_by_their_canonical_name_and_must_be_shared(tmp_pa
     assert result.sites.collect().select("chrom", "pos", "key").rows() == [("1", 5000, "breakend")]
     # a's join into contig 2, which b's collection does not hold, is not compared.
     assert {(r["facet"], r["reason"]): r["alleles"] for r in result.excluded.iter_rows(named=True)} == {("a", "contig_not_shared"): 1}
+
+
+def _rss() -> int:
+    for line in Path("/proc/self/status").read_text().splitlines():
+        if line.startswith("VmRSS:"):
+            return int(line.split()[1]) * 1024
+    raise AssertionError("/proc/self/status carries no VmRSS line, so the peak cannot be measured")
+
+
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="the peak is read from /proc/self/status (Linux)")
+def test_breakends_crowded_on_one_contig_compare_within_a_bounded_peak(tmp_path: Path, store: ReferenceStore) -> None:
+    """1,500 breakend records on one contig compared with themselves stay within 1 GB above the start.
+    The near pairs are a range join per contig; a contig equality beside the range made polars hold
+    every pair of records on the contig at once. Measured 2026-10-26 with 2,000 records on one contig:
+    5.7 GB that way, 29 MB as a range join; this test's 1,500 took 3 GB that way."""
+    rng = random.Random(1500)
+    positions = sorted(rng.sample(range(100, len(SEQ["1"]) - 100), 1500))
+    records = [raw("1", pos, f"{base('1', pos)}[1:{rng.randrange(100, len(SEQ['1']) - 100)}[") for pos in positions]
+    one = facet(tmp_path, "a", records, store)
+    peak = [0]
+    done = threading.Event()
+
+    def sample() -> None:
+        while not done.is_set():
+            peak[0] = max(peak[0], _rss())
+            time.sleep(0.02)
+
+    before = _rss()
+    sampler = threading.Thread(target=sample, daemon=True)
+    sampler.start()
+    sites = concordance(one, one).sites.collect()
+    done.set()
+    sampler.join()
+    # Each record meets itself and is taken once.
+    assert sites.select("pos", "agreement").unique()["pos"].sort().to_list() == positions
+    assert peak[0] - before < 2**30, f"peak {(peak[0] - before) / 2**20:.0f} MB above the start"
+
+
+def per_alt_facet(tmp_path: Path, name: str, records: list[str], store: ReferenceStore) -> Loaded:
+    """A facet whose header declares CIPOS and CIEND with any count (VCF 4.5's two per ALT)."""
+    meta = [line.replace("ID=CIPOS,Number=2", "ID=CIPOS,Number=.").replace("ID=CIEND,Number=2", "ID=CIEND,Number=.") for line in META]
+    contigs = [f"##contig=<ID={c},length={len(s)}>" for c, s in SEQ.items()]
+    header = "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "S1"])
+    path = tmp_path / f"{name}.vcf"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(["##fileformat=VCFv4.3", *contigs, *meta, header, *records]) + "\n")
+    return resolve_ref(load(path), store)
+
+
+def test_each_alt_of_a_record_reads_its_own_interval_pair(tmp_path: Path, store: ReferenceStore) -> None:
+    """Two bracket ALTs in one record, each with its own CIPOS and CIEND pair (VCF 4.5): ALT `k`'s
+    windows read pair `k`'s upper offsets, and so do the position intervals mates fold within."""
+    t = base("1", 5000)
+    record = f"1\t5000\t.\t{t}\t{t}[2:8000[,{t}]X:300]\t.\tPASS\tSVTYPE=BND;CIPOS=0,0,0,300;CIEND=0,400,0,0\tGT\t1/2"
+    a = per_alt_facet(tmp_path, "a", [record], store)
+    assert a.calls.collect().select("cipos", "ciend").rows() == [([0, 0, 0, 300], [0, 400, 0, 0])]
+    b_records = [bnd("1", 5000, "t[p[", "2", 8450), bnd("1", 5350, "t]p]", "X", 300)]
+    alts = [("1", 5000, "t[p[", "2", 8000, 0, 400), ("1", 5000, "t]p]", "X", 300, 300, 0)]
+    stated = [("1", 5000, "t[p[", "2", 8450, 0, 0), ("1", 5350, "t]p]", "X", 300, 0, 0)]
+    # Each ALT meets its own b record with its own pair, and with the other ALT's pair would not.
+    assert [meets(alt, other) for alt, other in zip(alts, stated, strict=True)] == [True, True]
+    swapped = [(*alts[0][:5], *alts[1][5:]), (*alts[1][:5], *alts[0][5:])]
+    assert [meets(alt, other) for alt, other in zip(swapped, stated, strict=True)] == [False, False]
+    result = concordance(a, per_alt_facet(tmp_path, "b", b_records, store))
+    rows = result.sites.collect().filter(pl.col("sv_kind") == "BND")
+    assert sorted(rows.filter(pl.col("key") == "breakend").select("a_pos", "b_pos").rows()) == [(5000, 5000), (5000, 5350)]
+    assert rows.height == 2
+
+    # Folding: the second ALT and a mate record written 3 bases apart, within ALT 1's CIPOS pair only.
+    mate_record = bnd("2", 8000, "]p]t", "1", 5003, CIPOS="0,3")
+    two = f"1\t5000\t.\t{t}\t{t}]X:300],{t}[2:8003[\t.\tPASS\tSVTYPE=BND;CIPOS=0,0,0,3\tGT\t1/2"
+    folded = concordance(per_alt_facet(tmp_path / "fold", "a", [two, mate_record], store), per_alt_facet(tmp_path / "fold", "b", [], store))
+    assert folded.sites.collect().height == 2  # the adjacency to X, and the folded pair of mates
+    wide_first = two.replace("CIPOS=0,0,0,3", "CIPOS=0,3,0,0")
+    unfolded = concordance(per_alt_facet(tmp_path / "nofold", "a", [wide_first, mate_record], store), per_alt_facet(tmp_path / "nofold", "b", [], store))
+    assert unfolded.sites.collect().height == 3

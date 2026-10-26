@@ -17,6 +17,27 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   written name for the same reason. `write_vcf_zarr` itself still writes ALTs as held and declares
   no mate (left open). No version constant changes: the writer has none and its output is cached
   nowhere.
+- A spill's generation key covers the step's versions and the set of file groups its generations
+  hold (`cache.Spill.key`), besides the input it was computed from, and a generation found holding
+  other groups than its step's is written again. `liftover` from 0d3599a on failed with
+  `KeyError: 'mate_contigs'` on a generation 45126a2 had written at the same `LIFT_VERSION` 11, before
+  the group existed. Every step's key changes with this, so each cached generation (load, rejoin,
+  resolve, normalize, VRS, lift, alignment coverage) is written once more on its next run, the old one
+  kept beside it until `clear_cache`, as after a polars upgrade. `load`'s and `rejoin_split`'s keys no
+  longer name `FRAMES_LAYOUT` and `REJOIN_LAYOUT` by hand: they are in the versions.
+
+- `concordance` pairs symbolic SV alleles by one range join per contig too (`intervals.contig_join`),
+  where the contig equality beside the two `refdist` inequalities held every pair of SVs on a contig
+  at once. Same candidate pairs, so the same rows, order and ties. 1,500 deletions on one contig
+  compared with themselves: 2.6 GB → 120 MB above the start (2026-10-26; a test holds it under 1 GB).
+
+- `concordance` pairs breakend records by one range join per contig (`intervals.contig_join`), where
+  one `join_where` with the contig equality beside the two window inequalities made polars join on
+  the contig and filter after, holding every pair of records on a contig at once. Same rows, order
+  and ties (the join tested against the old one on seeded random frames). On the audit's probe of
+  20,000 breakend records on 22 contigs compared with themselves: peak 26.2 GB → 0.6 GB, 6.0 s → 0.3 s
+  (2026-10-26, auditor's measurement 25.7 GB). A test holds 1,500 records on one contig under 1 GB
+  above the start; the old join took 3.2 GB there.
 
 - `load` reads a Complete Genomics `var` or `masterVarBeta` one locus range at a time
   (`loaders.cgi.locus_ranges`, `range_frames`), so a whole file no longer holds every haplotype in
@@ -40,7 +61,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   `select(pl.len())` 17.2 s → under 0.01 s, the calls collected 80.9 s at 20.5 GB → 0.75 s;
   `rejoin_split` itself takes 10 s longer for its one sort pass (measurements under RM6). A rejoin
   spill's manifest and generation key carry a new `REJOIN_LAYOUT` (1): an older version's generation is
-  never read, and the sweep removes an older entry once it is unused past the grace period.
+  never read. The stale-version sweep removes an older entry once it is unused past the grace period;
+  an entry this version has rejoined into since keeps the old generation beside the new one, costing
+  disk only, until `clear_cache` removes it.
   `REJOIN_VERSION` and the derived `facet_id` do not change. `loading._canonical_parts` is now
   `loading.canonical_parts`; `schema.canonical_order_per_contig`, with no caller left, is gone from
   the library (internal, never in `__all__`).

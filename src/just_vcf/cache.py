@@ -13,7 +13,7 @@ The cache (`cache_dir()`) holds five directories of entries:
   `<facet_id>-<SCHEMA_VERSION>-ref-<digest>-<RESOLVE_VERSION>` is `resolve_ref`'s (`resolve_spill`) and
   `…-vrs-<digest>-<MINT_VERSION>` is `mint_vrs_ids`'s (`vrs_spill`). Every spill entry, `load`'s
   included, holds one directory per generation, `<key>/`, named by the content it holds or was
-  computed from (`Spill`).
+  computed from and by the step's versions and file groups (`Spill`).
 - `coverage/<key>/`: `alignment_coverage`'s windows over one BAM or CRAM (`coverage_spill`, RM278), so
   an alignment file is read once. `<key>` digests what the windows are computed from: the file's
   header, index and size, the window and read filters, `COVERAGE_VERSION` and the polars-bio version.
@@ -328,13 +328,21 @@ class Spill:
     """One run of `load` or a derived step writing into its entry, under the entry's lock (`spilling`).
 
     The run writes into `stage`, a directory of its own inside the entry, and `commit`s it by renaming
-    it to `<entry>/<key>`, the key being the content the result was computed from. A generation is
-    never written into or removed once committed, so a frame an earlier run returned keeps reading its
-    files whatever later runs do; a later run with the same content `find`s it and reuses it instead.
+    it to `<entry>/<key>`, the key being the content the result was computed from (`key`). A generation
+    is never written into or removed once committed, so a frame an earlier run returned keeps reading
+    its files whatever later runs do; a later run with the same content `find`s it and reuses it instead.
+
+    `versions` (the manifest's) and `groups` (the file groups every generation of this step holds) are
+    the generation's shape, and `key` covers both: a step that changes either writes a generation of
+    its own beside the old one, and never reads one of another shape. Before, the key covered the input
+    alone, so a lift run by 0d3599a found a generation 45126a2 wrote at the same `LIFT_VERSION`, without
+    the `mate_contigs` group 0d3599a added, and failed on it with a `KeyError`.
     """
 
-    def __init__(self, entry: Path) -> None:
+    def __init__(self, entry: Path, versions: dict[str, object], groups: tuple[str, ...]) -> None:
         self.entry = entry
+        self.versions = {name: str(value) for name, value in versions.items()}
+        self.groups = tuple(groups)
         entry.mkdir(parents=True, exist_ok=True)
         for leftover in entry.glob(f"{_STAGING}*"):
             # The entry's lock is held, so a staging directory here is a writer's that died: no frame reads it.
@@ -343,21 +351,32 @@ class Spill:
         self.stage = entry / f"{_STAGING}{os.getpid()}-{os.urandom(4).hex()}"
         self.stage.mkdir()
 
+    def key(self, files: list[Path], facet: dict) -> str:
+        """The generation key of a result computed from `files` and `facet` (`content_key`), under this
+        step's `versions` and `groups`."""
+        return content_key(files, {**facet, "_generation": {"versions": self.versions, "groups": sorted(self.groups)}})
+
     def find(self, key: str) -> Committed | None:
-        """The complete generation under `key`, or None. One that cannot be read whole is removed: a
-        frame over it fails already, and the run then writes it again."""
+        """The complete generation under `key`, or None. One that cannot be read whole, or holds other
+        groups than the step's, is removed: a frame over it fails already or was never this key's (the
+        key covers the groups), and the run then writes it again."""
         path = self.entry / key
         if not path.is_dir():
             return None
         record = _read_generation(path / _RESULT)
-        if record is not None and all((path / name).is_file() for names in record.files.values() for name in names):
+        if record is not None and set(record.files) != set(self.groups):
+            logger.warning("cache: %s/%s holds the groups %s, not this step's %s; written again", self.entry.name, key, sorted(record.files), sorted(self.groups))
+        elif record is not None and all((path / name).is_file() for names in record.files.values() for name in names):
             return Committed(path, record)
-        logger.warning("cache: %s/%s is incomplete; written again", self.entry.name, key)
+        else:
+            logger.warning("cache: %s/%s is incomplete; written again", self.entry.name, key)
         shutil.rmtree(path)
         return None
 
     def commit(self, key: str, files: dict[str, list[Path]], warnings: list[str]) -> Committed:
         """Record what `stage` holds and move it into place as the generation `key`."""
+        if set(files) != set(self.groups):
+            raise ValueError(f"a generation of {self.entry.name} holds the groups {sorted(self.groups)}; this one has {sorted(files)}")
         record = Generation(
             files={group: tuple(path.relative_to(self.stage).as_posix() for path in paths) for group, paths in files.items()},
             warnings=tuple(warnings),
@@ -383,14 +402,15 @@ _RESULT = "result.json"
 
 
 @contextmanager
-def spilling(entry: Path, kind: str, versions: dict[str, object], origin: Origin) -> Iterator[Spill]:
-    """`writing` for a spill: hold the entry's lock, and give the run a `Spill` to stage into.
+def spilling(entry: Path, kind: str, versions: dict[str, object], origin: Origin, groups: tuple[str, ...]) -> Iterator[Spill]:
+    """`writing` for a spill: hold the entry's lock, and give the run a `Spill` to stage into, whose
+    generations hold `groups`.
 
     The manifest is updated whether the run commits a new generation or reuses one (`last_used`, size).
     The staging directory goes when the block ends, committed or not.
     """
     with writing(entry, kind, versions, origin):
-        spill = Spill(entry)
+        spill = Spill(entry, versions, groups)
         try:
             yield spill
         finally:

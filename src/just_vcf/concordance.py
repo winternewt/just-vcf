@@ -60,7 +60,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from just_vcf.breakends import SINGLE_BREAKEND, breakend_parts
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
-from just_vcf.intervals import covering, nearest_block
+from just_vcf.intervals import contig_join, covering, nearest_block
 from just_vcf.loading import Loaded
 from just_vcf.reference import PRIMARY, ReferenceMismatchError, ReferenceStore, _store_for
 from just_vcf.schema import CONTIG_RANK, BlockKind, VariantClass, canonical_chrom, canonical_chrom_expr, enum_dtype
@@ -885,9 +885,7 @@ def _sv_candidates(a: pl.DataFrame, b: pl.DataFrame, params: SvMatching) -> pl.D
     `refdist` of each other (truvari's `overlaps(start - refdist, end + refdist, ...)`, strict), with
     truvari's measures and whether the pair passes the rest of the thresholds (`_passes`)."""
     r = params.refdist
-    pairs = a.join_where(
-        b, pl.col("a_chrom") == pl.col("b_chrom"), pl.col("_a_ws") - r < pl.col("_b_we"), pl.col("_b_ws") < pl.col("_a_we") + r
-    )
+    pairs = contig_join(a, b, "a_chrom", "b_chrom", pl.col("_a_ws") - r < pl.col("_b_we"), pl.col("_b_ws") < pl.col("_a_we") + r)
     sa, sb = pl.col("_a_size"), pl.col("_b_size")
     # truvari's `sizesim`: a zero size counts as one base, two zeros are the same size.
     za, zb = pl.max_horizontal(sa, pl.lit(1)), pl.max_horizontal(sb, pl.lit(1))
@@ -1179,7 +1177,7 @@ def _bnd_sites(
     record order."""
     d = params.bnddist
     side_a, side_b = _bnd_side(bnd_a, "a", d, warnings), _bnd_side(bnd_b, "b", d, warnings)
-    near = side_a.join_where(side_b, pl.col("a_chrom") == pl.col("b_chrom"), pl.col("_a_lo") < pl.col("_b_hi"), pl.col("_b_lo") < pl.col("_a_hi"))
+    near = contig_join(side_a, side_b, "a_chrom", "b_chrom", pl.col("_a_lo") < pl.col("_b_hi"), pl.col("_b_lo") < pl.col("_a_hi"))
     near = near.filter(pl.max_horizontal("_a_lo", "_b_lo") < pl.min_horizontal("_a_hi", "_b_hi"))
     met = near.filter((pl.col("_a_join") == pl.col("_b_join")) & (pl.max_horizontal("_a_mlo", "_b_mlo") < pl.min_horizontal("_a_mhi", "_b_mhi")))
     start, end = (pl.col("_a_p") - pl.col("_b_p")).abs(), (pl.col("_a_mp") - pl.col("_b_mp")).abs()

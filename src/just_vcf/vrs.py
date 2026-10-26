@@ -201,13 +201,13 @@ def mint_vrs_ids(loaded: Loaded, reference: "ReferenceStore | Path | str | None"
     by_chrom = store.contigs_by_chrom(digest)
 
     entry = cache_dir() / "frames" / f"{facet['facet_id']}-{SCHEMA_VERSION}-vrs-{digest}-{MINT_VERSION}"
-    with cache.spilling(entry, cache.VRS_SPILL, versions, cache.derived_origin(facet, facet["facet_id"])) as spill:
+    with cache.spilling(entry, cache.VRS_SPILL, versions, cache.derived_origin(facet, facet["facet_id"]), ("calls", "ids")) as spill:
         # The input is spilled once as it is: the result reads its rows from this file, so they are the
         # rows the ids were minted from, in the same order, whatever plan built the input. Its bytes
         # key the result: a run on the same input reuses what an earlier one wrote.
         staged = spill.stage / "calls.parquet"
         loaded.calls.drop("vrs_allele_ids", "vrs_errors").sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
-        key = cache.content_key([staged], facet)
+        key = spill.key([staged], facet)
         done = spill.find(key)
         if done is None:
             tally = _Tally()

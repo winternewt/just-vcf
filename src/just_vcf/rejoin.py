@@ -78,13 +78,13 @@ def rejoin_split(loaded: Loaded) -> Loaded:
         rest = loaded.calls.filter(pl.col("split_signal").is_null())
         rebuilt = pl.DataFrame(kept + joined, schema=CALLS).lazy()
         entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
-        with cache.spilling(entry, cache.REJOIN_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id)) as spill:
+        with cache.spilling(entry, cache.REJOIN_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id), ("calls",)) as spill:
             staged = spill.stage / "calls.parquet"
             pl.concat([rest, rebuilt], how="vertical").with_columns(pl.lit(facet_id).alias("facet_id")).sink_parquet(
                 staged, row_group_size=SPILL_ROW_GROUP
             )
             # Keyed by what it holds: the join is cheap next to the sink, so the result itself is the key.
-            key = cache.content_key([staged], {**facet, "REJOIN_LAYOUT": REJOIN_LAYOUT})
+            key = spill.key([staged], facet)
             done = spill.find(key)
             if done is None:
                 parts = canonical_parts(staged, "calls")
@@ -112,8 +112,11 @@ REJOIN_LAYOUT = 1
 """How a rejoin spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
 rows in canonical order, in parts of whole contigs (`loading.canonical_parts`), which the calls read as
 they are (F27). A spill without the key held the rows unsorted in one file, sorted one contig at a time
-on every read: its manifest lacks the key, so the sweep judges it older, and its generation key lacks
-it, so no run of this version finds it. Not a `REJOIN_VERSION` bump: the rows are the same, and that
+on every read. Its generation key lacks the key, so no run of this version finds it. The sweep removes
+such an entry once it is unused past the grace period, but only while its manifest still lacks the
+key: a rejoin of this version into the same entry rewrites the manifest with the current versions, so
+the old generation then stays beside the new one, costing disk only, until `clear_cache` removes the
+entry. Not a `REJOIN_VERSION` bump: the rows are the same, and that
 version is part of the derived `facet_id`, so bumping it would rename the facet and orphan every spill
 made from it (resolve, normalize, VRS). Not `cache.SPILL_LAYOUT` either, which every other step's spill
 carries too."""

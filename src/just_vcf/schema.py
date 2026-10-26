@@ -366,8 +366,18 @@ def canonical_chrom(name: str) -> str:
 
 
 def canonical_chrom_expr(column: str) -> pl.Expr:
-    """`canonical_chrom` as a Polars expression over a string column."""
-    return pl.col(column).replace(CONTIG_ALIASES)
+    """`canonical_chrom` as a Polars expression over a string column, applied one batch at a time.
+
+    polars 1.44's streaming engine runs `replace` with a mapping as a columnar function it cannot
+    split into batches (an in-memory fallback), and holds every other column of the plan beside it
+    until that function has the whole column: `load`'s `calls` sink over a 9.65M-call gVCF held 8 GB
+    for 2.6 GB of rows (F26). The mapping is elementwise, so each batch is mapped on its own and the
+    plan streams; the values are the ones `replace` over the whole column gives."""
+    return pl.col(column).map_batches(_canonical_batch, return_dtype=pl.String, is_elementwise=True)
+
+
+def _canonical_batch(names: pl.Series) -> pl.Series:
+    return names.cast(pl.String).replace(CONTIG_ALIASES)
 
 
 def contig_map(source_names: list[str]) -> list[dict[str, str]]:

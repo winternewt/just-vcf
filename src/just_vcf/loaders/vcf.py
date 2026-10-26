@@ -1555,7 +1555,7 @@ def split_groups(calls: pl.LazyFrame, ploidy: int) -> tuple[pl.DataFrame, int]:
         .filter(pl.col("split_group").is_not_null())
     )
     marked = calls.select((pl.col("split_signal") == SplitSignal.MARKER.value).sum())
-    flagged, marker_rows = pl.collect_all([groups, marked])
+    flagged, marker_rows = pl.collect_all([groups, marked], engine="streaming")
     return flagged.sort("chrom", "pos"), marker_rows.item()
 
 

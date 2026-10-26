@@ -689,6 +689,14 @@ itself taking 15 s (11 s for the calls, 4.5 s for the blocks). A load whose fram
 87 s before and 86 s after, at 7.7 and 7.9 GB. hu80855C's Isaac gVCF was not re-run: its `load`
 peaked at 54 GB, more than the machine had free.
 
+*Measured 2026-10-26, after F26's repair* (the canonical `chrom` mapped a batch at a time, so the
+spill's sink streams; same bench, RSS sampled every 50 ms, under a 40 GB cap; docs/PREVIOUS_ISSUES.md
+has the phase table). hu416394's bcftools gVCF: `load` peak 8.1 → 3.9 GB fresh and 8.1 → 2.1 GB
+cached, 139 → 116 s and 107 → 88 s; frames, facet and warnings hash the same. hu80855C's Isaac gVCF
+now loads on this machine: 9.4 GB fresh (1,035 s), 6.8 GB cached (804 s). A cached load still costs
+two polars-bio passes over the VCF (the warning counts and the sink the spill key hashes), 83 of
+hu416394's 88 s; making it a lookup is a design call for the lead (F26's resolution lists the options).
+
 UCSC's scaffold names meet
 Ensembl's accessions since 2026-10-23, through NCBI's assembly reports rather than the accession inside
 the name (F19, docs/PREVIOUS_ISSUES.md). A VCF with neither

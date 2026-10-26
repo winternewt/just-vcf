@@ -130,6 +130,10 @@ meanwhile. The desk carries the ones filed there.
   named; the coverage spill is keyed on polars-bio's version as well as `COVERAGE_VERSION`. SVLEN is written from
   END on length-type ALTs (desk #148 asks whether to store it as written); a CIPOS/CIEND offset of -1 or -2 collides
   with VCF Zarr's integer missing/fill sentinels, so such an interval is written missing and counted.
+- **Layer 4, the lead's calls on store migration (built, listed for veto):** a store is never migrated on read;
+  `migrate_store` deletes the old version's files once the verified swap commits (`keep_previous=True` keeps them);
+  on a migrated VCF facet a null `method_steps` or `gl_source` means "not read", told apart from "not a VCF" or "no
+  likelihoods" only by the manifest and the `loaded()` warnings, which now carry the migration caveats too.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

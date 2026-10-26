@@ -163,6 +163,11 @@ meanwhile. The desk carries the ones filed there.
   Alternative rejected: keying the lift alone, which leaves the other six steps one forgotten bump from the same
   crash. Superseded generations are not deleted on a run (an older session may still read one within the grace);
   the docstrings now say so. F30 resolved (merge 0bc11c1); F31 logged, the lift's naming rule, not decided.
+- **Layer 1, the lead's call on a genotype table's variant classes (not built, listed for veto):** they stay null.
+  An array writes no REF or ALT at load, so its `AA` is hom-ref or hom-alt until `resolve_ref`. Rejected: counting
+  after `resolve_ref` (about an afternoon), which counts the alleles the person carries in a column that, for a VCF,
+  counts the ALT alleles the file writes; and counting probe shapes at load (letters as SNVs, I/D codes as indels),
+  a new meaning or a new column. Nothing that gates absence reads the field for an array.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

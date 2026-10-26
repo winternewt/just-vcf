@@ -8,6 +8,7 @@ pyliftover (the `[liftover]` extra) is a second, independent reading of the chai
 import gzip
 import hashlib
 import random
+from collections import Counter
 from pathlib import Path
 
 import polars as pl
@@ -15,7 +16,7 @@ import pytest
 
 from just_vcf import Loaded, ReferenceMismatchError, ReferenceStore, liftover, load, mint_vrs_ids, normalize, read_chain, resolve_ref, vrs_withheld, write_vcf
 from just_vcf.liftover import RELATION, REPORT, UNLIFTED_REASONS, _segments
-from just_vcf.schema import CALLS, FACETS
+from just_vcf.schema import BLOCKS, CALLS, FACETS, canonical_order
 
 rng = random.Random(7)
 
@@ -147,7 +148,8 @@ CASES = {
     "minus_mixed": row(790, s1(790), f"{other(s1(790))},{s1(790)}G", "1/2", rsid="minus_mixed"),
     "minus_edge": row(800, s1(800), s1(800) + "A", rsid="minus_edge"),
     "source_mismatch": row(210, other(s1(210)), s1(210), rsid="source_mismatch"),
-    "symbolic": row(220, s1(220), "<DEL>", rsid="symbolic", info="SVLEN=-5"),
+    "breakend": row(220, s1(220), s1(220) + "[2:20[", rsid="breakend"),
+    "star": row(230, s1(230), f"{other(s1(230))},*", "0/1", rsid="star"),
     "unknown_target": row(855, s1(855), other(s1(855)), rsid="unknown_target"),
     "contig_2": row(20, S2[19], other(S2[19]), chrom="2", rsid="contig_2"),
 }
@@ -173,7 +175,8 @@ EXPECTED_REASON = {
     "minus_mixed": None,
     "minus_edge": None,
     "source_mismatch": "source_ref_mismatch",
-    "symbolic": "allele_not_sequence",
+    "breakend": "breakend_not_lifted",
+    "star": "allele_not_sequence",
     "unknown_target": "target_contig_unmatched",
     "contig_2": "contig_not_in_chain",
 }
@@ -577,3 +580,292 @@ def test_normalize_left_aligns_lifted_indels_on_the_target(tmp_path: Path) -> No
     bcftools.norm("-f", str(target_fasta), "--no-version", "-o", str(theirs), str(exported.path), catch_stdout=False)
     by_bcftools = {r["ids"][0]: (r["pos"], r["source_ref"], r["alts"]) for r in load(theirs).calls.collect().iter_rows(named=True)}
     assert by_bcftools == leftmost
+
+
+# Blocks (gVCF reference and no-call intervals) on source contig 1, each named by where it lies in the
+# construction above; and one on contig 2, which the chain does not cover.
+GVCF_BLOCKS = {
+    "whole": ("1", 201, 240, "0/0:30:12:0,30,450"),  # inside block A
+    "gap": ("1", 381, 430, "0/0:40:15:0,40,600"),  # across the deleted source 401..410, A then B
+    "ambiguous": ("1", 141, 180, "0/0:20:9:0,20,300"),  # over source 151..170, which a second chain also maps
+    "minus": ("1", 711, 740, "0/0:50:20:0,50,800"),  # on the minus-strand chain to target 2
+    "unmapped": ("1", 21, 60, "0/0:10:4:0,10,100"),  # before the first chain block
+    "unknown_target": ("1", 851, 858, "0/0:11:4:0,11,100"),  # on the chain to chrUn_q, which the target lacks
+    "no_call": ("1", 581, 620, "./.:.:.:."),  # the end of block B, then no chain
+    "other_contig": ("2", 1, 50, "0/0:60:23:0,60,900"),
+}
+GVCF_HEADER = [
+    "##fileformat=VCFv4.2",
+    *[f"##contig=<ID={name},length={len(seq)}>" for name, seq in SOURCE.items()],
+    '##ALT=<ID=NON_REF,Description="Any other allele">',
+    '##INFO=<ID=END,Number=1,Type=Integer,Description="End">',
+    '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+    '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">',
+    '##FORMAT=<ID=MIN_DP,Number=1,Type=Integer,Description="Block minimum depth">',
+    '##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred likelihoods">',
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1",
+]
+
+
+def base_fate(chrom: str, pos: int) -> tuple[str, int, str] | str:
+    """Where the construction sends one source base: (chrom, 1-based pos, strand), or why nowhere."""
+    i = pos - 1
+    if chrom != "1":
+        return "contig_not_in_chain"
+    if 150 <= i < 170:
+        return "multiple_targets"
+    if 850 <= i < 860:
+        return "target_contig_unmatched"
+    if 100 <= i < 400 or 410 <= i < 600 or 700 <= i < 800:
+        return expected_target(pos)
+    return "no_chain_block"
+
+
+def expected_pieces(chrom: str, start: int, end: int) -> tuple[list[tuple[str, int, int]], Counter]:
+    """A block's lifted pieces, base by base from the construction: runs of source bases that are
+    consecutive on the source and on the target alike; and the bases left behind per reason."""
+    pieces: list[list] = []
+    behind: Counter = Counter()
+    previous = None
+    for pos in range(start, end + 1):
+        fate = base_fate(chrom, pos)
+        if isinstance(fate, str):
+            behind[fate] += 1
+            previous = None
+            continue
+        target_chrom, target_pos, strand = fate
+        step = 1 if strand == "+" else -1
+        if previous is not None and (previous[0], previous[1] + step, previous[2]) == fate:
+            pieces[-1][2 if strand == "+" else 1] = target_pos
+        else:
+            pieces.append([target_chrom, target_pos, target_pos])
+        previous = fate
+    return [tuple(piece) for piece in pieces], behind
+
+
+def gvcf_lifted(tmp_path: Path, store: ReferenceStore, chain: Path):
+    records = [
+        f"{chrom}\t{start}\t{name}\t{SOURCE[chrom][start - 1]}\t<NON_REF>\t.\t.\tEND={end}\tGT:GQ:MIN_DP:PL\t{sample}"
+        for name, (chrom, start, end, sample) in GVCF_BLOCKS.items()
+    ]
+    call = f"1\t250\tcall\t{s1(250)}\t{other(s1(250))},<NON_REF>\t40\tPASS\t.\tGT:GQ:PL\t0/1:40:40,0,50,90,95,99"
+    lines = sorted([*records, call], key=lambda line: (line.split("\t")[0], int(line.split("\t")[1])))
+    vcf = tmp_path / "source.g.vcf"
+    vcf.write_text("\n".join([*GVCF_HEADER, *lines]) + "\n")
+    resolved = resolve_ref(load(vcf), store)
+    return resolved, liftover(resolved, chain, store)
+
+
+def block_key(r: dict) -> tuple:
+    return (r["chrom"], r["pos"], r["end_pos"], r["kind"], r["gq"], r["dp_min"], tuple(r["gl"] or ()))
+
+
+def test_blocks_lift_cut_at_every_chain_gap_and_edge(tmp_path: Path, setup) -> None:
+    """Each block's lifted pieces are the runs the construction maps base by base; nothing is
+    stretched over a gap or merged across one, and what stays behind is counted in bases per reason."""
+    store, _, _, chain = setup
+    resolved, lifted = gvcf_lifted(tmp_path, store, chain)
+    source = resolved.blocks.collect()
+    assert source.height == len(GVCF_BLOCKS)
+    blocks = lifted.loaded.blocks.collect()
+    assert blocks.schema == BLOCKS
+
+    expected_rows = []
+    behind: Counter = Counter()
+    for evidence in source.iter_rows(named=True):
+        pieces, left = expected_pieces(evidence["chrom"], evidence["pos"], evidence["end_pos"])
+        behind += left
+        # Every piece carries its block's evidence unchanged.
+        expected_rows += [block_key({**evidence, "chrom": chrom, "pos": pos, "end_pos": end}) for chrom, pos, end in pieces]
+    got = [block_key(r) for r in blocks.iter_rows(named=True)]
+    assert sorted(got) == sorted(expected_rows)
+    assert lifted.block_reasons == dict(sorted(behind.items()))
+    assert set(lifted.block_reasons) <= UNLIFTED_REASONS
+    # Every source base is either in a lifted block or counted behind.
+    lifted_bases = sum(end - pos + 1 for _, pos, end, *_ in got)
+    assert lifted_bases + sum(lifted.block_reasons.values()) == sum(r["end_pos"] - r["pos"] + 1 for r in source.iter_rows(named=True))
+
+    # The block across the deleted source bases lands as two blocks that touch on the target: kept
+    # apart, since the source between them is not there.
+    assert [(r[1], r[2]) for r in got if r[4] == 40] == [(331, 350), (351, 370)]
+    # The minus-strand block lands on target 2 reversed, as one block.
+    assert [r[:3] for r in got if r[4] == 50] == [("2", expected_target(740)[1], expected_target(711)[1])]
+    # Canonical order on the target, and the facet's contig map names the contigs the blocks use.
+    assert blocks.equals(canonical_order(blocks.lazy()).collect())
+    facet = lifted.loaded.facets.collect().row(0, named=True)
+    assert set(blocks["chrom"]) <= {entry["chrom"] for entry in facet["contig_map"]}
+    assert facet["absence_means"] == "unknown"
+    assert set(blocks["facet_id"]) == {facet["facet_id"]}
+    assert any("block(s):" in w and "left behind" in w for w in lifted.loaded.warnings)
+    assert any("[multiple_targets]" in w and "block base(s)" in w for w in lifted.loaded.warnings)
+
+    # Determinism, and a reused generation answers as the run that wrote it.
+    again = liftover(resolved, chain, store)
+    assert again.loaded.blocks.collect().equals(blocks)
+    assert again.block_reasons == lifted.block_reasons
+
+
+def test_lifted_blocks_take_their_ref_from_the_target_on_export(tmp_path: Path, setup) -> None:
+    """The frame keeps no block REF: a lifted gVCF written out reads each block's first base from the
+    target collection, and `load` reads the file back to the lifted blocks."""
+    store, _, _, chain = setup
+    _, lifted = gvcf_lifted(tmp_path, store, chain)
+    written = write_vcf(lifted.loaded, tmp_path / "lifted.g.vcf", blocks=True, reference=store, compress=False)
+    records = [line.split("\t") for line in written.path.read_text().splitlines() if not line.startswith("#")]
+    block_records = [fields for fields in records if fields[4] == "<*>"]
+    assert len(block_records) == lifted.loaded.blocks.select(pl.len()).collect().item() > 0
+    for fields in block_records:
+        assert fields[3] == TARGET[fields[0]][int(fields[1]) - 1], fields[:2]
+    reloaded = load(written.path)
+    assert reloaded.blocks.drop("facet_id").collect().equals(lifted.loaded.blocks.drop("facet_id").collect())
+
+
+SV_HEADER = [
+    "##fileformat=VCFv4.2",
+    *[f"##contig=<ID={name},length={len(seq)}>" for name, seq in SOURCE.items()],
+    '##INFO=<ID=END,Number=1,Type=Integer,Description="End">',
+    '##INFO=<ID=SVTYPE,Number=1,Type=String,Description="SV type">',
+    '##INFO=<ID=CIPOS,Number=2,Type=Integer,Description="CI around POS">',
+    '##INFO=<ID=CIEND,Number=2,Type=Integer,Description="CI around END">',
+    '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+    '##FORMAT=<ID=CN,Number=1,Type=Integer,Description="Copy number">',
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1",
+]
+
+
+def sv(name: str, pos: int, alt: str, end: int | None = None, info: str = "", sample: str = "0/1", ref: str | None = None) -> str:
+    fields = [f"END={end}"] if end is not None else []
+    fields += [info] if info else []
+    fmt, value = ("GT:CN", sample) if ":" in sample else ("GT", sample)
+    return f"1\t{pos}\t{name}\t{ref or s1(pos)}\t{alt}\t50\tPASS\t{';'.join(fields) or '.'}\t{fmt}\t{value}"
+
+
+# Symbolic SVs and copy-number segments on source contig 1, by where their two ends fall in the
+# construction (block A: source 101..400 at -50; source 401..410 deleted; block B: 411..600 at -60;
+# 701..800 reversed onto target 2; 151..170 also mapped by a second chain).
+SV_CASES = {
+    "del_plus": (sv("del_plus", 201, "<DEL>", 230, "SVTYPE=DEL;CIPOS=-5,10;CIEND=-3,4"), None),
+    # Across the 10 deleted bases: 190 against 200, exactly SV_LENGTH_TOLERANCE, kept.
+    "dup_across_gap": (sv("dup_across_gap", 211, "<DUP:TANDEM>", 411), None),
+    # Across them too: 20 against 30, too far.
+    "del_shrunk": (sv("del_shrunk", 390, "<DEL>", 420), "sv_length_changed"),
+    "inv_end_unmapped": (sv("inv_end_unmapped", 550, "<INV>", 650), "sv_end_unlifted"),
+    "cnv_apart": (sv("cnv_apart", 500, "<CNV>", 750), "sv_ends_apart"),
+    "del_minus": (sv("del_minus", 720, "<DEL>", 760, "CIPOS=-6,2;CIEND=-1,7"), None),
+    "ins_plus": (sv("ins_plus", 300, "<INS>", info="SVTYPE=INS"), None),
+    "ins_minus": (sv("ins_minus", 750, "<INS>"), None),
+    "segment": (sv("segment", 460, ".", 520, sample="0/0:2"), None),
+    "segment_minus": (sv("segment_minus", 705, ".", 795, "CIPOS=-4,6", sample="0/0:3"), None),
+    # The target changes the padding base at SWAP_POS: a plus-strand anchor must be the source's.
+    "del_anchor_changed": (sv("del_anchor_changed", SWAP_POS, "<DEL>", 280), "ref_mismatch_after_lift"),
+    "del_ambiguous": (sv("del_ambiguous", 155, "<DEL>", 190), "multiple_targets"),
+    "del_beside_snv": (sv("del_beside_snv", 330, f"{other(s1(330))},<DEL>", 360), "allele_not_sequence"),
+    "del_long_ref": (sv("del_long_ref", 340, "<DEL>", 360, ref=s1(340, 2)), "allele_not_sequence"),
+}
+
+
+def expected_sv(pos: int, end: int, padded: bool) -> tuple[str, int, int, str]:
+    """Where the construction puts an SV lifted by both ends: (chrom, pos, end_pos, strand). On the
+    minus strand the event's image is reversed; a padded SV is anchored on the base before it."""
+    (chrom, a, strand), (_, b, _) = expected_target(pos), expected_target(end)
+    if strand == "+":
+        return chrom, a, b, strand
+    return (chrom, b - 1, a - 1, strand) if padded else (chrom, b, a, strand)
+
+
+def mirrored(pair: list[int]) -> list[int]:
+    return [-pair[1], -pair[0]]
+
+
+def sv_lifted(tmp_path: Path, store: ReferenceStore, chain: Path):
+    lines = sorted((line for line, _ in SV_CASES.values()), key=lambda line: int(line.split("\t")[1]))
+    vcf = tmp_path / "sv.vcf"
+    vcf.write_text("\n".join([*SV_HEADER, *lines]) + "\n")
+    resolved = resolve_ref(load(vcf), store)
+    return resolved, liftover(resolved, chain, store)
+
+
+def test_symbolic_svs_lift_by_both_ends(tmp_path: Path, setup) -> None:
+    store, _, _, chain = setup
+    resolved, lifted = sv_lifted(tmp_path, store, chain)
+    source = by_case(resolved.calls.collect())
+    report = by_case(lifted.report.collect())
+    assert {case: r["lift_reason"] for case, r in report.items()} == {case: reason for case, (_, reason) in SV_CASES.items()}
+    assert set(lifted.reasons) <= UNLIFTED_REASONS
+
+    calls = by_case(lifted.loaded.calls.collect())
+    assert set(calls) == {case for case, (_, reason) in SV_CASES.items() if reason is None}
+    for case, r in calls.items():
+        parent = source[case]
+        chrom, pos, end, strand = expected_sv(parent["pos"], parent["end_pos"], padded=bool(parent["alts"]))
+        assert (r["chrom"], r["pos"], r["end_pos"]) == (chrom, pos, end), case
+        assert (report[case]["lift_chrom"], report[case]["lift_pos"], report[case]["lift_strand"]) == (chrom, pos, strand)
+        # The length is the source's wherever both ends sit in one chain block.
+        if case != "dup_across_gap":
+            assert r["end_pos"] - r["pos"] == parent["end_pos"] - parent["pos"], case
+        # REF is the target's base at the new POS; the ALTs stay as written; gt indexes [ref] + alts.
+        assert r["ref"] == TARGET[chrom][pos - 1] and r["source_ref"] is None
+        assert r["alts"] == parent["alts"]
+        assert [[r["ref"], *r["alts"]][g] for g in r["gt"]] == r["gt_alleles"]
+        assert (r["sv_type"], r["copy_number"]) == (parent["sv_type"], parent["copy_number"])
+    assert calls["dup_across_gap"]["end_pos"] - calls["dup_across_gap"]["pos"] == 190
+
+    # CIPOS and CIEND carry on the plus strand; on the minus strand the new POS is the old END's
+    # image, so they swap and mirror, and a missing CIEND reads as CIPOS (VCF 4.5).
+    assert (calls["del_plus"]["cipos"], calls["del_plus"]["ciend"]) == (source["del_plus"]["cipos"], source["del_plus"]["ciend"])
+    assert (calls["del_minus"]["cipos"], calls["del_minus"]["ciend"]) == (mirrored(source["del_minus"]["ciend"]), mirrored(source["del_minus"]["cipos"]))
+    assert source["segment_minus"]["ciend"] is None
+    assert calls["segment_minus"]["cipos"] == calls["segment_minus"]["ciend"] == mirrored(source["segment_minus"]["cipos"])
+    assert any("symbolic SVs or copy-number segments" in w for w in lifted.loaded.warnings)
+
+
+def test_lifted_svs_round_trip_through_the_writer(tmp_path: Path, setup) -> None:
+    """A lifted SV's END is its lifted `end_pos`: written out and loaded back, the extents are the same."""
+    store, _, _, chain = setup
+    _, lifted = sv_lifted(tmp_path, store, chain)
+    written = write_vcf(lifted.loaded, tmp_path / "lifted.vcf", compress=False, resolved_only=True)
+    back = by_case(load(written.path).calls.collect())
+    calls = by_case(lifted.loaded.calls.collect())
+    assert {case for case, (line, reason) in SV_CASES.items() if reason is None and "<" in line} <= set(back)
+    for case in back:
+        assert (back[case]["chrom"], back[case]["pos"], back[case]["end_pos"]) == (calls[case]["chrom"], calls[case]["pos"], calls[case]["end_pos"])
+
+
+def one_contig_lift(tmp_path: Path, source_seq: str, target_seq: str, chain: str, records: list[str]):
+    store = ReferenceStore.open(tmp_path / "store")
+    source = store.add_fasta(write_fasta(tmp_path / "s.fa", {"1": source_seq}), assembly_label="GRCh37")
+    target = store.add_fasta(write_fasta(tmp_path / "t.fa", {"1": target_seq}), assembly_label="GRCh38")
+    path = tmp_path / "one.chain"
+    path.write_text(chain)
+    vcf = tmp_path / "one.vcf"
+    header = [line for line in SV_HEADER if not line.startswith("##contig")]
+    vcf.write_text("\n".join([header[0], f"##contig=<ID=1,length={len(source_seq)}>", *header[1:], *records]) + "\n")
+    return liftover(resolve_ref(load(vcf), store, collection=source), path, store, target=target)
+
+
+def test_an_sv_whose_ends_swap_order_stays_behind(tmp_path: Path) -> None:
+    """Two plus-strand chains swap the source's halves: an SV across the middle has its END land before its POS."""
+    source_seq = random_bases(300)
+    target_seq = source_seq[150:] + source_seq[:150]
+    chain = "chain 100 1 300 + 0 150 1 300 + 150 300 1\n150\n\nchain 90 1 300 + 150 300 1 300 + 0 150 2\n150\n\n"
+    inside = f"1\t20\tinside\t{source_seq[19]}\t<DEL>\t50\tPASS\tEND=60\tGT\t0/1"
+    across = f"1\t100\tacross\t{source_seq[99]}\t<DEL>\t50\tPASS\tEND=200\tGT\t0/1"
+    lifted = one_contig_lift(tmp_path, source_seq, target_seq, chain, [inside, across])
+    report = by_case(lifted.report.collect())
+    assert report["across"]["lift_reason"] == "sv_ends_reversed"
+    assert (report["inside"]["lift_reason"], report["inside"]["lift_pos"]) == (None, 170)
+
+
+def test_a_minus_strand_sv_at_the_target_contigs_first_base_stays_behind(tmp_path: Path) -> None:
+    """Target 1 is source 1 reverse-complemented whole: an insertion after the last source base would be
+    anchored before the target's first base. A deletion inside is anchored on the base before its image."""
+    source_seq = random_bases(200)
+    chain = "chain 100 1 200 + 0 200 1 200 - 0 200 1\n200\n\n"
+    last = f"1\t200\tlast\t{source_seq[199]}\t<INS>\t50\tPASS\t.\tGT\t0/1"
+    inner = f"1\t100\tinner\t{source_seq[99]}\t<DEL>\t50\tPASS\tEND=150\tGT\t0/1"
+    lifted = one_contig_lift(tmp_path, source_seq, revcomp(source_seq), chain, [inner, last])
+    report = by_case(lifted.report.collect())
+    assert report["last"]["lift_reason"] == "indel_minus_strand"
+    inner_row = by_case(lifted.loaded.calls.collect())["inner"]
+    # Source 101..150 deleted: their images are 51..100, so the deletion is anchored on 50 and ends at 100.
+    assert (inner_row["pos"], inner_row["end_pos"], inner_row["ref"]) == (50, 100, revcomp(source_seq)[49])

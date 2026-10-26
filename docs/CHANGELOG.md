@@ -23,6 +23,27 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   chromosomes stays unknown. **Values change**: null to `GRCh36` for those facets
   (docs/SCHEMA.md, "Changes since sign-off").
 
+- `liftover` lifts symbolic SVs (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`, `<CNn>`, `<INS>`) and copy-number
+  segments by both ends (RM6). POS and `end_pos` are lifted as two points; the row is kept where both
+  land on one contig and strand, in order, with a length within 5% of the source's
+  (`liftover.SV_LENGTH_TOLERANCE`, liftoverSV's rule), and otherwise left behind under the new reasons
+  `sv_end_unlifted`, `sv_ends_apart`, `sv_ends_reversed` and `sv_length_changed`. REF is read from the
+  target at the new POS; on a minus strand the SV is anchored on the target's base before the event's
+  image and `cipos`/`ciend` swap and mirror. Breakends stay behind as `breakend_not_lifted`, where they
+  were `allele_not_sequence`. **Fixed**: a copy-number segment (`ALT .` with END and CN) lifted with
+  its `end_pos` cut to its one-base REF span. **Values change**: lifted facets get a new `facet_id`
+  (`LIFT_VERSION` 9). Additive otherwise: minor (docs/SCHEMA.md, "Lifting symbolic SVs").
+
+- `liftover` lifts the `blocks` frame (RM6). A gVCF reference or no-call block is cut wherever the
+  chain's mapping changes: the pieces inside one chain block with one target lift, with `kind`, `gq`,
+  `dp_min` and `gl` unchanged, and the rest stays behind, counted in bases per reason in the new
+  `Lifted.block_reasons` and in the warnings. A block crossing a chain gap becomes several blocks,
+  never one stretched over the gap; minus-strand and other-contig pieces lift as rows do. The frame
+  keeps no block REF, so `write_vcf(..., blocks=True)` on the lifted facet reads it from the target.
+  The lifted facet had an empty `blocks` frame; its `absence_means` stays `unknown`. **Values change**:
+  lifted facets get a new `facet_id` (`LIFT_VERSION` 8). Additive otherwise: minor (docs/SCHEMA.md,
+  "Lifting blocks").
+
 - A facet records the rule that read its REF, and the store refuses a held facet given again in
   another REF state (schema 0.0.20). `resolve_ref` keeps a facet's `facet_id`, so `Store.add` of the
   facet resolved under a newer `RESOLVE_VERSION`, or of the loaded facet once its resolved twin was

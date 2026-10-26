@@ -102,6 +102,24 @@ def test_masterVarBeta_insertion_points_are_anchored_as_var_ones(tmp_path: Path,
         assert row["source_alleles"] == [row["ref"], *row["alts"]]
 
 
+def test_a_split_anchored_point_keeps_its_read_counts(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """Two insertions at one point (masterVarBeta, with read counts): `normalize` splits them, and each
+    row keeps `ad` sliced to its REF and ALT, the counts being indexed over the anchored alleles."""
+    p = next(q for q in range(100, 2900) if base("1", q) in "CG")  # neither insertion can then move left
+    path = write_cgi(tmp_path, master_var_text([cgi_point("chr1", p, "A", "AT")]), "masterVarBeta-GS000000001-ASM.tsv.bz2")
+    resolved = resolve_ref(load(path), grch37_store)
+    parent = resolved.calls.collect().row(0, named=True)
+    x = base("1", p)
+    assert (parent["ref"], parent["alts"], parent["source_alleles"]) == (x, [x + "A", x + "AT"], [x, x + "A", x + "AT"])
+    assert len(parent["ad"]) == 3
+    split = normalize(resolved, grch37_store).calls.collect()
+    got = {row["alts"][0]: row for row in split.iter_rows(named=True)}
+    assert set(got) == {x + "A", x + "AT"}
+    for k, alt in enumerate(parent["alts"], 1):
+        assert got[alt]["ad"] == [parent["ad"][0], parent["ad"][k]], alt
+        assert got[alt]["source_alleles"] == [x, alt]
+
+
 def test_an_anchored_insertion_point_is_minted_and_written(tmp_path: Path, grch37_store: ReferenceStore) -> None:
     resolved = resolved_var(tmp_path, grch37_store)
     anchored = (pl.col("source_ref") == "") & pl.col("ref").is_not_null()

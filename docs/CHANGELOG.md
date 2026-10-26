@@ -13,7 +13,8 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   first base, VCF's rule: the base after, appended, at POS 1. A point where nothing was called stays
   unread, counted. A Genos row gets REF over its stated span whatever its length, and its alleles
   derived against it as an array row's (`AT/GC`, `T/-`); before, only its single-base rows were read,
-  and a one-base insertion `A/A` was read as an SNV at the anchor. `normalize` aligns the anchored
+  and a one-base insertion site was read as a call at the anchor base: `G/G` inserted after a `G`
+  read hom-ref there (checked on the old code), another base an SNV. `normalize` aligns the anchored
   rows (`NORMALIZE_VERSION` 9), and anchors a deletion at a contig's first base on the base after
   its span, where it left it unanchored. `genotype_evidence` names an anchored point's alleles with
   `ref`. **Breaking for a reader of a resolved CGI or CASAVA facet**: an insertion point's `alts`,

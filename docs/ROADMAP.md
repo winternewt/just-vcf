@@ -568,7 +568,7 @@ writes them. A CASAVA indel table's points take the same rule, but such a facet 
 has no SNV rows to infer one from (F9), so `resolve_ref` refuses it before reading a row; that gap is
 not this item's.
 
-Left: emitting reference-supported positions; an opt-in test against a real assembly. UCSC's scaffold names meet
+Left: emitting reference-supported positions. UCSC's scaffold names meet
 Ensembl's accessions since 2026-10-23, through NCBI's assembly reports rather than the accession inside
 the name (F19, docs/PREVIOUS_ISSUES.md). A VCF with neither
 `##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array

@@ -747,11 +747,11 @@ With Decisions 1–5 as recommended:
 | `facet_id` | `str` | never null |
 | `chrom` | `str` | never null (Decision 7) |
 | `pos` | `u32` | never null. 1-based, VCF `POS` |
-| `end_pos` | `u32` | the length of the REF span is unknown (a 23andMe `I`/`D` row, a Living DNA run-together indel before RM3). 1-based, inclusive. Rule below |
+| `end_pos` | `u32` | the length of the REF span is unknown (a 23andMe `I`/`D` row, a Living DNA run-together indel before RM3, an insertion point before `resolve_ref` reads its anchor). 1-based, inclusive. Rule below |
 | `ids` | `list[str]` | the source had no id. rsids, 23andMe `i` ids and VCF `ID` split on `;` |
 | `ref` | `str` | the assembly sequence has not been read yet (charter 10). Only ever filled from the sequence |
 | `source_ref` | `str` | the source wrote no REF (arrays). What the file wrote, as written |
-| `ref_check` | `Enum` | there is no `source_ref` to compare. `not_run`, `match` or `mismatch` (Decision 2) |
+| `ref_check` | `Enum` | there is no `source_ref` to compare, or it is the empty REF of an insertion point whose anchor `resolve_ref` read (no base to compare). `not_run`, `match` or `mismatch` (Decision 2) |
 | `alts` | `list[str]` | the source did not say (a non-VCF row before RM3), or RM3 withheld it: an array row of a `strand_check = mixed` facet whose genotype reads differently on the two strands keeps `ref` and has `alts` and `gt` null (Decision 2). `[]` = a stated monomorphic record (ALT `.`). Symbolic alleles and `*` kept verbatim, except `<NON_REF>`, which is written `<*>` |
 | `source_alleles` | `list[str]` | the source gave no vector to index (Decision 2) |
 | `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention: the REF slot first, then one per ALT in `alts` order. An element is null when it was withheld (charter 4); the whole list is null when nothing was minted. Minting rule below ("When an id is minted") |

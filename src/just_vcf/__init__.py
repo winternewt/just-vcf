@@ -29,7 +29,13 @@ from just_vcf.evidence import (
     genotype_evidence,
     genotype_evidence_at,
 )
-from just_vcf.karyotype import KaryotypicSex, SexChromosomeEvidence, XCopies, sex_chromosome_evidence
+from just_vcf.karyotype import (
+    KaryotypicSex,
+    SexChromosomeEvidence,
+    XCopies,
+    person_sex_chromosome_evidence,
+    sex_chromosome_evidence,
+)
 from just_vcf.liftover import Chain, Lifted, liftover, read_chain
 from just_vcf.links import link_disagreements
 from just_vcf.loading import (
@@ -226,6 +232,7 @@ __all__ = [
     "relatedness",
     "resolve_ref",
     "same_person",
+    "person_sex_chromosome_evidence",
     "sex_chromosome_evidence",
     "sniff",
     "table_samples",

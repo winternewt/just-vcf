@@ -3,9 +3,11 @@
 `sex_chromosome_evidence(loaded)` measures what a facet's own calls say about its X and Y
 chromosomes and turns that into an estimate with a reason. Nothing is stored: like `vrs_withheld()`,
 the result is computed from the frames on request, so it never drifts from the rows it summarises and
-its thresholds can move without a schema change. There is no person in the schema yet, so the result
-is per facet; liftovers of one callset are one piece of evidence, not several, and weighing facets
-against each other belongs to a later person-level layer.
+its thresholds can move without a schema change. The result is per facet; liftovers of one callset
+are one piece of evidence, not several, and weighing facets against each other belongs to a later
+person-level layer. `person_sex_chromosome_evidence(person)` answers for each facet of a `Person`
+with the person's own coverage facets paired to it by build, and says which it used and why
+(`CoveragePairing`); it weighs nothing either.
 
 What is measured, over the rows a caller did not filter out (`filters` is `["PASS"]` or null, which
 is VCF's "filters not applied"; FORMAT `FT` likewise; `evidence_basis = assay`):
@@ -88,6 +90,8 @@ band below is the central half of its gap, so every class edge keeps a quarter o
 The Y threshold was checked against 27 PGP-HMS VCFs with self-reported sex (same section).
 """
 
+from collections import defaultdict
+from collections.abc import Callable, Mapping
 from enum import Enum
 
 import polars as pl
@@ -96,6 +100,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from just_vcf.coverage import Coverage
 from just_vcf.links import LIFTOVER_TO
 from just_vcf.loading import Loaded
+from just_vcf.person import Person
 from just_vcf.schema import AssemblyLabelBasis, CallsetType
 
 # --- Regions -----------------------------------------------------------------------------------
@@ -522,6 +527,45 @@ class ArrayLines(BaseModel):
     or when the export wrote no no-call on the autosomes (it drops them, so rows are not probes)."""
 
 
+COVERAGE_PAIRINGS: frozenset[str] = frozenset(
+    {"stated", "only_one_on_build", "only_usable_on_build", "several_on_build", "none_usable_on_build", "none_on_build", "no_coverage"}
+)
+"""How `person_sex_chromosome_evidence` chose a facet's coverage (`CoveragePairing.basis`).
+
+- `stated`: the caller named it, or named none, in `pairs`.
+- `only_one_on_build`: the person's one coverage facet on the facet's build; used, and set aside by the
+  facet-level rules if it cannot be read (`coverage.reason`).
+- `only_usable_on_build`: several on the build, one of them usable (`measure_coverage` gave no
+  reason): that one is used, the others named with their reasons.
+- `several_on_build`: several usable ones on the build. None is used: nothing in the frames says
+  which alignment a callset was called from, so the choice would be a guess. State one in `pairs`.
+- `none_usable_on_build`: several on the build, none usable; none is used.
+- `none_on_build`: coverage facets, none on the facet's build (or the facet has no build).
+- `no_coverage`: the person carries no coverage facet.
+"""
+
+
+class CoveragePairing(BaseModel):
+    """Which of a person's coverage facets one facet's estimate used, and why (`COVERAGE_PAIRINGS`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    coverage_facet_id: str | None
+    """The coverage facet used; None when none was."""
+    basis: str
+    candidates: tuple[str, ...]
+    """The person's coverage facets on the facet's build, by `facet_id`."""
+    detail: str
+    """The same in words, naming each candidate set aside and why."""
+
+    @field_validator("basis")
+    @classmethod
+    def _known_basis(cls, value: str) -> str:
+        if value not in COVERAGE_PAIRINGS:
+            raise ValueError(f"unknown coverage pairing {value!r}")
+        return value
+
+
 class SexChromosomeEvidence(BaseModel):
     """What one facet's calls say about its sex chromosomes, and the estimate it supports.
 
@@ -583,6 +627,9 @@ class SexChromosomeEvidence(BaseModel):
     """The coverage facet's line, when `sex_chromosome_evidence` was given one."""
     array: ArrayLines | None = None
     """An array facet's letter counts (`callset_type = array`); None for every other facet."""
+    coverage_pairing: CoveragePairing | None = None
+    """Which of the person's coverage facets was used and why, from `person_sex_chromosome_evidence`;
+    None from `sex_chromosome_evidence`, whose caller pairs by hand."""
 
     @field_validator("x_copies_reason", "y_reason", "reason")
     @classmethod
@@ -646,6 +693,107 @@ def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None, *,
             ref_seqcol_digest=facet["ref_seqcol_digest"],
         )
         for facet in facets.iter_rows(named=True)
+    )
+
+
+def person_sex_chromosome_evidence(
+    person: Person, *, pairs: Mapping[str, str | None] | None = None, array_y: bool = False
+) -> tuple[SexChromosomeEvidence, ...]:
+    """`sex_chromosome_evidence` for each of a person's facets, each with a coverage facet of the person
+    paired to it, and `coverage_pairing` saying which and why (`COVERAGE_PAIRINGS`).
+
+    Pairing is by build: a facet uses the person's one coverage facet on its `assembly_label`; of
+    several there, the one usable one (`measure_coverage` gave no reason); otherwise none, the
+    candidates named. Nothing in the frames records which alignment a callset was called from, so a
+    choice between two usable coverage facets is never made here. `pairs` states it instead: a facet's
+    `facet_id` to a coverage facet's, or to None for none; a stated one is used as stated (a stated one
+    on another build is set aside by the facet-level rule, `coverage_build_mismatch`). Every id in
+    `pairs` must be the person's own, else `ValueError`.
+
+    One answer per facet, in `person.facets` order. Each is exactly what `sex_chromosome_evidence`
+    gives that facet with the chosen coverage facet, plus `coverage_pairing`. Facets are not weighed
+    against each other: liftovers of one callset still answer once each.
+    """
+    stated = dict(pairs or {})
+    facets = person.facets.select("facet_id", "assembly_label").collect()
+    ids = facets["facet_id"].to_list()
+    coverage = {item.facet.facet_id: item for item in person.coverage}
+    strangers = sorted(set(stated) - set(ids))
+    if strangers:
+        raise ValueError(f"pairs names what is not a facet of this person: {', '.join(strangers)}")
+    unknown = sorted({value for value in stated.values() if value is not None} - set(coverage))
+    if unknown:
+        raise ValueError(f"pairs names what is not a coverage facet of this person: {', '.join(unknown)}")
+    reasons: dict[str, str | None] = {}
+
+    def reason_of(coverage_id: str) -> str | None:
+        if coverage_id not in reasons:
+            reasons[coverage_id] = measure_coverage(coverage[coverage_id]).reason
+        return reasons[coverage_id]
+
+    pairings = {
+        row["facet_id"]: _pairing(row["facet_id"], row["assembly_label"], person.coverage, stated, reason_of)
+        for row in facets.iter_rows(named=True)
+    }
+    by_coverage: dict[str | None, list[str]] = defaultdict(list)
+    for facet_id, pairing in pairings.items():
+        by_coverage[pairing.coverage_facet_id].append(facet_id)
+    found: dict[str, SexChromosomeEvidence] = {}
+    for coverage_id, facet_ids in by_coverage.items():
+        chosen = pl.col("facet_id").is_in(facet_ids)
+        loaded = Loaded(
+            facets=person.facets.filter(chosen), calls=person.calls.filter(chosen), blocks=person.blocks.filter(chosen),
+            links=person.links, schema_version=person.schema_version,
+        )
+        paired = coverage[coverage_id] if coverage_id is not None else None
+        for item in sex_chromosome_evidence(loaded, paired, array_y=array_y):
+            found[item.facet_id] = item.model_copy(update={"coverage_pairing": pairings[item.facet_id]})
+    return tuple(found[facet_id] for facet_id in ids)
+
+
+def _pairing(
+    facet_id: str,
+    label: str | None,
+    coverage: tuple[Coverage, ...],
+    stated: dict[str, str | None],
+    reason_of: Callable[[str], str | None],
+) -> CoveragePairing:
+    """The coverage facet one facet uses, by the rules in `person_sex_chromosome_evidence`."""
+    candidates = tuple(item.facet.facet_id for item in coverage if label is not None and item.facet.assembly_label == label)
+    if facet_id in stated:
+        chosen = stated[facet_id]
+        detail = f"stated: {chosen}" if chosen is not None else "stated: no coverage facet"
+        return CoveragePairing(coverage_facet_id=chosen, basis="stated", candidates=candidates, detail=detail)
+    if not coverage:
+        return CoveragePairing(coverage_facet_id=None, basis="no_coverage", candidates=(), detail="the person carries no coverage facet")
+    if not candidates:
+        builds = ", ".join(sorted({item.facet.assembly_label or "no build" for item in coverage}))
+        where = f"the facet's build, {label}" if label is not None else "the facet's build, which it does not state"
+        return CoveragePairing(
+            coverage_facet_id=None, basis="none_on_build", candidates=(), detail=f"no coverage facet on {where}; the person's are on {builds}"
+        )
+    if len(candidates) == 1:
+        return CoveragePairing(
+            coverage_facet_id=candidates[0], basis="only_one_on_build", candidates=candidates, detail=f"the person's one coverage facet on {label}"
+        )
+    usable = [candidate for candidate in candidates if reason_of(candidate) is None]
+    set_aside = "; ".join(f"{candidate}: {reason_of(candidate)}" for candidate in candidates if candidate not in usable)
+    if len(usable) == 1:
+        return CoveragePairing(
+            coverage_facet_id=usable[0], basis="only_usable_on_build", candidates=candidates,
+            detail=f"{len(candidates)} coverage facets on {label}, one usable; set aside {set_aside}",
+        )
+    if not usable:
+        return CoveragePairing(
+            coverage_facet_id=None, basis="none_usable_on_build", candidates=candidates,
+            detail=f"{len(candidates)} coverage facets on {label}, none usable: {set_aside}",
+        )
+    return CoveragePairing(
+        coverage_facet_id=None, basis="several_on_build", candidates=candidates,
+        detail=(
+            f"{len(usable)} usable coverage facets on {label} ({', '.join(usable)}); nothing records which alignment the "
+            "callset came from, so none is used: state one with pairs="
+        ),
     )
 
 

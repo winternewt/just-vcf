@@ -14,10 +14,12 @@ from just_vcf import (
     CoverageFormat,
     KaryotypicSex,
     Loaded,
+    Person,
     ReferenceStore,
     Resolution,
     XCopies,
     load,
+    person_sex_chromosome_evidence,
     resolve_ref,
     sex_chromosome_evidence,
 )
@@ -25,6 +27,7 @@ from just_vcf.coverage import COVERAGE_INTERVALS
 from just_vcf.karyotype import (
     ARRAY_ESTIMATE_BUILDS,
     ASSEMBLY_LABEL_SOURCES,
+    COVERAGE_PAIRINGS,
     COVERAGE_X_BANDS,
     COVERAGE_Y_BANDS,
     MIN_X_SITES,
@@ -38,6 +41,7 @@ from just_vcf.karyotype import (
     TWO_X_MIN_HET_SHARE,
     UNKNOWN_REASONS,
     X_DEGENERATE_Y,
+    CoveragePairing,
     SexChromosomeEvidence,
     assembly_label_source,
     estimate,
@@ -1016,3 +1020,97 @@ def test_the_label_source_is_a_closed_list_checked_on_the_model() -> None:
     found = evidence(frame(chr20(), *XY))
     with pytest.raises(ValueError, match="unknown assembly label source"):
         SexChromosomeEvidence(**{**found.model_dump(), "assembly_label_source": "guessed"})
+
+
+# --- A person's coverage facets paired with its callsets (RM278) -----------------------------------
+
+
+def callset(facet_id: str, x: pl.DataFrame, y: pl.DataFrame, *, build: str = "GRCh38", subject: str = "person-a") -> Loaded:
+    """One whole-genome facet under `subject`, a source of its own (its own `source_sha256`)."""
+    facets = conform(
+        pl.LazyFrame({"facet_id": [facet_id], "assembly_label": [build], "callset_type": ["wgs"], "subject": [subject], "source_sha256": [facet_id * 64]}),
+        FACETS,
+    )
+    calls = frame(chr20(), x, y).with_columns(facet_id=pl.lit(facet_id))
+    return Loaded(facets=facets, calls=calls, blocks=empty(BLOCKS))
+
+
+def covered(facet_id: str, x_depth: float, y_depth: float, *, build: str = "GRCh38", subject: str | None = "person-a", uneven: bool = False) -> Coverage:
+    base = coverage_facet(x_depth, y_depth, build=build)
+    intervals = base.intervals
+    if uneven:  # an exome's shape on chr20 (`test_uneven_coverage_is_set_aside`)
+        intervals = pl.concat([intervals, pl.DataFrame(windows("20", 5_000_001, 300, 2.0), schema=list(COVERAGE_INTERVALS), orient="row").cast(COVERAGE_INTERVALS).lazy()])
+    return Coverage(facet=base.facet.model_copy(update={"facet_id": facet_id, "subject": subject}), intervals=intervals)
+
+
+def by_facet(found: tuple[SexChromosomeEvidence, ...]) -> dict[str, SexChromosomeEvidence]:
+    return {item.facet_id: item for item in found}
+
+
+def without_pairing(found: SexChromosomeEvidence) -> SexChromosomeEvidence:
+    return found.model_copy(update={"coverage_pairing": None})
+
+
+def test_a_persons_one_coverage_pairs_with_its_callsets_on_its_build() -> None:
+    f, g = callset("f", *XX), callset("g", *XX, build="GRCh37")
+    cov = covered("cov", 30.0, 0.0)
+    found = by_facet(person_sex_chromosome_evidence(Person.of(g, f, coverage=[cov], check=None)))
+    assert list(found) == ["f", "g"], "one answer per facet, in the person's facet order"
+    # The facet on the coverage's build gets exactly what the hand-paired facet-level call gives.
+    assert without_pairing(found["f"]) == sex_chromosome_evidence(f, coverage=cov)[0]
+    assert found["f"].inferred_karyotypic_sex is KaryotypicSex.XX
+    assert found["f"].coverage_pairing.model_dump(exclude={"detail"}) == {"coverage_facet_id": "cov", "basis": "only_one_on_build", "candidates": ("cov",)}
+    # The other build's facet is answered from its calls alone, and says why.
+    assert without_pairing(found["g"]) == sex_chromosome_evidence(g)[0]
+    assert found["g"].coverage is None
+    assert found["g"].coverage_pairing.model_dump(exclude={"detail"}) == {"coverage_facet_id": None, "basis": "none_on_build", "candidates": ()}
+    assert "GRCh38" in found["g"].coverage_pairing.detail
+
+
+def test_without_coverage_the_person_level_answer_is_the_facet_levels() -> None:
+    f = callset("f", *XY)
+    (found,) = person_sex_chromosome_evidence(Person.of(f, check=None))
+    assert without_pairing(found) == sex_chromosome_evidence(f)[0]
+    assert (found.coverage_pairing.basis, found.coverage_pairing.coverage_facet_id) == ("no_coverage", None)
+
+
+def test_two_usable_coverages_on_one_build_are_named_and_neither_used() -> None:
+    f = callset("f", *XX)
+    person = Person.of(f, coverage=[covered("c2", 30.0, 15.0), covered("c1", 30.0, 0.0)], check=None)
+    (found,) = person_sex_chromosome_evidence(person)
+    assert found.coverage_pairing.model_dump(exclude={"detail"}) == {"coverage_facet_id": None, "basis": "several_on_build", "candidates": ("c1", "c2")}
+    assert without_pairing(found) == sex_chromosome_evidence(f)[0]
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE, "the two would answer XX and XXY: no guess between them"
+    # The caller states the pairing; it is used and says it was stated.
+    (stated,) = person_sex_chromosome_evidence(person, pairs={"f": "c2"})
+    assert without_pairing(stated) == sex_chromosome_evidence(f, coverage=covered("c2", 30.0, 15.0))[0]
+    assert (stated.inferred_karyotypic_sex, stated.coverage_pairing.basis, stated.coverage_pairing.coverage_facet_id) == (KaryotypicSex.XXY, "stated", "c2")
+    (none,) = person_sex_chromosome_evidence(person, pairs={"f": None})
+    assert (none.coverage, none.coverage_pairing.basis, none.coverage_pairing.coverage_facet_id) == (None, "stated", None)
+
+
+def test_of_several_on_one_build_the_only_usable_one_is_used_and_the_rest_named() -> None:
+    f = callset("f", *XX)
+    even, exome = covered("c1", 30.0, 0.0), covered("c2", 30.0, 0.0, uneven=True)
+    (found,) = person_sex_chromosome_evidence(Person.of(f, coverage=[exome, even], check=None))
+    assert found.coverage_pairing.model_dump(exclude={"detail"}) == {"coverage_facet_id": "c1", "basis": "only_usable_on_build", "candidates": ("c1", "c2")}
+    assert "c2: coverage_uneven" in found.coverage_pairing.detail
+    assert without_pairing(found) == sex_chromosome_evidence(f, coverage=even)[0]
+    # None usable: none is used, and each one's reason is named.
+    (neither,) = person_sex_chromosome_evidence(Person.of(f, coverage=[exome, covered("c3", 30.0, 0.0, uneven=True)], check=None))
+    assert (neither.coverage_pairing.basis, neither.coverage_pairing.coverage_facet_id, neither.coverage) == ("none_usable_on_build", None, None)
+    assert "c2: coverage_uneven" in neither.coverage_pairing.detail and "c3: coverage_uneven" in neither.coverage_pairing.detail
+
+
+def test_a_stated_pairing_must_name_the_persons_own_facets() -> None:
+    person = Person.of(callset("f", *XX), coverage=[covered("c1", 30.0, 0.0)], check=None)
+    with pytest.raises(ValueError, match="not a facet of this person: x"):
+        person_sex_chromosome_evidence(person, pairs={"x": "c1"})
+    with pytest.raises(ValueError, match="not a coverage facet of this person: c9"):
+        person_sex_chromosome_evidence(person, pairs={"f": "c9"})
+
+
+def test_the_pairing_basis_is_a_closed_list_checked_on_the_model() -> None:
+    assert COVERAGE_PAIRINGS == {"stated", "only_one_on_build", "only_usable_on_build", "several_on_build", "none_usable_on_build", "none_on_build", "no_coverage"}
+    with pytest.raises(ValueError, match="unknown coverage pairing"):
+        CoveragePairing(coverage_facet_id=None, basis="guessed", candidates=(), detail="")

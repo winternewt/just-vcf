@@ -7,17 +7,22 @@ person, `False` two, `None` that it could not tell. A `False` is a warning namin
 facets stay where the caller put them. The default check is `just_vcf.relatedness.same_person` (RM274),
 KING-robust kinship over the package's site panel; `check=None` runs none, and every pair is then
 `not_run`, which is not a pass.
+
+A person also carries the coverage facets (RM278) the caller labels with its subject
+(`read_coverage(..., subject=...)`, `alignment_coverage(..., subject=...)`). They are grouped by that
+label alone: a depth file holds no genotype, so no relatedness check reads one.
 """
 
 import logging
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from enum import Enum
 from itertools import combinations
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
+from just_vcf.coverage import Coverage
 from just_vcf.links import MULTI_PARENT_RELATIONS, canonical_links
 from just_vcf.loading import Loaded
 from just_vcf.pedigree import BAND_ORDER, EXPECTED_KINSHIP, Pedigree, expected_kinship
@@ -85,6 +90,10 @@ class Person(BaseModel):
     warnings: tuple[str, ...] = ()
     """One line per reason, naming facet ids, never the subject."""
     schema_version: str = SCHEMA_VERSION
+    coverage: tuple[Coverage, ...] = ()
+    """The coverage facets under this subject, in `facet_id` order (RM278). Grouped by the caller's
+    label and nothing else: they are in no row of `checks`, since no relatedness test reads depth.
+    `just_vcf.karyotype.person_sex_chromosome_evidence` pairs them with the callsets."""
 
     @property
     def one_person(self) -> bool | None:
@@ -99,7 +108,9 @@ class Person(BaseModel):
         return None
 
     @classmethod
-    def of(cls, *loaded: Loaded, check: SameSubjectCheck | None = same_person) -> "Person":
+    def of(
+        cls, *loaded: Loaded, check: SameSubjectCheck | None = same_person, coverage: Iterable[Coverage] = ()
+    ) -> "Person":
         """One person from facets that all carry one subject.
 
         A facet without a subject, or facets under two subjects, are refused with `SubjectError`; so is
@@ -108,6 +119,10 @@ class Person(BaseModel):
         loads as) are one person by construction and are not checked against each other. Every other
         pair of sources is checked once, each source standing as its facet read from the file (else
         its lowest `facet_id`).
+
+        `coverage` is coverage facets of the same subject, carried on `Person.coverage`. One without a
+        subject, or under another subject than the facets, is refused with `SubjectError`; one
+        `facet_id` given twice with `ValueError`. Their label is the only check they get.
         """
         pieces = _pieces(loaded)
         if not pieces:
@@ -129,6 +144,7 @@ class Person(BaseModel):
         versions = sorted({piece.schema_version for piece in pieces})
         if len(versions) > 1:
             raise ValueError(f"facets of different schema versions cannot be grouped: {', '.join(versions)}")
+        held = _coverage_of(facets[0]["subject"], tuple(coverage))
 
         order = sorted(range(len(pieces)), key=lambda i: ids[i])
         pieces = [pieces[i] for i in order]
@@ -145,7 +161,27 @@ class Person(BaseModel):
             checks=checks,
             warnings=tuple(warnings),
             schema_version=versions[0],
+            coverage=held,
         )
+
+
+def _unlabelled_coverage(coverage: tuple[Coverage, ...]) -> None:
+    missing = sorted(item.facet.facet_id for item in coverage if item.facet.subject is None)
+    if missing:
+        raise SubjectError(f"coverage facet(s) without a subject: {', '.join(missing)}; read them with subject=...")
+
+
+def _coverage_of(subject: str, coverage: tuple[Coverage, ...]) -> tuple[Coverage, ...]:
+    """The coverage facets of `subject`, in `facet_id` order; anything else is refused."""
+    _unlabelled_coverage(coverage)
+    other = sorted(item.facet.facet_id for item in coverage if item.facet.subject != subject)
+    if other:
+        raise SubjectError(f"coverage facet(s) under another subject than the facets: {', '.join(other)}")
+    ids = [item.facet.facet_id for item in coverage]
+    twice = sorted({facet_id for facet_id in ids if ids.count(facet_id) > 1})
+    if twice:
+        raise ValueError(f"coverage facet(s) given more than once: {', '.join(twice)}")
+    return tuple(sorted(coverage, key=lambda item: item.facet.facet_id))
 
 
 class PedigreeAgreement(str, Enum):
@@ -297,8 +333,12 @@ def people(
     *loaded: Loaded,
     check: SameSubjectCheck | None = same_person,
     pedigree: Pedigree | None = None,
+    coverage: Iterable[Coverage] = (),
 ) -> dict[str, Person]:
     """Every facet given, grouped into one `Person` per subject, sorted by subject.
+
+    `coverage` is coverage facets, each going to the person its `subject` names. One without a
+    subject, or under a subject no facet carries, is refused with `SubjectError`.
 
     The grouping is the caller's labels and nothing else. A facet without a subject is refused with
     `SubjectError`. Facets of one source under different subjects (one file loaded twice under two
@@ -318,10 +358,15 @@ def people(
     for piece, row in zip(pieces, rows):
         groups[row["subject"]].append(piece)
         subjects_of_source[_source(row)].add(row["subject"])
+    coverage = tuple(coverage)
+    _unlabelled_coverage(coverage)
+    stray = sorted(item.facet.facet_id for item in coverage if item.facet.subject not in groups)
+    if stray:
+        raise SubjectError(f"coverage facet(s) under a subject no facet carries: {', '.join(stray)}")
 
     result: dict[str, Person] = {}
     for subject in sorted(groups):
-        person = Person.of(*groups[subject], check=check)
+        person = Person.of(*groups[subject], check=check, coverage=[item for item in coverage if item.facet.subject == subject])
         shared = _shared_sources(subject, rows, subjects_of_source)
         for warning in shared:
             logger.warning("%s", warning)

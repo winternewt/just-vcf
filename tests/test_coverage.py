@@ -2,6 +2,7 @@
 
 import gzip
 import re
+from datetime import timedelta
 from pathlib import Path
 
 import polars as pl
@@ -16,8 +17,10 @@ from just_vcf import (
     alignment_coverage,
     callable_at,
     callable_sites,
+    clear_cache,
     read_coverage,
 )
+from just_vcf import cache
 from just_vcf import coverage as coverage_module
 from just_vcf.assembly import ASSEMBLY_LENGTHS
 from just_vcf.coverage import CALLABLE_REASONS, COVERAGE_INTERVALS
@@ -362,3 +365,104 @@ def test_callable_sites_keeps_the_sites_order_and_columns() -> None:
     assert out["callable_reason"].to_list() == ["straddles", None, "no_interval", None]
     assert out["coverage_depth_min"].to_list() == [2, 10, None, 0]
     assert out.columns == ["chrom", "pos", "tag", "coverage_depth_min", "coverage_depth_max", "coverage_depth_mean", "callable", "callable_reason"]
+
+
+# --- The cache spill: a BAM is read once (RM278) -----------------------------------------------------
+
+
+@pytest.fixture
+def depth_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Each path polars-bio's `depth()` is run on, recorded; the real `depth()` still runs."""
+    seen: list[str] = []
+    real = coverage_module.pb.depth
+
+    def counted(path, *args, **kwargs):
+        seen.append(path)
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(coverage_module.pb, "depth", counted)
+    return seen
+
+
+def coverage_manifests() -> dict[str, cache.CacheEntry]:
+    base = cache.cache_dir() / "coverage"
+    return {path.stem: cache.CacheEntry.model_validate_json(path.read_bytes()) for path in sorted(base.glob("*.json"))} if base.is_dir() else {}
+
+
+def test_a_second_call_reads_the_spill_not_the_bam(tmp_path: Path, depth_calls: list[str]) -> None:
+    path = write_bam(tmp_path / "a.bam", [*READS, *[("chr1", 40, "5M")] * 32_770])
+    first = alignment_coverage(path, window=10)
+    second = alignment_coverage(path, window=10)
+    assert depth_calls == [str(path)]
+    assert second.facet == first.facet  # the Int16 warning included, given back from the spill
+    assert second.facet.warnings and second.facet.warnings[0].startswith("5 base(s) in 1 window(s)")
+    assert second.intervals.collect().equals(first.intervals.collect())
+    for source, length in CONTIGS[1:]:
+        assert rows_of(second, source.removeprefix("chr")) == windows_of(depth_of(READS, contig=source), length, 10)
+    ((name, manifest),) = coverage_manifests().items()
+    assert manifest.kind == cache.COVERAGE_SPILL
+    assert manifest.versions == {
+        "COVERAGE_VERSION": str(coverage_module.COVERAGE_VERSION),
+        "POLARS_BIO_VERSION": coverage_module.POLARS_BIO_VERSION,
+        "SPILL_LAYOUT": str(cache.SPILL_LAYOUT),
+    }
+    assert (manifest.facet_id, manifest.source_sha256, manifest.source_path) == (first.facet.facet_id, None, str(path.resolve()))
+    assert manifest.size_bytes == sum(f.stat().st_size for f in (cache.cache_dir() / "coverage" / name).rglob("*") if f.is_file())
+
+
+def test_a_spill_is_never_served_for_other_parameters_or_versions(tmp_path: Path, depth_calls: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    path = write_bam(tmp_path / "a.bam", READS, mapq=[60, 10, 60, 60, 60])
+    base = alignment_coverage(path, window=10).intervals.collect()
+    runs = [
+        (lambda: alignment_coverage(path, window=20), 20, 0),
+        (lambda: alignment_coverage(path, window=10, min_mapping_quality=20), 10, 20),
+        (lambda: alignment_coverage(path, window=10, filter_flag=0), 10, 0),
+    ]
+    for call, window, mapq in runs:
+        before = len(depth_calls)
+        found = call()
+        assert len(depth_calls) == before + 1
+        kept = [read for i, read in enumerate(READS) if not (mapq and i == 1)]
+        assert rows_of(found, "1") == windows_of(depth_of(kept, contig="chr1"), 100, window)
+    # The same parameters under another COVERAGE_VERSION or another polars-bio: computed again.
+    for name, value in (("COVERAGE_VERSION", coverage_module.COVERAGE_VERSION + 1), ("POLARS_BIO_VERSION", "0.0.1")):
+        with monkeypatch.context() as patch:
+            patch.setattr(coverage_module, name, value)
+            before = len(depth_calls)
+            assert alignment_coverage(path, window=10).intervals.collect().equals(base)
+            assert len(depth_calls) == before + 1
+    assert len(coverage_manifests()) == 6
+    # A stated build changes no interval: the spill is reused, under the facet id the build gives.
+    before = len(depth_calls)
+    stated = alignment_coverage(path, window=10, assembly_label="GRCh38")
+    assert len(depth_calls) == before
+    assert stated.intervals.collect().equals(base)
+
+
+def test_the_spill_is_swept_and_cleared_like_the_loaders(tmp_path: Path, depth_calls: list[str]) -> None:
+    path = write_bam(tmp_path / "a.bam", READS)
+    other = write_bam(tmp_path / "b.bam", READS[:2])
+    alignment_coverage(other, window=10)
+    old = {"COVERAGE_VERSION": coverage_module.COVERAGE_VERSION - 1, "POLARS_BIO_VERSION": coverage_module.POLARS_BIO_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+    newer = {**old, "COVERAGE_VERSION": coverage_module.COVERAGE_VERSION + 1}
+    root = cache.cache_dir() / "coverage"
+    entries = {}
+    for name, versions, days in (("a", old, cache.GRACE_DAYS + 1), ("b", old, 0), ("c", newer, cache.GRACE_DAYS + 1)):
+        entry = root / (name * 32)
+        with cache.writing(entry, cache.COVERAGE_SPILL, versions, cache.Origin(source_sha256=None, source_path=None)):
+            entry.mkdir(parents=True)
+            (entry / "intervals.parquet").write_bytes(b"x" * 100)
+        manifest_path = root / f"{entry.name}.json"
+        then = cache._now() - timedelta(days=days)
+        manifest = cache.CacheEntry.model_validate_json(manifest_path.read_bytes())
+        cache._write_manifest(manifest_path, manifest.model_copy(update={"created": then, "last_used": then}))
+        entries[name] = entry
+    alignment_coverage(path, window=10)
+    # The older version's entry unused past the grace period goes; a recent one and a newer install's stay.
+    assert not entries["a"].exists() and entries["b"].exists() and entries["c"].exists()
+    # clear_cache by the BAM removes its spill and leaves the other BAM's.
+    report = clear_cache(source=path)
+    assert [info.kind for info in report.removed] == [cache.COVERAGE_SPILL]
+    assert sorted(m.source_path or "" for m in coverage_manifests().values()) == ["", "", str(other.resolve())]
+    alignment_coverage(path, window=10)
+    assert depth_calls.count(str(path)) == 2

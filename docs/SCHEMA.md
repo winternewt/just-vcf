@@ -2559,6 +2559,14 @@ beside it and renamed into place.
   but declares an Integer field Float. `variant_CN` holds `alt_copy_numbers`, `<f4` on `alt_alleles`
   (the spec's `Number=A` dimension), a fractional value as it is, where `write_vcf`'s VCF 4.3 leaves it
   out. polars-bio reads all three back as lists, sentinels as stored.
+- **Breakend mates** (2026-10-26, F32) follow `write_vcf`'s rule ("Lifting breakends" above): the
+  mate's contig inside a breakend ALT in `variant_allele` is read canonically and written under the
+  `contig_names` style CHROM is written under, and every contig a written row's ALT names is listed
+  in `contig_id`, rows or none (no `contig_length` for one the header does not state, written
+  missing). Under `source` a mate keeps the source's spelling. A mate in angle brackets (`<ctg1>`, a
+  contig of the `##assembly` file) is written as held and listed nowhere, and a row `resolved_only`
+  leaves out lists no mate. The writer's own helpers do it (`writing._mate_chroms`,
+  `writing._contig_names`, `breakends.mate_renamed`), so the two exports cannot drift apart.
 - **Missing and padding** are the spec's: `-1` and `-2` for integers, the NaNs `0x7F800001` and
   `0x7F800002` for floats, `"."` and `""` for strings. The last chunk is padded whole, as Zarr v2
   stores it. polars-bio hands the integer sentinels back as they are.
@@ -3159,6 +3167,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **No version change** (2026-10-26, F32: a breakend's mate in the Zarr export): no column changes.
+  `write_vcf_zarr` names a breakend mate inside `variant_allele` as `write_vcf` names it and lists
+  every mate contig in `contig_id` ("VCF Zarr export" above). **Values change** in the store only:
+  under `stored` a mate the source spelled `chr2` is stored `2`, under `chr` a `2` is stored `chr2`,
+  and `contig_id` gains an entry per mate contig no row stands on.
 - **No version change** (2026-10-26, assembly mates lifted and compared): no column changes.
   `liftover` lifts a breakend whose mate is in angle brackets (`C[<ctg1>:7[`, a contig of the
   `##assembly` file) by its own position, keeping the mate as written and turning the form by POS's

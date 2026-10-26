@@ -4,6 +4,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf_zarr` names a breakend's mate as `write_vcf` does (F32). It stored `variant_allele` as
+  the frame held it and listed only the rows' contigs in `contig_id`: `A[2:500[` written with
+  `contig_names="chr"` read back as CHROM `chr1` beside a mate `2` that `contig_id` did not list. The
+  mate's contig is now written under the style CHROM is written under (`breakends.mate_renamed`, under
+  `source` the source's spelling), and every contig a written ALT names is listed in `contig_id`, rows
+  or none; a mate in angle brackets (`<ctg1>`, a contig of the `##assembly` file) is written as held
+  and listed nowhere, and a row `resolved_only` leaves out lists no mate. It reuses the writer's
+  helpers (`_mate_chroms`, `_contig_names`). **Values change** in the store: under `stored` a mate
+  spelled `chr2` is stored `2`, under `chr` a `2` is stored `chr2`, and `contig_id` gains the mate
+  contigs no row stands on. No version constant changes.
+
 - A breakend mate in angle brackets (`C[<ctg1>:7[`, VCF 4.3 §5.4.2's large insertion) is read as a
   contig of the `##assembly` file, not of the reference, by `liftover` and `concordance` too (the
   writer already did). `liftover` left every such row behind as `breakend_mate_not_lifted`, the

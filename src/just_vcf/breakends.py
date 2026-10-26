@@ -10,8 +10,8 @@ joined before t" (right, left); `[p[t` "reverse comp piece extending right of p 
 (right, right). A single breakend has the record's side only: `t.` left, `.t` right.
 
 `concordance` reads the form and the mate to meet breakends (truvari's `bnd_match`); `liftover` turns
-the form when an end lands on a minus-strand chain block (`turned`); `write_vcf` names the mate as it
-names CHROM (`mate_renamed`, F30).
+the form when an end lands on a minus-strand chain block (`turned`); `write_vcf` and `write_vcf_zarr`
+name the mate as they name CHROM (`mate_renamed`, F30, F32).
 
 A mate in angle brackets, `<ctg1>` (VCF 4.3 §5.4.2's large insertion), is a contig of the `##assembly`
 file (§1.6.1's CHROM), not of the reference: it is never read as a canonical name (`breakend_parts`

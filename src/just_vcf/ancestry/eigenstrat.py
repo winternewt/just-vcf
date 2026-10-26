@@ -17,9 +17,10 @@ Ported from just-prs `ancestry/eigenstrat.py` (docs/PROVENANCE.md). One release 
 
   A packed byte holds four genotypes, two bits each, the first in the high bits; a genotype is the
   count of `allele1` (0, 1, 2), 3 is missing. Text writes 9 for missing. The `tgeno` layout was
-  checked on AADR v66.p1's files (their sizes are exactly the header plus the records); the `geno`
-  layout follows convertf's description and was tested here on files written to it, not on a
-  published one. The two hashes in a packed header are not checked.
+  checked on AADR v66.p1's files (their sizes are exactly the header plus the records). The `geno`
+  layout (a header padded to one record) was tested only on synthetic files written to it, not on a
+  published `GENO` file nor against convertf's own documentation; a file whose header length differs
+  fails the size check and is refused. The two hashes in a packed header are not checked.
 """
 
 import math

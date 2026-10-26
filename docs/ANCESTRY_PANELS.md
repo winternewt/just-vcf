@@ -147,7 +147,7 @@ keeps 20 components (just-prs's choice, for fine structure within Europe); `knn_
 | Regions | Europe 1,388, Western Asia 344, Southern Asia 307, Siberia 216, Central Asia 164, Northern Africa 105, Eastern Asia 32 |
 | Sites | 184,833 of 276,725; every one of the 276,725 had the GRCh37 base as its first allele (none swapped, none dropped for it); 91,892 below the frequency floor |
 | Files | sites 116 MB, reference samples 1.6 MB |
-| Build | 24 to 54 s (the slower one reading the `.geno` from Krypton cold), peak 6.1 GiB |
+| Build | 24 s and peak RSS 6.1 GiB with the shipped code, the `.geno` read warm; 50 to 54 s on a first, cold read with an earlier cut that held a float copy of the matrix (peak 13.4 GiB) |
 | Leave-one-out | 0.944 by region. Per region: Central Asia 162/164, Europe 1,348/1,388, Northern Africa 103/105, Siberia 195/216, Southern Asia 290/307, Western Asia 314/344, Eastern Asia 0/32 (its Xibo, Uyghur and Kyrgyz samples are voted Central Asian) |
 | hu6ABACE (PGP-HMS, DRAGEN SNV genome, GRCh37) | 184,832 of 184,833 sites used: 85,971 observed, 98,861 absent read as reference, 1 unusable. Region Europe, all 20 neighbours; population GBR, margin 0.50. Load and placement 55 s |
 

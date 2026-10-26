@@ -2563,7 +2563,9 @@ beside it and renamed into place.
   mate's contig inside a breakend ALT in `variant_allele` is read canonically and written under the
   `contig_names` style CHROM is written under, and every contig a written row's ALT names is listed
   in `contig_id`, rows or none (no `contig_length` for one the header does not state, written
-  missing). Under `source` a mate keeps the source's spelling. A mate in angle brackets (`<ctg1>`, a
+  missing). Under `source` a mate keeps the source's spelling, and a contig only ALTs name, spelled
+  two ways by them (`chr3`, `3`), is refused with a `ValueError` before anything is written, as
+  `write_vcf` refuses it, where the store wrote both as held. A mate in angle brackets (`<ctg1>`, a
   contig of the `##assembly` file) is written as held and listed nowhere, and a row `resolved_only`
   leaves out lists no mate. The writer's own helpers do it (`writing._mate_chroms`,
   `writing._contig_names`, `breakends.mate_renamed`), so the two exports cannot drift apart.

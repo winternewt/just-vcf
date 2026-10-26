@@ -13,7 +13,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   and listed nowhere, and a row `resolved_only` leaves out lists no mate. It reuses the writer's
   helpers (`_mate_chroms`, `_contig_names`). **Values change** in the store: under `stored` a mate
   spelled `chr2` is stored `2`, under `chr` a `2` is stored `chr2`, and `contig_id` gains the mate
-  contigs no row stands on. No version constant changes.
+  contigs no row stands on. Under `source`, a contig only ALTs name, spelled two ways by them
+  (`chr3`, `3`), is now refused with a `ValueError`, as `write_vcf` refuses it, where the store
+  wrote both spellings as held. No version constant changes.
 
 - A breakend mate in angle brackets (`C[<ctg1>:7[`, VCF 4.3 §5.4.2's large insertion) is read as a
   contig of the `##assembly` file, not of the reference, by `liftover` and `concordance` too (the

@@ -419,6 +419,21 @@ def test_an_assembly_mate_is_written_verbatim_and_listed_nowhere(tmp_path: Path,
     assert contig_ids(root) == [written_name(style, "13", ["13"], ASSEMBLY_RECORDS)]
 
 
+def test_source_refuses_a_contig_only_alts_name_spelled_two_ways(tmp_path: Path) -> None:
+    # As `write_vcf` refuses it: contig 3 has no row and no header line, and the ALTs spell it `chr3`
+    # and `3`, so which spelling the source meant cannot be told. The other styles write it.
+    records = [record("1", 100, "A[chr3:500["), record("1", 200, "A[3:600[")]
+    path = tmp_path / "in.vcf"
+    path.write_text(source_text(["1"], records))
+    loaded = load(path)
+    with pytest.raises(ValueError, match="spelled 3 more than one way"):
+        write_vcf_zarr(loaded, tmp_path / "source.vcz", contig_names=ContigNames.SOURCE)
+    assert not (tmp_path / "source.vcz").exists()
+    root = write_vcf_zarr(loaded, tmp_path / "chr.vcz", contig_names=ContigNames.CHR).path
+    assert read_back(root)["alt"].to_list() == ["A[chr3:500[", "A[chr3:600["]
+    assert contig_ids(root) == ["chr1", "chr3"]
+
+
 def test_a_skipped_rows_mate_is_not_listed(tmp_path: Path) -> None:
     # The second record's GT names an ALT it does not have, so `resolved_only` leaves it out; its mate's
     # contig (7: no row, not in the source header) must not reach `contig_id`.

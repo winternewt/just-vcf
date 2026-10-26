@@ -8,7 +8,7 @@ six private pairs were rebuilt the same way on 2026-10-26: REF read, VRS ids min
 alleles met by VRS id, with both rules and the band cells. The
 full table (768 rows: every region class, variant class and scope) is `data/output/method_atlas.parquet`
 and `.tsv`, git-ignored, with `method_atlas.pairs.tsv` listing each pair's methods and checks; the
-last CGI build is `data/output/method_atlas_cgi.*` beside it (192 pooled rows; rebuilt 2026-10-24 with the cells of both sides' confidence bands beside them, 10,552 rows, the pooled ones unchanged), and the private pairs' rebuild is `data/output/method_atlas_private.*` (17,896 rows with the band cells), all git-ignored. The full table's private rows are the first build's, by position. Everything here is an aggregate over a whole genome: no position, sample
+last CGI build is `data/output/method_atlas_cgi.*` beside it (192 pooled rows; rebuilt 2026-10-24 with the cells of both sides' confidence bands beside them, 10,552 rows, the pooled ones unchanged), all git-ignored. The private pairs' rebuild (17,896 rows with the band cells) was written to `data/output/method_atlas_private.*` on the builder's branch and not kept; the counts here are taken from it. The full table's private rows are the first build's, by position. Everything here is an aggregate over a whole genome: no position, sample
 name or file is named, and the private pairs are described by their methods only. Columns and rules
 are in docs/SCHEMA.md ("A method-error atlas").
 

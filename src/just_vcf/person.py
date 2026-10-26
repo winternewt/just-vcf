@@ -25,12 +25,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from just_vcf.coverage import Coverage
 from just_vcf.links import MULTI_PARENT_RELATIONS, canonical_links
 from just_vcf.loading import Loaded
-from just_vcf.pedigree import BAND_ORDER, EXPECTED_KINSHIP, Pedigree, expected_kinship
+from just_vcf.pedigree import BAND_ORDER, EXPECTED_KINSHIP, PEDIGREE_REASONS, Pedigree, expected_kinship
 from just_vcf.relatedness import (
     BETWEEN_BANDS,
     DEFAULT_MIN_SITES,
     INTERVAL_SES,
     RELATEDNESS_FRAME,
+    RELATEDNESS_REASONS,
     RelationBand,
     SitePanel,
     band_of,
@@ -193,11 +194,19 @@ class PedigreeAgreement(str, Enum):
     """No band the measured interval reaches is one the pedigree allows. A first-degree kind is a band
     of its own here: a stated parent who reads `full_siblings` disagrees."""
     CANNOT_TELL = "cannot_tell"
-    """The interval reaches both kinds, or one side is unknown; `reason` says which."""
+    """The interval reaches allowed and other bands, the first degree's kind is not told where the
+    pedigree allows one, or one side is unknown; `reason` says which (`PEDIGREE_CHECK_REASONS`)."""
 
 
 NO_FACET = "no_facet"
 """A pedigree individual has no facet under its id as subject."""
+KIND_NOT_TOLD = "kind_not_told"
+"""The kinship's interval lies wholly in the first degree, the pedigree allows one of its two kinds, and
+the IBS0 count does not tell which kind the pair is (its interval is too thin, or there is none)."""
+PEDIGREE_CHECK_REASONS: frozenset[str] = frozenset({NO_FACET, KIND_NOT_TOLD}) | PEDIGREE_REASONS | RELATEDNESS_REASONS
+"""Why a `PEDIGREE_CHECKS` row is `cannot_tell`: its own reasons, a pedigree's (`expected_reason`), or
+the measured relatedness's (`between_bands` also when the interval reaches allowed and other bands).
+Grows additively; `check_pedigree` refuses to write any other."""
 
 PEDIGREE_CHECKS = pl.Schema(
     {
@@ -219,30 +228,36 @@ the relative's), the measured `relatedness` (`band`, `kinship`, `kinship_se`, `i
 its `reason` as `relatedness_reason`), and the `agreement`, with `reason` when it is `cannot_tell`."""
 
 
-def _measured_bands(kinship: float, se: float | None, n_ibs0: int | None, n_sites: int | None) -> set[RelationBand]:
-    """The finest bands `kinship ± INTERVAL_SES·se` reaches (just the kinship's band without an SE),
-    the first degree as the kind its IBS0 count tells, or both kinds where it does not."""
+def _measured_ladder(kinship: float, se: float | None) -> list[RelationBand]:
+    """The bands of `BAND_ORDER` the interval `kinship ± INTERVAL_SES·se` reaches (just the kinship's
+    band without an SE), the first degree as one band."""
     if se is None:
-        ladder = [band_of(kinship)]
-    else:
-        low, high = BAND_ORDER.index(band_of(kinship - INTERVAL_SES * se)), BAND_ORDER.index(band_of(kinship + INTERVAL_SES * se))
-        ladder = list(BAND_ORDER[low : high + 1])
-    kind = first_degree_kind(n_ibs0, n_sites)
-    return set().union(*(finest_bands(kind if band is RelationBand.FIRST_DEGREE else band) for band in ladder))
+        return [band_of(kinship)]
+    low, high = BAND_ORDER.index(band_of(kinship - INTERVAL_SES * se)), BAND_ORDER.index(band_of(kinship + INTERVAL_SES * se))
+    return list(BAND_ORDER[low : high + 1])
 
 
 def _agreement(expected: dict, measured: dict) -> tuple[PedigreeAgreement, str | None]:
+    """The agreement of a measured pair with what the pedigree expects, and the reason when it is
+    `cannot_tell`. The measured bands are the finest the interval reaches, the first degree as the kind
+    its IBS0 count tells, or both kinds where it does not (no count tells none). Where the interval lies
+    wholly in the first degree and only the kind is not told, the reason is `kind_not_told`; where it
+    reaches allowed and other bands, `between_bands`."""
     if expected["expected_reason"] is not None:
         return PedigreeAgreement.CANNOT_TELL, expected["expected_reason"]
     # A kinship kept beside a reason other than its interval's (`variant_sites_only`) names no band.
     if measured["kinship"] is None or measured["reason"] not in (None, BETWEEN_BANDS):
         return PedigreeAgreement.CANNOT_TELL, measured["reason"]
     allowed = set().union(*(finest_bands(RelationBand(value)) for value in expected["expected_bands"]))
-    reached = _measured_bands(measured["kinship"], measured["kinship_se"], measured["n_ibs0"], measured["n_sites"])
+    ladder = _measured_ladder(measured["kinship"], measured["kinship_se"])
+    kind = first_degree_kind(measured["n_ibs0"], measured["n_sites"])
+    reached = set().union(*(finest_bands(kind if band is RelationBand.FIRST_DEGREE else band) for band in ladder))
     if reached <= allowed:
         return PedigreeAgreement.AGREES, None
     if not reached & allowed:
         return PedigreeAgreement.DISAGREES, None
+    if ladder == [RelationBand.FIRST_DEGREE] and kind is RelationBand.FIRST_DEGREE:
+        return PedigreeAgreement.CANNOT_TELL, KIND_NOT_TOLD
     return PedigreeAgreement.CANNOT_TELL, BETWEEN_BANDS
 
 
@@ -316,6 +331,9 @@ def check_pedigree(
                 "reason": reason,
             }
         )
+    unknown = sorted({row["reason"] for row in out if row["reason"] is not None} - PEDIGREE_CHECK_REASONS)
+    if unknown:
+        raise ValueError(f"pedigree check reason(s) outside PEDIGREE_CHECK_REASONS: {', '.join(unknown)}")
     return pl.DataFrame(out, schema=PEDIGREE_CHECKS)
 
 

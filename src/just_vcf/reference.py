@@ -13,7 +13,8 @@ gtars `RefgetStore`, and returns the same facet with the slots SCHEMA.md leaves 
   the two alleles say which of them is the reference;
 - an insertion point (an empty `source_ref`: CGI's native files, a CASAVA indel table; a Genos row of
   zero length): the anchor base VCF writes, the reference base at `pos` (the base after, at a contig's
-  start), is `ref` and is written into every allele (`_anchor_points`);
+  start), is `ref` and is written into every allele (`_anchor_points`); a point that calls no inserted
+  allele (every called haplotype the empty allele: "no insertion here") is left unread;
 - a Genos row (`SPANNED_GENOTYPES`): REF over the span the row states, whatever its length, and its
   alleles derived against it as an array row's are.
 
@@ -52,9 +53,10 @@ from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_rea
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 10
+RESOLVE_VERSION = 11
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes (10: an insertion
-point's anchor base, and REF over a Genos row's stated span)."""
+point's anchor base, and REF over a Genos row's stated span; 11: a point whose every called haplotype is
+the empty allele is left unread, not anchored as a hom-ref call at the base before it)."""
 
 CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
 """Formats whose multi-letter genotype text is the two allele sequences written back to back, as the
@@ -317,7 +319,8 @@ def resolve_ref(
     contig checks; `collection` names one instead.
 
     The result is the same facet (same `facet_id`) with the slots SCHEMA.md leaves open until the
-    sequence is read now filled, and `facets.ref_seqcol_digest` naming the collection that was read.
+    sequence is read now filled, `facets.ref_seqcol_digest` naming the collection that was read and
+    `facets.resolve_version` the `RESOLVE_VERSION` that read it.
     The input `Loaded` is not changed. Rows that could not be read keep `ref` null (and `ref_check`
     `not_run`), each reason counted once in the warnings.
 
@@ -392,6 +395,8 @@ def resolve_ref(
     return Loaded(
         facets=loaded.facets.with_columns(
             pl.lit(plan.digest).alias("ref_seqcol_digest"),
+            # The rule that read the rows, since the facet keeps its id: a store tells two REF states apart by it.
+            pl.lit(RESOLVE_VERSION, dtype=FACETS["resolve_version"]).alias("resolve_version"),
             pl.lit(strand.check.value if strand is not None and strand.check is not None else None)
             .cast(FACETS["strand_check"])
             .alias("strand_check"),
@@ -646,7 +651,10 @@ def _resolve_rows(
     vcf = work.filter(pl.col("_vcf"))
     if vcf.height:
         _count_vcf(vcf, counts)
-    array_rows = work.filter(~pl.col("_vcf") & pl.col("source_ref").is_null())
+    # A spanned insertion site left unanchored (nothing called, no insertion, past the contig) was
+    # counted by `_anchor_points`, under its own reason.
+    unanchored_point = pl.lit(spanned) & pl.col("end_pos").is_null()
+    array_rows = work.filter(~pl.col("_vcf") & pl.col("source_ref").is_null() & ~unanchored_point)
     if array_rows.height:
         _count_array_unreadable(array_rows, counts)
 
@@ -686,7 +694,13 @@ def _anchor_points(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, co
     gets `ref` (the anchor) and `ref_check` null: the source wrote no base to compare. A Genos row gets
     REF from the span like any spanned row, after this. A point where no haplotype was called (`gt_alleles`
     all null: CGI's zero-length no-calls) has no allele to anchor, and REF with no ALT would state a
-    no-call at the anchor base; it is left as loaded, counted.
+    no-call at the anchor base; it is left as loaded, counted. A point whose every called haplotype is
+    the empty allele (CGI `""/""` and `""/?`, Genos `-/-`) says nothing is inserted there: evidence about
+    the gap between two bases, not about the base before it. Anchored it would read `REF=X`, no ALT,
+    `0/0`, a hom-ref call at that base the source never made, beside whatever the source did call
+    there. No frame carries a statement about a gap without a genotype at a base (a `calls` row at `pos`
+    is one, and a block spans bases), so it is left as loaded, counted apart. A point with an inserted
+    allele on any haplotype is anchored: there the `0` is the haplotype without the insertion.
     """
     point = (pl.col("source_ref") == EMPTY_ALLELE).fill_null(False)
     if spanned:
@@ -695,9 +709,13 @@ def _anchor_points(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, co
     targets = indexed.filter(point)
     if targets.is_empty():
         return rows
-    any_called = pl.col("gt_alleles").list.drop_nulls().list.len() > 0
-    counts["point_no_call"] += targets.filter(~any_called.fill_null(False)).height
-    targets = targets.filter(any_called.fill_null(False))
+    called = pl.col("gt_alleles").list.drop_nulls()
+    any_called = (called.list.len() > 0).fill_null(False)
+    # Every called haplotype the empty allele: "no insertion here", which says nothing about the base before.
+    no_insertion = any_called & called.list.eval(pl.element() == EMPTY_ALLELE).list.all().fill_null(False)
+    counts["point_no_call"] += targets.filter(~any_called).height
+    counts["point_no_insertion"] += targets.filter(no_insertion).height
+    targets = targets.filter(any_called & ~no_insertion)
     inside = targets.filter(pl.col("pos").cast(pl.Int64) <= contig.length)
     counts["point_outside"] += targets.height - inside.height
     if inside.is_empty():
@@ -1147,6 +1165,12 @@ def _row_warnings(counts: Counter[str], digest: str, codes: _Codes | None = None
         )
     if counts["point_no_call"]:
         lines.append(f"{counts['point_no_call']} insertion point(s) with no haplotype called: REF left unread (no allele to anchor)")
+    if counts["point_no_insertion"]:
+        lines.append(
+            f"{counts['point_no_insertion']} insertion point(s) where every called haplotype is the empty allele: REF left "
+            "unread. They say nothing is inserted there, which is not a reference call at the base before; anchored, "
+            "they would read as one"
+        )
     if counts["point_outside"]:
         lines.append(f"{counts['point_outside']} insertion point(s) past the end of their contig: REF left unread")
     if counts["array_rows"]:

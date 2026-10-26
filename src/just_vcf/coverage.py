@@ -140,14 +140,15 @@ class CoverageFacet(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     facet_id: str
-    """Deterministic: the source's digest (for an alignment file, its header, index and size), the
-    format, the options and `COVERAGE_VERSION`."""
+    """Deterministic: the source's digest (for an indexed alignment file, its header, index and size),
+    the format, the options and `COVERAGE_VERSION`."""
     format_id: CoverageFormat
     source_path: str
     """A label, not identity."""
     source_sha256: str | None
-    """The source bytes' sha256. Null for an alignment file: hashing tens of gigabytes to name what
-    `depth()` read would double the cost; `facet_id` uses its header, index and size instead."""
+    """The source bytes' sha256. Null for an indexed alignment file: hashing tens of gigabytes to name
+    what `depth()` read would double the cost, and `facet_id` uses its header, index and size instead.
+    An alignment file with no index is hashed: its header and size alone do not tell two files apart."""
     assembly_label: str | None
     assembly_label_basis: AssemblyLabelBasis | None
     """`stated` when the caller passed it, `inferred` from contig lengths (an alignment header,
@@ -608,8 +609,10 @@ def alignment_coverage(
     The windows are spilled to the cache (`coverage/` under `JUST_VCF_CACHE_DIR`, `just_vcf.cache`), so
     the file is read once: a later call with the same file, `window`, `min_mapping_quality` and
     `filter_flag`, under the same `COVERAGE_VERSION` and polars-bio, reads the spill. The file is known
-    by what names it in `facet_id` (header, index, size); `assembly_label` is left out of the key, since
-    no window depends on it. A spill made with other parameters or versions is never served.
+    by what names it in `facet_id`: its header, index and size, or, with no index beside it, the sha256
+    of its bytes (one more read of the file on every call, spill or not; a header and size alone would
+    serve one file's spill to another written with other reads). `assembly_label` is left out of the
+    key, since no window depends on it. A spill made with other parameters or versions is never served.
 
     `subject` is the caller's label for the person the reads are of (`CoverageFacet.subject`); it is
     carried on the facet and keys nothing.
@@ -628,12 +631,14 @@ def alignment_coverage(
         raise UnsupportedCoverageError(f"the {kind.upper()} header lists no reference sequence, so no window can be placed")
     lengths = [{"source": ref["name"], "chrom": canonical_chrom(ref["name"]), "length": int(ref["length"])} for ref in references]
     index = _index_sha256(path)
+    # No index: the header and size do not tell a file from one rewritten with other reads, so its bytes name it.
+    sha256 = _sha256(path) if index is None else None
     options = {"filter_flag": filter_flag, "min_mapping_quality": min_mapping_quality}
     source = {"format": CoverageFormat.ALIGNMENT_DEPTH.value, "kind": kind, "size": path.stat().st_size, "header": header, "index": index,
-              "options": options, "window": window}
+              "options": options, "window": window, **({"sha256": sha256} if sha256 is not None else {})}
     facet_id = _facet_id({**source, "assembly_label": assembly_label})
     key = _facet_id({**source, "polars_bio": POLARS_BIO_VERSION})
-    origin = cache.Origin(source_sha256=None, source_path=str(path.resolve()), facet_id=facet_id)
+    origin = cache.Origin(source_sha256=sha256, source_path=str(path.resolve()), facet_id=facet_id)
     with cache.spilling(cache_dir() / "coverage" / key, cache.COVERAGE_SPILL, versions, origin) as spill:
         done = spill.find(key)
         if done is None:
@@ -650,7 +655,7 @@ def alignment_coverage(
         facet_id=facet_id,
         format_id=CoverageFormat.ALIGNMENT_DEPTH,
         source_path=str(path),
-        source_sha256=None,
+        source_sha256=sha256,
         assembly_label=label,
         assembly_label_basis=basis,
         contig_lengths=lengths,

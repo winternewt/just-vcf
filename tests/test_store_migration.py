@@ -11,6 +11,7 @@ added null. Every fixture is synthetic; every store is under `tmp_path`.
 import json
 import logging
 import os
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,19 +19,20 @@ import polars as pl
 import pytest
 
 from just_vcf import load
+from just_vcf import store as store_module
 from just_vcf.loaders.cgi import FORMATS as CGI_FORMATS
 from just_vcf.loading import Loaded
 from just_vcf.schema import BLOCKS, CALLS, FACETS, LINKS, SCHEMA_VERSION
-from just_vcf.store import FRAMES, Store, StoreError, StoreVersionError, migrate_store
+from just_vcf.store import FRAMES, Store, StoreConflictError, StoreError, StoreVersionError, migrate_store
 from just_vcf.store_migration import MIGRATIONS, STORE_FIRST_VERSION, migration_chain, version_key
 from test_load_cgi import LOCI, var_text
 from test_load_cgi import write as write_cgi
 from test_load_vcf import vcf_text
 from test_load_vcf import write as write_vcf_text
 from test_person import _array_file
-from test_store import GVCF, SUBJECT, _files
+from test_store import GVCF, SUBJECT, _files, _resolved_cgi
 
-VERSIONS = ("0.0.14", "0.0.15", "0.0.16", "0.0.17", "0.0.18", "0.0.19")
+VERSIONS = ("0.0.14", "0.0.15", "0.0.16", "0.0.17", "0.0.18", "0.0.19", "0.0.20")
 """Every schema version a store can have been written under: the store shipped under 0.0.14 (merge
 6830fb7, 2026-10-23, between 0.0.14's merge 04c5db3 and 0.0.15's 8b72a46)."""
 
@@ -39,6 +41,7 @@ ADDED: dict[str, dict[str, tuple[str, ...]]] = {
     "0.0.16": {"facets": ("reference", "aligner", "aligner_version", "method_steps")},
     "0.0.18": {"facets": ("gl_source",)},
     "0.0.19": {"calls": ("hq",)},
+    "0.0.20": {"facets": ("resolve_version",)},
 }
 """The columns each bump since the store shipped added (SCHEMA.md "Changes since sign-off")."""
 
@@ -245,6 +248,25 @@ def test_the_report_names_what_was_filled_unknown_and_loaded_repeats_it(tmp_path
     assert SUBJECT not in json.dumps([*warnings, report.model_dump_json()]), "facet ids, never the subject"
 
 
+def test_a_resolved_facet_migrated_to_0020_has_its_resolve_version_named_unknown(tmp_path: Path) -> None:
+    """A 0.0.19 store recorded no rule for the REF it holds: the step to 0.0.20 fills `resolve_version`
+    null on a resolved facet, names it, and the store then refuses the facet resolved today, whose
+    version is known, as another REF state of it. An unresolved facet loses nothing."""
+    loaded, resolved, _ = _resolved_cgi(tmp_path)
+    array = load(_array_file(tmp_path), subject=SUBJECT)
+    root = tmp_path / "store"
+    expected = _old_store(root, "0.0.19", [resolved, array])
+    report = migrate_store(root)
+    facet_id = resolved.facets.collect()["facet_id"].item()
+    assert [(entry.version, entry.frame, entry.columns, entry.facet_ids) for entry in report.filled_unknown] == [
+        ("0.0.20", "facets", ("resolve_version",), (facet_id,))
+    ]
+    got = _read_back(Store.open(root))
+    assert all(got[name].equals(expected[name]) for name in FRAMES)
+    with pytest.raises(StoreConflictError, match="unrecorded RESOLVE_VERSION"):
+        Store.open(root).add(resolved)
+
+
 def test_a_newer_store_is_refused_never_downgraded(tmp_path: Path) -> None:
     root = tmp_path / "store"
     Store.open(root, subject=SUBJECT).add(_sources(tmp_path)[0])
@@ -357,6 +379,41 @@ def test_a_migration_cut_off_after_its_check_finishes_on_the_next_call(
     got = _read_back(store)
     assert all(got[name].equals(expected[name]) for name in FRAMES)
     assert not list(root.glob(".migrating-*")) and not list(root.glob(".previous-*"))
+
+
+def test_a_migration_cut_off_after_its_commit_reports_it_on_the_next_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cut off after the new manifest is committed, before the old version's files and the migration's
+    directory are removed: the store reads at this version, and the next `migrate_store` removes what
+    was left and reports the migration the manifest records, not "nothing applied"."""
+    root = tmp_path / "store"
+    expected = _old_store(root, STORE_FIRST_VERSION, _sources(tmp_path))
+    real = shutil.rmtree
+
+    def cut(path: object, *args: object, **kwargs: object) -> None:
+        if Path(str(path)).name.startswith(".previous-"):
+            raise OSError("cut off")
+        real(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store_module.shutil, "rmtree", cut)
+        with pytest.raises(OSError):
+            migrate_store(root)
+    store = Store.open(root)
+    assert store.schema_version == SCHEMA_VERSION
+    assert list(root.glob(".migrating-*")) and list(root.glob(".previous-*"))
+
+    report = migrate_store(root)
+    assert (report.from_version, report.to_version) == (STORE_FIRST_VERSION, SCHEMA_VERSION)
+    assert report.migrated is not None and report.steps
+    assert report == store.manifest.migrations[-1]
+    assert not list(root.glob(".migrating-*")) and not list(root.glob(".previous-*"))
+    got = _read_back(store)
+    assert all(got[name].equals(expected[name]) for name in FRAMES)
+    # Once finished, a further call applies nothing and says so.
+    again = migrate_store(root)
+    assert (again.from_version, again.migrated) == (SCHEMA_VERSION, None)
 
 
 def test_keep_previous_keeps_the_old_versions_files(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

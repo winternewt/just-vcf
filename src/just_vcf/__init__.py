@@ -91,7 +91,7 @@ from just_vcf.schema import (
     VariantClass,
 )
 from just_vcf.sniff import Sniffed, SniffOutcome, open_payload, sniff
-from just_vcf.store import Store, StoreAdded, StoredFacet, StoreError, StoreManifest, StoreVersionError, migrate_store
+from just_vcf.store import Store, StoreAdded, StoreConflictError, StoredFacet, StoreError, StoreManifest, StoreVersionError, migrate_store
 from just_vcf.store_migration import FilledUnknown, MigrationApplied, StoreMigration
 from just_vcf.vcf_zarr import VCF_ZARR_VERSION, VcfZarrWritten, write_vcf_zarr
 from just_vcf.writing import BlockAllele, ContigNames, UnsortedRowsError, UnwritableRowsError, VcfWritten, write_vcf
@@ -178,6 +178,7 @@ __all__ = [
     "SplitSignal",
     "Store",
     "StoreAdded",
+    "StoreConflictError",
     "StoreError",
     "StoreManifest",
     "StoreVersionError",

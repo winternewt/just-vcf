@@ -1274,6 +1274,7 @@ def _facet_row(facet_id: str, rows: list[dict], label: str | None, digest: str |
         assembly_label=label,
         assembly_label_basis=shared("assembly_label_basis") if label is not None else None,
         ref_seqcol_digest=digest,
+        resolve_version=shared("resolve_version"),
         callset_type=shared("callset_type"),
         absence_means=AbsenceMeans.UNKNOWN.value,
         variant_classes=classes,

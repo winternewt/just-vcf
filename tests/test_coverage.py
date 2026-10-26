@@ -1,6 +1,7 @@
 """Coverage as a facet (RM278): depth tools' outputs, polars-bio depth over a BAM, callable positions."""
 
 import gzip
+import hashlib
 import re
 from datetime import timedelta
 from pathlib import Path
@@ -63,7 +64,9 @@ CONTIGS = [("chr1", 100), ("chrX", 50), ("chrY", 40)]
 READS = [("chr1", 10, "20M"), ("chr1", 15, "5M3D10M"), ("chr1", 15, "20M"), ("chr1", 60, "4M2N4M"), ("chrX", 0, "10M")]
 
 
-def write_bam(path: Path, reads: list[tuple[str, int, str]], *, flags: list[int] | None = None, mapq: list[int] | None = None) -> Path:
+def write_bam(
+    path: Path, reads: list[tuple[str, int, str]], *, flags: list[int] | None = None, mapq: list[int] | None = None, index: bool = True
+) -> Path:
     pysam = pytest.importorskip("pysam")
     names = [name for name, _ in CONTIGS]
     header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": name, "LN": length} for name, length in CONTIGS]}
@@ -82,7 +85,8 @@ def write_bam(path: Path, reads: list[tuple[str, int, str]], *, flags: list[int]
             record.query_sequence = "A" * n
             record.query_qualities = pysam.qualitystring_to_array("I" * n)
             handle.write(record)
-    pysam.index(str(path))
+    if index:
+        pysam.index(str(path))
     return path
 
 
@@ -437,6 +441,33 @@ def test_a_spill_is_never_served_for_other_parameters_or_versions(tmp_path: Path
     stated = alignment_coverage(path, window=10, assembly_label="GRCh38")
     assert len(depth_calls) == before
     assert stated.intervals.collect().equals(base)
+
+
+def test_an_unindexed_bam_rewritten_with_other_reads_is_not_served_the_old_spill(tmp_path: Path, depth_calls: list[str]) -> None:
+    """Without an index, a BAM's header and byte size are all that named it, so a BAM rewritten in
+    place with the same header and size but other reads was served the first one's windows, under its
+    facet id. An unindexed BAM is now known by its bytes' sha256: one more read of the file, against a
+    depth pass on every call had it not been spilled at all. An indexed one keeps its header, index and
+    size."""
+    path = tmp_path / "a.bam"
+    first = alignment_coverage(write_bam(path, READS, index=False), window=10)
+    size = path.stat().st_size
+    assert first.facet.source_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    moved = None
+    for start in range(1, 30):  # the X read moved along until the rewritten file has the same size
+        reads = [*READS[:-1], ("chrX", start, "10M")]
+        write_bam(path, reads, index=False)
+        if path.stat().st_size == size:
+            moved = reads
+            break
+    assert moved is not None, "no X read start gives a BAM of the first one's size"
+    second = alignment_coverage(path, window=10)
+    assert depth_calls == [str(path), str(path)]
+    assert second.facet.facet_id != first.facet.facet_id
+    assert rows_of(second, "X") == windows_of(depth_of(moved, contig="chrX"), 50, 10) != rows_of(first, "X")
+    # Indexed, the file is not hashed: the index names it.
+    indexed = alignment_coverage(write_bam(tmp_path / "b.bam", READS), window=10)
+    assert indexed.facet.source_sha256 is None
 
 
 def test_the_spill_is_swept_and_cleared_like_the_loaders(tmp_path: Path, depth_calls: list[str]) -> None:

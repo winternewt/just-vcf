@@ -4,6 +4,41 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A facet records the rule that read its REF, and the store refuses a held facet given again in
+  another REF state (schema 0.0.20). `resolve_ref` keeps a facet's `facet_id`, so `Store.add` of the
+  facet resolved under a newer `RESOLVE_VERSION`, or of the loaded facet once its resolved twin was
+  stored (or the reverse), reported it `present` and kept the held rows. `facets.resolve_version` is
+  new (the `RESOLVE_VERSION`, null until REF is read, inherited by derived facets), and `Store.add`
+  compares it and `ref_seqcol_digest` with the held facet's, raising `StoreConflictError` (new, a
+  `StoreError`) before anything is written. A held facet is never rewritten: the other state goes into
+  a new store. `migrate_store` adds the column to a 0.0.19 store, null and named as not recorded on
+  facets whose REF was read (docs/SCHEMA.md, "The durable store" and "Store migration").
+
+- `alignment_coverage` names a BAM or CRAM with no index beside it by the sha256 of its bytes, now in
+  `CoverageFacet.source_sha256`, its `facet_id` and its spill key. Its header and byte size alone named
+  it, so a file rewritten in place with the same header and size but other reads was served the old
+  file's windows under the old `facet_id`. The cost is one more read of an unindexed file per call. An
+  indexed file is named as before. **Values change** for an unindexed file: its `facet_id`, and
+  `source_sha256` from null (docs/SCHEMA.md, "Coverage facets").
+
+- `migrate_store` called after a migration that was cut off between committing the new manifest and
+  removing the old version's files returns that migration, read from the manifest's `migrations`,
+  and finishes the cleanup. It returned `from_version = to_version`, `migrated` null, which reads as
+  nothing applied though the store had just been migrated (docs/SCHEMA.md, "Store migration").
+
+- `check_pedigree` gives a pair whose kinship lies wholly in the first degree, but whose IBS0 count
+  cannot tell parent from sibling where the pedigree expects one, the reason `kind_not_told`
+  (`person.KIND_NOT_TOLD`). It read `between_bands`, which says the kinship's interval crosses a band
+  boundary: kinship 0.25 ± 0.01 with no IBS0 over 300 sites against a parent link was reported as
+  between bands. The reasons a check row may carry are now one vocabulary,
+  `person.PEDIGREE_CHECK_REASONS`, checked where the row is built. **Values change** for a reader of
+  `reason`: those rows read `kind_not_told`; `agreement` is unchanged (docs/SCHEMA.md, "Relatedness
+  and pedigrees").
+
+- `loaders.text.GT_INDEX_MAX` is an int (255), read from `gt`'s dtype. It was `pl.UInt8.max()`, an
+  expression annotated `int`; the warning for an index `gt` cannot hold printed "(255)" only because
+  polars renders that literal bare. No value changes.
+
 - A store written under an older schema version can be migrated (RM276): `migrate_store(path)`
   rewrites it to this version by one step per schema bump since the store shipped under 0.0.14
   (`just_vcf.store_migration.MIGRATIONS`, five steps to 0.0.19), and returns a `StoreMigration`
@@ -25,7 +60,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   from the reference, is now `ref` and is written before every allele (`["", "GG"]` becomes
   `["G", "GGG"]`), `end_pos = pos`, `ref_check` null (the file wrote no REF base). Before a contig's
   first base, VCF's rule: the base after, appended, at POS 1. A point where nothing was called stays
-  unread, counted. A Genos row gets REF over its stated span whatever its length, and its alleles
+  unread, counted, and so does one whose every called haplotype is the empty allele (CGI `""/""` and
+  `""/?`, Genos `-/-`; `RESOLVE_VERSION` 11): it says no insertion is there, and anchoring it wrote
+  `REF=X ALT=. 0/0`, a hom-ref call at the base before that the source never made, beside the
+  source's own call there. It keeps its loaded `["", ""]`, counted under its own warning; Genos's is
+  no longer counted among the array rows too. A Genos row gets REF over its stated span whatever its length, and its alleles
   derived against it as an array row's (`AT/GC`, `T/-`); before, only its single-base rows were read,
   and a one-base insertion site was read as a call at the anchor base: `G/G` inserted after a `G`
   read hom-ref there (checked on the old code), another base an SNV. `normalize` aligns the anchored

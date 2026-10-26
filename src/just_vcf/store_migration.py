@@ -162,6 +162,7 @@ _PHASE_SET_KINDS_0017 = pl.List(pl.Enum(["ps", "psl", "cgi_haplink"]))
 _GL_SOURCE_0018 = pl.Enum(["gl", "pl", "gl_over_pl"])
 
 _RELOAD = "load the source again to read them"
+_READ = pl.col("ref_seqcol_digest").is_not_null()
 
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
@@ -253,6 +254,23 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
                 _CGI | _dropped("FORMAT/HQ"),
                 "CGI's varScoreEAF, and a VCF's FORMAT HQ (in dropped_fields), were not read into hq before 0.0.19 "
                 f"and its first update: hq null here means not read, so these rows grade gt_only; {_RELOAD}",
+            ),
+        ),
+    ),
+    MigrationStep(
+        "0.0.19",
+        "0.0.20",
+        "the rule that read REF: facets.resolve_version",
+        frames={"facets": _add_after("ref_seqcol_digest", {"resolve_version": pl.UInt32})},
+        added=("facets.resolve_version",),
+        caveats=(
+            Caveat(
+                "facets",
+                ("resolve_version",),
+                _READ,
+                "which RESOLVE_VERSION read these facets' REF was not recorded before 0.0.20: resolve_version null "
+                "here means not recorded, not 'REF not read', so the store refuses the same facet resolved today as "
+                f"another state of it; {_RELOAD} and resolve them into a new store",
             ),
         ),
     ),

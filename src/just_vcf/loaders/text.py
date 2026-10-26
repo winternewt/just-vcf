@@ -106,8 +106,9 @@ READABLE_GT = r"^(\d+|\.)([/|](\d+|\.))*$"
 """Genotype text readable as allele indices: each slot an index or `.`, separated by `/` or `|`."""
 
 
-GT_INDEX_MAX: int = CALLS["gt"].inner.max()
-"""The largest allele index `gt` can hold (255: `gt` is a `u8` list, SCHEMA.md Decision 6)."""
+GT_INDEX_MAX: int = pl.select(CALLS["gt"].inner.max()).item()
+"""The largest allele index `gt` can hold (255: `gt` is a `u8` list, SCHEMA.md Decision 6), read from the dtype
+as an int: `UInt8.max()` alone is an expression."""
 
 
 def _text_indices(genotype: pl.Expr) -> pl.Expr:

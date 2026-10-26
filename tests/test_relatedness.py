@@ -17,7 +17,7 @@ from dotenv import dotenv_values, find_dotenv
 from just_vcf import FACETS, Loaded, load, mint_vrs_ids, resolve_ref
 from just_vcf.assembly import ASSEMBLY_LENGTHS
 from just_vcf.pedigree import BAND_ORDER, Pedigree, pedigree_from_dict
-from just_vcf.person import NO_FACET, PEDIGREE_CHECKS, Person, check_pedigree
+from just_vcf.person import KIND_NOT_TOLD, NO_FACET, PEDIGREE_CHECK_REASONS, PEDIGREE_CHECKS, PedigreeAgreement, Person, _agreement, check_pedigree
 from just_vcf.person import people as people_of
 from just_vcf.reference import ReferenceStore
 from just_vcf.sniff import sniff
@@ -468,7 +468,8 @@ def test_a_parent_who_reads_as_a_sibling_disagrees(family_on_panel, tmp_path: Pa
     """The pedigree's parent-child edge against its sibling edge: `c` stated as `s`'s mother (they are
     full siblings) and `a` stated as `c`'s full sibling (she is the mother) both read `disagrees`, at a
     kinship that agrees; the true mother link `a`-`s` agrees. On 700 sites a mother link reads
-    `cannot_tell`, `between_bands`: no IBS0 there cannot yet rule siblings out."""
+    `cannot_tell`, `kind_not_told`: the kinship is wholly first degree, and no IBS0 there cannot yet
+    rule siblings out."""
     panel, people = family_on_panel
     loaded = [wgs(write_vcf(tmp_path / f"{x}.vcf", panel, people[x]), subject=f"subject-{x}") for x in "acs"]
     # One pedigree per statement: together they would make `s` a child of two siblings.
@@ -485,7 +486,35 @@ def test_a_parent_who_reads_as_a_sibling_disagrees(family_on_panel, tmp_path: Pa
     assert "expected parent_child, measured full_siblings" in warning
     small = SitePanel(assembly_label="GRCh37", sites=panel.sites.head(700), source="synthetic")
     thin = check_pedigree(_family_pedigree([("a", KIN_MOTHER, "s")], "as"), *loaded, panel=small).row(0, named=True)
-    assert (thin["band"], thin["agreement"], thin["reason"]) == ("first_degree", "cannot_tell", BETWEEN_BANDS)
+    assert (thin["band"], thin["agreement"], thin["reason"]) == ("first_degree", "cannot_tell", KIND_NOT_TOLD)
+
+
+def _expected(*bands: str) -> dict:
+    return {"expected_reason": None, "expected_bands": list(bands)}
+
+
+def _measured(kinship: float, se: float | None, n_ibs0: int | None, n_sites: int | None) -> dict:
+    return {"kinship": kinship, "kinship_se": se, "n_ibs0": n_ibs0, "n_sites": n_sites, "reason": None}
+
+
+def test_a_first_degree_kinship_whose_kind_is_not_told_has_its_own_reason() -> None:
+    """A kinship wholly in the first degree, its IBS0 interval too thin to tell parent from sibling
+    (none over 300 sites), against a pedigree expecting one kind: `cannot_tell`, `kind_not_told`, not
+    `between_bands`, which says the kinship's interval crosses a band boundary. Without an IBS0 count
+    the kind is not told either. An interval reaching the second degree as well stays `between_bands`;
+    a kind the IBS0 count tells against the pedigree disagrees; a pedigree allowing either kind agrees."""
+    thin = _measured(0.25, 0.005, 0, 300)
+    assert _agreement(_expected("parent_child"), thin) == (PedigreeAgreement.CANNOT_TELL, KIND_NOT_TOLD)
+    assert _agreement(_expected("full_siblings"), thin) == (PedigreeAgreement.CANNOT_TELL, KIND_NOT_TOLD)
+    assert _agreement(_expected("parent_child"), _measured(0.25, None, None, None)) == (PedigreeAgreement.CANNOT_TELL, KIND_NOT_TOLD)
+    assert _agreement(_expected("first_degree"), thin) == (PedigreeAgreement.AGREES, None)
+    assert _agreement(_expected("parent_child", "full_siblings"), thin) == (PedigreeAgreement.AGREES, None)
+    wide = _measured(0.19, 0.03, 0, 300)  # reaches the second degree too
+    assert _agreement(_expected("parent_child", "second_degree"), wide) == (PedigreeAgreement.CANNOT_TELL, BETWEEN_BANDS)
+    assert _agreement(_expected("parent_child"), wide) == (PedigreeAgreement.CANNOT_TELL, BETWEEN_BANDS)
+    siblings = _measured(0.25, 0.005, 400, 4000)  # an IBS0 share of 10%, wholly above KING's 0.008
+    assert _agreement(_expected("parent_child"), siblings) == (PedigreeAgreement.DISAGREES, None)
+    assert {KIND_NOT_TOLD, NO_FACET, BETWEEN_BANDS} <= PEDIGREE_CHECK_REASONS
 
 
 def test_a_stated_relationship_the_genotypes_contradict_is_kept_and_warned(family_on_panel, tmp_path: Path) -> None:

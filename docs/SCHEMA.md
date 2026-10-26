@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.19.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.20.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -83,7 +83,12 @@ sequence, not by a choice. The same holds for an array's `assembly_label` when t
 (null is "unknown", and the rows against the sequence settle it, below); a stated label is never
 replaced. The alternative, a derived facet (`relation = ref_checked`), was rejected:
 every facet would then stay `not_run` for ever and its checked twin would be a second identity for the
-same calls. A facet already read is refused rather than read again.
+same calls. A facet already read is refused rather than read again. Since the id stays, the facet
+records the rule that read it: `facets.resolve_version` is the `RESOLVE_VERSION` (0.0.20), so a rule
+change that rewrites rows is visible on the facet, and the durable store refuses to take the same
+facet in another REF state as `present`. Rejected: digesting `RESOLVE_VERSION` into the `facet_id`,
+as `normalize`, `liftover` and `rejoin_split` digest theirs, which would make every resolved facet the
+second identity rejected above.
 
 - A row with `source_ref`: `ref` is the reference over the same span, `pos` to
   `pos + len(source_ref) - 1`. `ref_check` compares case-insensitively (VCF REF bases are), so a
@@ -146,7 +151,16 @@ same calls. A facet already read is refused rather than read again.
   POS 1) base. A Genos point is then a spanned row (below). A point where no haplotype was called
   (`gt_alleles` all null: CGI's zero-length no-calls, 346,474 in one PGP-HMS masterVarBeta) is left
   as loaded, counted: it has no allele to anchor, and REF with no ALT would state a no-call at the
-  anchor base. Anchoring places the insertion where the file did; `normalize` left-aligns it.
+  anchor base. So is a point whose every called haplotype is the empty allele (CGI `""/""` and `""/?`,
+  Genos `-/-`), counted apart (`RESOLVE_VERSION` 11): it says nothing is inserted between two bases,
+  which is evidence about the gap, not a genotype at the base before. Anchored it read `REF=X`, no
+  ALT, `0/0`, a hom-ref call the source never made, written to VCF beside the source's own call at
+  that base (`G . 0/0` beside `G A 1/1`). No frame carries a statement about a gap without one: a
+  `calls` row at `pos` is a genotype at that base, and a block spans bases. The row keeps the loaded
+  `["", ""]`, which is the statement as the file made it, with `ref` and `end_pos` null. A point
+  with an inserted allele on any haplotype (`""/GG`) is anchored as before: there the `0` is the
+  haplotype without the insertion, as VCF writes it. Anchoring places the insertion where the file
+  did; `normalize` left-aligns it.
   Measured on a PGP-HMS assembly's `var` against CGI's own vcfBeta of it (2026-10-26, GRCh37):
   263,689 of the 263,690 anchored points carrying an ALT have a vcfBeta record at the same POS with
   the same REF and the same ALT set; the one other has none there. Shifted one base either way, at
@@ -159,7 +173,8 @@ same calls. A facet already read is refused rather than read again.
   insertion site `-/A`, anchored above, `G/GA`. `ref_check` stays null.
 - Left unread, each reason counted once: I/D codes no manifest probe resolves (above), whole
   no-calls (the probe's REF span is unknown), genotypes that could not be split, spans past the
-  contig's end or at POS 0, insertion points where nothing was called or past their contig's end, and
+  contig's end or at POS 0, insertion points where nothing was called, where nothing inserted was
+  called (every called haplotype the empty allele), or past their contig's end, and
   every row of a contig that could not be matched with the reference (below), which includes the
   insertion points and Genos rows on it, left unanchored.
 
@@ -283,7 +298,7 @@ How the awkward cases land under C:
   `source_ref` on every insertion point, which keeps what the file wrote once anchored (its `ref` then
   holds the anchor); that is how RM3 finds the rows it has to pad. An insertion point CGI could not
   call stays a row with every haplotype null: it covers no base, so it cannot be a block, and it has
-  no allele to anchor.
+  no allele to anchor. One that calls only the empty allele stays unanchored too (above).
 - **The empty allele has one spelling: `""`** (`schema.EMPTY_ALLELE`), VRS's zero-length literal, in
   every loader: CGI's unpadded indels above, an upload's ALT `-` (below), and Genos's `-` (an insertion
   site's empty REF allele, or a deletion's ALT; `source_gt` keeps the `-/A` the file wrote). Every reader
@@ -665,6 +680,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
+| `resolve_version` | the `RESOLVE_VERSION` of the `resolve_ref` that read REF (u32). Null until REF is read, and on a facet a store migrated from before 0.0.20 whose REF was read (not recorded). A derived facet keeps its parent's; a consensus its parents' where they share one, else null. `resolve_ref` keeps the `facet_id`, so this column and `ref_seqcol_digest` are what tell two REF states of one facet apart (the durable store refuses an add that meets a held facet in another). just-vcf's own shape |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
 | `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele; null = not counted (a genotype table, which writes no REF or ALT). just-vcf's own shape |
@@ -1609,10 +1625,14 @@ supplies, read into frames of its own. docs/RELATEDNESS.md has the method.
   then `facet_a` (the individual's) and `facet_b` (the relative's), the measured `band`, `kinship`,
   `kinship_se`, `ibs0`, `n_sites` and `relatedness_reason`, and `agreement` (`agrees`: every band the
   measured interval reaches is allowed; `disagrees`: none is; `cannot_tell`), with `reason` for
-  `cannot_tell` (`no_facet`, a pedigree reason, a relatedness reason, or `between_bands` when the
-  interval reaches allowed and other bands). The two first-degree kinds are bands of their own here,
-  and `first_degree` on either side stands for both: a parent link measured `full_siblings`
-  disagrees, one measured `first_degree` (the kind not told) is `cannot_tell`, `between_bands`. A pedigree individual is matched to facets by its
+  `cannot_tell` (`person.PEDIGREE_CHECK_REASONS`: `no_facet`, a pedigree reason, a relatedness
+  reason, `between_bands` when the interval reaches allowed and other bands, or `kind_not_told`
+  when it lies wholly in the first degree and the IBS0 count does not tell the kind the pedigree
+  needs; an open vocabulary, checked where the row is built). The two first-degree kinds are bands of
+  their own here, and `first_degree` on either side stands for both: a parent link measured
+  `full_siblings` disagrees, one measured `first_degree` (the kind not told, a thin IBS0 interval or
+  no count) is `cannot_tell`, `kind_not_told`; it read `between_bands` until 2026-10-26, which said the
+  kinship crossed a band boundary when it did not. A pedigree individual is matched to facets by its
   `individual_id` as `subject` (RM273), each source once as `Person.checks` stands it; one row per pair
   of those facets, one row with null facets when an individual has none. The pedigree is never changed
   and nothing is relabelled (charter invariant 8). `people(..., pedigree=...)` runs it and warns each
@@ -1835,18 +1855,24 @@ Rules:
   (chrM, thousands deep) look the same. `kind=` states the format where the content cannot.
 - **The build** is stated by the caller, or inferred from contig lengths where the source gives them
   (an alignment header, mosdepth's summary). Otherwise it is null.
-- **An alignment file is not hashed**: `source_sha256` is null and `facet_id` digests its header, its
-  index and its size. Rejected: the sha256 of the bytes, which would read a 30x BAM a second time over
-  the network for a name.
+- **An indexed alignment file is not hashed**: `source_sha256` is null and `facet_id` digests its
+  header, its index and its size. Rejected: the sha256 of the bytes, which would read a 30x BAM a
+  second time over the network for a name. **One with no index is hashed** (2026-10-26):
+  `source_sha256` is its bytes' sha256, which `facet_id` and the spill key digest beside its header
+  and size. Its header and size alone named it, so a BAM rewritten in place with the same header and
+  byte size but other reads was served the first one's windows under the first one's `facet_id`. The
+  cost is one more read of the file on every call, spill or not; an index is what a pipeline leaves
+  beside its BAMs. Rejected: not spilling an unindexed file, which reads it in full by `depth()` on
+  every call and still gives two such files one `facet_id`.
 - **An alignment file is read once.** `alignment_coverage` spills its windows to the cache
   (`coverage/<key>/`, kind `coverage_spill`, with a manifest, swept and cleared as the loader's spills
   are, docs/ROADMAP_HISTORY.md RM268), and a later call with the same inputs reads the spill. The key
-  digests the file's header, index and size, `window`, `min_mapping_quality`, `filter_flag`,
+  digests the file's header, index and size (its sha256 too, with no index), `window`, `min_mapping_quality`, `filter_flag`,
   `COVERAGE_VERSION` and the polars-bio version, so a spill made with other parameters, or by another
   `COVERAGE_VERSION` or polars-bio, is never served. `assembly_label` is left out: no window depends on
   it, and the facet built on a reused spill still carries the build the call states. The spill trusts
-  the file's identity exactly as far as `facet_id` does: two files with one header, index and byte size
-  would share it. `clear_cache(source=bam)` matches the spill by path, but hashes an existing file to
+  the file's identity exactly as far as `facet_id` does: two indexed files with one header, index and
+  byte size would share it. `clear_cache(source=bam)` matches the spill by path, but hashes an existing file to
   look for digests too, which is one full read of the BAM. Rejected: keying by the just-vcf release,
   which would read every BAM again at each upgrade where `COVERAGE_VERSION` already says when the
   windows change.
@@ -2100,7 +2126,14 @@ a load warning may quote a sample or a file name.
   is refused.
 - **Facets accumulate (charter 5).** A facet's directory is written once and never rewritten or
   removed, except by a migration, which rewrites every facet's files with the same facets and rows;
-  adding a facet the store holds, by `facet_id`, is a no-op that writes nothing. The links
+  adding a facet the store holds, by `facet_id`, is a no-op that writes nothing, when its REF state is
+  the held one's (`store.REF_STATE`: `ref_seqcol_digest` and `resolve_version`). One in another state
+  (held as loaded and given resolved, or the reverse, or read by another `RESOLVE_VERSION` or from
+  another collection) is refused with `StoreConflictError`, naming the facet and both states, before
+  anything is written: `resolve_ref` keeps the `facet_id`, and a `present` there kept the held rows
+  while the caller thought the new ones stored. A held facet's files are never rewritten, so the other
+  state goes into a new store. Rejected: replacing the held facet (charter 5; a replace is the
+  person's call, not an add's), and comparing the rows (a full read of both on every re-add). The links
   are kept per facet, so adding one never touches a file another facet owns: each facet keeps the
   links of the `Loaded` it came with that end at it or at one of its lineage ancestors, so a facet
   added without its parent still names it. `loaded()` reads them all back once each, in Decision 12's
@@ -2143,6 +2176,7 @@ a step fails it.
 | 0.0.16 → 0.0.17 | calls | casts `phase_set_kinds` to the enum with `cgi_haplink` | CGI `var` and masterVarBeta facets: `phased`, `phase_sets`, `phase_set_kinds` null for hapLink not read; masterVarBeta facets: `ad`, `source_alleles` for read counts not read |
 | 0.0.17 → 0.0.18 | facets | adds `gl_source` (null) after `split_marker` | VCF facets: null means not recorded, not "no likelihoods" |
 | 0.0.18 → 0.0.19 | calls | adds `hq` (null) after `gq` | CGI native facets, and facets whose `dropped_fields` list FORMAT `HQ`: `hq` null for not read, so their rows grade `gt_only` |
+| 0.0.19 → 0.0.20 | facets | adds `resolve_version` (null) after `ref_seqcol_digest` | facets whose REF was read (`ref_seqcol_digest` set): null means not recorded, not "REF not read", so the store refuses the same facet resolved today as another state of it |
 
 A step never invents a value: an added column is null, and where that null (or a value an older loader
 left) reads differently from what a load of the same source gives today, the facets it applies to are
@@ -2167,7 +2201,9 @@ step: a store keeps the values its load gave until the source is loaded again.
 - **Cut off, finished or undone on the next call.** A migration directory without `READY` is a
   migration cut off before every facet was checked; the store is as it was, and the next
   `migrate_store` removes it. One with `READY` is finished by the next `migrate_store`, each move
-  skipped where it is already done. `open` reports a `.migrating-*` or `.previous-*` directory with a
+  skipped where it is already done; one cut off after its commit, with only the cleanup left, is
+  cleaned up and its record, read from the committed manifest's `migrations`, is what that call
+  returns, so the call does not read as nothing applied. `open` reports a `.migrating-*` or `.previous-*` directory with a
   warning. Rejected: renaming the old `facets/` aside and relying on a crash never landing between the
   two renames; parking old facet directories under `facets/`, where an add would take them for a dead
   writer's and remove them.
@@ -2642,7 +2678,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   table, Genos) and REF over a Genos row's stated span ("How RM3 fills these slots" above;
   `RESOLVE_VERSION` 10); `normalize` aligns the anchored rows and anchors a deletion at a contig's
   first base on the base after (`NORMALIZE_VERSION` 9). Rows that stayed unread now get `ref`,
-  `alts`, `gt` and `end_pos`. **Not additive for a reader of a resolved CGI or CASAVA facet's alleles**:
+  `alts`, `gt` and `end_pos`, except a point whose every called haplotype is the empty allele, which
+  stays unread (`RESOLVE_VERSION` 11, "How RM3 fills these slots"). **Not additive for a reader of a resolved CGI or CASAVA facet's alleles**:
   an insertion point's `alts`, `gt_alleles` and `source_alleles` are now spelled with the anchor base
   (`["", "GG"]` read `["G", "GGG"]`), its `ref_check` goes from `not_run` to null, and one before a
   contig's first base moves from `pos` 0 to 1. The loaded frame is unchanged. Allowed before 1.0 and
@@ -2930,6 +2967,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   the rule above is a minor bump, 0.0.10. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.20** (2026-10-26, the rule that read REF): `facets.resolve_version` (`u32` or null), the
+  `RESOLVE_VERSION` that read the facet's REF, inherited by derived facets. Additive. A store of
+  0.0.19 migrates with it null, named as not recorded on its resolved facets. Rule change in the
+  store: re-adding a held facet in another REF state is refused (`StoreConflictError`) where it was
+  reported `present`.
 
 - **0.0.19** (2026-10-24, CGI's allele scores): `calls.hq` (`list[u16]` or null). Additive.
 

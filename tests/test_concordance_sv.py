@@ -9,6 +9,8 @@ and the event itself (docs/SCHEMA.md "Concordance", "Structural variants").
 
 import itertools
 import random
+import threading
+import time
 from pathlib import Path
 
 import polars as pl
@@ -293,3 +295,37 @@ def test_symmetric_comparison(tmp_path: Path, store: ReferenceStore) -> None:
     backward = concordance(fb, fa).sites.collect().filter(pl.col("key") == "extent").select(pl.col("b_pos").alias("a_pos"), pl.col("a_pos").alias("b_pos"))
     assert forward.sort("a_pos").equals(backward.sort("a_pos"))
     assert forward.height == sum(size_similarity(s, 300) >= 0.7 for s in (200, 400, 200, 400))
+
+
+def _rss() -> int:
+    for line in Path("/proc/self/status").read_text().splitlines():
+        if line.startswith("VmRSS:"):
+            return int(line.split()[1]) * 1024
+    raise AssertionError("/proc/self/status carries no VmRSS line, so the peak cannot be measured")
+
+
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="the peak is read from /proc/self/status (Linux)")
+def test_svs_crowded_on_one_contig_compare_within_a_bounded_peak(tmp_path: Path, store: ReferenceStore) -> None:
+    """1,500 deletions on one contig compared with themselves stay within 1 GB above the start. The
+    candidate pairs are a range join per contig; a contig equality beside the range made polars hold
+    every pair of SVs on the contig at once (2.6 GB here that way, measured 2026-10-26)."""
+    rng = random.Random(1501)
+    positions = sorted(rng.sample(range(2, len(SEQ["1"]) - 200), 1500))
+    one = facet(tmp_path, "a", [sv(pos, "<DEL>", pos + rng.randrange(1, 150)) for pos in positions], store)
+    peak = [0]
+    done = threading.Event()
+
+    def sample() -> None:
+        while not done.is_set():
+            peak[0] = max(peak[0], _rss())
+            time.sleep(0.02)
+
+    before = _rss()
+    sampler = threading.Thread(target=sample, daemon=True)
+    sampler.start()
+    sites = concordance(one, one).sites.collect()
+    done.set()
+    sampler.join()
+    # Each deletion is closest to itself, so each is matched to itself, once.
+    assert sites.filter(pl.col("key") == "extent")["pos"].sort().to_list() == positions
+    assert peak[0] - before < 2**30, f"peak {(peak[0] - before) / 2**20:.0f} MB above the start"

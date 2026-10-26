@@ -4,6 +4,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `concordance` pairs symbolic SV alleles by one range join per contig too (`intervals.contig_join`),
+  where the contig equality beside the two `refdist` inequalities held every pair of SVs on a contig
+  at once. Same candidate pairs, so the same rows, order and ties. 1,500 deletions on one contig
+  compared with themselves: 2.6 GB → 120 MB above the start (2026-10-26; a test holds it under 1 GB).
+
 - `concordance` pairs breakend records by one range join per contig (`intervals.contig_join`), where
   one `join_where` with the contig equality beside the two window inequalities made polars join on
   the contig and filter after, holding every pair of records on a contig at once. Same rows, order

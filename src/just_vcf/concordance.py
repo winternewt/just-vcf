@@ -885,9 +885,7 @@ def _sv_candidates(a: pl.DataFrame, b: pl.DataFrame, params: SvMatching) -> pl.D
     `refdist` of each other (truvari's `overlaps(start - refdist, end + refdist, ...)`, strict), with
     truvari's measures and whether the pair passes the rest of the thresholds (`_passes`)."""
     r = params.refdist
-    pairs = a.join_where(
-        b, pl.col("a_chrom") == pl.col("b_chrom"), pl.col("_a_ws") - r < pl.col("_b_we"), pl.col("_b_ws") < pl.col("_a_we") + r
-    )
+    pairs = contig_join(a, b, "a_chrom", "b_chrom", pl.col("_a_ws") - r < pl.col("_b_we"), pl.col("_b_ws") < pl.col("_a_we") + r)
     sa, sb = pl.col("_a_size"), pl.col("_b_size")
     # truvari's `sizesim`: a zero size counts as one base, two zeros are the same size.
     za, zb = pl.max_horizontal(sa, pl.lit(1)), pl.max_horizontal(sb, pl.lit(1))

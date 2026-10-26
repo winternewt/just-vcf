@@ -119,10 +119,11 @@ meanwhile. The desk carries the ones filed there.
   declared `Number=.` with its reserved Type there so its values are skipped unread (`REWRITE_VERSION` 16). GRCh36:
   UCSC's public hg19ToHg18 chain was downloaded to derive the Y region set (md5 checked); GRCh36 arrays are
   estimated, GRCh36 genomes answer `uncalibrated_build`; one test pins two counts read off the carried chain file.
-- **Layer 1, open (no decision), next builder:** a VCF `0/300` loads as `gt [0, null]` with no past-ALT warning;
-  reserved keys the loader never carries (INFO DP, FORMAT MQ) still fail a 4.3+ retry on a malformed value; INFO
-  parse failures escape the retry in every version (the stats pass reads no INFO, the spill does). A single `0/x` GT
-  fails a whole VCF load in polars-bio/noodles: the upstream-liaison seat's to file.
+- **Layer 1, the three loader gaps closed (4167e0e), one call for veto:** in a VCF 4.4+ file, where `source_gt`
+  is withheld (P4), `0/300` gives the same row as a half-call `0/.` (`gt [0, null]`) and only the past-ALT warning
+  tells them apart; the alternative is withholding such a genotype whole in 4.4+ VCFs. `READER_DEFINITIONS` mirrors the
+  pinned noodles fork and needs re-extracting when the pin moves. A Flag written with a value (`DB=1`) still fails a
+  4.3+ read. A single `0/x` GT fails a whole VCF load upstream (P22).
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

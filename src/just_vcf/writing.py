@@ -41,7 +41,12 @@ What is written, and the rules it follows:
 - **INFO** carries `END` where `end_pos` is not the REF span (symbolic alleles), the SV keys
   `SVTYPE`, `CIPOS`, `CIEND` and `CN` from `sv_type`, `cipos`, `ciend` and `alt_copy_numbers` (FORMAT
   `CN` is `copy_number`; a copy number that is not whole cannot be written as 4.3's Integer CN and
-  is left out, counted), and
+  is left out, counted), `SVLEN` on a length-type SV allele (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`,
+  `<CNn>`) as `end_pos - pos`, `.` on the record's other ALTs: the frame keeps no SVLEN of its own,
+  so this is END restated in the spelling VCF 4.5 asks for, never the source's SVLEN. VCF 4.3 has it
+  `Number=.` and negative for a deletion, as its examples do; 4.5 `Number=A` and unsigned. A record
+  with several length-type ALTs gets it only where VCF 4.5 says they share one length (copy-number
+  alleles alone, or `<DEL>`/`<DUP>`/`<CNV>` beside FORMAT CN); elsewhere it is left out, counted. And
   `JUST_VCF_SPLIT` on rows flagged as one record of a split multi-allelic site (`split_signal`:
   `normalize`'s split rows, and rows RM270 flagged). Those rows are written as the frame holds them,
   with a warning and the tag, so a reader is told that a `0` there may mean another ALT. `load` reads
@@ -85,7 +90,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.bgzf import BgzfWriter
-from just_vcf.loaders.vcf import FORMAT_KEYS, INFO_KEYS, SPLIT_INFO_KEY, V43_RESERVED_TYPES
+from just_vcf.loaders.vcf import _SV_PATTERN, FORMAT_KEYS, INFO_KEYS, SPLIT_INFO_KEY, V43_RESERVED_TYPES
 from just_vcf.loading import Loaded
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _store_for
 from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, BlockKind, PhaseSetKind, RefCheck, canonical_chrom
@@ -121,15 +126,23 @@ loader's `FORMAT_KEYS`, so a written file declares each key the way the loader r
 _NO_STRINGS = pl.lit([], dtype=pl.List(pl.String))
 
 _SV_INFO = {
+    "SVLEN": (".", "Integer", "Length of the structural variant, END minus POS; under VCF 4.3 negative for a deletion"),
     "SVTYPE": ("1", "String", "Type of structural variant, as the source wrote it"),
     "CIPOS": (".", "Integer", "Confidence interval around POS, two values per ALT"),
     "CIEND": (".", "Integer", "Confidence interval around END, two values per ALT"),
     "CN": ("A", V43_RESERVED_TYPES["INFO/CN"], "Copy number of each ALT allele, as the source wrote it"),
 }
-"""The structural-variant INFO keys the writer emits (RM282), in the order they are written: CIPOS and
-CIEND as VCF 4.5 declares them (two values per ALT, which is how the frame holds them), CN with the
-Integer Type VCF 4.3 reserves, since polars-bio refuses a 4.3 CN declared Float; a 4.5 file declares it
-Float (`INFO_KEYS`)."""
+"""The structural-variant INFO keys the writer emits (RM282, RM6), in the order they are written: SVLEN
+as VCF 4.3 declares it (`Number=.`, signed), CIPOS and CIEND as VCF 4.5 declares them (two values per
+ALT, which is how the frame holds them), CN with the Integer Type VCF 4.3 reserves, since polars-bio
+refuses a 4.3 CN declared Float. A 4.5 file takes each key's Number and Type from `INFO_KEYS`: SVLEN
+`Number=A` and unsigned, CN Float."""
+
+_DELETION_ALLELE = r"^<DEL(:[^>]*)?>$"
+_COPY_NUMBER_ALLELE = r"^<(CNV|CN\d+)(:[^>]*)?>$"
+_SEGMENT_ALLELE = r"^<(DEL|DUP|CNV|CN\d+)(:[^>]*)?>$"
+"""Symbolic alleles by what VCF 4.5 says of their SVLEN: every copy-number allele of a record has the
+same SVLEN (the segment), and beside FORMAT CN so has every `<DEL>`, `<DUP>` and `<CNV>`."""
 
 
 def _whole(value: pl.Expr, v45: bool = False) -> pl.Expr:
@@ -147,9 +160,51 @@ def _copy_number_text(value: pl.Expr, v45: bool) -> pl.Expr:
     return _number_text(value) if v45 else value.cast(pl.Int64).cast(pl.String)
 
 
+def _all_alts(pattern: str) -> pl.Expr:
+    """True where every length-type SV ALT of the row matches `pattern`."""
+    return pl.col("alts").list.eval(~pl.element().str.contains(_SV_PATTERN) | pl.element().str.contains(pattern)).list.all()
+
+
+def _svlen_count() -> pl.Expr:
+    """How many of the row's ALTs are length-type SV alleles (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`, `<CNn>`)."""
+    return pl.col("alts").list.eval(pl.element().str.contains(_SV_PATTERN)).list.sum().fill_null(0)
+
+
+def _svlen_writable() -> pl.Expr:
+    """True where `end_pos - pos` is each length-type SV ALT's own length, so SVLEN can be written.
+
+    The frame keeps no SVLEN: `end_pos` is the record's extent, END or `POS + |SVLEN|`, the largest
+    over its alleles. With one length-type ALT that is its length. With several it is each one's only
+    where VCF 4.5 says they share it: copy-number alleles alone, or `<DEL>`, `<DUP>` and `<CNV>` beside
+    FORMAT CN. Elsewhere the ALTs' own lengths are not kept apart, and SVLEN is left out (counted)
+    rather than written as a length one of them may not have. REF must be the one padding base a
+    symbolic record writes, so that `end_pos` is the event's end and not REF's."""
+    count = _svlen_count()
+    shared = (count == 1) | _all_alts(_COPY_NUMBER_ALLELE) | (pl.col("copy_number").is_not_null() & _all_alts(_SEGMENT_ALLELE))
+    length = pl.col("end_pos").cast(pl.Int64) - pl.col("pos").cast(pl.Int64)
+    return ((count > 0) & shared & (_written_ref().str.len_chars() == 1) & (length > 0)).fill_null(False)
+
+
+def _svlen_text(v45: bool) -> pl.Expr:
+    """SVLEN per ALT: `end_pos - pos` on a length-type SV allele, `.` on any other (`<INS>`, a breakend,
+    a sequence allele: VCF 4.5's missing value there, and the frame keeps no inserted length). VCF 4.3
+    signs it as its own examples do, negative for a deletion; 4.5 writes it unsigned."""
+    deletion = 1 if v45 else -1
+    signs = pl.col("alts").list.eval(
+        pl.when(pl.element().str.contains(_DELETION_ALLELE))
+        .then(pl.lit(deletion, dtype=pl.Int64))
+        .when(pl.element().str.contains(_SV_PATTERN))
+        .then(pl.lit(1, dtype=pl.Int64))
+        .otherwise(None)
+    )
+    values = signs * (pl.col("end_pos").cast(pl.Int64) - pl.col("pos").cast(pl.Int64))
+    return pl.when(_svlen_writable()).then(values.list.eval(pl.element().cast(pl.String).fill_null(".")).list.join(","))
+
+
 def _sv_info_values(v45: bool = False) -> dict[str, pl.Expr]:
     """Each SV INFO key's `KEY=value` text per row, null where the row has no value for it."""
     texts = {
+        "SVLEN": _svlen_text(v45),
         "SVTYPE": pl.col("sv_type"),
         "CIPOS": _list_text("cipos"),
         "CIEND": _list_text("ciend"),
@@ -341,6 +396,11 @@ def write_vcf(
         warnings.append(
             f"{stats['n_cn_fractional']} row(s) had a copy number that is not a whole number, which VCF 4.3 "
             "cannot write (it reserves CN as Integer); left out"
+        )
+    if stats["n_svlen_withheld"]:
+        warnings.append(
+            f"{stats['n_svlen_withheld']} row(s) with SV alleles whose own lengths the frame does not keep apart; "
+            "SVLEN left out, INFO END states the record's extent"
         )
     if stats["n_split"]:
         warnings.append(
@@ -642,6 +702,7 @@ def _scan(calls: pl.LazyFrame) -> dict:
             )
             .sum()
             .alias("n_cn_fractional"),
+            ((_svlen_count() > 0) & ~_svlen_writable() & pl.col("_unwritable").is_null()).sum().alias("n_svlen_withheld"),
             pl.col("split_signal").is_not_null().sum().alias("n_split"),
             (pl.col("end_pos").cast(pl.Int64) != ref_span_end).fill_null(False).any().alias("has_END"),
             pl.concat_list(pl.col("filters").fill_null(_NO_STRINGS), pl.col("sample_filters").fill_null(_NO_STRINGS))
@@ -723,7 +784,7 @@ def _header(facet: dict, sample: str, names: _Names, declared: list[str], stats:
     if stats["has_END"]:
         lines.append('##INFO=<ID=END,Number=1,Type=Integer,Description="End position of the record">')
     for key, (number, kind, description) in _SV_INFO.items():
-        kind = INFO_KEYS[key][1] if stats["v45"] and key in INFO_KEYS else kind
+        number, kind = INFO_KEYS[key] if stats["v45"] and key in INFO_KEYS else (number, kind)
         if stats[f"has_info_{key}"]:
             lines.append(f'##INFO=<ID={key},Number={number},Type={kind},Description="{description}">')
     if stats["n_split"]:

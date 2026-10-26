@@ -1053,6 +1053,18 @@ event goes to five columns, each just-vcf's own shape (VRS has no Allele for the
   `dropped_fields`; an undeclared `CN` the rows use is declared as the file's version reserves it.
   `write_vcf` writes VCF 4.3, so it declares `CN` Integer and leaves out, counted, a copy number that
   is not a whole number.
+- The frame keeps no SVLEN: it goes into `end_pos` and nowhere else, so an `<INS>`'s inserted length
+  and a source SVLEN that disagreed with END are not kept. `write_vcf` still writes INFO `SVLEN`
+  beside END (2026-10-26), since VCF 4.5 requires it on a symbolic SV allele: `end_pos - pos` on each
+  length-type allele (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`, `<CNn>`), `.` on the record's other ALTs. It
+  is END restated, never a value read from the source. Under VCF 4.3 it is `Number=.` and negative for
+  a deletion, as 4.3's examples write it; under 4.5 `Number=A` and unsigned. A record with several
+  length-type ALTs gets it only where VCF 4.5 says they share one length (copy-number alleles alone,
+  or `<DEL>`/`<DUP>`/`<CNV>` beside FORMAT CN); otherwise its ALTs' own lengths are not in the frame,
+  and SVLEN is left out and counted rather than written as one ALT's length for another. Rejected:
+  a `svlen` column here, which would add an `<INS>`'s length and each ALT's own length on a record of
+  several, but is a schema change for the person to decide; and SVLEN from `end_pos` on every ALT, which writes a length a `<DEL>`
+  beside a longer `<DUP>` does not have.
 
 Each of these is null on a row that is no SV. `normalize` leaves symbolic sites as written; on a
 sequence site it splits, each row keeps its own ALT's pair and copy number, and a row it moves loses

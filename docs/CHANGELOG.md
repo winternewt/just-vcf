@@ -26,7 +26,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   `select(pl.len())` 17.2 s → under 0.01 s, the calls collected 80.9 s at 20.5 GB → 0.75 s;
   `rejoin_split` itself takes 10 s longer for its one sort pass (measurements under RM6). A rejoin
   spill's manifest and generation key carry a new `REJOIN_LAYOUT` (1): an older version's generation is
-  never read, and the sweep removes an older entry once it is unused past the grace period.
+  never read. The stale-version sweep removes an older entry once it is unused past the grace period;
+  an entry this version has rejoined into since keeps the old generation beside the new one, costing
+  disk only, until `clear_cache` removes it.
   `REJOIN_VERSION` and the derived `facet_id` do not change. `loading._canonical_parts` is now
   `loading.canonical_parts`; `schema.canonical_order_per_contig`, with no caller left, is gone from
   the library (internal, never in `__all__`).

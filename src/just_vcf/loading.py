@@ -492,8 +492,11 @@ FRAMES_LAYOUT = 1
 """How a load spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
 rows in canonical order, in parts of whole contigs (`canonical_parts`), which the frames read as they
 are (F27). A spill without the key held each frame unsorted in one file, sorted one contig at a time on
-every read: its manifest lacks the key, so the sweep judges it older, and its generation key lacks it,
-so no run of this version finds it. `cache.SPILL_LAYOUT`, which every derived step's spill carries
+every read. Its generation key lacks the key, so no run of this version finds it. The sweep removes
+such an entry once it is unused past the grace period, but only while its manifest still lacks the key:
+a load of this version into the same entry rewrites the manifest with the current versions, so the
+old generation then stays beside the new one, costing disk only, until `clear_cache` removes the
+entry. `cache.SPILL_LAYOUT`, which every derived step's spill carries
 too, is not what changed: bumping it would retire their spills as well."""
 
 _FRAMES_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT, "FRAMES_LAYOUT": FRAMES_LAYOUT}

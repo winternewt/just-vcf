@@ -112,8 +112,11 @@ REJOIN_LAYOUT = 1
 """How a rejoin spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
 rows in canonical order, in parts of whole contigs (`loading.canonical_parts`), which the calls read as
 they are (F27). A spill without the key held the rows unsorted in one file, sorted one contig at a time
-on every read: its manifest lacks the key, so the sweep judges it older, and its generation key lacks
-it, so no run of this version finds it. Not a `REJOIN_VERSION` bump: the rows are the same, and that
+on every read. Its generation key lacks the key, so no run of this version finds it. The sweep removes
+such an entry once it is unused past the grace period, but only while its manifest still lacks the
+key: a rejoin of this version into the same entry rewrites the manifest with the current versions, so
+the old generation then stays beside the new one, costing disk only, until `clear_cache` removes the
+entry. Not a `REJOIN_VERSION` bump: the rows are the same, and that
 version is part of the derived `facet_id`, so bumping it would rename the facet and orphan every spill
 made from it (resolve, normalize, VRS). Not `cache.SPILL_LAYOUT` either, which every other step's spill
 carries too."""

@@ -794,7 +794,7 @@ def _block_reading(mine: pl.DataFrame, other: Loaded) -> pl.DataFrame:
     probe = mine.with_row_index("_probe")
     silent = probe.filter(pl.col("_rows").is_null()).select("_probe", "chrom", pl.col("pos").cast(pl.Int64).alias("_at"))
     blocks = other.blocks.select("chrom", pl.col("pos").cast(pl.Int64).alias("_start"), pl.col("end_pos").cast(pl.Int64).alias("_end"), pl.col("kind").cast(pl.String))
-    hits = covering(silent.lazy(), blocks, silent["chrom"].unique().to_list(), at="_at", start="_start", end="_end").collect()
+    hits = covering(silent.lazy(), blocks, silent["chrom"].unique().to_list(), at="_at", start="_start", end="_end")
     chosen = nearest_block(hits, "_probe", start="_start", end="_end").select("_probe", pl.col("kind").alias("_block"))
     return probe.join(chosen, on="_probe", how="left", maintain_order="left").drop("_probe")
 

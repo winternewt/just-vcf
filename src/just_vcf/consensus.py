@@ -846,7 +846,7 @@ def _readings(
         "chrom", pl.col("pos").cast(pl.Int64).alias("_bstart"), pl.col("end_pos").cast(pl.Int64).alias("_bend"), pl.col("kind").cast(pl.String).alias("_kind"),
         pl.col("gl").cast(pl.List(pl.Float64)).alias("_gl"), pl.col("gq").cast(pl.Float64).alias("_gq"),
     )  # fmt: skip
-    hits = covering(probe.select("_site", "_at").with_columns(pl.lit(chrom).alias("chrom")).lazy(), blocks, [chrom], at="_at", start="_bstart", end="_bend").collect()
+    hits = covering(probe.select("_site", "_at").with_columns(pl.lit(chrom).alias("chrom")).lazy(), blocks, [chrom], at="_at", start="_bstart", end="_bend")
     hits = hits.with_columns(pl.col("_gl").list.eval(pl.element().cast(pl.String)).list.join(",").alias("_gl_text"))
     chosen = nearest_block(hits, "_site", start="_bstart", end="_bend", kind="_kind", then=("_gq", "_gl_text")).select("_site", "_kind", "_gl", "_gq")
     probe = probe.join(chosen, on="_site", how="left", maintain_order="left")

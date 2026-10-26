@@ -4,6 +4,18 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `reference_support` and `genotype_evidence_at` answer a whole-genome gVCF within a few GB. They
+  matched the asked sites by joining the facet's lazy frames, which held every asked contig's rows at
+  once: on PGP-HMS hu416394's bcftools gVCF (9.65M calls, 9.47M blocks) 1,000 random sites ran past
+  30 GB before the block lookup changed and past 45 GB after it (one lazy range join per contig, each
+  re-reading the blocks). Now each frame is read once, filtered to the asked contigs, holding only the
+  calls that start at an asked position or span more than one base and the blocks that cover a site:
+  1,000 sites take 108 s at a 7.8 GB peak (the load's own), 1M take 235 s at 5.6 GB, nearly all of
+  it reading the frames (F27). Answers do not change. `intervals.covering` collects the as-of join and
+  the overlapping blocks together, so the frame is sorted once, and returns a DataFrame; `concordance`
+  and `consensus` read blocks through it too. `reference_support` now reads the covering records when
+  called; grading and the answer stay lazy. Measurements in docs/ROADMAP.md (RM3).
+
 - `genotype_evidence_at` orders a site's records over one span by what they state (block kind, basis,
   confidence, alleles, genotype) after start, origin and end, so blocks two source regions sent to one
   identical target span come out in one order whatever the file's. Before, their order was the file's.

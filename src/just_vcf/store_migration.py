@@ -274,6 +274,23 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
             ),
         ),
     ),
+    MigrationStep(
+        "0.0.20",
+        "0.0.21",
+        "the manifests that read REF: facets.resolve_inputs",
+        frames={"facets": _add_after("resolve_version", {"resolve_inputs": pl.String})},
+        added=("facets.resolve_inputs",),
+        caveats=(
+            Caveat(
+                "facets",
+                ("resolve_inputs",),
+                _READ & (pl.col("family") == "genotype_table"),
+                "which chip manifests read these array facets' I/D codes and mixed-strand rows was not recorded before "
+                "0.0.21: resolve_inputs null here means not recorded, not 'no manifest', so the store takes the same "
+                f"facet resolved today with manifests for another state of it; {_RELOAD} and resolve them into a new store",
+            ),
+        ),
+    ),
 )
 """One step per schema version bump since the store shipped, in order."""
 

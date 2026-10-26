@@ -32,7 +32,7 @@ from test_load_vcf import write as write_vcf_text
 from test_person import _array_file
 from test_store import GVCF, SUBJECT, _files, _resolved_cgi
 
-VERSIONS = ("0.0.14", "0.0.15", "0.0.16", "0.0.17", "0.0.18", "0.0.19", "0.0.20")
+VERSIONS = ("0.0.14", "0.0.15", "0.0.16", "0.0.17", "0.0.18", "0.0.19", "0.0.20", "0.0.21")
 """Every schema version a store can have been written under: the store shipped under 0.0.14 (merge
 6830fb7, 2026-10-23, between 0.0.14's merge 04c5db3 and 0.0.15's 8b72a46)."""
 
@@ -42,6 +42,7 @@ ADDED: dict[str, dict[str, tuple[str, ...]]] = {
     "0.0.18": {"facets": ("gl_source",)},
     "0.0.19": {"calls": ("hq",)},
     "0.0.20": {"facets": ("resolve_version",)},
+    "0.0.21": {"facets": ("resolve_inputs",)},
 }
 """The columns each bump since the store shipped added (SCHEMA.md "Changes since sign-off")."""
 

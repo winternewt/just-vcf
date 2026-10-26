@@ -33,6 +33,7 @@ that converts between them (charter 13).
 """
 
 import hashlib
+import json
 import logging
 import os
 from collections import Counter
@@ -322,8 +323,10 @@ def resolve_ref(
     contig checks; `collection` names one instead.
 
     The result is the same facet (same `facet_id`) with the slots SCHEMA.md leaves open until the
-    sequence is read now filled, `facets.ref_seqcol_digest` naming the collection that was read and
-    `facets.resolve_version` the `RESOLVE_VERSION` that read it.
+    sequence is read now filled, `facets.ref_seqcol_digest` naming the collection that was read,
+    `facets.resolve_version` the `RESOLVE_VERSION` that read it, and `facets.resolve_inputs` a digest of the
+    chip manifests it read an array's `I`/`D` codes or a mixed strand's allele pairs with (null where it
+    read none).
     The input `Loaded` is not changed. Rows that could not be read keep `ref` null (and `ref_check`
     `not_run`), each reason counted once in the warnings.
 
@@ -400,6 +403,9 @@ def resolve_ref(
             pl.lit(plan.digest).alias("ref_seqcol_digest"),
             # The rule that read the rows, since the facet keeps its id: a store tells two REF states apart by it.
             pl.lit(RESOLVE_VERSION, dtype=FACETS["resolve_version"]).alias("resolve_version"),
+            # What else the rows were read with: the same facet resolved without the manifests keeps its
+            # I/D rows unread, so a store must tell that state from this one.
+            pl.lit(resolve_inputs(codes.digest, pairs.digest if pairs else None), dtype=FACETS["resolve_inputs"]).alias("resolve_inputs"),
             pl.lit(strand.check.value if strand is not None and strand.check is not None else None)
             .cast(FACETS["strand_check"])
             .alias("strand_check"),
@@ -411,6 +417,17 @@ def resolve_ref(
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )
+
+
+def resolve_inputs(probe_catalog: str | None, pair_catalog: str | None) -> str | None:
+    """`facets.resolve_inputs`: one digest of the manifests `resolve_ref` read rows with, the indel probes
+    (`probe_catalog`) and the SNV allele pairs (`pair_catalog`), each `probes.catalog_digest` or None
+    where none applied. None when neither did: the rows then depend on the collection and the
+    `RESOLVE_VERSION` alone."""
+    if probe_catalog is None and pair_catalog is None:
+        return None
+    text = json.dumps({"pair_catalog": pair_catalog, "probe_catalog": probe_catalog}, sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
 def _infer_from_rows(store: ReferenceStore, loaded: Loaded, facet: dict, candidates: list[str]) -> RowsInference | None:

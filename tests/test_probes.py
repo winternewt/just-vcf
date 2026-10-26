@@ -11,11 +11,14 @@ import pytest
 from just_vcf import ReferenceStore, load, normalize, resolve_ref
 from just_vcf.cache import cache_dir
 from just_vcf.formats import get_spec
+from just_vcf.reference import resolve_inputs
+from just_vcf.store import Store, StoreConflictError, migrate_store
 from just_vcf.probes import (
     IndelSite,
     ProbeSet,
     ProbeSetKind,
     available_manifests,
+    catalog_digest,
     chip_absence,
     ID_CALIBRATION,
     find_manifest,
@@ -29,6 +32,8 @@ from just_vcf.probes import (
 )
 from test_load_rsid import _two_exports
 from test_reference import PREAMBLE_23, SEQ, array_text, assert_gt_indexes_ref, write_fasta
+from test_store import SUBJECT
+from test_store_migration import _old_store
 
 CONTIG = SEQ["1"]
 FLANK = 60
@@ -297,6 +302,54 @@ def test_a_manifest_on_another_build_reads_no_codes(tmp_path: Path, grch37_store
     resolved = resolve_ref(load(coded_export(tmp_path, [("rs100", "1", 501, "DI")])), grch37_store)
     assert resolved.calls.collect()["ref"].to_list() == [None]
     assert any("no manifest with indel probes on GRCh37 is configured" in w for w in resolved.warnings)
+
+
+def test_a_store_tells_codes_read_with_manifests_from_codes_left_unread(tmp_path: Path, grch37_store: ReferenceStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`resolve_ref` keeps the `facet_id` and its `RESOLVE_VERSION` is the same either way, but the rows
+    differ: resolved without manifests an array's I/D rows stay unread, with them they are read. A store
+    holding the first was told the second was `present`, and kept the unread rows. The facet now records
+    the manifests that read it (`resolve_inputs`), so the store refuses the other state; a facet that had
+    nothing for a manifest to read records none, and stays one state with or without them."""
+    path = coded_export(tmp_path, [("rs100", "1", 501, "DI"), ("rs1", "1", 10, CONTIG[9] * 2)])
+    monkeypatch.setenv("JUST_VCF_MANIFESTS_DIR", "")
+    unread = resolve_ref(load(path, subject=SUBJECT), grch37_store)
+    directory = tmp_path / "manifests"
+    write_manifest(directory, [probe_row("rs100", "[I/D]", "1", 501, "PLUS", deletion(500, 3)[1])])
+    monkeypatch.setenv("JUST_VCF_MANIFESTS_DIR", str(directory))
+    read = resolve_ref(load(path, subject=SUBJECT), grch37_store)
+    facet_id = read.facets.collect()["facet_id"].item()
+    assert unread.facets.collect()["facet_id"].item() == facet_id
+    code = pl.col("source_gt") == "DI"
+    assert unread.calls.filter(code).collect()["ref"].to_list() == [None] and read.calls.filter(code).collect()["ref"].to_list() != [None]
+
+    store = Store.open(tmp_path / "store", subject=SUBJECT)
+    assert store.add(unread).added == (facet_id,)
+    with pytest.raises(StoreConflictError, match=facet_id):
+        store.add(read)
+    assert store.add(unread).present == (facet_id,)
+
+    assert unread.facets.collect()["resolve_inputs"].to_list() == [None]
+    assert read.facets.collect()["resolve_inputs"].to_list() == [resolve_inputs(catalog_digest(available_manifests()), None)]
+    (tmp_path / "plain").mkdir()
+    plain = coded_export(tmp_path / "plain", [("rs1", "1", 10, CONTIG[9] * 2)])
+    assert resolve_ref(load(plain), grch37_store).facets.collect()["resolve_inputs"].to_list() == [None], "no code row: no manifest read it"
+
+
+def test_an_array_resolved_before_0021_has_its_manifests_named_unknown(tmp_path: Path, grch37_store: ReferenceStore, manifests: Path) -> None:
+    """A 0.0.20 store recorded no manifests for the rows it holds: the step to 0.0.21 fills
+    `resolve_inputs` null on a resolved array facet and names it, so the null is not read as "no
+    manifest". The same facet resolved today with manifests is then another state of it."""
+    resolved = resolve_ref(load(coded_export(tmp_path, [("rs100", "1", 501, "DI")]), subject=SUBJECT), grch37_store)
+    root = tmp_path / "store"
+    _old_store(root, "0.0.20", [resolved])
+    facet_id = resolved.facets.collect()["facet_id"].item()
+    report = migrate_store(root)
+    assert [(entry.version, entry.frame, entry.columns, entry.facet_ids) for entry in report.filled_unknown] == [
+        ("0.0.21", "facets", ("resolve_inputs",), (facet_id,))
+    ]
+    assert Store.open(root).loaded().facets.collect()["resolve_inputs"].to_list() == [None]
+    with pytest.raises(StoreConflictError, match="no manifest recorded"):
+        Store.open(root).add(resolved)
 
 
 def test_codes_of_a_chip_whose_orientation_is_unverified_are_withheld(tmp_path: Path, grch37_store: ReferenceStore, manifests: Path) -> None:

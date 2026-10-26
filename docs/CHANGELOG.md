@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A facet records the chip manifests that read its rows, and the store tells the states apart (schema
+  0.0.21). `resolve_ref` reads an array's `I`/`D` codes, and a mixed strand's withheld rows, with the
+  manifests `JUST_VCF_MANIFESTS_DIR` holds, which neither the `facet_id` nor `resolve_version` records:
+  the same array resolved without manifests and then with them was reported `present`, and the store
+  kept the unread rows. `facets.resolve_inputs` is new (a digest of the manifests that read rows, null
+  where none did, inherited by derived facets), `store.REF_STATE` includes it, and such an add is now
+  refused with `StoreConflictError`. `migrate_store` adds the column to a 0.0.20 store, null and named
+  as not recorded on resolved array facets (docs/SCHEMA.md, "The durable store" and "Store migration").
+
 - `reference_support(loaded, sites, variant_class=…)` materialises reference-supported positions
   (RM3): per asked position of a one-facet `loaded`, one row (`REFERENCE_SUPPORT`) saying what the
   facet states about the reference allele there and on what it rests: `support` `call` or `block`

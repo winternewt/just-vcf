@@ -96,12 +96,14 @@ class StoreVersionError(StoreError):
 
 class StoreConflictError(StoreError):
     """A facet the store holds, given again with REF in another state: not read where the held one was,
-    or read from another collection or by another `RESOLVE_VERSION`. Its files are never rewritten."""
+    or read from another collection, by another `RESOLVE_VERSION` or with other chip manifests. Its
+    files are never rewritten."""
 
 
-REF_STATE = ("ref_seqcol_digest", "resolve_version")
-"""The facet columns that say how a facet's REF was read. `resolve_ref` keeps the `facet_id`, so a facet
-id alone does not tell a held facet's rows from those of the same facet resolved otherwise."""
+REF_STATE = ("ref_seqcol_digest", "resolve_version", "resolve_inputs")
+"""The facet columns that say how a facet's REF was read: the collection, the rule, and the chip
+manifests the rule read rows with. `resolve_ref` keeps the `facet_id`, so a facet id alone does not tell
+a held facet's rows from those of the same facet resolved otherwise."""
 
 
 class StoredFacet(BaseModel):
@@ -228,7 +230,8 @@ class Store:
         Refused, with nothing written: a `Loaded` of another schema version (`StoreVersionError`); a
         facet with no subject or another subject than the store's (`SubjectError`); one `facet_id`
         twice in `loaded`; a facet the store holds whose REF state (`REF_STATE`: the collection REF was
-        read from and the `RESOLVE_VERSION` that read it, both null before `resolve_ref`) differs from
+        read from, the `RESOLVE_VERSION` that read it and the manifests it read rows with, all null
+        before `resolve_ref`) differs from
         the held one's (`StoreConflictError`). A held facet is never rewritten, so the rows of the same
         facet resolved otherwise go into another store.
         """
@@ -360,7 +363,8 @@ def _ref_state(row: dict) -> str:
     if row["ref_seqcol_digest"] is None:
         return "REF not read"
     version = "an unrecorded RESOLVE_VERSION" if row["resolve_version"] is None else f"RESOLVE_VERSION {row['resolve_version']}"
-    return f"REF read from {row['ref_seqcol_digest']} by {version}"
+    inputs = "no manifest recorded" if row["resolve_inputs"] is None else f"inputs {row['resolve_inputs']}"
+    return f"REF read from {row['ref_seqcol_digest']} by {version} with {inputs}"
 
 
 def _links_of(links: pl.DataFrame, facet_id: str) -> pl.DataFrame:

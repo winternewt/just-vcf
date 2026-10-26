@@ -111,9 +111,16 @@ under:
    data, one read per site, would look homozygous everywhere, and the reference genomes (human, chimp,
    gorilla, ancestral) are not people;
 4. `ASSESSMENT` `Pass`, `PROVISIONAL_PASS` or `MERGE_PASS`;
-5. a group label without `Ignore` at its start and without a `-` qualifier: AADR marks outliers,
-   relatives, duplicates and QC removals that way (`-o`, `-oPCA`, `-oRelative`, `-QCremove`, `-Dup`,
-   `-1`, `-Discovery`);
+5. a group label without `Ignore` at its start and without a QC qualifier (`group_label_flag`). A
+   label is a name followed by any number of `-` qualifiers, and every one is read. AADR's README names
+   two marks of individuals to filter out of primary analyses, `Ignore_` and outliers; an outlier is
+   `-o` or any `-o…` (`-oPCA`, `-oRelative`, `-oAfrica`, `-olowEEF`). The other QC qualifiers,
+   `QC_QUALIFIERS`, were read off v66.p1's `.ind`: `-QCremove`, `-Dup`, `-Discovery` (the Human Origins
+   ascertainment samples), `-NotPermittedToPublish` and `-DontUseHighlyProblematic`. A qualifier of
+   digits only is a numbered sub-group (`Kumyk-1`, `Uzbek-2`, `Hazara_1-1`) and is kept, under its label
+   as written. A qualifier that is neither is counted apart (`group label qualifier not recognised`),
+   with a warning naming the labels; in v66.p1 those (`-A`, `-B`, `-C`, `-lowEastEU`, `-highEastEU`,
+   `-Africa`, `-3CentralEuropean`) are all on ancient individuals, so rule 2 has already left them out;
 6. a latitude and longitude;
 7. inside the box, by default just-prs's West Eurasia: latitude 30 to 75, longitude -25 to 90
    (`box=` takes another);
@@ -121,7 +128,14 @@ under:
 9. once per person: where AADR lists one person under two genetic ids (`Individual ID` shared, usually
    a Human Origins genotype and a shotgun genome), the `HumanOrigins` one is kept, else the first.
 
-`population` is the `.ind` group label (161 of them in the default build). `superpop` is a region:
+`population` is the `.ind` group label as written (172 of them in the default build). A numbered
+sub-group stays a population of its own: nothing in the panel code needs the suffix gone, and AADR
+lists `Kumyk-1` and `Kumyk-2` apart. Two things follow, measured on v66.p1. Several numbered labels
+are the Human Origins genotype of a person whose shotgun genome is under the bare label (`Hazara_1-1`
+and `Hazara_1`, `Italian_North-1` and `Italian_North`), and rule 9 keeps the Human Origins one, so
+11 people moved from the bare label to the numbered one (`Hazara_1` emptied into `Hazara_1-1`; two of
+`Italian_North`'s 40 are now `Italian_North-1`). And a numbered sub-group holds one to five people, so it cannot lead a 20-neighbour vote at
+`resolution="population"`. `superpop` is a region:
 the political entity's United Nations M49 region, Europe as one region and Sub-Saharan Africa as one,
 with Russia split at 60°E into Europe and Siberia, which M49 does not do (`AADR_REGIONS`,
 `region_of`). Where AADR's samples were collected away from their ancestry's region (the USA, Barbados:
@@ -143,13 +157,16 @@ keeps 20 components (just-prs's choice, for fine structure within Europe); `knn_
 
 | | |
 |---|---|
-| Individuals | 2,556 of 27,594. Out: 19,120 ancient, 244 not diploid, 1 assessment, 440 flagged labels, 537 without coordinates, 4,132 outside the box, 564 second representations |
-| Regions | Europe 1,388, Western Asia 344, Southern Asia 307, Siberia 216, Central Asia 164, Northern Africa 105, Eastern Asia 32 |
-| Sites | 184,833 of 276,725; every one of the 276,725 had the GRCh37 base as its first allele (none swapped, none dropped for it); 91,892 below the frequency floor |
+| Individuals | 2,567 of 27,594. Out: 19,120 ancient, 244 not diploid, 1 assessment, 370 flagged labels, 0 unrecognised qualifiers, 541 without coordinates, 4,176 outside the box, 575 second representations. 22 of the 2,567 are in a numbered sub-group (16 labels) |
+| Regions | Europe 1,394, Western Asia 347, Southern Asia 307, Siberia 216, Central Asia 166, Northern Africa 105, Eastern Asia 32 |
+| Sites | 184,882 of 276,725; every one of the 276,725 had the GRCh37 base as its first allele (none swapped, none dropped for it); 91,843 below the frequency floor |
 | Files | sites 116 MB, reference samples 1.6 MB |
-| Build | 24 s and peak RSS 6.1 GiB with the shipped code, the `.geno` read warm; 50 to 54 s on a first, cold read with an earlier cut that held a float copy of the matrix (peak 13.4 GiB) |
-| Leave-one-out | 0.944 by region. Per region: Central Asia 162/164, Europe 1,348/1,388, Northern Africa 103/105, Siberia 195/216, Southern Asia 290/307, Western Asia 314/344, Eastern Asia 0/32 (its Xibo, Uyghur and Kyrgyz samples are voted Central Asian) |
-| hu6ABACE (PGP-HMS, DRAGEN SNV genome, GRCh37) | 184,832 of 184,833 sites used: 85,971 observed, 98,861 absent read as reference, 1 unusable. Region Europe, all 20 neighbours; population GBR, margin 0.50. Load and placement 55 s |
+| Build | 17 to 24 s and peak RSS 6.1 GiB with the shipped code, the `.geno` read warm; 50 to 54 s on a first, cold read with an earlier cut that held a float copy of the matrix (peak 13.4 GiB) |
+| Leave-one-out | 0.942 by region. Per region: Central Asia 163/166, Europe 1,351/1,394, Northern Africa 103/105, Siberia 195/216, Southern Asia 290/307, Western Asia 317/347, Eastern Asia 0/32 (its Xibo, Uyghur and Kyrgyz samples are voted Central Asian) |
+| hu6ABACE (PGP-HMS, DRAGEN SNV genome, GRCh37) | 184,881 of 184,882 sites used: 85,981 observed, 98,900 absent read as reference, 1 unusable. Region Europe, all 20 neighbours; population GBR, margin 0.55. Load and placement 41 s |
+
+The build before numbered sub-groups were kept (rule 5 then excluded every `-` qualifier) chose 2,556
+individuals and 184,833 sites, leave-one-out 0.944; hu6ABACE was placed the same way.
 
 The regions overlap where the populations form a cline. `tests/test_ancestry_panels.py`'s check that
 each panel's first reference sample of every group lands in its group fails on this panel: the first

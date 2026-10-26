@@ -4,6 +4,21 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`build_aadr_panel` keeps AADR's numbered sub-groups** (the person's decision, 2026-10-26: "keep
+  numbered AADR groups"). Rule 5 excluded every group label with a `-` in it, which also dropped
+  `Kumyk-1`, `Uzbek-2`, `Hazara_1-1` and the like. AADR's README names only `Ignore_` and outliers as
+  marks to filter on. Rule 5 now reads every `-` qualifier of a label (`group_label_flag`): `Ignore` at
+  the start, an outlier qualifier (`-o`, `-o…`) or one of the new `QC_QUALIFIERS` (`QCremove`, `Dup`,
+  `Discovery`, `NotPermittedToPublish`, `DontUseHighlyProblematic`, each read off v66.p1's `.ind`)
+  excludes; a qualifier of digits is a sub-group and is kept, with `population` the label as written.
+  A qualifier that is neither is counted under a new reason, `group label qualifier not recognised`,
+  with a warning naming the labels. **Changed names:** the reason `group label flagged (Ignore_ or a
+  -qualifier)` is now `group label flagged (Ignore_ or a QC qualifier)`, and `INDIVIDUAL_EXCLUSIONS`
+  has one entry more, so a panel meta's `selection.excluded` keys differ. Rebuilt from Krypton:
+  2,567 individuals (was 2,556; 22 in 16 numbered sub-groups, 11 of them people who were in under their
+  shotgun genome's bare label and are now in under their Human Origins genotype's numbered one),
+  184,882 sites, leave-one-out 0.942; hu6ABACE still in Europe, population GBR. docs/ANCESTRY_PANELS.md
+  has the rule and the counts.
 - `just_vcf.ancestry.build_aadr_panel` builds a reference-PCA panel, `aadr_ho` on GRCh37, from AADR's
   Human Origins release (RM5), so `infer_ancestry`'s PCA path has a real panel to run on. Ported from
   just-prs `ancestry/aadr.py` and `eigenstrat.py` (docs/PROVENANCE.md). New module

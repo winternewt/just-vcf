@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `alignment_coverage` reads a BAM or CRAM once (RM278): its windows are spilled to the cache under
+  `coverage/` (a new entry kind, `coverage_spill`, with a manifest, the stale-version sweep and
+  `clear_cache`, as RM268's), and a second call with the same file, window and read filters reads the
+  spill instead of running polars-bio's `depth()` again. The key is the file's identity as `facet_id`
+  takes it (header, index, size) with the parameters, `COVERAGE_VERSION` and the polars-bio version, so
+  no spill made with other parameters or by another version is served; a stated `assembly_label` reuses
+  the spill. The returned facet is the same, its Int16 warning included; `intervals` is now a scan of
+  the spill's parquet. `just_vcf.coverage.POLARS_BIO_VERSION` is new.
+
 - **Breaking, pre-1.0:** relatedness splits the first degree into `parent_child` and `full_siblings`
   by IBS0 (RM274), two new `RelationBand` members. A parent and child are never homozygous for
   opposite alleles absent genotyping error; full siblings can be, over the quarter of the genome they

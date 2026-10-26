@@ -1765,6 +1765,18 @@ Rules:
 - **An alignment file is not hashed**: `source_sha256` is null and `facet_id` digests its header, its
   index and its size. Rejected: the sha256 of the bytes, which would read a 30x BAM a second time over
   the network for a name.
+- **An alignment file is read once.** `alignment_coverage` spills its windows to the cache
+  (`coverage/<key>/`, kind `coverage_spill`, with a manifest, swept and cleared as the loader's spills
+  are, docs/ROADMAP_HISTORY.md RM268), and a later call with the same inputs reads the spill. The key
+  digests the file's header, index and size, `window`, `min_mapping_quality`, `filter_flag`,
+  `COVERAGE_VERSION` and the polars-bio version, so a spill made with other parameters, or by another
+  `COVERAGE_VERSION` or polars-bio, is never served. `assembly_label` is left out: no window depends on
+  it, and the facet built on a reused spill still carries the build the call states. The spill trusts
+  the file's identity exactly as far as `facet_id` does: two files with one header, index and byte size
+  would share it. `clear_cache(source=bam)` matches the spill by path, but hashes an existing file to
+  look for digests too, which is one full read of the BAM. Rejected: keying by the just-vcf release,
+  which would read every BAM again at each upgrade where `COVERAGE_VERSION` already says when the
+  windows change.
 - **polars-bio 0.36 writes depth as Int16 by a wrapping cast** from a 32-bit count. A negative depth is
   left out of its window (`bases` drops) and counted in a warning; a depth past 65,535 wraps to a small
   positive value that cannot be told apart.

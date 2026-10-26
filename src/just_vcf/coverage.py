@@ -45,19 +45,28 @@ import logging
 import re
 from collections.abc import Iterator
 from enum import Enum
+from importlib.metadata import version
 from pathlib import Path
 
 import polars as pl
 import polars_bio as pb
 from pydantic import BaseModel, ConfigDict
 
+from just_vcf import cache
 from just_vcf.assembly import infer_assembly
+from just_vcf.cache import cache_dir
 from just_vcf.schema import CONTIG_RANK, AssemblyLabelBasis, canonical_chrom, canonical_chrom_expr
 
 logger = logging.getLogger(__name__)
 
 COVERAGE_VERSION = 1
-"""Bumped when the same input would give different intervals; part of every `facet_id`."""
+"""Bumped when the same input would give different intervals; part of every `facet_id` and of the
+cache key of `alignment_coverage`'s spill."""
+
+POLARS_BIO_VERSION = version("polars-bio")
+"""The polars-bio whose `depth()` computed a spill: part of its cache key and its manifest, so a
+spill one release wrote is never served under another (a fix to the Int16 wrap changes the windows
+without a `COVERAGE_VERSION` bump here)."""
 
 DEFAULT_WINDOW = 1_000
 """Window size for per-base sources folded into windows: 3.1 million rows for a human genome."""
@@ -580,10 +589,18 @@ def alignment_coverage(
     Polars' streaming engine and never held whole; the windows tile every contig the header names, with uncovered bases as
     zero (`zero_filled`). The read filters are `depth()`'s own and are recorded in `options`. A CRAM
     needs its reference where htslib-style lookup finds it; polars-bio is given none here.
+
+    The windows are spilled to the cache (`coverage/` under `JUST_VCF_CACHE_DIR`, `just_vcf.cache`), so
+    the file is read once: a later call with the same file, `window`, `min_mapping_quality` and
+    `filter_flag`, under the same `COVERAGE_VERSION` and polars-bio, reads the spill. The file is known
+    by what names it in `facet_id` (header, index, size); `assembly_label` is left out of the key, since
+    no window depends on it. A spill made with other parameters or versions is never served.
     """
     path = Path(path)
     if window < 1:
         raise ValueError("window must be a positive number of bases")
+    versions = {"COVERAGE_VERSION": COVERAGE_VERSION, "POLARS_BIO_VERSION": POLARS_BIO_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+    cache.sweep_stale(cache.COVERAGE_SPILL, versions)
     kind = _alignment_kind(path)
     scan = pb.scan_cram(str(path)) if kind == "cram" else pb.scan_bam(str(path))
     header = {key: value for key, value in pb.get_metadata(scan).get("header", {}).items() if not key.startswith("_")}
@@ -593,6 +610,46 @@ def alignment_coverage(
     lengths = [{"source": ref["name"], "chrom": canonical_chrom(ref["name"]), "length": int(ref["length"])} for ref in references]
     index = _index_sha256(path)
     options = {"filter_flag": filter_flag, "min_mapping_quality": min_mapping_quality}
+    source = {"format": CoverageFormat.ALIGNMENT_DEPTH.value, "kind": kind, "size": path.stat().st_size, "header": header, "index": index,
+              "options": options, "window": window}
+    facet_id = _facet_id({**source, "assembly_label": assembly_label})
+    key = _facet_id({**source, "polars_bio": POLARS_BIO_VERSION})
+    origin = cache.Origin(source_sha256=None, source_path=str(path.resolve()), facet_id=facet_id)
+    with cache.spilling(cache_dir() / "coverage" / key, cache.COVERAGE_SPILL, versions, origin) as spill:
+        done = spill.find(key)
+        if done is None:
+            finished, depth_warnings = _alignment_windows(path, window, filter_flag, min_mapping_quality, lengths)
+            part = spill.stage / "intervals.parquet"
+            finished.write_parquet(part)
+            done = spill.commit(key, {"intervals": [part]}, depth_warnings)
+    warnings = done.warnings
+    label, basis, label_warnings = _assembly(assembly_label, lengths)
+    warnings += label_warnings
+    for line in warnings:
+        logger.warning("alignment depth: %s", line)
+    facet = CoverageFacet(
+        facet_id=facet_id,
+        format_id=CoverageFormat.ALIGNMENT_DEPTH,
+        source_path=str(path),
+        source_sha256=None,
+        assembly_label=label,
+        assembly_label_basis=basis,
+        contig_lengths=lengths,
+        resolution=Resolution.WINDOW,
+        window=window,
+        options=options,
+        zero_filled=True,
+        dropped_fields=[],
+        warnings=warnings,
+    )
+    return Coverage(facet=facet, intervals=pl.scan_parquet(done.files("intervals")))
+
+
+def _alignment_windows(
+    path: Path, window: int, filter_flag: int, min_mapping_quality: int, lengths: list[dict]
+) -> tuple[pl.DataFrame, list[str]]:
+    """polars-bio's per-base depth over `path`, folded into `COVERAGE_INTERVALS` windows, and the
+    warning for wrapped depths: the one full read of the file."""
     # Per-base rows, not run-length blocks: polars-bio 0.36 builds every contig's block batches before
     # it emits the first, so block mode's peak grows with the reads (22.6 GB on a 27 GB BAM, 33.6 GB on
     # a 48 GB one); per-base mode emits contig by contig from its dense arrays (13.3 GB on the first).
@@ -621,30 +678,7 @@ def alignment_coverage(
             f"{unreadable:,} base(s) in {windows:,} window(s) came back with a negative depth (polars-bio writes depth as Int16, "
             "wrapping past 32,767); they are left out of those windows' depth, which then describe fewer bases"
         )
-    label, basis, label_warnings = _assembly(assembly_label, lengths)
-    warnings += label_warnings
-    for line in warnings:
-        logger.warning("alignment depth: %s", line)
-    stat = path.stat()
-    facet = CoverageFacet(
-        facet_id=_facet_id(
-            {"format": CoverageFormat.ALIGNMENT_DEPTH.value, "kind": kind, "size": stat.st_size, "header": header, "index": index,
-             "options": options, "window": window, "assembly_label": assembly_label}
-        ),
-        format_id=CoverageFormat.ALIGNMENT_DEPTH,
-        source_path=str(path),
-        source_sha256=None,
-        assembly_label=label,
-        assembly_label_basis=basis,
-        contig_lengths=lengths,
-        resolution=Resolution.WINDOW,
-        window=window,
-        options=options,
-        zero_filled=True,
-        dropped_fields=[],
-        warnings=warnings,
-    )
-    return Coverage(facet=facet, intervals=_ordered(finished).lazy())
+    return _ordered(finished), warnings
 
 
 def _alignment_kind(path: Path) -> str:

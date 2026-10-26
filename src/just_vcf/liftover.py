@@ -81,7 +81,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf import cache
-from just_vcf.breakends import mate_contig, parse_breakend, turned
+from just_vcf.breakends import parse_breakend, turned
 from just_vcf.links import LIFTOVER_TO, derived_links
 from just_vcf.loaders.vcf import _SV_LENGTH_TYPES
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
@@ -422,10 +422,10 @@ def liftover(
     present = pl.concat([calls.select("chrom"), lifted_blocks.select("chrom")]).unique().collect()["chrom"].to_list()
     names = {chrom: contig.name for chrom, contig in target_contigs.items()}
     # A lifted breakend names its mate's contig inside ALT, as the target collection names it: those
-    # contigs are the rows' too, though no row may stand on one.
-    by_name = {name: chrom for chrom, name in names.items()}
-    spelled = calls.filter(pl.col("alts").list.join(",").str.contains(r"[\[\]]")).select(mate_contig(pl.col("alts").explode(empty_as_null=False)).alias("_name")).drop_nulls().unique().collect()
-    present = sorted({*present, *(by_name[name] for name in spelled["_name"].to_list() if name in by_name)})
+    # contigs are the rows' too, though no row may stand on one. The lift wrote them down beside the rows.
+    mate_parts = done.files("mate_contigs")
+    mates = pl.read_parquet(mate_parts)["chrom"].to_list() if mate_parts else []
+    present = sorted({*present, *mates})
     label = store.assembly_label(target_digest)
     chain_input = [{"role": "chain", "name": chain.name, "sha256": chain.sha256}]
     facets = parent.lazy().with_columns(
@@ -511,7 +511,13 @@ def _lift_into(
         block_report.write_parquet(block_report_parts[-1])
     reasons = {reason: counts[f"reason:{reason}"] for reason in sorted(UNLIFTED_REASONS) if counts[f"reason:{reason}"]}
     warnings = _warnings(counts, reasons, block_report, chain, store, source_digest, target_digest)
-    groups = {"calls": calls_parts, "report": report_parts, "blocks": blocks_parts, "block_report": block_report_parts}
+    # The canonical target contigs lifted breakends name as mates, for the facet's `contig_map`.
+    mate_contigs = sorted(key.removeprefix("bnd_mate_chrom:") for key in counts if key.startswith("bnd_mate_chrom:"))
+    mate_parts: list[Path] = []
+    if mate_contigs:
+        mate_parts.append(spill.stage / "mate-contigs.parquet")
+        pl.DataFrame({"chrom": mate_contigs}, schema={"chrom": pl.String}).write_parquet(mate_parts[-1])
+    groups = {"calls": calls_parts, "report": report_parts, "blocks": blocks_parts, "block_report": block_report_parts, "mate_contigs": mate_parts}
     return spill.commit(key, groups, warnings)
 
 
@@ -921,6 +927,7 @@ def _place_bnd(
                     alts.append(turned(b, bool(minus), False, None, None))
                     continue
                 _, mate_target, mate_q0, _ = placed_mates[(row, k)]
+                counts[f"bnd_mate_chrom:{mate_target}"] += 1
                 alts.append(turned(b, bool(minus), mate_minus[k], targets[mate_target].name, mate_q0 + 1))
         out["_row"].append(row)
         out["_reason2"].append(reason)

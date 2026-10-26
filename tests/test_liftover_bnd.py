@@ -340,8 +340,12 @@ def test_the_lifted_facet_names_its_mate_contigs(tmp_path: Path, setup) -> None:
     store, source, _, forward, _ = setup
     _, lifted = lift_cases(tmp_path, store, source, forward)
     facet = lifted.loaded.facets.collect().row(0, named=True)
-    # Breakends on chr2 point at chr1 and chr3 (pm_*): every contig an ALT names is in the map.
+    # No row lands on chr3, but pm_* point at it: every contig an ALT names is in the map.
     assert {entry["source"] for entry in facet["contig_map"]} == {"chr1", "chr2", "chr3"}
+    assert "3" not in set(lifted.loaded.calls.collect()["chrom"])
+    # A second run reuses the cached generation and reads the same map back.
+    _, again = lift_cases(tmp_path, store, source, forward)
+    assert again.loaded.facets.collect().row(0, named=True)["contig_map"] == facet["contig_map"]
     lifted_count = sum(reason is None for reason in EXPECTED_REASON.values())
     assert any(warning.startswith(f"{lifted_count} lifted row(s) were breakends") for warning in lifted.loaded.warnings)
     # mate_gap's mate in a gap, mate_no_chain's on a contig the chain does not cover.

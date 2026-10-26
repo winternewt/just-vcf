@@ -168,6 +168,11 @@ meanwhile. The desk carries the ones filed there.
   after `resolve_ref` (about an afternoon), which counts the alleles the person carries in a column that, for a VCF,
   counts the ALT alleles the file writes; and counting probe shapes at load (letters as SNVs, I/D codes as indels),
   a new meaning or a new column. Nothing that gates absence reads the field for an array.
+- **Layer 1, the lead's call on a cached load's time (not built yet, listed for veto):** a cached load still reads the
+  VCF twice through polars-bio (warning counts, and the staged spill whose bytes key the generation): 88 s of
+  hu416394's, 804 s of the Isaac gVCF's. The generation stays keyed by the staged bytes; the warning counts are to be
+  cached by the copy's digest, which saves the first pass. Rejected: keying the generation on its inputs (source
+  digest, options, a loader version), where one forgotten bump serves rows an older loader wrote.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

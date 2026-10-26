@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A `Person` carries its coverage facets (RM278): `read_coverage` and `alignment_coverage` take
+  `subject=`, written on the new `CoverageFacet.subject` (not in `facet_id`), and `Person.of` and
+  `people` take `coverage=[...]`, grouped by that label and refused (`SubjectError`) without one or
+  under another subject. `person_sex_chromosome_evidence(person, pairs=None)` is new: each facet's
+  estimate with the person's coverage facet on its build, and a new `coverage_pairing` field saying
+  which was used and why (`only_one_on_build`, `only_usable_on_build`, `stated`, …). Of two usable
+  coverage facets on one build none is used and both are named, since nothing records which
+  alignment a callset came from; `pairs` states one. `sex_chromosome_evidence` is unchanged and
+  leaves `coverage_pairing` null. Additive.
+
 - `alignment_coverage` reads a BAM or CRAM once (RM278): its windows are spilled to the cache under
   `coverage/` (a new entry kind, `coverage_spill`, with a manifest, the stale-version sweep and
   `clear_cache`, as RM268's), and a second call with the same file, window and read filters reads the

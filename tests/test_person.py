@@ -6,8 +6,9 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+import test_coverage
 import test_liftover
-from just_vcf import ReferenceStore, liftover, load, rejoin_split, resolve_ref
+from just_vcf import ReferenceStore, alignment_coverage, liftover, load, read_coverage, rejoin_split, resolve_ref
 from just_vcf.formats import get_spec
 from just_vcf.links import APPENDED_EXPORT, LIFTOVER_TO, canonical_links
 from just_vcf.loading import Loaded
@@ -312,3 +313,70 @@ def test_a_person_carries_kin_links_once_across_its_facets(tmp_path: Path) -> No
     assert Person.of(loaded).links.collect().equals(expected)
     alone = Person.of(load(_vcf_file(tmp_path, ["S1"]), subject="person-a"))
     assert alone.links.collect().is_empty() and alone.links.collect().schema == LINKS
+
+
+# --- coverage facets of a person (RM278) -------------------------------------------------------------
+
+
+def _bam(tmp_path: Path, name: str = "a.bam", reads: list | None = None) -> Path:
+    return test_coverage.write_bam(tmp_path / name, test_coverage.READS if reads is None else reads)
+
+
+def test_a_coverage_facet_carries_the_supplied_subject_and_its_id_does_not(tmp_path: Path) -> None:
+    bam = _bam(tmp_path)
+    labelled, plain = alignment_coverage(bam, window=10, subject="person-a"), alignment_coverage(bam, window=10)
+    assert (labelled.facet.subject, plain.facet.subject) == ("person-a", None)
+    assert labelled.facet.facet_id == plain.facet.facet_id
+    bed = tmp_path / "p.bed"
+    bed.write_text("\n".join(test_coverage.per_base_lines(test_coverage.READS)) + "\n")
+    read = read_coverage(bed, subject="person-a")
+    assert read.facet.subject == "person-a" and read.facet.facet_id == read_coverage(bed).facet.facet_id
+    for bad in ("", "  "):
+        with pytest.raises(ValueError, match="subject must be a non-empty label"):
+            alignment_coverage(bam, subject=bad)
+        with pytest.raises(ValueError, match="subject must be a non-empty label"):
+            read_coverage(bed, subject=bad)
+
+
+def test_a_person_carries_its_coverage_facets_in_facet_id_order(tmp_path: Path) -> None:
+    array, vcf = _two_sources(tmp_path)
+    bam = _bam(tmp_path)
+    narrow, wide = alignment_coverage(bam, window=10, subject="person-a"), alignment_coverage(bam, window=20, subject="person-a")
+    person = Person.of(array, vcf, coverage=[narrow, wide], check=None)
+    assert [c.facet.facet_id for c in person.coverage] == sorted([narrow.facet.facet_id, wide.facet.facet_id])
+    assert Person.of(array, vcf, check=None).coverage == ()
+    # A coverage facet has no genotypes, so the relatedness check never sees it.
+    check = Recorder(default=True)
+    Person.of(array, vcf, coverage=[narrow], check=check)
+    assert {frozenset(pair) for pair in check.calls} == {frozenset({_facet_id(array), _facet_id(vcf)})}
+
+
+def test_a_person_refuses_coverage_it_cannot_group(tmp_path: Path) -> None:
+    array, vcf = _two_sources(tmp_path)
+    bam = _bam(tmp_path)
+    unlabelled = alignment_coverage(bam, window=10)
+    with pytest.raises(SubjectError, match=f"coverage facet\\(s\\) without a subject: {unlabelled.facet.facet_id}"):
+        Person.of(array, vcf, coverage=[unlabelled])
+    other = alignment_coverage(bam, window=20, subject="person-b")
+    with pytest.raises(SubjectError, match=other.facet.facet_id) as refused:
+        Person.of(array, vcf, coverage=[other])
+    assert "person-a" not in str(refused.value) and "person-b" not in str(refused.value)
+    labelled = alignment_coverage(bam, window=10, subject="person-a")
+    with pytest.raises(ValueError, match="more than once"):
+        Person.of(array, vcf, coverage=[labelled, labelled])
+
+
+def test_people_groups_coverage_by_the_supplied_label(tmp_path: Path) -> None:
+    a_array, a_vcf = _two_sources(tmp_path, "person-a")
+    b = load(_array_file(tmp_path, "b.txt", "23andme_csv"), subject="person-b")
+    a_cov = alignment_coverage(_bam(tmp_path, "a.bam"), window=10, subject="person-a")
+    b_cov = alignment_coverage(_bam(tmp_path, "b.bam", test_coverage.READS[:2]), window=10, subject="person-b")
+    grouped = people(a_array, a_vcf, b, coverage=[b_cov, a_cov], check=None)
+    assert [c.facet.facet_id for c in grouped["person-a"].coverage] == [a_cov.facet.facet_id]
+    assert [c.facet.facet_id for c in grouped["person-b"].coverage] == [b_cov.facet.facet_id]
+    stray = alignment_coverage(_bam(tmp_path, "c.bam", test_coverage.READS[:3]), window=10, subject="person-c")
+    with pytest.raises(SubjectError, match=f"under a subject no facet carries: {stray.facet.facet_id}") as refused:
+        people(a_array, b, coverage=[stray], check=None)
+    assert "person-c" not in str(refused.value)
+    with pytest.raises(SubjectError, match="without a subject"):
+        people(a_array, coverage=[alignment_coverage(_bam(tmp_path, "d.bam", test_coverage.READS[:1]), window=10)], check=None)

@@ -166,6 +166,10 @@ class CoverageFacet(BaseModel):
     dropped_fields: list[str]
     """Source columns no interval column carries (`samtools coverage`'s `numreads`, …)."""
     warnings: list[str]
+    subject: str | None = None
+    """The caller's label for the person whose reads these are (`subject=`), as `load` writes
+    `facets.subject` (RM273): supplied, never inferred. Not identity: `facet_id` does not digest it, and
+    `alignment_coverage`'s cache spill does not key on it. `Person.of(..., coverage=...)` groups by it."""
 
 
 class Coverage(BaseModel):
@@ -199,6 +203,7 @@ def read_coverage(
     window: int | None = DEFAULT_WINDOW,
     assembly_label: str | None = None,
     kind: CoverageFormat | None = None,
+    subject: str | None = None,
 ) -> Coverage:
     """Read a depth tool's output into a coverage facet (module docstring for the formats).
 
@@ -209,8 +214,10 @@ def read_coverage(
     contig lengths); a stated label disagreeing with the lengths is kept, with a warning.
     `kind` states the format where the content cannot tell it (a headerless three-column file whose
     rows read as intervals is refused without it).
+    `subject` is the caller's label for the person the reads are of (`CoverageFacet.subject`).
     """
     path = Path(path)
+    _check_subject(subject)
     if window is not None and window < 1:
         raise ValueError("window must be a positive number of bases, or None")
     if kind is CoverageFormat.ALIGNMENT_DEPTH:
@@ -267,8 +274,15 @@ def read_coverage(
         zero_filled=False,
         dropped_fields=dropped,
         warnings=warnings,
+        subject=subject,
     )
     return Coverage(facet=facet, intervals=_ordered(intervals).lazy())
+
+
+def _check_subject(subject: str | None) -> None:
+    """`load`'s rule for the label: a non-empty one, or None."""
+    if subject is not None and not subject.strip():
+        raise ValueError("subject must be a non-empty label, or None for no subject")
 
 
 def _open_text(path: Path) -> io.BufferedIOBase:
@@ -582,6 +596,7 @@ def alignment_coverage(
     min_mapping_quality: int = DEFAULT_MIN_MAPPING_QUALITY,
     filter_flag: int = DEFAULT_FILTER_FLAG,
     assembly_label: str | None = None,
+    subject: str | None = None,
 ) -> Coverage:
     """Depth over a BAM or CRAM by polars-bio's `depth()`, in fixed windows (module docstring).
 
@@ -595,8 +610,12 @@ def alignment_coverage(
     `filter_flag`, under the same `COVERAGE_VERSION` and polars-bio, reads the spill. The file is known
     by what names it in `facet_id` (header, index, size); `assembly_label` is left out of the key, since
     no window depends on it. A spill made with other parameters or versions is never served.
+
+    `subject` is the caller's label for the person the reads are of (`CoverageFacet.subject`); it is
+    carried on the facet and keys nothing.
     """
     path = Path(path)
+    _check_subject(subject)
     if window < 1:
         raise ValueError("window must be a positive number of bases")
     versions = {"COVERAGE_VERSION": COVERAGE_VERSION, "POLARS_BIO_VERSION": POLARS_BIO_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
@@ -641,6 +660,7 @@ def alignment_coverage(
         zero_filled=True,
         dropped_fields=[],
         warnings=warnings,
+        subject=subject,
     )
     return Coverage(facet=facet, intervals=pl.scan_parquet(done.files("intervals")))
 

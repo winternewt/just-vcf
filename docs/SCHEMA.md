@@ -1503,6 +1503,13 @@ library checks the claim and warns, and it never infers a subject or moves a fac
   same-person floor, `False` below it, `None` across it or when the pair cannot be compared (no shared
   assembly, too few shared sites). `check=None` runs none and leaves every pair `not_run`, which is not
   a pass.
+- **Coverage facets** (RM278). `read_coverage(..., subject=...)` and `alignment_coverage(...,
+  subject=...)` write the label on the `CoverageFacet` (`subject`, nullable, not digested into its
+  `facet_id` and not in the cache spill's key). `Person.of(*loaded, coverage=[...])` and
+  `people(*loaded, coverage=[...])` carry them on `Person.coverage`, in `facet_id` order. One without
+  a subject, under another subject than the facets, or (in `people`) under a subject no facet carries
+  is refused with `SubjectError`; one given twice with `ValueError`. The label is their only check: a
+  depth file holds no genotype, so no relatedness test reads one and `Person.checks` has no row for it.
 - **One source under two subjects** (a file loaded twice under two labels) is allowed: `people` warns
   in each person concerned, naming the facet ids. Two samples of one VCF under two subjects (a trio)
   are different sources and draw no warning.
@@ -1626,6 +1633,24 @@ and the answer is the calls' alone. So is a coverage facet whose chr20 depth is 
 genome (`coverage_uneven`: under 75% of its bases within half to twice the median, an exome's or a
 panel's shape). The field defaults to null, so nothing changes without coverage.
 
+**At the person level**, `person_sex_chromosome_evidence(person, pairs=None, array_y=False)` answers
+for each facet of a `Person` (RM273) with one of the person's coverage facets paired to it, and the
+result's `coverage_pairing` (`just_vcf.karyotype.CoveragePairing`: `coverage_facet_id`, `basis`,
+`candidates`, `detail`; null from the facet-level function) says which and why. Each answer is
+exactly what `sex_chromosome_evidence` gives that facet with that coverage facet. Pairing is by build,
+since nothing in the frames records which alignment a callset was called from: the person's one
+coverage facet on the facet's `assembly_label` is used (`only_one_on_build`); of several there, the
+one `measure_coverage` finds usable (`only_usable_on_build`, the others named with their reasons);
+two or more usable is `several_on_build`, none usable `none_usable_on_build`, none there
+`none_on_build`, none at all `no_coverage`, and in those cases no coverage facet is used and the
+answer is the calls' alone. `pairs` (a facet's `facet_id` to a coverage facet's, or None) states the
+pairing instead (`stated`). The vocabulary is `just_vcf.karyotype.COVERAGE_PAIRINGS`. Rejected: picking
+one of several usable coverage facets (the deepest, the first), a guess that would hide another
+person's BAM labelled with this subject, which `lines_disagree` otherwise shows; pairing on the BAM's
+read-group sample against the VCF's sample column, a file's label that is often a real name and the
+same for different people (the reason the subject is never read from it); a blend of several coverage
+lines.
+
 An array facet (`callset_type = array`) gets its own lines, on the result's `array` field
 (`just_vcf.karyotype.ArrayLines`, null for every other facet), read from `gt_alleles` as the export
 wrote them, so no REF and no `gt` are needed: rows, called rows, written no-calls, one-letter rows, two-letter base
@@ -1742,7 +1767,8 @@ return a `Coverage`: a `CoverageFacet` model and a lazy `intervals` frame. It is
 `samtools_coverage`, `alignment_depth`: named by shape, since mosdepth's per-base BED and bedtools'
 `genomecov -bg` are one shape), `source_path`, `source_sha256`, `assembly_label` and its basis,
 `contig_lengths`, `resolution` (`base`, `window`, `bin`, `region`), `window`, `options` (the read
-filters `depth()` ran with), `zero_filled`, `dropped_fields`, `warnings`. just-vcf's own shape
+filters `depth()` ran with), `zero_filled`, `dropped_fields`, `warnings`, `subject` (the caller's
+label, "Facets of one person" above). just-vcf's own shape
 (charter 2): GA4GH has no coverage model.
 
 Rules:
@@ -2505,6 +2531,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   (or the reverse) is `disagrees`, where it was `agrees`. Rejected: a separate nullable column (say
   `first_degree_kind`) beside an unchanged `band`, strictly additive but a second column every reader
   must join to the first to know what a pair is.
+
+- **No version change** (2026-10-26, RM278's person-level coverage): no column of `facets`, `calls` or
+  `blocks` changes. Three nullable or defaulted fields outside the frames: `CoverageFacet.subject`,
+  `Person.coverage` (empty by default) and `SexChromosomeEvidence.coverage_pairing` (null from
+  `sex_chromosome_evidence`, which is unchanged). Additive: minor.
 
 - **No version change** (2026-10-26, an allele index `gt` cannot hold): the VCF, key=value and Nirvana
   loaders count a genotype whose index names an allele of the row past 255 (`0/300` over 300 ALTs)

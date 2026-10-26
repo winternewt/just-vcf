@@ -55,3 +55,67 @@ probe tests GSA's allele. A learned probe set cannot settle it either: PGP-HMS h
 export, and learning its site alleles from the same person's WGS would make the array agree with that
 WGS by construction (a value filled from the source that checks it). Stays open until a second
 source of the Sirius chip's site alleles appears.
+
+## F23 — A CNV caller's `N` REF reads as a mismatch, so no CNV facet lifts
+
+Severity: medium · Found 2026-10-26 dogfooding RM6's SV lift on the PGP-HMS CNV files.
+
+DRAGEN's and Canvas's copy-number VCFs write REF `N` on every record: the caller never reads the
+reference. `resolve_ref` compares that `N` with the base it reads and sets `ref_check = mismatch`
+on every row, and `liftover` leaves every `mismatch` row behind as `source_ref_mismatch`. Measured
+with the library: hu6ABACE's DRAGEN 3.2.8 `.cnv.` (586 rows, GRCh37), hu1C1368's DRAGEN 3.4.5
+`.cnv.` (556 rows, GRCh37) and hu416394's Canvas `.cnv.` (182 rows, 92 copy-number calls and 90
+copy-neutral segments, GRCh38): 0 match, 100% mismatch, 0 rows lifted through `hg19ToHg38` or
+`hg38ToHg19`. So the copy-number half of RM6's SV lift has never run on a real file; the 31 `N` rows
+of hu416394's Manta file sit on decoys and are unread anyway.
+
+The IUPAC note in the resolve warning does not cover it: `_iupac_explains` counts an ambiguity code on
+the reference side (a gap base) against a concrete source base, not a source `N` against a concrete
+reference base. The SV lift itself needs nothing new: on a plus strand `_place_sv` compares the
+target's base with `ref`, the base read from the source assembly, not with `source_ref`. Only the
+`ref_check` gate stops these rows. Each candidate repair needs a decision:
+
+- *Read a source `N` as matching any base (`match`):* the row moves from honestly unverified to
+  apparently verified, a check that never ran reported as passed (§5, Kleene).
+- *A new `RefCheck` value for a source REF that states no base (`unstated` or similar), lifted like
+  `match`:* the honest reading, but `RefCheck` is a `pl.Enum` in the wire schema, so a new value is a
+  schema change, and `mint_vrs_ids`, `write_vcf(resolved_only=True)` and `normalize` each have to say
+  what they do with it.
+- *`not_run` for an all-`N` source REF, with `ref` read:* no schema change, but `not_run` today means
+  the comparison did not happen for want of a reference, and the two causes would share one value.
+- *Special-case symbolic rows in `liftover`:* makes SVs the one row kind whose unstated REF passes,
+  and leaves `resolve_ref`'s counts calling 1,324 public rows mismatched.
+
+Blocks: lifting any CNV facet (every one in hand); also any QC that reads `ref_check` on them.
+
+## F24 — Every source contig costs a fixed pass, so a header full of decoys is slow and heavy
+
+Severity: low · Found 2026-10-26 dogfooding RM6's SV lift on hu416394's Manta file (Sequencing.com,
+GRCh38, a 2,581-contig hs38DH-style header).
+
+`resolve_ref` and `liftover` work contig by contig, each contig a filtered scan, a few `collect`s and a
+parquet file in the spill. The file has 9,373 rows on 942 contigs, 918 of them decoys and scaffolds
+with a handful of rows each (1,228 rows on decoys, which no assembly holds and which stay unread, as
+they should). Profiled on a fresh cache: `resolve_ref` 13.4 s (943 parquet sinks), `liftover` 27.2 s
+(942 `_lift_contig` passes, 13,217 `collect`s, 997 sinks, `_segments` rebuilt 72 times). The same
+rows cut to the 25 primary contigs resolve in 0.4 s at a 1,774 MB peak; all of them take 14.3 s and
+3,757 MB. For scale, hu1C1368's GRCh37 Manta file (7,246 rows on 24 contigs) resolves in 0.5 s and
+lifts in 2.7 s under 430 MB. Nothing is wrong in the output; the cost is per contig, not per row.
+Repairs, each a change to the spill design: batch the small contigs into one pass; send rows on a
+contig the store or the chain does not hold straight to their reason without a pass of their own.
+Neither is free: the per-contig parts are what keep a WGS gVCF within memory, and their layout is a
+cache key (`SPILL_LAYOUT`).
+
+## F25 — UCSC scaffold names written without `chr` are not matched to the store
+
+Severity: low · Found 2026-10-26 dogfooding RM6's SV lift on hu416394's Manta file.
+
+Sequencing.com's GRCh38 header names the scaffolds `1_KI270706v1_random` and `Un_KI270302v1`: UCSC's
+names with `chr` cut off. F19's alias table carries the names NCBI's assembly reports give
+(`chr1_KI270706v1_random`, `KI270706.1`, `NT_187361.1`), and this spelling is none of them, so 275
+rows (96 on `_random` scaffolds, 179 on unplaced `Un_` ones) stay `ref_unread` and cannot lift, though
+the store holds the sequences. Repairs: add the `chr`-less spelling of each UCSC name to the alias
+table, which is the name-pattern rule F19 rejected (its reasons are in PREVIOUS_ISSUES.md);
+or match a header contig by its stated length when exactly one scaffold of the
+assembly has it, which is a new matching rule. Low: 3% of this file, and only its breakends and SVs
+touching scaffolds.

@@ -1165,6 +1165,21 @@ strands). Not run on a real SV file yet (the PGP-HMS Manta, Canvas and DRAGEN fi
   the ALT the source's spelling) and the brackets turned per strand, with both mate records agreeing.
 - `<INS>` lifts as a point at its anchor. The frame keeps no inserted length, so nothing else moves.
 
+*Dogfooded 2026-10-26 on the PGP-HMS SV and CNV files* (load, `resolve_ref`, `liftover`, `write_vcf`,
+reload; counts only). Manta files lift their symbolic SVs: hu1C1368 (GRCh37 → 38, `hg19ToHg38`)
+473 of 477 `<DEL>`, 236 of 236 `<DUP>`, 1,047 of 1,049 `<INS>`; hu416394 (GRCh38 → 37, `hg38ToHg19`)
+647 of 848 `<DEL>`, 387 of 558 `<DUP>`, 242 of 251 `<INS>`, most of the rest on decoys and scaffolds
+(`no_chain_block`, `ref_unread`); huBEF5E2's Veritas file 1,654 of 1,668 `<DEL>` and 206 of 216
+`<INV>`, its 3,730 BreakDancer `<ITX>`/`<CTX>` behind as `allele_not_sequence`. Every reason fired
+on real rows (`sv_end_unlifted` 23, `sv_length_changed` 20, `sv_ends_apart` 6, `sv_ends_reversed`
+2). Breakends (1,228, 2,040, 1,310 more unread) stay behind as designed. Checked against pyliftover's
+placing of both ends: 4,892 of 4,892 lifted SVs agree, 52 on minus-strand blocks and 74 whose span
+crosses a chain gap (lifted length changed within 5%). Reloaded, every lifted SV keeps its `end_pos`,
+`cipos` and `ciend`, with no END/SVLEN disagreement warned. A few seconds per file under 500 MB,
+except hu416394's decoy-heavy header (F24). **No CNV file lifts**: DRAGEN and Canvas write REF `N`,
+which `resolve_ref` reads as a mismatch (F23), so 0 of 1,324 copy-number rows, segments included,
+have lifted on real data.
+
 
 ## RM271 — VRS allele ids
 Severity: high · Status: in progress (`mint_vrs_ids` and `vrs_withheld` shipped 2026-10-22 for VCF and array rows, merge b41bda5, equal to vrs-python on 19,000 real alleles. Left, buildable now: an opt-in test in `tests/test_vrs.py` minting on the real store `JUST_VCF_TEST_REFERENCE_DIR` names against vrs-python (`scripts/vrs_oracle.py`); today only `tests/test_phasing.py`'s Genes for Good test (39506f4, 2026-10-23) checks minted alleles on a real assembly, through CisPhasedBlock ids, on 1,500 rows. Waiting on the person: filing the gtars gap, G1 in docs/GTARS_PENDING_FIXES.md, not filed, needs the person's go per batch, the upstream-liaison seat's) · Owner: lead

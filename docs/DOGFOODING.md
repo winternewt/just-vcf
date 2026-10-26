@@ -119,3 +119,17 @@ table, which is the name-pattern rule F19 rejected (its reasons are in PREVIOUS_
 or match a header contig by its stated length when exactly one scaffold of the
 assembly has it, which is a new matching rule. Low: 3% of this file, and only its breakends and SVs
 touching scaffolds.
+
+## F26 — Loading a WGS gVCF holds gigabytes
+
+Severity: low · Found 2026-10-26 dogfooding RM6's block lift on the PGP-HMS gVCFs.
+
+`load` of hu416394's bcftools gVCF (a 397 MB member of a zip, 9,651,143 calls and 9,473,303 blocks)
+peaks at 7.8 GB on a fresh cache (151 s) and at 7.7 GB again with its frames already cached (89 s);
+`resolve_ref`, `liftover` and `write_vcf` after it stay within that peak (sampled per phase). The
+whole pipeline over hu80855C's Isaac gVCF (1.9 GB, 45,242,155 calls and 138,019,217 blocks) peaked at
+46 GB by the end of `load` (1,008 s) and 49 GB on the reload, on a 62 GB machine; that run's own
+counting over the frames is inside the figure, so `load`'s share there is not measured. Not looked
+into: where in `load` the memory goes (the per-contig spill is meant to bound it, PREVIOUS_ISSUES has
+the 6.4-million-call DeepVariant file at 3.6 GB), and why a load whose frames are cached still takes
+89 s at the same peak. Blocks nothing yet; a 30x Isaac gVCF is near the edge of this machine.

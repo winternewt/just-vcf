@@ -1434,8 +1434,14 @@ POLARS_BIO_VERSION = version("polars-bio")
 
 _STATS_CODE = hashlib.sha256(Path(__file__).read_bytes() + Path(text_loader.__file__).read_bytes()).hexdigest()
 """A digest of this module's source and `loaders/text.py`'s, which hold `scan_stats`, `read_records`
-and every helper they call: in the cached stats' key, so an edit to either that does not bump
-`STATS_VERSION` still never reads a count an older edit computed."""
+and every helper they call: in the cached stats' key and manifest (`stats_versions`), so an edit to
+either that does not bump `STATS_VERSION` still never reads a count an older edit computed, and the
+sweep retires the entry that edit's predecessor wrote (`STATS_DIGESTS`)."""
+
+STATS_DIGESTS: frozenset[str] = frozenset({"STATS_CODE"})
+"""The keys of `stats_versions` that are digests, not version numbers: the sweep retires an entry whose
+digest differs (`cache.sweep_stale`'s `digests`), unless its `STATS_VERSION` or a library version is
+ahead."""
 
 STATS_FILE = "stats.json"
 """The file in a `stats/<key>/` cache entry holding one `scan_stats` result and the key it answers."""
@@ -1443,7 +1449,12 @@ STATS_FILE = "stats.json"
 
 def stats_versions() -> dict[str, object]:
     """The version keys of a cached `scan_stats` result, in its manifest and its key."""
-    return {"STATS_VERSION": STATS_VERSION, "POLARS_BIO_VERSION": POLARS_BIO_VERSION, "POLARS_VERSION": pl.__version__}
+    return {
+        "STATS_VERSION": STATS_VERSION,
+        "POLARS_BIO_VERSION": POLARS_BIO_VERSION,
+        "POLARS_VERSION": pl.__version__,
+        "STATS_CODE": _STATS_CODE,
+    }
 
 
 def stats_key(path: Path, read_sha256: str, header: Header, part: Part, origin: cache_index.Origin) -> str:
@@ -1459,7 +1470,8 @@ def stats_key(path: Path, read_sha256: str, header: Header, part: Part, origin: 
       registration options (`SCAN_OPTIONS`); the header's VCF version, the keys left out of the copy
       (`left_out_of_copy`) and whether PS is declared, which shape the records past the scan; the keys
       the retry left out (`Header.unparsed`); and the part (`Part.select`, `Part.unsourced`);
-    - `READER_DEFINITIONS`, `STATS_VERSION`, polars-bio's and polars' versions, and `_STATS_CODE`.
+    - `READER_DEFINITIONS`, and `stats_versions()`: `STATS_VERSION`, polars-bio's and polars' versions
+      and `_STATS_CODE`.
 
     Not inputs: the first record, which `read_records` only checks against the scan (it raises, it
     changes no row); and the table name `scan` registers, which names a table and changes no row. The
@@ -1485,7 +1497,6 @@ def stats_key(path: Path, read_sha256: str, header: Header, part: Part, origin: 
         },
         "reader_definitions": {f"{major}.{minor}": definitions for (major, minor), definitions in READER_DEFINITIONS.items()},
         "versions": stats_versions(),
-        "code": _STATS_CODE,
     }
     return hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()
 

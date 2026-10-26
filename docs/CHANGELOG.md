@@ -4,6 +4,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load`'s cache sweep retires cached `scan_stats` results an earlier edit of the VCF loader counted
+  (the person's decision, audit 12). The loader's code digest, `_STATS_CODE`, was in a stats entry's
+  key but not among its version keys, so an entry written under another digest with the same
+  `STATS_VERSION` was never read again and never swept: small JSON orphans piled up until
+  `clear_cache`. The digest is now a version key, `STATS_CODE` (`stats_versions()`), and
+  `cache.sweep_stale` takes `digests=`, keys compared for equality only: an entry whose digest differs
+  is behind unless a numbered key is ahead. The grace period still applies. A newer install sharing
+  the cache under the same numbered versions can lose its stats entries this way and count them again
+  on its next load; only the stats sweep passes `digests`, since nothing reads a stats entry after its
+  load returned. Every stats entry written before this change lacks the key and is swept once its
+  grace period has run. `cache.py`'s module docstring now lists every input of the stats key.
 - `tests/test_ancestry_panels.py`'s own-sample check accepts a reference sample placed on its region's
   border with one other region (the person's option 1, 2026-10-26): in its own region, or a two-way vote
   (its own region and the leader at least 0.9 together) with its own region at least a third. It

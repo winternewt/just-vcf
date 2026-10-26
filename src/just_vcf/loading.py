@@ -165,7 +165,8 @@ def load(source: Path | str | Sniffed, sample: str | None = None, subject: str |
     touches the files an earlier `Loaded` reads. An input polars-bio cannot read as it is is first
     copied there; the lazy frames read the spill, never the copy. Each run first removes the cache
     entries an older `REWRITE_VERSION`, `SCHEMA_VERSION`, `SPILL_LAYOUT`, `FRAMES_LAYOUT`, `WORK_VERSION` or
-    `STATS_VERSION` (or polars, or polars-bio) wrote (`just_vcf.cache.sweep_stale`). A VCF's warning
+    `STATS_VERSION` (or polars, or polars-bio) wrote, and the stats an edit of the VCF loader's code
+    counted (`just_vcf.cache.sweep_stale`). A VCF's warning
     counts come from one polars-bio pass over its records, stored in the cache by what they depend on
     (`loaders.vcf.stats_key`), so a load of the same file run again reads the records once, to spill them.
     """
@@ -181,7 +182,7 @@ def _load(source: Path | str | Sniffed, sample: str | None) -> Loaded:
     cache.sweep_stale(cache.REWRITE_COPY, {"REWRITE_VERSION": vcf.REWRITE_VERSION})
     cache.sweep_stale(cache.FRAMES_SPILL, _FRAMES_VERSIONS)
     cache.sweep_stale(cache.WORK_COPY, _WORK_VERSIONS)
-    cache.sweep_stale(cache.SCAN_STATS, vcf.stats_versions())
+    cache.sweep_stale(cache.SCAN_STATS, vcf.stats_versions(), digests=vcf.STATS_DIGESTS)
     sniffed = source if isinstance(source, Sniffed) else sniff(Path(source))
     if sniffed.outcome is SniffOutcome.UNREADABLE and sniffed.layers[:1] == ("bgzf",) and (damage := bgzf.find_damage(sniffed.path)):
         # The first blocks did not read back, so sniff could not say what the file is.

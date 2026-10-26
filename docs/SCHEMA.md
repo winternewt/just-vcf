@@ -2419,8 +2419,10 @@ frame stops working when its files go.
   merge's caller index, `SF` selection); `READER_DEFINITIONS`; `STATS_VERSION`; the polars and
   polars-bio versions; and a digest of the source of `loaders/vcf.py` and `loaders/text.py`, so an edit
   that forgets the `STATS_VERSION` bump costs a pass, never a stale count. The manifest carries
-  `STATS_VERSION`, `POLARS_BIO_VERSION` and `POLARS_VERSION`, and `load` sweeps older ones like its
-  other kinds. The entry is read and written under its lock, through the pass: a second session
+  `STATS_VERSION`, `POLARS_BIO_VERSION`, `POLARS_VERSION` and that code digest, `STATS_CODE`, and
+  `load` sweeps older ones like its other kinds. A digest has no order, so an entry whose code digest
+  differs is swept unless one of the three numbered versions is ahead (`loaders.vcf.STATS_DIGESTS`);
+  that may sweep a newer install's entry of the same numbered versions, and costs it one pass. The entry is read and written under its lock, through the pass: a second session
   loading the same file waits, then reads the first one's result; the file is written under a
   temporary name and moved into place. A file that does not read whole, or answers another key, is
   counted again and rewritten. Only a pass that succeeded is stored: a read polars-bio refuses is met

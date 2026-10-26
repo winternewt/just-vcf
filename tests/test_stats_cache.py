@@ -235,6 +235,34 @@ def test_a_second_session_waits_for_the_first_pass_and_reads_its_result() -> Non
     assert results == {"first": {"n": 1}, "second": {"n": 1}}
 
 
+def test_stats_counted_under_other_loader_code_are_swept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same `STATS_VERSION`, another `_STATS_CODE`: no load of this code reads that entry again, so the
+    sweep retires it rather than leave it until `clear_cache`."""
+    monkeypatch.setenv("JUST_VCF_CACHE_GRACE_DAYS", "0")
+    path = plain(tmp_path)
+    with monkeypatch.context() as edited:
+        edited.setattr(vcf, "_STATS_CODE", "0" * 64)
+        load(path)
+    (old,) = stats_files()
+    load(path)
+    assert not old.exists()
+    assert len(stats_files()) == 1
+
+
+def test_a_newer_stats_versions_entry_is_kept_whatever_its_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A newer install's entry (a `STATS_VERSION` ahead) is never swept, its code digest differing or not."""
+    monkeypatch.setenv("JUST_VCF_CACHE_GRACE_DAYS", "0")
+    path = plain(tmp_path)
+    with monkeypatch.context() as newer:
+        newer.setattr(vcf, "STATS_VERSION", vcf.STATS_VERSION + 1)
+        newer.setattr(vcf, "_STATS_CODE", "0" * 64)
+        load(path)
+    (kept,) = stats_files()
+    load(path)
+    assert kept.exists()
+    assert len(stats_files()) == 2
+
+
 def test_an_older_stats_version_is_swept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JUST_VCF_CACHE_GRACE_DAYS", "0")
     path = plain(tmp_path)

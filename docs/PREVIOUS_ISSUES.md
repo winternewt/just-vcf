@@ -60,6 +60,23 @@ the first pass only. Code: `schema.canonical_chrom_expr`, `loaders/vcf.split_gro
 plan of the gVCF, CGI, key=value or Nirvana loaders has an in-memory fallback node; failed on the
 gVCF, key=value and Nirvana plans before).
 
+**Amended 2026-10-26:** the first pass is now cached, the narrower option above, as the lead chose
+(docs/LAYERS.md). `scan_stats`'s result is stored as `stats/<key>/stats.json`, the key a sha256 of
+every input of the pass (`loaders.vcf.stats_key`: the bytes polars-bio reads and the file's name, the
+source's digest and member, the request and `SCAN_OPTIONS`, the header's version and left-out keys,
+the retry's `Header.unparsed`, the part, `READER_DEFINITIONS`, `STATS_VERSION`, the polars and
+polars-bio versions, and a digest of `loaders/vcf.py`'s and `loaders/text.py`'s source); the
+generation is still keyed by its staged bytes. hu416394, frames cached, same conditions as above
+(Krypton, library only, 40 GB cap): 85.0 / 86.7 s before, 47.4 / 48.4 s after, peak 2.0 GiB both; the
+copy's digest costs 0.3 s per load. The first load on this version runs the pass and stores it
+(88.9 s). Warnings, facet row and row counts hash the same. The Isaac gVCF was not measured again;
+its pass was 371 s of 804. A cached load still sinks the rows to find its generation (45 s here, the
+rest of the time). Code: `loaders/vcf.read_part`, `stats_key`, `cached_stats`; tests in
+`tests/test_stats_cache.py` (a reload runs no pass and hands `to_rows` the same values and types;
+each key input changed reruns it; a truncated, garbage or other-key file is counted again; a refused
+read is not stored; a second loader waits on the lock and reads the first one's result; failed on main
+but for the copy-bytes test, which also fails with the copy's digest left out of the key).
+
 ## F24 — Every source contig costs a fixed pass, so a header full of decoys is slow and heavy
 
 Severity: low · Found 2026-10-26 dogfooding RM6's SV lift on hu416394's Manta file (Sequencing.com,

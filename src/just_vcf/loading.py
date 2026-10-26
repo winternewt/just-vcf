@@ -164,8 +164,10 @@ def load(source: Path | str | Sniffed, sample: str | None = None, subject: str |
     as a generation the same rows find again (`just_vcf.cache.Spill`), so a load run again never
     touches the files an earlier `Loaded` reads. An input polars-bio cannot read as it is is first
     copied there; the lazy frames read the spill, never the copy. Each run first removes the cache
-    entries an older `REWRITE_VERSION`, `SCHEMA_VERSION`, `SPILL_LAYOUT`, `FRAMES_LAYOUT` or `WORK_VERSION` wrote
-    (`just_vcf.cache.sweep_stale`).
+    entries an older `REWRITE_VERSION`, `SCHEMA_VERSION`, `SPILL_LAYOUT`, `FRAMES_LAYOUT`, `WORK_VERSION` or
+    `STATS_VERSION` (or polars, or polars-bio) wrote (`just_vcf.cache.sweep_stale`). A VCF's warning
+    counts come from one polars-bio pass over its records, stored in the cache by what they depend on
+    (`loaders.vcf.stats_key`), so a load of the same file run again reads the records once, to spill them.
     """
     if subject is not None and not subject.strip():
         raise ValueError("subject must be a non-empty label, or None for no subject")
@@ -179,6 +181,7 @@ def _load(source: Path | str | Sniffed, sample: str | None) -> Loaded:
     cache.sweep_stale(cache.REWRITE_COPY, {"REWRITE_VERSION": vcf.REWRITE_VERSION})
     cache.sweep_stale(cache.FRAMES_SPILL, _FRAMES_VERSIONS)
     cache.sweep_stale(cache.WORK_COPY, _WORK_VERSIONS)
+    cache.sweep_stale(cache.SCAN_STATS, vcf.stats_versions())
     sniffed = source if isinstance(source, Sniffed) else sniff(Path(source))
     if sniffed.outcome is SniffOutcome.UNREADABLE and sniffed.layers[:1] == ("bgzf",) and (damage := bgzf.find_damage(sniffed.path)):
         # The first blocks did not read back, so sniff could not say what the file is.
@@ -884,11 +887,11 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 # A BCF declares every key it uses, and its header cannot be rewritten without re-encoding
                 # the records, so a refusal from polars-bio is final here.
                 path = vcf.readable_bcf_path(sniffed.path, sniffed.layers, lambda: open_payload(sniffed), copy, origin)
-                raw = vcf.read_records(path, header, part.sample, first_record, extra_info=part.info)
-                records = part.select(raw)
-                stats = vcf.scan_stats(records, part.unsourced(raw))
+                records, stats = vcf.read_part(
+                    path, header, part, first_record, _read_sha256(path, sniffed, source_sha256), _facet_origin(origin, facet_id)
+                )
             else:
-                records, stats = _read_text_records(sniffed, header, missing, data, copy, origin, part, part_warnings)
+                records, stats = _read_text_records(sniffed, header, missing, data, copy, origin, part, part_warnings, facet_id)
             calls, blocks, row_warnings = vcf.to_rows(records, header, stats, text_gt=not binary, gl_phred=gl_phred)
             part_warnings += row_warnings
 
@@ -1023,9 +1026,12 @@ def _read_text_records(
     origin: cache.Origin,
     part: "vcf.Part",
     warnings: list[str],
+    facet_id: str,
 ) -> tuple[pl.LazyFrame, dict]:
     """A text VCF's records for one part and their stats, read once more from a structural copy if
-    polars-bio refuses the first read (P7, P8). The retry is reported in `warnings`.
+    polars-bio refuses the first read (P7, P8). The retry is reported in `warnings`. The stats of a read
+    that succeeded are cached (`vcf.read_part`); a refused read is not, so a load run again meets the
+    refusal again and retries as the first did.
 
     Where the structural copy is refused too and polars-bio's error names a carried key holding a value
     it cannot parse (`HeaderRefused.key`), the copy is written again without that key and read again,
@@ -1033,8 +1039,9 @@ def _read_text_records(
     (`vcf.can_leave_out`), so the retries end; an error that names no key, or one already left out, is
     raised as it is: the loader never guesses which key failed."""
     opener = partial(_vcf_text, sniffed, header.resaved)
+    stats_origin = _facet_origin(origin, facet_id)
     path = vcf.readable_path(sniffed.path, sniffed.layers, opener, header, missing, copy, origin)
-    read = _read_part(path, header, part, data[0] if data else None)
+    read = _read_part(path, header, part, data[0] if data else None, _read_sha256(path, sniffed, origin.source_sha256), stats_origin)
     if not isinstance(read, vcf.HeaderRefused):
         return read
     warnings.append(
@@ -1044,7 +1051,7 @@ def _read_text_records(
     first = next((line for line in data if line.split(b"\t", 2)[1:2] != [b"0"]), None)
     for _ in range(len(vcf.FORMAT_KEYS) + len(vcf.INFO_KEYS) + 1):
         path = vcf.readable_path(sniffed.path, sniffed.layers, opener, header, missing, copy, origin, structural_only=True)
-        read = _read_part(path, header, part, first)
+        read = _read_part(path, header, part, first, _read_sha256(path, sniffed, origin.source_sha256), stats_origin)
         if not isinstance(read, vcf.HeaderRefused):
             break
         if not vcf.can_leave_out(header, read.key):
@@ -1061,15 +1068,27 @@ def _read_text_records(
     return read
 
 
-def _read_part(path: Path, header: vcf.Header, part: "vcf.Part", first: bytes | None) -> tuple[pl.LazyFrame, dict] | vcf.HeaderRefused:
-    """One part's records and their stats from `path`, or polars-bio's refusal of them, returned (not
-    raised) so the caller decides whether to retry without a nested `try`."""
+def _read_part(
+    path: Path, header: vcf.Header, part: "vcf.Part", first: bytes | None, read_sha256: str, origin: cache.Origin
+) -> tuple[pl.LazyFrame, dict] | vcf.HeaderRefused:
+    """One part's records and their stats from `path` (`vcf.read_part`), or polars-bio's refusal of
+    them, returned (not raised) so the caller decides whether to retry without a nested `try`."""
     try:
-        raw = vcf.read_records(path, header, part.sample, first, extra_info=part.info)
-        records = part.select(raw)
-        return records, vcf.scan_stats(records, part.unsourced(raw))
+        return vcf.read_part(path, header, part, first, read_sha256, origin)
     except vcf.HeaderRefused as err:
         return err
+
+
+def _read_sha256(path: Path, sniffed: Sniffed, source_sha256: str) -> str:
+    """The digest of the bytes polars-bio reads at `path`: the source's when it is read as it is (no
+    copy), else the copy's, hashed now (0.3 s for hu416394's 490 MB gVCF copy, against a 39 s pass it
+    may save). The copy is hashed, not named by its source and `REWRITE_VERSION`, so a copy written by code
+    that changed without the bump still keys its own stats."""
+    return source_sha256 if path == sniffed.path else file_sha256(path)
+
+
+def _facet_origin(origin: cache.Origin, facet_id: str) -> cache.Origin:
+    return origin.model_copy(update={"facet_id": facet_id})
 
 
 def _assembly_label(stated: str | None, contigs: list[dict]) -> tuple[str | None, AssemblyLabelBasis | None, list[str]]:

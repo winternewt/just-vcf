@@ -1,6 +1,6 @@
 """The loader's cache: what each entry is, sweeping stale versions, and `clear_cache` (RM268).
 
-The cache (`cache_dir()`) holds five directories of entries:
+The cache (`cache_dir()`) holds six directories of entries:
 
 - `vcf/<key>/`: a rewritten copy of an input polars-bio cannot read as it is (`readable_path`), and a
   `structural/` copy inside it for a file polars-bio refused. Kind `rewrite_copy`.
@@ -17,6 +17,10 @@ The cache (`cache_dir()`) holds five directories of entries:
 - `coverage/<key>/`: `alignment_coverage`'s windows over one BAM or CRAM (`coverage_spill`, RM278), so
   an alignment file is read once. `<key>` digests what the windows are computed from: the file's
   header, index and size, the window and read filters, `COVERAGE_VERSION` and the polars-bio version.
+- `stats/<key>/`: one `scan_stats` result (`stats.json`, kind `scan_stats`), the counts a VCF load's
+  warnings and facet take from a polars-bio pass over the records, so a load run again skips that
+  pass (F26). `<key>` digests what the pass depends on: the bytes polars-bio reads, the source, the
+  request, the part, `STATS_VERSION` and the polars and polars-bio versions (`loaders.vcf.stats_key`).
 
 Each entry has two files beside it: `<name>.json`, its manifest (`CacheEntry`: kind, version keys,
 the root source's sha256, the facet it holds and the facet it came from, size, created and last
@@ -79,14 +83,15 @@ NORMALIZE_SPILL = "normalize_spill"
 LIFT_SPILL = "lift_spill"
 WORK_COPY = "work_copy"
 COVERAGE_SPILL = "coverage_spill"
+SCAN_STATS = "scan_stats"
 CACHE_KINDS: frozenset[str] = frozenset(
-    {REWRITE_COPY, FRAMES_SPILL, REJOIN_SPILL, RESOLVE_SPILL, VRS_SPILL, NORMALIZE_SPILL, LIFT_SPILL, WORK_COPY, COVERAGE_SPILL}
+    {REWRITE_COPY, FRAMES_SPILL, REJOIN_SPILL, RESOLVE_SPILL, VRS_SPILL, NORMALIZE_SPILL, LIFT_SPILL, WORK_COPY, COVERAGE_SPILL, SCAN_STATS}
 )
 """What a cache entry can be. Grows as derived-facet steps that spill land."""
 
 _COPY_DIRS = ("vcf", "keyvalue", "cgi")
 """Directories of copies of a source, each entry named by a 32-hex key that hashes the source."""
-_DIRS = (*_COPY_DIRS, "frames", "coverage")
+_DIRS = (*_COPY_DIRS, "frames", "coverage", "stats")
 _VCF_NAME = re.compile(r"[0-9a-f]{32}")
 _FRAMES_NAME = re.compile(
     r"(?P<facet>[0-9a-f]{32})-(?P<schema>[0-9][0-9.]*)(?:-(?P<op>ref|vrs)-(?P<digest>[A-Za-z0-9_-]+)-(?P<step>[0-9]+)|-(?P<lift>lift))?"
@@ -459,7 +464,7 @@ def sweep_stale(kind: str, current: dict[str, object]) -> CacheClearReport:
     are judged again under the entry's lock, so a writer that finished between the scan and the removal
     keeps its entry.
 
-    Run by the step that owns the kind, before it writes: `load` for `rewrite_copy`, `work_copy` and `frames_spill`,
+    Run by the step that owns the kind, before it writes: `load` for `rewrite_copy`, `work_copy`, `frames_spill` and `scan_stats`,
     `alignment_coverage` for `coverage_spill`,
     each derived step for its own. An entry with no manifest is judged by its name where the name shows
     its version, and a `vcf/` one is stale by construction (module docstring); its last use is the
@@ -510,13 +515,13 @@ def clear_cache(
     has that sha256 or was read from that path; a 64-character hex string that is not a file is taken
     as the sha256 itself; any other path (a file deleted since) matches the entries read from that
     path. Derived spills (`rejoin_split`, `resolve_ref`, `normalize`, `mint_vrs_ids`) carry their root
-    source, so removing a genome's copies removes them too. `older_than` matches entries whose
+    source, so removing a genome's copies removes them too, and so do its cached `scan_stats` results. `older_than` matches entries whose
     `last_used` is longer ago than that. Given both, an entry must match both; given neither, every
     indexed entry matches.
 
     `dry_run` lists what would go and removes nothing. An entry whose writer holds its lock is left
     alone and reported in `being_written`. An entry written before the index is never removed here
-    (`unknown_origin`). Only `vcf/`, `keyvalue/`, `cgi/`, `frames/` and `coverage/` entries are
+    (`unknown_origin`). Only `vcf/`, `keyvalue/`, `cgi/`, `frames/`, `coverage/` and `stats/` entries are
     considered: the reference store is never touched. A coverage spill records no `source_sha256` (an
     alignment file is not hashed), so it matches `source` by path; naming an existing BAM still hashes
     it here, one full read.
@@ -604,9 +609,10 @@ def _stale(entry: _Entry, kind: str, current: dict[str, str]) -> bool:
         return False
     if entry.relative.startswith("vcf/"):
         return kind == REWRITE_COPY
-    if entry.relative.startswith("coverage/"):
-        # Every coverage spill is written with a manifest (`writing` records it before the entry
-        # exists): a directory here without one says nothing of its version, and is never judged stale.
+    if entry.relative.startswith(("coverage/", "stats/")):
+        # Every coverage spill and cached stats result is written with a manifest (`writing` records it
+        # before the entry exists): a directory here without one says nothing of its version, and is
+        # never judged stale.
         return False
     if not entry.relative.startswith("frames/"):
         # `keyvalue/` and `cgi/`: every working copy written since the index has a manifest.

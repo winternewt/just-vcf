@@ -2303,8 +2303,9 @@ frame stops working when its files go.
 
 - Entries are directories under `vcf/` (rewrite copies, kind `rewrite_copy`), `keyvalue/` and `cgi/`
   (the decompressed payload the key=value and Complete Genomics loaders read while they spill, kind
-  `work_copy`, emptied when the load ends, failed or not) and `frames/` (spills: `frames_spill`,
-  `rejoin_spill`, `resolve_spill`, `vrs_spill`, `normalize_spill`, `lift_spill`). Beside each is
+  `work_copy`, emptied when the load ends, failed or not), `frames/` (spills: `frames_spill`,
+  `rejoin_spill`, `resolve_spill`, `vrs_spill`, `normalize_spill`, `lift_spill`), `coverage/`
+  (`coverage_spill`) and `stats/` (a VCF load's warning counts, `scan_stats`, below). Beside each is
   `<name>.json`, its manifest, and `<name>.lock`, an OS file lock the writer holds while it writes.
   The manifest names the root source (sha256 and resolved path), which every derived facet carries
   down from its parent, so a genome's derived spills go with its copies.
@@ -2384,9 +2385,31 @@ frame stops working when its files go.
 - A rewrite copy under `vcf/` is read only while `load` sinks its spill; no frame `load` returns reads
   it, and a complete copy (its `.complete` marker present) is never written again, so it needs no
   generations.
+- A VCF load's warning counts and the facet fields they feed (`contig_map`, `absence_means`, the GP
+  scale, the ploidy) come from one polars-bio pass over the records (`loaders.vcf.scan_stats`), separate
+  from the sink. Its result is stored as `stats/<key>/stats.json` (kind `scan_stats`), so a reload reads
+  the records once, to sink them (F26). `<key>` is a sha256 of everything the pass depends on
+  (`loaders.vcf.stats_key`): the bytes polars-bio reads (the copy's, hashed on every load, or the
+  source's when it is read as it is) and the file's name; the source's digest and member, which fix
+  the header the loader parsed; the keys and sample column asked for, the registration options, the
+  header's VCF version, the keys left out of the copy and those the retry left out; the part (a
+  merge's caller index, `SF` selection); `READER_DEFINITIONS`; `STATS_VERSION`; the polars and
+  polars-bio versions; and a digest of the source of `loaders/vcf.py` and `loaders/text.py`, so an edit
+  that forgets the `STATS_VERSION` bump costs a pass, never a stale count. The manifest carries
+  `STATS_VERSION`, `POLARS_BIO_VERSION` and `POLARS_VERSION`, and `load` sweeps older ones like its
+  other kinds. The entry is read and written under its lock, through the pass: a second session
+  loading the same file waits, then reads the first one's result; the file is written under a
+  temporary name and moved into place. A file that does not read whole, or answers another key, is
+  counted again and rewritten. Only a pass that succeeded is stored: a read polars-bio refuses is met
+  again on every load, and retried as the first load did. A stored result means the spill's read of
+  the same bytes, under the same request and polars-bio, is the read that already succeeded, so the
+  sink, still under `_damage_named`, is now where a cached load would meet a damaged block. Rejected
+  (F26): keying the load's generation by its inputs instead of its staged bytes, which would make a
+  reload a lookup but hand back the rows an older loader wrote whenever a fix forgets its bump.
 - `clear_cache` removes what the caller names, even under a live `Loaded`; that frame's next
   `collect` then fails. It skips an entry whose lock is held, and touches nothing outside `vcf/`,
-  `keyvalue/`, `cgi/` and `frames/`: the reference store under `reference/` is not a cache of a genome.
+  `keyvalue/`, `cgi/`, `frames/`, `coverage/` and `stats/`: the reference store under `reference/` is
+  not a cache of a genome. A source's cached stats carry its digest and go with its copies.
 - Rejected: a size cap with least-recently-used eviction. `last_used` is when a step wrote or reused an
   entry, not when a frame last read it, so a cap could evict under a live frame without anyone asking.
 

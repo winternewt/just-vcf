@@ -613,6 +613,10 @@ rejected:
   answer is unknown per position with its reason, as `genotype_evidence_at` answers.
 - **Lazy, sorted canonically.** The matching is `genotype_evidence_at`'s, factored out and shared.
 
+*Corrected 2026-10-26:* lazy over the grading and the answer only. The records that can cover the asked
+sites are read when `reference_support` is called, one pass over each frame (the Measured line below
+says why).
+
 Not measured on real data yet: no PGP-HMS facet was asked in this change.
 
 *Measured 2026-10-26* (`reference_support` and `genotype_evidence_at` at whole-genome scale, through the

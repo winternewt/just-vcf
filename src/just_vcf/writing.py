@@ -65,10 +65,17 @@ What is written, and the rules it follows:
   names and the rows' order. A breakend ALT's mate (`t[p[` and the other three forms, `p` being
   `contig:position`) is a contig of the file too: its contig is read canonically, as `load` reads
   CHROM, and written under the one mapping CHROM is written under, and it gets a `##contig` line
-  whether or not a row stands on it (VCF 4.3 §1.4.7; F30). A mate the style has no other name for
-  keeps its canonical name, as such a CHROM does. Two canonical names written as one name (a lifted
-  scaffold under the chain's name and the FASTA's) get one `##contig` line. Single breakends, symbolic
-  alleles and brackets that are none of the four forms are written as held.
+  whether or not a row stands on it (VCF 4.3 §1.4.7; F30). Under `stored` and `chr`, a mate the style
+  has no other name for keeps its canonical name, as such a CHROM does. Under `source`, a mate is
+  written as the facet spells its contig (`contig_map`, `header_contigs`), even where the ALT spelled
+  it another way, so the file agrees with its own CHROM column; a contig the facet does not know (no
+  row, no header line) is written as the ALT spelled it, and refused if ALTs spelled it two ways, as
+  a CHROM spelled two ways is. Two canonical names written as one name (a lifted scaffold under the
+  chain's name and the FASTA's) get one `##contig` line. Single breakends, symbolic alleles and
+  brackets that are none of the four forms are written as held. So is a mate in angle
+  brackets (`]<ctg1>:7]T`, VCF 4.3 §5.4.2): it names a contig of the `##assembly` file, not of the
+  reference, and gets no `##contig` line (htslib refuses `<ctg1>` as a contig name). Only the written
+  rows' mates are declared: a row `resolved_only` leaves out declares none.
 
 - **A tabix index** (`<path>.tbi`) is written beside BGZF output by default, from the byte offsets
   the writer itself produced (`just_vcf.tabix`), so the file is region-queryable by htslib without a
@@ -96,7 +103,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.bgzf import BgzfWriter
-from just_vcf.breakends import breakend_parts, mate_renamed
+from just_vcf.breakends import assembly_mate, breakend_parts, mate_contig, mate_renamed
 from just_vcf.loaders.vcf import _SV_PATTERN, FORMAT_KEYS, INFO_KEYS, SPLIT_INFO_KEY, V43_RESERVED_TYPES
 from just_vcf.loading import Loaded
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _store_for
@@ -245,7 +252,8 @@ class ContigNames(str, Enum):
     CHR = "chr"
     """`chr1`–`chr22`, `chrX`, `chrY`, `chrM`; every other contig as stored."""
     SOURCE = "source"
-    """As the source file spelled them, from the facet's `contig_map`."""
+    """As the source file spelled them, from the facet's `contig_map` and `header_contigs`; a breakend
+    mate's contig the facet does not know, as the ALT spelled it."""
 
 
 _CHR_NAMES = {**{str(n): f"chr{n}" for n in range(1, 23)}, "X": "chrX", "Y": "chrY", "MT": "chrM"}
@@ -371,9 +379,11 @@ def write_vcf(
     blocks_written = block_count - plan.unreadable if plan is not None else 0
 
     # A breakend's mate is a contig of the file too (VCF 4.3 §1.4.7): it gets a `##contig` line and the
-    # name CHROM would get, through the one mapping (F30).
+    # name CHROM would get, through the one mapping (F30); under `source`, a contig only ALTs name
+    # keeps their spelling.
     mates = stats["mate_chroms"] or []
-    names = _contig_names(contig_names, facet, sorted({*stats["chroms"], *mates, *(plan.chroms if plan is not None else [])}))
+    chroms = sorted({*stats["chroms"], *(chrom for chrom, _ in mates), *(plan.chroms if plan is not None else [])})
+    names = _contig_names(contig_names, facet, chroms, mates)
     warnings: list[str] = []
     if skipped:
         warnings.append(f"{sum(skipped.values())} row(s) not written: " + ", ".join(f"{n} {r}" for r, n in skipped.items()))
@@ -747,15 +757,32 @@ def _bracketed(alt: pl.Expr) -> pl.Expr:
     return alt.str.contains("[", literal=True) | alt.str.contains("]", literal=True)
 
 
-def _mate_chroms(calls: pl.LazyFrame) -> list[str]:
-    """The canonical contigs breakend ALTs name as mates, as `breakend_parts` reads them, over every
-    row (as the header is decided). A pass of its own over the bracketed ALTs alone, run only when
-    `_scan`'s first pass found one (on 4.8 million rows without a breakend, the bracket search 0.1 s,
-    this pass 0.2 s; the regex read inside each row's list, 1.9 s). Not an expression in `_scan`'s
-    one select: over `alts` exploded there, polars 1.44's common-subexpression pass mixes the
-    exploded length with the rows' and raises a ShapeError."""
-    alts = calls.select(pl.col("alts").explode(empty_as_null=False).alias("_alt")).filter(_bracketed(pl.col("_alt")))
-    return alts.select(breakend_parts(pl.col("_alt"))[1]).drop_nulls().unique().sort("_mate_chrom").collect()["_mate_chrom"].to_list()
+def _mate_chroms(calls: pl.LazyFrame) -> list[tuple[str, str]]:
+    """Each (canonical contig, spelling) the written rows' breakend ALTs name as mates, the canonical
+    as `breakend_parts` reads it and the spelling as the ALT wrote it (`source` writes a contig the
+    facet does not know by it). A row left out as unwritable (`_unwritable`) declares nothing, and a
+    mate on a contig of the assembly file (`<ctg1>`, `breakends.assembly_mate`) is no reference
+    contig and gets no `##contig` line. A pass of its own over the bracketed ALTs alone, run only
+    when `_scan`'s first pass found one (on 4.8 million rows without a breakend, the bracket search
+    0.1 s, this pass 0.2 s; the regex read inside each row's list, 1.9 s). Not an expression in
+    `_scan`'s one select: over `alts` exploded there, polars 1.44's common-subexpression pass mixes
+    the exploded length with the rows' and raises a ShapeError."""
+    alts = (
+        calls.filter(pl.col("_unwritable").is_null())
+        .select(pl.col("alts").explode(empty_as_null=False).alias("_alt"))
+        .filter(_bracketed(pl.col("_alt")))
+        .filter(~assembly_mate(pl.col("_alt")).fill_null(False))
+    )
+    # `_mate_chrom` is null on an ALT that is none of the four forms, so `drop_nulls` keeps the mates.
+    _, canonical, _ = breakend_parts(pl.col("_alt"))
+    found = (
+        alts.select(canonical, mate_contig(pl.col("_alt")).alias("_spelled"))
+        .drop_nulls()
+        .unique()
+        .sort("_mate_chrom", "_spelled")
+        .collect()
+    )
+    return list(found.iter_rows())
 
 
 @dataclass(frozen=True)
@@ -766,8 +793,15 @@ class _Names:
     contigs: list[dict]
 
 
-def _contig_names(style: ContigNames, facet: dict, chroms: list[str]) -> _Names:
-    """The written name of every contig in the rows and in the facet's `##contig` lines."""
+def _contig_names(style: ContigNames, facet: dict, chroms: list[str], mates: list[tuple[str, str]] | None = None) -> _Names:
+    """The written name of every contig in the rows, in the facet's `##contig` lines and among the
+    breakend mates (`mates`: each canonical contig with a spelling an ALT gave it, `_mate_chroms`).
+
+    Under `source`, a contig is written as the facet spells it (`contig_map`, then `header_contigs`),
+    the one spelling its CHROM column uses, even where an ALT spelled it another way: the file stays
+    consistent with its own CHROM column. A contig only ALTs name keeps the ALTs' spelling, not its
+    canonical name. A contig spelled two ways (two CHROM or header spellings, or two ALT spellings
+    of a contig only ALTs name) is refused: which one the source meant cannot be told."""
     if style is ContigNames.SOURCE:
         # `contig_map` holds the contigs that have rows; a `##contig` with none is spelled by the header.
         by_chrom: dict[str, set[str]] = {}
@@ -775,6 +809,12 @@ def _contig_names(style: ContigNames, facet: dict, chroms: list[str]) -> _Names:
             by_chrom.setdefault(entry["chrom"], set()).add(entry["source"])
         for contig in facet["header_contigs"] or []:
             by_chrom.setdefault(canonical_chrom(contig["name"]), set()).add(contig["name"])
+        # Only after the facet's own spellings, so an ALT's never competes with CHROM's.
+        by_alt: dict[str, set[str]] = {}
+        for chrom, spelled in mates or []:
+            if chrom not in by_chrom:
+                by_alt.setdefault(chrom, set()).add(spelled)
+        by_chrom.update(by_alt)
         clashes = sorted(chrom for chrom, sources in by_chrom.items() if len(sources) > 1)
         if clashes:
             raise ValueError(f"the source spelled {', '.join(clashes)} more than one way; its spelling cannot be restored")

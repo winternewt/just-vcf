@@ -6,6 +6,7 @@ package table; sequences are synthetic, of the reports' lengths. NCBI36's report
 row has GenBank `na` and Relationship `<>`, so its RefSeq accession is the sequence's one accession.
 """
 
+import importlib.util
 import random
 from pathlib import Path
 
@@ -14,8 +15,15 @@ import pytest
 
 from just_vcf import ReferenceStore, liftover, load, mint_vrs_ids, normalize, resolve_ref
 from just_vcf.assembly import infer_assembly
-from just_vcf.contig_names import PRIMARY_ACCESSIONS, SEQUENCES, scaffold_names
+from just_vcf.contig_names import COLUMNS, PRIMARY_ACCESSIONS, SEQUENCES, scaffold_names
 from just_vcf.schema import CONTIG_ALIASES, canonical_chrom
+
+# The generator, `scripts/contig_names.py`, loaded by path under a name of its own: `contig_names` alone
+# reads too much like the package module beside it.
+_GENERATOR = Path(__file__).resolve().parent.parent / "scripts" / "contig_names.py"
+_spec = importlib.util.spec_from_file_location("contig_names_generator", _GENERATOR)
+generator = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(generator)
 
 REPORTS = Path(__file__).resolve().parent.parent / "assets" / "ncbi_assembly_reports"
 REPORT_FILES = {
@@ -72,6 +80,31 @@ def test_the_table_is_the_assembly_reports() -> None:
     # NCBI36's report names no GenBank sequence at all, and a RefSeq accession on every row.
     assert {(row["GenBank-Accn"], row["Relationship"]) for row in report("GRCh36")} == {("na", "<>")}
     assert all(row["RefSeq-Accn"] != "na" for row in report("GRCh36"))
+
+
+def test_the_generator_refuses_a_refseq_accession_beside_a_genbank_one_it_is_not(tmp_path: Path) -> None:
+    # No carried report has such a row (above), so the refusal is reached through a synthetic report:
+    # its header lines and three rows taken from the carried reports, the third given a RefSeq
+    # accession beside a GenBank accession it is not (`<>`), which the script must refuse.
+    lines = REPORT_FILES["GRCh38"].read_text().splitlines()
+    header = [line for line in lines if line.startswith("# Assembly name:") or line.startswith("# Sequence-Name")]
+    columns = header[1].removeprefix("# ").split("\t")
+    same = next(row for row in report("GRCh38") if row["Relationship"] == "=" and row["RefSeq-Accn"] != "na")
+    refseq_only = report("GRCh36")[0]
+    other = next(row for row in report("GRCh38") if row["Relationship"] == "<>" and row["GenBank-Accn"] != "na")
+    refused = {**other, "RefSeq-Accn": same["RefSeq-Accn"]}
+
+    def written(rows: list[dict[str, str]]) -> Path:
+        path = tmp_path / "report.txt"
+        path.write_text("\n".join([*header, *("\t".join(row[c] for c in columns) for row in rows)]) + "\n")
+        return path
+
+    _, rows = generator.report_rows(written([same, refseq_only]))
+    refseq = COLUMNS.index("refseq")
+    assert [cells[refseq] for cells in generator.table_rows("GRCh38", rows)] == [same["RefSeq-Accn"], refseq_only["RefSeq-Accn"]]
+    _, rows = generator.report_rows(written([same, refseq_only, refused]))
+    with pytest.raises(ValueError, match=f"{refused['Sequence-Name']}: a RefSeq accession that is not the GenBank sequence"):
+        generator.table_rows("GRCh38", rows)
 
 
 def test_primary_accessions_are_the_assembled_molecules() -> None:
@@ -169,13 +202,32 @@ def test_scaffold_names_need_the_reports_length() -> None:
     # The assembled molecules are not scaffolds: the reports' MT row (`chrM`, rCRS) vouches for nothing,
     # since hg19's chrM is another sequence.
     assert scaffold_names("chrM", 16569) == scaffold_names("J01415.2", 16569) == frozenset()
-    # NCBI36's scaffolds have a RefSeq name only. One GRCh37 kept gains GRCh37's names; one it did not
-    # has no other name.
+    # NCBI36's scaffolds have a RefSeq name, and two a UCSC one too (below). One GRCh37 kept gains
+    # GRCh37's names; one it did not, with no UCSC name, has no other name.
     kept = next(row for row in report("GRCh36") if row["RefSeq-Accn"] == scaffold("GRCh37", "chr1_gl000191_random")["RefSeq-Accn"])
     assert scaffold_names(kept["RefSeq-Accn"], int(kept["Sequence-Length"])) == {"GL000191.1", "chr1_gl000191_random"}
     later = {row["RefSeq-Accn"] for a in ("GRCh37", "GRCh38") for row in report(a)}
-    alone = next(row for row in report("GRCh36") if row["Sequence-Role"] != "assembled-molecule" and row["RefSeq-Accn"] not in later)
+    alone = next(
+        row
+        for row in report("GRCh36")
+        if row["Sequence-Role"] != "assembled-molecule" and row["RefSeq-Accn"] not in later and row["UCSC-style-name"] == "na"
+    )
     assert scaffold_names(alone["RefSeq-Accn"], int(alone["Sequence-Length"])) == frozenset()
+
+
+def test_ncbi36s_two_ucsc_named_scaffolds_meet_their_refseq_accessions() -> None:
+    # NCBI36's report gives a UCSC name to two scaffolds, both alt haplotypes, and to no other: each
+    # name and its RefSeq accession are the other's alias, at the report's length only.
+    named = [row for row in report("GRCh36") if row["Sequence-Role"] != "assembled-molecule" and row["UCSC-style-name"] != "na"]
+    assert {(row["UCSC-style-name"], row["RefSeq-Accn"]) for row in named} == {("chr6_cox_hap1", "NT_113891.1"), ("chr22_h2_hap1", "NT_113959.1")}
+    for row in named:
+        ucsc, refseq, length = row["UCSC-style-name"], row["RefSeq-Accn"], int(row["Sequence-Length"])
+        assert scaffold_names(ucsc, length) == {refseq}
+        assert scaffold_names(refseq, length) == {ucsc}
+        assert scaffold_names(ucsc, length + 1) == frozenset()
+    # GRCh37's chr6_cox_hap2 is NT_113891.2, another sequence of another length: no build-36 name meets it.
+    grch37 = scaffold("GRCh37", "chr6_cox_hap2")
+    assert scaffold_names("chr6_cox_hap1", int(grch37["Sequence-Length"])) == frozenset()
 
 
 ACCESSION_COLUMNS = [

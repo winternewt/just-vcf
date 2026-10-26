@@ -6,8 +6,9 @@ GRCh37's `chr1_gl000191_random`, `chr6_apd_hap1`; Ensembl and GenBank call the s
 GenBank accession (`KI270706.1`), RefSeq by its own (`NT_187361.1`). The package's `contig_names.tsv`
 holds every sequence of NCBI's GRCh37.p13, GRCh38.p14 and NCBI36 assembly reports, one row each, with
 these names and the sequence's length, as the reports write them (`scripts/contig_names.py`,
-docs/PROVENANCE.md). NCBI36's report is RefSeq only: its rows name no GenBank sequence, and no UCSC
-name for a scaffold. No name is derived from another by its pattern: a name the reports do not list
+docs/PROVENANCE.md). NCBI36's report is RefSeq only: its rows name no GenBank sequence, and of its
+scaffolds only two alt haplotypes have a UCSC name, `chr6_cox_hap1` (`NT_113891.1`) and
+`chr22_h2_hap1` (`NT_113959.1`). No name is derived from another by its pattern: a name the reports do not list
 stays unmatched.
 
 Two uses, kept apart on purpose:

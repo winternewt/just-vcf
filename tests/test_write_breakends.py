@@ -5,7 +5,8 @@ another contig with rows, on a contig only an ALT names, on the mitochondrion an
 one source spelling its mates another way than its CHROM. Each is written under every `ContigNames`
 choice and read back through `load`. The expected names are computed from the input records and
 header, never read off the output: the mate contig is read canonically, then named as that style names
-a CHROM; every contig a written ALT names must have a `##contig` line.
+a CHROM, except that `source` keeps an ALT's own spelling of a contig the file names nowhere else;
+every contig a written ALT names must have a `##contig` line, except an `##assembly` contig (`<ctg1>`).
 """
 
 import gzip
@@ -58,20 +59,30 @@ CHR = [
     record("chr2", 500, "A]chr1:100]"),
 ]
 
-SOURCES = {"plain": (PLAIN_CONTIGS, PLAIN), "chr": (CHR_CONTIGS, CHR)}
+# The same chr-named records with a header that declares only the contigs with rows (chr3 and chrM are
+# named by ALTs alone), and with no header contigs at all (every mate contig is).
+SOURCES = {
+    "plain": (PLAIN_CONTIGS, PLAIN),
+    "chr": (CHR_CONTIGS, CHR),
+    "chr_rows_declared": (["chr1", "chr2"], CHR),
+    "chr_undeclared": ([], CHR),
+}
 
 
 def source_text(contigs: list[str], records: list[str]) -> str:
     return "\n".join(["##fileformat=VCFv4.2", *(f"##contig=<ID={c},length=100000>" for c in contigs), GT, COLUMNS, *records]) + "\n"
 
 
-def written_name(style: ContigNames, canonical: str, contigs: list[str], records: list[str]) -> str:
-    """How `style` names a canonical contig, worked out from the source's own header and CHROMs."""
+def written_name(style: ContigNames, spelled: str, contigs: list[str], records: list[str]) -> str:
+    """How `style` names a contig the source spelled `spelled` (in CHROM, the header or an ALT), worked
+    out from the source's own header and CHROMs: `source` takes their spelling of the contig where
+    they have one, else the spelling given."""
+    canonical = canonical_chrom(spelled)
     if style is ContigNames.CHR:
         return CHR_NAMES.get(canonical, canonical)
     if style is ContigNames.SOURCE:
-        spelled = {canonical_chrom(name): name for name in [*contigs, *(line.split("\t")[0] for line in records)]}
-        return spelled.get(canonical, canonical)
+        known = {canonical_chrom(name): name for name in [*contigs, *(line.split("\t")[0] for line in records)]}
+        return known.get(canonical, spelled)
     return canonical
 
 
@@ -109,21 +120,20 @@ def test_a_mate_is_named_as_chrom_is_and_declared(tmp_path: Path, source: str, s
     declared = header_contigs(out)
     for given, line in zip(records, rows, strict=True):
         given_fields = given.split("\t")
-        assert line[0] == written_name(style, canonical_chrom(given_fields[0]), contigs, records)
+        assert line[0] == written_name(style, given_fields[0], contigs, records)
         given_alts, alts = given_fields[4].split(","), line[4].split(",")
         # Only the mate's contig changes: the form, the bases and the position are as given, and an
         # ALT that is none of the four forms is written as it came.
-        expected = [(form, bases, written_name(style, canonical_chrom(mate), contigs, records), pos) for form, bases, mate, pos in mates(given_alts)]
+        expected = [(form, bases, written_name(style, mate, contigs, records), pos) for form, bases, mate, pos in mates(given_alts)]
         assert mates(alts) == expected, given
         assert others(alts) == others(given_alts)
         assert {mate for _, _, mate, _ in mates(alts)} <= declared, "every contig an ALT names has a ##contig line"
 
     # The header is the source's contigs, the rows' and the mates', each named once by the style;
     # the unpaired `A[X:5]` names no contig.
-    canonical = {canonical_chrom(c) for c in contigs}
-    canonical |= {canonical_chrom(line.split("\t")[0]) for line in records}
-    canonical |= {canonical_chrom(mate) for line in records for _, _, mate, _ in mates(line.split("\t")[4].split(","))}
-    assert declared == {written_name(style, c, contigs, records) for c in canonical}
+    spelled = [*contigs, *(line.split("\t")[0] for line in records)]
+    spelled += [mate for line in records for _, _, mate, _ in mates(line.split("\t")[4].split(","))]
+    assert declared == {written_name(style, name, contigs, records) for name in spelled}
 
 
 @pytest.mark.parametrize("source", sorted(SOURCES))
@@ -148,9 +158,50 @@ def test_load_write_load_keeps_every_breakend(tmp_path: Path, source: str, style
     before, after = first.calls.collect(), again.calls.collect()
     assert after.height == before.height
     assert adjacencies(after) == adjacencies(before)
-    if style is ContigNames.SOURCE and source == "chr":
-        # A source that spells every contig one way gets every ALT back verbatim.
+    if style is ContigNames.SOURCE and source.startswith("chr"):
+        # A source that spells every contig one way gets every ALT back verbatim, whether or not its
+        # header declares the contigs only an ALT names.
         assert after.select("chrom", "pos", "alts").rows() == before.select("chrom", "pos", "alts").rows()
+
+
+@pytest.mark.parametrize("contigs", [[], ["chr1", "chr2"]], ids=["no_header_contigs", "rows_declared"])
+def test_source_writes_a_mate_the_file_alone_names_as_it_spelled_it(tmp_path: Path, contigs: list[str]) -> None:
+    # A chr-named source whose mates lie on contigs no row stands on: chr2 (declared in one header, not
+    # in the other) and chr3 (declared in neither). Under `source` each comes back as the ALT spelled
+    # it, and is declared under that spelling.
+    records = [record("chr1", 100, "A[chr2:500["), record("chr1", 200, "A[chr3:500[")]
+    path = tmp_path / "in.vcf"
+    path.write_text(source_text(contigs, records))
+    out = write_vcf(load(path), tmp_path / "out.vcf.gz", contig_names=ContigNames.SOURCE).path
+
+    rows = written_rows(out)
+    assert [row[:5] for row in rows] == [line.split("\t")[:5] for line in records]
+    given = {line.split("\t")[0] for line in records} | {mate for line in records for _, _, mate, _ in mates([line.split("\t")[4]])}
+    assert header_contigs(out) == given | set(contigs)
+
+
+def test_source_prefers_the_chrom_spelling_of_a_mate_with_rows(tmp_path: Path) -> None:
+    # CHROM spells contig 2 `2`; one ALT spells it `chr2`. The file is kept consistent with its own CHROM
+    # column: the mate is written `2`, and contig 2 gets one `##contig` line.
+    records = [record("1", 100, "]chr2:700]A"), record("2", 700, "A[1:100[")]
+    path = tmp_path / "in.vcf"
+    path.write_text(source_text([], records))
+    out = write_vcf(load(path), tmp_path / "out.vcf.gz", contig_names=ContigNames.SOURCE).path
+    assert [row[4] for row in written_rows(out)] == ["]2:700]A", "A[1:100["]
+    assert header_contigs(out) == {"1", "2"}
+
+
+def test_source_refuses_a_contig_only_alts_name_spelled_two_ways(tmp_path: Path) -> None:
+    # Contig 3 has no row and no header line, and the ALTs spell it `chr3` and `3`: which spelling the
+    # source meant cannot be restored, as for a CHROM spelled two ways. The other styles write it.
+    records = [record("1", 100, "A[chr3:500["), record("1", 200, "A[3:600[")]
+    path = tmp_path / "in.vcf"
+    path.write_text(source_text(["1"], records))
+    loaded = load(path)
+    with pytest.raises(ValueError, match="spelled 3 more than one way"):
+        write_vcf(loaded, tmp_path / "out.vcf.gz", contig_names=ContigNames.SOURCE)
+    out = write_vcf(loaded, tmp_path / "out.vcf.gz", contig_names=ContigNames.CHR).path
+    assert [row[4] for row in written_rows(out)] == ["A[chr3:500[", "A[chr3:600["]
 
 
 def test_one_contig_under_two_canonical_names_is_declared_once(tmp_path: Path) -> None:
@@ -181,3 +232,50 @@ def test_one_contig_under_two_canonical_names_is_declared_once(tmp_path: Path) -
         rows = written_rows(out)
         assert {row[0] for row in rows} == chroms
         assert {mate for row in rows for _, _, mate, _ in mates(row[4].split(","))} == {accession}
+
+
+# VCF 4.3 §5.4.2's large insertion: the mate is a contig of the `##assembly` file, in angle brackets
+# (§1.6.1 reads an `<ID>` CHROM the same way), not a contig of the reference.
+ASSEMBLY = ["##fileformat=VCFv4.2", "##contig=<ID=13,length=400000>", "##assembly=file:///assembly.fa", GT, COLUMNS]
+ASSEMBLY_RECORDS = [record("13", 321682, "]<ctg1>:7]T", ref="T"), record("13", 321683, "A[<ctg1>:214[")]
+
+
+@pytest.mark.parametrize("style", list(ContigNames))
+def test_an_assembly_mate_is_written_verbatim_and_declared_nowhere(tmp_path: Path, style: ContigNames) -> None:
+    path = tmp_path / "in.vcf"
+    path.write_text("\n".join([*ASSEMBLY, *ASSEMBLY_RECORDS]) + "\n")
+    out = write_vcf(load(path), tmp_path / "out.vcf.gz", contig_names=style).path
+
+    given = [line.split("\t") for line in ASSEMBLY_RECORDS]
+    assert [row[4] for row in written_rows(out)] == [fields[4] for fields in given]
+    assert header_contigs(out) == {written_name(style, fields[0], ["13"], ASSEMBLY_RECORDS) for fields in given}
+
+
+@pytest.mark.parametrize("style", list(ContigNames))
+def test_htslib_reads_an_assembly_mates_header_without_a_warning(tmp_path: Path, style: ContigNames, capfd: pytest.CaptureFixture) -> None:
+    pysam = pytest.importorskip("pysam")
+    path = tmp_path / "in.vcf"
+    path.write_text("\n".join([*ASSEMBLY, *ASSEMBLY_RECORDS]) + "\n")
+    out = write_vcf(load(path), tmp_path / "out.vcf.gz", contig_names=style).path
+    capfd.readouterr()
+    with pysam.VariantFile(str(out)) as vcf:
+        alts = [row.alts for row in vcf]
+    # htslib writes its warnings to the C-level stderr, which `capfd` reads and `capsys` would not.
+    err = capfd.readouterr().err
+    assert alts == [(line.split("\t")[4],) for line in ASSEMBLY_RECORDS]
+    assert "[W::" not in err and "[E::" not in err, err
+
+
+def test_a_skipped_rows_mate_is_not_declared(tmp_path: Path) -> None:
+    # The second record's GT names an ALT it does not have, so `resolved_only` leaves it out; its mate's
+    # contig (7: no row, not in the source header) must not reach the written header.
+    records = [record("1", 100, "A[2:500["), record("1", 200, "A[7:500[").replace("0/1", "0/2")]
+    path = tmp_path / "in.vcf"
+    path.write_text(source_text(["1"], records))
+    written = write_vcf(load(path), tmp_path / "out.vcf.gz", resolved_only=True)
+    assert written.rows_skipped == {"genotype_index_past_alts": 1}
+
+    rows = written_rows(written.path)
+    assert [row[1] for row in rows] == ["100"]
+    named = {mate for row in rows for _, _, mate, _ in mates(row[4].split(","))}
+    assert header_contigs(written.path) == {"1"} | named

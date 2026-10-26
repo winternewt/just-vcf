@@ -23,6 +23,20 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   0.944 by region; PGP-HMS hu6ABACE placed in Europe (population GBR). The regions overlap along clines
   (Eastern Asia 0/32 in leave-one-out), and `test_ancestry_panels.py`'s own-sample check fails on this
   panel; docs/ANCESTRY_PANELS.md has the rules and the numbers.
+- **Behaviour change: an AncestryDNA array facet's Y probes are now read under default arguments.**
+  `sex_chromosome_evidence` and `person_sex_chromosome_evidence` take `array_y: bool | None = None`
+  (was `bool = False`). None decides per facet by `facets.vendor`: the Y line is read for a vendor in
+  the new `just_vcf.karyotype.ARRAY_Y_VENDORS`, which holds `AncestryDNA` alone, and not for 23andMe,
+  any other vendor or a facet whose vendor is null. So an AncestryDNA facet that answered
+  `UNKNOWN_KARYOTYPE` with `y_reason = vendor_asserted` before now answers `XX` or `XY` (or unknown
+  with the band's reason) with no argument given; every other facet answers as before. `array_y=True`
+  and `array_y=False` keep their meaning, for every array facet whatever its vendor. A person with an
+  AncestryDNA and a 23andMe facet gets the first's Y read and not the second's. The person's decision
+  (desk #136, 2026-10-26, "yes, per-vendor decision"): on PGP-HMS, AncestryDNA calls what its chip
+  measures (its women call 0.8–9.9% of the Y probes), while 23andMe no-calls every Y probe for the
+  samples it calls female, a mask the file cannot tell from absence (RM269). Not read, `y_reason` is
+  still `vendor_asserted`; the detail now says whether the vendor's default or `array_y=False` turned
+  it off. No reason value added, no frame column changed.
 - A VCF load run again reads its records through polars-bio once, to spill them (F26). The first pass,
   `scan_stats`, which counts what the warnings and the facet need, is stored in the cache as
   `stats/<key>/stats.json` (a new entry kind, `scan_stats`, with its manifest), and a load whose key is

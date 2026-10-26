@@ -66,8 +66,12 @@ The estimate:
   called share, near 1 with a Y and near 0 without. A vendor may no-call every Y probe because it
   decided the sample is female, and nothing in the file tells that mask from a chip that saw no Y:
   on PGP-HMS, 23andMe exports with a two-letter X read exactly 0, AncestryDNA women 0.008-0.098
-  (docs/ROADMAP.md RM269). So the Y line is read only with `array_y=True`; otherwise `y_reason` is
-  `vendor_asserted` and the karyotype unknown. Arrays cannot count copies. They are estimated on
+  (docs/ROADMAP.md RM269). So whether the Y line is read is decided per vendor: by default
+  (`array_y=None`) for a vendor in `ARRAY_Y_VENDORS`, AncestryDNA alone, whose exports call what the
+  chip measured, and for no other vendor nor a facet whose vendor is unknown (the person's decision,
+  desk #136, 2026-10-26). `array_y=True` reads it for every array, `array_y=False` for none. Not read,
+  `y_reason` is `vendor_asserted`, the detail says whether the default or the caller turned it off,
+  and the karyotype is unknown. Arrays cannot count copies. They are estimated on
   GRCh36 too (`ARRAY_ESTIMATE_BUILDS`), where a genome is not.
 
 **The build** places the PARs and the X-degenerate Y, and it is the facet's `assembly_label`, whatever
@@ -365,7 +369,8 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
   (`COVERAGE_MIN_EVEN_SHARE`): an exome's or a panel's reads; it is set aside (`coverage.reason` only).
 - `vendor_asserted`: an array's Y probes were measured but not read: whether they are called follows
   the vendor's own sex call where it masks Y for the samples it calls female (`array_y`; `y_reason`
-  only).
+  only). Off by default for a vendor not in `ARRAY_Y_VENDORS` or an unknown one, or turned off by the
+  caller with `array_y=False`; the detail says which.
 - `no_calls_not_written`: an array export with no no-call row on the autosomes (a genuine probe
   export calls 97-99.9% of them): it drops its no-calls, so its Y rows are only the called ones and
   their share says nothing (`y_reason` only).
@@ -649,7 +654,9 @@ class SexChromosomeEvidence(BaseModel):
         return self.inferred_karyotypic_sex is not KaryotypicSex.UNKNOWN_KARYOTYPE
 
 
-def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None, *, array_y: bool = False) -> tuple[SexChromosomeEvidence, ...]:
+def sex_chromosome_evidence(
+    loaded: Loaded, coverage: Coverage | None = None, *, array_y: bool | None = None
+) -> tuple[SexChromosomeEvidence, ...]:
     """Measure each loaded facet's sex-chromosome evidence and estimate its karyotype (module docstring).
 
     `loaded` is what `just_vcf.load` (or `rejoin_split`, `resolve_ref`, `liftover`) returns. The build
@@ -664,10 +671,12 @@ def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None, *,
     Y for each facet on its own build, and is set aside for any other facet, with the reason in
     `coverage.reason`.
 
-    `array_y` reads an array facet's X-degenerate Y probes as a Y line (module docstring). It is off by
-    default: a vendor that no-calls Y for the samples it calls female makes the line its own sex call.
-    Turn it on for an export whose vendor does not (on PGP-HMS, AncestryDNA's women called a few Y
-    probes; 23andMe's none). It changes nothing for other facets.
+    `array_y` says whether an array facet's X-degenerate Y probes are read as a Y line (module
+    docstring). None, the default, decides per facet by its `vendor`: read for a vendor in
+    `ARRAY_Y_VENDORS` (AncestryDNA), not for any other or an unknown one, since a vendor that no-calls Y
+    for the samples it calls female makes the line its own sex call (on PGP-HMS, AncestryDNA's women
+    called a few Y probes; 23andMe's none). True reads it for every array facet, False for none. It
+    changes nothing for other facets.
 
     The answer is a karyotype, not a sex: an XX male reads two X copies (and `XX` where a coverage facet
     shows no Y), never `XY` for his phenotype. It is an estimate from variant calls and read depth,
@@ -675,7 +684,7 @@ def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None, *,
     """
     facets = loaded.facets.select(
         "facet_id", "assembly_label", "assembly_label_basis", "relation", "header_contigs", "vcf_version", "ref_seqcol_digest",
-        "callset_type", "caller", "ploidy_statements",
+        "callset_type", "caller", "ploidy_statements", "vendor",
     ).collect()
     measured = measure_coverage(coverage) if coverage is not None else None
     return tuple(
@@ -691,13 +700,14 @@ def sex_chromosome_evidence(loaded: Loaded, coverage: Coverage | None = None, *,
             assembly_label_basis=AssemblyLabelBasis(facet["assembly_label_basis"]) if facet["assembly_label_basis"] is not None else None,
             assembly_label_source=assembly_label_source(facet),
             ref_seqcol_digest=facet["ref_seqcol_digest"],
+            vendor=facet["vendor"],
         )
         for facet in facets.iter_rows(named=True)
     )
 
 
 def person_sex_chromosome_evidence(
-    person: Person, *, pairs: Mapping[str, str | None] | None = None, array_y: bool = False
+    person: Person, *, pairs: Mapping[str, str | None] | None = None, array_y: bool | None = None
 ) -> tuple[SexChromosomeEvidence, ...]:
     """`sex_chromosome_evidence` for each of a person's facets, each with a coverage facet of the person
     paired to it, and `coverage_pairing` saying which and why (`COVERAGE_PAIRINGS`).
@@ -980,11 +990,12 @@ def estimate(
     caller: str | None = None,
     ploidy_statements: list[str] | None = None,
     coverage: CoverageRatios | None = None,
-    array_y: bool = False,
+    array_y: bool | None = None,
     *,
     assembly_label_basis: AssemblyLabelBasis | None = None,
     assembly_label_source: str | None = None,
     ref_seqcol_digest: str | None = None,
+    vendor: str | None = None,
 ) -> SexChromosomeEvidence:
     """Turn `measure`'s numbers into the evidence and the estimate (rules in the module docstring).
 
@@ -992,7 +1003,8 @@ def estimate(
     caller said about ploidy is its assertion, kept beside the evidence and never counted in it.
     `coverage` is a coverage facet's line (`measure_coverage`); it counts only without a `reason`.
     `assembly_label_basis`, `assembly_label_source` and `ref_seqcol_digest` say where `assembly_label`
-    came from; they are carried, and decide nothing."""
+    came from; they are carried, and decide nothing. `vendor` is the facet's `facets.vendor`: with
+    `array_y` None it decides whether an array facet's Y probes are read (`ARRAY_Y_VENDORS`)."""
     groups = measured["groups"]
     empty = {"rows": 0, "one": 0, "two": 0, "more": 0}
     names = ["autosomes", "x_nonpar", "y_nonpar", "par", "mt"] if measured["supported"] else ["autosomes", "mt"]
@@ -1068,7 +1080,7 @@ def estimate(
         if assembly_label not in ARRAY_ESTIMATE_BUILDS:
             return unknown("uncalibrated_build", f"no array rule was checked on {assembly_label}", **known)
         x_range, x_reason, x_detail = _array_x(lines)
-        y_range, y_reason, y_detail = _array_y(lines, array_y)
+        y_range, y_reason, y_detail = _array_y(lines, array_y, vendor)
         return named(x_range, x_reason, y_range, y_reason, f"X: {x_detail}; Y: {y_detail}")
     if callset_type is not CallsetType.WGS:
         kind = callset_type.value if callset_type else "unknown"
@@ -1146,8 +1158,21 @@ export has not). Two X has no upper edge: hets cannot count copies. PGP-HMS, doc
 ARRAY_Y_ABSENT_MAX_CALL_RATIO = 0.25
 ARRAY_Y_PRESENT_MIN_CALL_RATIO = 0.75
 """The X-degenerate Y probes' called share over the autosomes'. A Y calls like an autosome (near 1),
-none leaves its probes uncalled (near 0); the unknown band is the gap's central half. Read only with
-`array_y` (the vendor's no-calls on Y follow its own sex call)."""
+none leaves its probes uncalled (near 0); the unknown band is the gap's central half. Read by default
+only for a vendor in `ARRAY_Y_VENDORS`, or for every array with `array_y=True` (a vendor's no-calls on
+Y may follow its own sex call)."""
+
+ARRAY_Y_VENDORS: frozenset[str] = frozenset({"AncestryDNA"})
+"""The vendors (`facets.vendor`, spelled as the format registry writes it) whose array Y probes are
+read by default (`array_y=None`). The criterion: the vendor's exports were checked against
+self-reported sex on PGP-HMS and their Y calls follow what the chip measured, not the vendor's own sex
+call. AncestryDNA's women call 0.8-9.9% of the X-degenerate Y probes and its men's X carry a genotyping
+error's hets, so neither is a mask; 23andMe no-calls every Y probe for the samples it calls female, a
+mask the file cannot tell from a chip that saw no Y (docs/ROADMAP.md RM269). Every vendor not listed,
+and a facet whose vendor is unknown, is off by default: no other vendor was checked. The person's
+decision, desk #136, 2026-10-26 ("yes, per-vendor decision"). The property is one measured on PGP-HMS
+exports, which a vendor's next release can change silently; `array_y=False` turns it off. An open
+vocabulary: a vendor checked the same way may join it."""
 
 ARRAY_X_BANDS: tuple[Band, ...] = ((None, ARRAY_ONE_X_MAX_HET_RATIO, (1, 1)), (ARRAY_TWO_X_MIN_HET_RATIO, None, (2, None)))
 ARRAY_Y_BANDS: tuple[Band, ...] = ((None, ARRAY_Y_ABSENT_MAX_CALL_RATIO, (0, 0)), (ARRAY_Y_PRESENT_MIN_CALL_RATIO, None, (1, None)))
@@ -1259,19 +1284,27 @@ def _array_x(lines: ArrayLines) -> tuple[Copies | None, str | None, str]:
     return None, "too_few_sites", said
 
 
-def _array_y(lines: ArrayLines, array_y: bool) -> tuple[Copies | None, str | None, str]:
-    """Y from the called share of X-degenerate Y probes, read only when `array_y` is set."""
+def _array_y(lines: ArrayLines, array_y: bool | None, vendor: str | None) -> tuple[Copies | None, str | None, str]:
+    """Y from the called share of X-degenerate Y probes, read where `array_y` says so, or with `array_y`
+    None where the vendor is in `ARRAY_Y_VENDORS`. Not read, `y_reason` is `vendor_asserted` and the
+    detail says whether the caller or the vendor's default turned it off."""
     said = f"call ratio {_fmt(lines.y_call_ratio)} ({lines.y_called:,} of {lines.y_rows:,} X-degenerate Y rows called)"
     if lines.y_call_ratio is None:
         if lines.y_rows >= MIN_Y_SITES and lines.autosome_rows >= MIN_REFERENCE_SITES and lines.autosome_no_calls == 0:
             return None, "no_calls_not_written", said + "; the export writes no no-call, so its rows are not its probes"
         return None, "too_few_sites", said
-    if not array_y:
-        return None, "vendor_asserted", said + "; not read: the vendor's Y calls and no-calls follow its own sex call"
+    mask = "a vendor's Y calls and no-calls may follow its own sex call"
+    if array_y is False:
+        return None, "vendor_asserted", said + f"; not read (array_y=False): {mask}"
+    if array_y is None and vendor is None:
+        return None, "vendor_asserted", said + f"; not read, off by default: the vendor is unknown, and {mask}"
+    if array_y is None and vendor not in ARRAY_Y_VENDORS:
+        return None, "vendor_asserted", said + f"; not read, off by default for {vendor} (not in ARRAY_Y_VENDORS): {mask}"
     found = _read(lines.y_call_ratio, ARRAY_Y_BANDS)
+    how = "array_y=True" if array_y else f"on by default for {vendor}, ARRAY_Y_VENDORS"
     if isinstance(found, str):
-        return None, found, said
-    return found, None, said + "; read as the vendor's calls (array_y)"
+        return None, found, said + f" ({how})"
+    return found, None, said + f"; read as the vendor's calls ({how})"
 
 
 def _y_present(depth: DepthRatios, no_dp: bool, coverage: CoverageRatios | None) -> tuple[Copies | None, str | None, str]:

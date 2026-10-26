@@ -24,8 +24,14 @@ from just_vcf import (
     sex_chromosome_evidence,
 )
 from just_vcf.coverage import COVERAGE_INTERVALS
+from just_vcf.formats import REGISTRY
 from just_vcf.karyotype import (
     ARRAY_ESTIMATE_BUILDS,
+    ARRAY_ONE_X_MAX_HET_RATIO,
+    ARRAY_TWO_X_MIN_HET_RATIO,
+    ARRAY_Y_ABSENT_MAX_CALL_RATIO,
+    ARRAY_Y_PRESENT_MIN_CALL_RATIO,
+    ARRAY_Y_VENDORS,
     ASSEMBLY_LABEL_SOURCES,
     COVERAGE_PAIRINGS,
     COVERAGE_X_BANDS,
@@ -927,6 +933,87 @@ def test_an_array_on_grch36_is_estimated_on_grch36s_regions() -> None:
     # On GRCh37's regions the same rows find no X-degenerate Y probe, and the PAR1 rows are non-PAR X.
     grch37 = on_array(*parts, read_y=True, build="GRCh37")
     assert (grch37.array.y_rows, grch37.array.x_base_pairs, grch37.y_reason) == (0, 2500, "too_few_sites")
+
+
+# --- Whether an array's Y is read: per vendor by default (desk #136, 2026-10-26) -----------------
+
+TWO_X_Y_UNCALLED = (autosomes(), array_x(500, 1500), array_y(0, 700))
+"""Hets on X at 0.833 of the autosomes' share, every X-degenerate Y probe no-called."""
+ONE_X_Y_CALLED = (autosomes(), array_x(4, 1996), array_y(650, 50))
+"""A genotyping error's few hets on X, the Y probes called like the autosomes."""
+ARRAY_VENDORS = ("AncestryDNA", "23andMe", "FamilyTreeDNA", None)
+"""Two vendors checked against self-reported sex on PGP-HMS, one never checked, and none stated."""
+
+
+def by_the_bands(found: SexChromosomeEvidence) -> KaryotypicSex:
+    """The karyotype the array bands give the result's own ratios."""
+    x, y = found.array.x_het_ratio, found.array.y_call_ratio
+    x_count = 1 if x <= ARRAY_ONE_X_MAX_HET_RATIO else 2 if x >= ARRAY_TWO_X_MIN_HET_RATIO else None
+    y_count = 0 if y <= ARRAY_Y_ABSENT_MAX_CALL_RATIO else 1 if y >= ARRAY_Y_PRESENT_MIN_CALL_RATIO else None
+    return {(2, 0): KaryotypicSex.XX, (1, 1): KaryotypicSex.XY}[(x_count, y_count)]
+
+
+def test_the_vendors_whose_y_is_read_by_default_are_ancestrydnas_alone() -> None:
+    # The person's decision: on for AncestryDNA, off for 23andMe and every other vendor; spelled as the
+    # format registry writes `facets.vendor`, or the default would never match a loaded facet.
+    assert ARRAY_Y_VENDORS == frozenset({"AncestryDNA"})
+    assert ARRAY_Y_VENDORS <= {spec.vendor for spec in REGISTRY}
+
+
+@pytest.mark.parametrize("parts", [TWO_X_Y_UNCALLED, ONE_X_Y_CALLED], ids=["two_x_y_uncalled", "one_x_y_called"])
+@pytest.mark.parametrize("array_y", [None, True, False])
+@pytest.mark.parametrize("vendor", ARRAY_VENDORS)
+def test_an_arrays_y_is_read_by_its_vendors_default_unless_the_caller_says(
+    parts: tuple[pl.DataFrame, ...], array_y: bool | None, vendor: str | None
+) -> None:
+    found = estimate(measure(frame(*parts), "GRCh38"), "f", "GRCh38", CallsetType.ARRAY, array_y=array_y, vendor=vendor)
+    assert found.x_copies is not None, "X is read from the hets whatever the Y"
+    read = array_y if array_y is not None else vendor == "AncestryDNA"
+    if read:
+        assert (found.y_reason, found.reason) == (None, None)
+        assert found.inferred_karyotypic_sex is by_the_bands(found)
+        assert ("array_y=True" if array_y else "on by default for AncestryDNA") in found.detail
+        return
+    assert (found.y_present, found.y_reason, found.reason) == (None, "vendor_asserted", "y_unusable")
+    assert found.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE
+    if array_y is False:
+        assert "array_y=False" in found.detail and "by default" not in found.detail
+    elif vendor is None:
+        assert "off by default" in found.detail and "vendor is unknown" in found.detail
+    else:
+        assert f"off by default for {vendor}" in found.detail
+
+
+def array_facets(vendors: dict[str, str | None], *, subject: str | None = None) -> Loaded:
+    """One array facet per id, each with `vendor` as given and the same two-X letters."""
+    columns = {
+        "facet_id": list(vendors), "vendor": list(vendors.values()), "assembly_label": ["GRCh38"] * len(vendors),
+        "callset_type": ["array"] * len(vendors), "source_sha256": [facet_id * 64 for facet_id in vendors],
+    }  # fmt: skip
+    if subject is not None:
+        columns["subject"] = [subject] * len(vendors)
+    calls = pl.concat([frame(*TWO_X_Y_UNCALLED).with_columns(facet_id=pl.lit(facet_id)) for facet_id in vendors])
+    return Loaded(facets=conform(pl.LazyFrame(columns), FACETS), calls=calls, blocks=empty(BLOCKS))
+
+
+def test_each_array_facet_of_a_load_takes_its_own_vendors_default() -> None:
+    loaded = array_facets({"a": "AncestryDNA", "t": "23andMe", "n": None})
+    default = by_facet(sex_chromosome_evidence(loaded))
+    assert default["a"].inferred_karyotypic_sex is by_the_bands(default["a"]) is KaryotypicSex.XX
+    assert [default[f].y_reason for f in ("t", "n")] == ["vendor_asserted"] * 2
+    # An explicit value applies to every array facet, whatever its vendor.
+    assert {f.inferred_karyotypic_sex for f in sex_chromosome_evidence(loaded, array_y=True)} == {KaryotypicSex.XX}
+    assert {f.y_reason for f in sex_chromosome_evidence(loaded, array_y=False)} == {"vendor_asserted"}
+
+
+def test_a_person_with_an_ancestrydna_and_a_23andme_facet_reads_y_on_the_first_only() -> None:
+    ancestry, twenty_three = array_facets({"a": "AncestryDNA"}, subject="p"), array_facets({"t": "23andMe"}, subject="p")
+    found = by_facet(person_sex_chromosome_evidence(Person.of(ancestry, twenty_three, check=None)))
+    assert (found["a"].y_present, found["a"].inferred_karyotypic_sex) == (False, by_the_bands(found["a"]))
+    assert (found["t"].y_present, found["t"].y_reason, found["t"].inferred_karyotypic_sex) == (
+        None, "vendor_asserted", KaryotypicSex.UNKNOWN_KARYOTYPE,
+    )  # fmt: skip
+    assert found["a"].x_copies is found["t"].x_copies is XCopies.TWO_OR_MORE
 
 
 # --- The build: whatever in the library filled `assembly_label`, and which source that was ----------

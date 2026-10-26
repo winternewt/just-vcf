@@ -102,8 +102,8 @@ meanwhile. The desk carries the ones filed there.
   Zarr 0.4 spec (not on this machine), a one-string rename if wrong.
 - **Layer 4, sex chromosomes (RM269), desk #135 and #136:** from a variant file alone the estimate still names XY and
   XXY though it cannot rule out an extra Y (#135, default: keep, caveat documented); a coverage facet now counts X and
-  Y copies past two. Chip files read X from their own hets; their Y probes only behind `array_y` (#136: on by default
-  for AncestryDNA, whose Y calls are measured, or off for all as now). The lead's calls, for veto: three X with two Y
+  Y copies past two. Chip files read X from their own hets; their Y probes per vendor (#136, answered 2026-10-26: on by
+  default for AncestryDNA, whose Y calls are measured, off for 23andMe and every other vendor; `array_y` forces either). The lead's calls, for veto: three X with two Y
   is `OTHER_KARYOTYPE`; the array two-X expectation is 3/4 (Ne_X = 3/4 Ne_A), not PLINK's 0.2/0.8; copy counts are new
   nullable `x_copy_count`/`y_copy_count`, not new `XCopies` members; a table that states no build answers `no_build` as loaded and is estimated on `resolve_ref`'s output, the result naming the build's source.
 - **Layer 1, the lead's calls on VCF loading (built, listed for veto):** GT declared Integer, Float or Character is

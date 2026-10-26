@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF or a coverage facet whose header lengths are NCBI36's (hg18) gets `assembly_label = GRCh36`,
+  basis `inferred` (RM4). `assembly.ASSEMBLY_LENGTHS` held GRCh37, GRCh38 and T2T-CHM13 only, so a
+  build-36 header's lengths named no assembly and the label stayed null. The lengths come from NCBI's
+  assembly report for GCF_000001405.12, MT from hg18's chrom.sizes (the report lists none), both
+  carried in `assets/` (docs/PROVENANCE.md). No primary length is shared with another assembly, and
+  the one shared mitochondrion length never supports a label, so a header with only chrM or two
+  chromosomes stays unknown. **Values change**: null to `GRCh36` for those facets
+  (docs/SCHEMA.md, "Changes since sign-off").
+
 - A facet records the rule that read its REF, and the store refuses a held facet given again in
   another REF state (schema 0.0.20). `resolve_ref` keeps a facet's `facet_id`, so `Store.add` of the
   facet resolved under a newer `RESOLVE_VERSION`, or of the loaded facet once its resolved twin was

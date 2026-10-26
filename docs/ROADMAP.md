@@ -637,7 +637,7 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-Severity: medium · Status: in progress (a VCF facet's `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null), the `absence_means` that follows, and `assembly_label` from its contig lengths, merge ee4d5d1, 2026-10-22; an array's build from its rows in `resolve_ref` (F9, RM3), merge 2ff9b00; chip from the header or, for 23andMe, the rows, with F13, merge 9d18bcb; variant classes and `content_filter`, merge 3dfeaad; chip by marker overlap for FTDNA, MyHeritage and unstated Final Reports, merge 7451089, 2026-10-23; RefSeq and GenBank accessions as contig names, merge cec1831. Left, buildable now: gVCF `END` expansion; GRCh36 in `assembly.ASSEMBLY_LENGTHS`, which holds GRCh37, GRCh38 and T2T-CHM13 only, so a build-36 VCF's `##contig` lengths name no assembly; counting a genotype table's variant classes; pairing an FTDNA X-only export with the same person's autosomal one, which a caller-supplied subject (RM273) can now group but nothing reads across. Waiting for data: more manifests (other OmniExpress and GSA versions, an Affymetrix one for the 2010 FTDNA layout). Open, no desk number: whether an indel-only genome half should read as `wgs`) · Owner: lead
+Severity: medium · Status: in progress (a VCF facet's `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null), the `absence_means` that follows, and `assembly_label` from its contig lengths, merge ee4d5d1, 2026-10-22; an array's build from its rows in `resolve_ref` (F9, RM3), merge 2ff9b00; chip from the header or, for 23andMe, the rows, with F13, merge 9d18bcb; variant classes and `content_filter`, merge 3dfeaad; chip by marker overlap for FTDNA, MyHeritage and unstated Final Reports, merge 7451089, 2026-10-23; RefSeq and GenBank accessions as contig names, merge cec1831; GRCh36 in `assembly.ASSEMBLY_LENGTHS` from NCBI's NCBI36 assembly report, so a build-36 VCF's `##contig` lengths name it, 2026-10-26. Left, buildable now: gVCF `END` expansion; NCBI36's RefSeq accessions (`NC_000001.9`) as contig names, which `contig_names.PRIMARY_ACCESSIONS` maps for GRCh37 and GRCh38 only; counting a genotype table's variant classes; pairing an FTDNA X-only export with the same person's autosomal one, which a caller-supplied subject (RM273) can now group but nothing reads across. Waiting for data: more manifests (other OmniExpress and GSA versions, an Affymetrix one for the 2010 FTDNA layout). Open, no desk number: whether an indel-only genome half should read as `wgs`) · Owner: lead
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
@@ -785,6 +785,11 @@ would read as `wgs`.
 *Corrected 2026-10-26:* contigs named by RefSeq or GenBank accession are read. GRCh37's and GRCh38's
 primary accessions map to canonical `chrom` (`contig_names.PRIMARY_ACCESSIONS` in
 `schema.CONTIG_ALIASES`, 33b44d9, merge cec1831, 2026-10-23), so `infer_assembly` reads their lengths.
+*Corrected 2026-10-26:* GRCh36 is in `ASSEMBLY_LENGTHS`: NCBI36's 24 chromosome lengths from NCBI's assembly
+report for GCF_000001405.12 and hg18's chrM (16,571; the report lists no mitochondrion), both carried in
+`assets/` (docs/PROVENANCE.md). No primary length is shared with GRCh37, GRCh38 or T2T-CHM13; the only
+shared length is the Yoruba chrM, which never supports a label, so a header with only chrM, or with two
+build-36 chromosomes, stays unknown. A build-36 header carrying rCRS reads as conflicting, unknown.
 
 **Answered 2026-10-22: an SNV-only or indel-only split of a genome.** The person: "it can [be
 treated as WGS], but with a caveat that ref restoration is additionally gated (needs force)". It

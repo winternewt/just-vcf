@@ -725,11 +725,15 @@ its reasons there, or the loaders fill it.
   its own column rather than `seqcol_digest`'s, because it identifies a coordinate system, which
   several collections share.
   Names are verbatim, so `chr1` and `1` headers give different digests, as seqcol intends.
-- `assembly_label` is inferred from primary-chromosome lengths against GRCh37, GRCh38 and T2T-CHM13
-  (domain constants, `just_vcf.assembly`): at least three must match one assembly and none may
-  match another or none. The mitochondrion only contradicts (all three share 16,569; hg19's 16,571
-  counts as GRCh37). Fewer, or a mixture, leaves it null. A stated label (sniff's header hints) is
-  never replaced; a disagreement is a warning.
+- `assembly_label` is inferred from primary-chromosome lengths against GRCh36 (NCBI36, hg18), GRCh37,
+  GRCh38 and T2T-CHM13 (domain constants, `just_vcf.assembly`; GRCh36's from NCBI's assembly report for
+  GCF_000001405.12, carried in `assets/ncbi_assembly_reports/`): at least three must match one
+  assembly and none may match another or none. No primary length is shared between any two of them.
+  The mitochondrion only contradicts (GRCh37, GRCh38 and T2T-CHM13 share 16,569; hg19's 16,571 counts
+  as GRCh37, and is GRCh36's only one, as hg18 and Ensembl 54 carry it: NCBI's report lists no
+  mitochondrion). So a header with only chrM, or with two GRCh36 chromosomes, leaves it null, never
+  the assembly with the nearer lengths. Fewer, or a mixture, leaves it null. A stated label (sniff's
+  header hints) is never replaced; a disagreement is a warning.
 
 **`callset_type` and `absence_means` for a VCF (RM4).** From the spread of the facet's calls on the
 primary assembly (`just_vcf.callset`, ported from just-dna-lite `detect_callset_scope`): `wgs` needs
@@ -2663,6 +2667,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-26, RM4's GRCh36 lengths): no column changes. `infer_assembly`
+  knows NCBI36's primary-chromosome lengths, so a VCF, or a coverage facet, whose `##contig` or BAM
+  header lengths are build 36's gets `assembly_label = GRCh36`, basis `inferred`, where it was null.
+  A value that was unknown becomes known; no known value changes. Additive: minor.
 
 - **No version change** (2026-10-26, RM276's store migration): no column of `facets`, `calls`,
   `blocks` or `links` changes. `migrate_store` rewrites a store of an older version to this one by a

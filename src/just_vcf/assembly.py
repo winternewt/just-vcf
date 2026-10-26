@@ -2,11 +2,13 @@
 
 Two answers, kept apart because they are different kinds of fact:
 
-- **The label** (`GRCh37`, `GRCh38`, `T2T-CHM13`), inferred from the `##contig` lengths of the
-  primary chromosomes. The lengths below are domain constants (UCSC `chrom.sizes` for hg19, hg38 and
-  hs1, checked 2026-10-22); no two assemblies share a primary chromosome length except the
-  mitochondrion's 16,569, so a matching length is evidence for one assembly only. A header too thin to
-  tell, or one whose lengths disagree, gives no label, never the nearest one.
+- **The label** (`GRCh36`, `GRCh37`, `GRCh38`, `T2T-CHM13`), inferred from the `##contig` lengths of
+  the primary chromosomes. The lengths below are domain constants (UCSC `chrom.sizes` for hg19, hg38
+  and hs1, checked 2026-10-22; NCBI's NCBI36 assembly report, checked against hg18's, 2026-10-26); no
+  two assemblies share a primary chromosome length, on any chromosome. Only the mitochondrion's are
+  shared (16,569 by GRCh37, GRCh38 and T2T-CHM13; hg19's and hg18's 16,571), so a matching primary
+  length is evidence for one assembly only. A header too thin to tell, or one whose lengths disagree,
+  gives no label, never the nearest one.
 - **The coordinate system's digest**: the refget Sequence Collection `sorted_name_length_pairs`
   attribute digest of the header's contigs, names verbatim. It is computed exactly as the seqcol
   specification defines it, so it is a conformant value of that attribute. The collection's top-level
@@ -28,6 +30,24 @@ from just_vcf.schema import canonical_chrom
 _NAMES = [str(n) for n in range(1, 23)] + ["X", "Y"]
 
 ASSEMBLY_LENGTHS: dict[str, dict[str, frozenset[int]]] = {
+    # NCBI36 (hg18): NCBI's assembly report for GCF_000001405.12, carried verbatim in
+    # assets/ncbi_assembly_reports/; UCSC's hg18 chrom.sizes and Ensembl 54's seq_region give the same.
+    "GRCh36": {
+        **dict(
+            zip(
+                _NAMES,
+                (frozenset({n}) for n in (
+                    247249719, 242951149, 199501827, 191273063, 180857866, 170899992, 158821424, 146274826,
+                    140273252, 135374737, 134452384, 132349534, 114142980, 106368585, 100338915, 88827254,
+                    78774742, 76117153, 63811651, 62435964, 46944323, 49691432, 154913754, 57772954,
+                )),
+                strict=True,
+            )
+        ),
+        # NCBI's report lists no mitochondrion; hg18 (assets/ucsc_hg18/) and Ensembl 54 carry the Yoruba
+        # chrM (16,571). rCRS (16,569) came with GRCh37, so a build-36 header that has it reads conflicting.
+        "MT": frozenset({16571}),
+    },
     "GRCh37": {
         **dict(
             zip(
@@ -116,8 +136,8 @@ def infer_assembly(contigs: list[dict]) -> AssemblyInference:
 
     Only primary chromosomes take part, by canonical name; alt contigs, decoys and unplaced scaffolds
     differ between releases of one assembly and say nothing about the label. The mitochondrion's
-    length is shared by all three assemblies, so it can contradict a label (hg19's 16,571 on GRCh38)
-    but never supports one.
+    length is shared between assemblies (16,569 by three, 16,571 by hg19 and hg18), so it can
+    contradict a label (hg19's 16,571 on GRCh38) but never supports one.
     """
     lengths: dict[str, set[int]] = {}
     for contig in contigs:

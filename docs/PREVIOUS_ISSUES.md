@@ -68,7 +68,7 @@ minutes instead of seconds.
 
 Resolved 2026-10-26 by the lead's decision: the spill is written in canonical order once, at load time,
 sorted a part at a time so load's memory stays bound, and the frames come back as one scan with no
-sort. `_spill_files` still sinks each frame unsorted in one streaming pass, then `_canonical_parts`
+sort. `_spill_files` still sinks each frame unsorted in one streaming pass, then `canonical_parts`
 writes it again as parts of whole contigs, consecutive in canonical contig order, up to
 `SPILL_PART_ROWS` rows unless one contig alone has more, each part filtered from the staged file,
 sorted (`canonical_order`) and written; the unsorted file is removed. The frames are
@@ -81,7 +81,7 @@ derived steps' spills, which carry it too, did not change. Every loader that spi
 Measured on hu416394 (RM3, "after F27's repair"): one scan of 12 call parts and 11 block parts, no
 sort; `select(pl.len())` 15.7 s → 0.3 s; `reference_support` at 1M sites 249 s → 4.0 s; both frames
 and both answer sets hash the same row for row; `load` peaks at 7.7–7.9 GB as before, its sort pass
-15 s. Code: `loading.py` `_spill_files`, `_canonical_parts`; tests: `tests/test_spill_order.py` (the
+15 s. Code: `loading.py` `_spill_files`, `canonical_parts`; tests: `tests/test_spill_order.py` (the
 frames against the old per-contig read of the same staged bytes, the plan with no sort node, the
 parts holding whole contigs, an older layout's generation not read and swept).
 
@@ -89,8 +89,9 @@ Rejected: one sorted file per frame, which needs the whole frame sorted in memor
 sort) or a parquet writer that appends a part at a time (pyarrow's, not a core dependency), when the
 parts already read as one scan; and bumping `cache.SPILL_LAYOUT`, which would mark every resolve,
 lift, VRS, normalize and coverage spill older too, so the sweep would retire those unused for the grace
-period and their next run recompute them, though their layout did not change. Left: `rejoin_split`'s own spill (`rejoin.py`) is still read back one contig at a time with
-`canonical_order_per_contig`, so a rejoined whole-genome facet still pays a sort per contig on each
+period and their next run recompute them, though their layout did not change. Left at first:
+`rejoin_split`'s own spill (`rejoin.py`) was still read back one contig at a time with
+`canonical_order_per_contig`, so a rejoined whole-genome facet still paid a sort per contig on each
 read.
 ## F28 — Manta's breakend mates do not state each other's positions exactly
 
@@ -110,6 +111,21 @@ intervals, none ambiguous, and the counts are now 1,675 and 614, half the record
 Rejected: pairing by `ids` (`MantaBND:…:0` beside `:1`), which is Manta's naming and no other
 caller's; and carrying MATEID into `calls`, a schema change for the person, which these files do not
 need. Test: `tests/test_concordance_bnd.py::test_mates_written_apart_within_their_intervals_count_once`.
+
+Closed 2026-10-26 for `rejoin_split` too: its spill goes through the same `loading.canonical_parts`
+(renamed from `_canonical_parts`, now shared), and its manifest and generation key carry a
+rejoin-only `REJOIN_LAYOUT` 1, so an older rejoin generation is never read and no other spill is
+retired. `REJOIN_VERSION` stays at 5: the rows are the same, and it is part of the derived
+`facet_id`, so a bump would rename the facet and orphan the resolve, normalize and VRS spills made
+from it. The old read took its contigs from the parent's `contig_map`, the new one from the rows;
+every loader and `liftover` build `contig_map` from the contigs with rows, so the two agree. With no
+caller left in `src/`, `canonical_order_per_contig` moved into `tests/test_spill_order.py` as the
+oracle of the old read. On hu416394 (RM6, dated 2026-10-26): the rejoined calls' plan 2,179 scans and
+sorts → one scan, no sort; `select(pl.len())` 17.2 s → under 0.01 s; collected whole 80.9 s → 0.75 s;
+the same rows by hash; `rejoin_split` 9.9 s → 20.4 s for its one sort pass. Tests:
+`tests/test_rejoin_spill_order.py`. No other spill sorts on read: `resolve_ref`, `normalize` and
+`liftover` sort each contig when they write it, `coverage` sorts before it writes, and `mint_vrs_ids`
+keeps its input's order.
 
 ## F22 — A haploid call against the same allele's diploid homozygous call counts as discordant
 

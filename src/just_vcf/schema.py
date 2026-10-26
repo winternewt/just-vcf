@@ -390,22 +390,6 @@ def canonical_order(frame: pl.LazyFrame) -> pl.LazyFrame:
     return frame.sort(keys, nulls_last=True, maintain_order=True)
 
 
-def canonical_order_per_contig(frame: pl.LazyFrame, contigs: list[str]) -> pl.LazyFrame:
-    """`canonical_order` for one facet, one contig at a time, so memory stays within one contig.
-
-    `frame` should be a scan that can skip to a contig cheaply: a parquet file whose rows are grouped
-    by contig, where row-group statistics let the filter skip the rest. `contigs` are the canonical
-    `chrom` values in the frame. The result equals `canonical_order(frame)` row for row (tested).
-    """
-    ordered = sorted(set(contigs), key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))
-    names = frame.collect_schema().names()
-    keys: list[pl.Expr] = [pl.col("pos"), pl.col("end_pos")]
-    if "source_ref" in names:
-        keys += [pl.col("source_ref"), pl.col("alts").list.join(",")]
-    parts = [frame.filter(pl.col("chrom") == name).sort(keys, nulls_last=True, maintain_order=True) for name in ordered]
-    return pl.concat(parts, how="vertical", parallel=False) if parts else frame.clear()
-
-
 def empty(schema: pl.Schema) -> pl.LazyFrame:
     """An empty frame of `schema`."""
     return pl.LazyFrame(schema=schema)

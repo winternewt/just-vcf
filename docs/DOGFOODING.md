@@ -108,7 +108,7 @@ cache key (`SPILL_LAYOUT`).
 
 *Updated 2026-10-26:* the first repair is in for `load`'s own spill (F27, PREVIOUS_ISSUES.md): it is
 written in parts of whole contigs, consecutive in canonical order, up to `SPILL_PART_ROWS` rows, so
-contigs with a few rows share a file (`loading._canonical_parts`). hu416394's bcftools gVCF, rows on
+contigs with a few rows share a file (`loading.canonical_parts`). hu416394's bcftools gVCF, rows on
 2,179 contigs, is 12 call parts and 11 block parts. `resolve_ref` and `liftover` still make a pass and
 write a file per source contig, which is what this finding measured; it stays open for them.
 

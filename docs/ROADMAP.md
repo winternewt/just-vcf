@@ -1312,6 +1312,16 @@ except hu416394's decoy-heavy header (F24). **No CNV file lifts**: DRAGEN and Ca
 which `resolve_ref` reads as a mismatch (F23), so 0 of 1,324 copy-number rows, segments included,
 have lifted on real data.
 
+*Measured 2026-10-26, `rejoin_split`'s spill written in canonical order* (F27's repair carried over
+from `load`; library only, counts, timings and digests, a fresh cache per run, 40 GB cap, the 62 GB
+machine shared). hu416394's bcftools gVCF (PGP-HMS, 2,179 contigs with rows): 140,230 flagged rows,
+70,115 sites re-joined; the rejoined calls 9,581,028 rows on 2,057 contigs. Before → after: the calls'
+plan 2,179 scans and 2,179 sorts → one scan, no sort; `select(pl.len())` 17.2 s → under 0.01 s; the
+chr21 rows counted (154,916) 16.9 s → under 0.01 s; the calls collected whole 80.9 s at a 20.5 GB peak
+→ 0.75 s with no rise above `rejoin_split`'s own 11.0 GB. `rejoin_split` itself 9.9 s → 20.4 s, the
+one sort pass it now runs. The collected calls hash the same, row index included, with the same
+schema. `load` 130 s and 118 s at 7.6 GB, unchanged.
+
 
 ## RM271 — VRS allele ids
 Severity: high · Status: in progress (`mint_vrs_ids` and `vrs_withheld` shipped 2026-10-22 for VCF and array rows, merge b41bda5, equal to vrs-python on 19,000 real alleles. Left, buildable now: an opt-in test in `tests/test_vrs.py` minting on the real store `JUST_VCF_TEST_REFERENCE_DIR` names against vrs-python (`scripts/vrs_oracle.py`); today only `tests/test_phasing.py`'s Genes for Good test (39506f4, 2026-10-23) checks minted alleles on a real assembly, through CisPhasedBlock ids, on 1,500 rows. Waiting on the person: filing the gtars gap, G1 in docs/GTARS_PENDING_FIXES.md, not filed, needs the person's go per batch, the upstream-liaison seat's) · Owner: lead

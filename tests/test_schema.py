@@ -4,6 +4,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from test_spill_order import canonical_order_per_contig
 
 from just_vcf.schema import (
     BLOCKS,
@@ -157,8 +158,7 @@ def test_conform_refuses_unknown_columns() -> None:
 
 
 def test_per_contig_order_equals_the_global_order(tmp_path: Path) -> None:
-    from just_vcf.schema import canonical_order_per_contig
-
+    """The old per-contig read the spill-order tests take as their oracle sorts as `canonical_order` does."""
     rng = random.Random(11)
     contigs = ["1", "2", "10", "X", "MT", "XY", "chrUn_KI270302v1", "GL000192.1"]
     rows = [

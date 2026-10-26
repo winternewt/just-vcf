@@ -22,7 +22,7 @@ from just_vcf.cache import CACHE_KINDS, Origin
 from just_vcf.loaders.vcf import REWRITE_VERSION
 from just_vcf.normalize import NORMALIZE_VERSION
 from just_vcf.reference import RESOLVE_VERSION
-from just_vcf.rejoin import REJOIN_VERSION
+from just_vcf.rejoin import REJOIN_LAYOUT, REJOIN_VERSION
 from just_vcf.schema import SCHEMA_VERSION
 
 SEQ = "".join(random.Random(268).choice("ACGT") for _ in range(1000))
@@ -108,7 +108,7 @@ def test_every_entry_records_what_it_is_and_its_root_source(tmp_path: Path, defa
     assert by_kind[cache.NORMALIZE_SPILL][1].facet_id == normalized.facets.collect()["facet_id"][0]
     assert by_kind[cache.NORMALIZE_SPILL][1].parent_facet_id == rejoin_id
     assert by_kind[cache.REWRITE_COPY][1].versions == {"REWRITE_VERSION": str(REWRITE_VERSION)}
-    assert by_kind[cache.REJOIN_SPILL][1].versions == {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": str(REJOIN_VERSION), "SPILL_LAYOUT": str(cache.SPILL_LAYOUT)}
+    assert by_kind[cache.REJOIN_SPILL][1].versions == {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": str(REJOIN_VERSION), "SPILL_LAYOUT": str(cache.SPILL_LAYOUT), "REJOIN_LAYOUT": str(REJOIN_LAYOUT)}
     assert by_kind[cache.RESOLVE_SPILL][1].versions == {"SCHEMA_VERSION": SCHEMA_VERSION, "RESOLVE_VERSION": str(RESOLVE_VERSION), "SPILL_LAYOUT": str(cache.SPILL_LAYOUT)}
     assert by_kind[cache.NORMALIZE_SPILL][1].versions == {"SCHEMA_VERSION": SCHEMA_VERSION, "NORMALIZE_VERSION": str(NORMALIZE_VERSION), "SPILL_LAYOUT": str(cache.SPILL_LAYOUT)}
     for name, manifest in found.items():

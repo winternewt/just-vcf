@@ -493,7 +493,7 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
 
 FRAMES_LAYOUT = 1
 """How a load spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
-rows in canonical order, in parts of whole contigs (`_canonical_parts`), which the frames read as they
+rows in canonical order, in parts of whole contigs (`canonical_parts`), which the frames read as they
 are (F27). A spill without the key held each frame unsorted in one file, sorted one contig at a time on
 every read: its manifest lacks the key, so the sweep judges it older, and its generation key lacks it,
 so no run of this version finds it. `cache.SPILL_LAYOUT`, which every derived step's spill carries
@@ -543,7 +543,7 @@ def _spill_files(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origi
     in reading order.
 
     A global sort holds every column in memory (11 GB for a 6.4M-call VCF), so the rows are first sunk
-    unsorted in one streaming pass, then sorted a part at a time (`_canonical_parts`). The frames scan
+    unsorted in one streaming pass, then sorted a part at a time (`canonical_parts`). The frames scan
     the parts as they are: no sort runs when they are read (F27), where one sort per contig used to run
     on every read. The generation is named by the unsorted bytes and `FRAMES_LAYOUT`: the same rows
     sink to the same bytes, so a load run again finds the generation an earlier one committed, skips
@@ -564,21 +564,22 @@ def _spill_files(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origi
         key = cache.content_key([staged_calls, staged_blocks], {"facet_id": facet_id, "FRAMES_LAYOUT": FRAMES_LAYOUT})
         done = spill.find(key)
         if done is None:
-            parts = {"calls": _canonical_parts(staged_calls, "calls"), "blocks": _canonical_parts(staged_blocks, "blocks")}
+            parts = {"calls": canonical_parts(staged_calls, "calls"), "blocks": canonical_parts(staged_blocks, "blocks")}
             staged_calls.unlink()
             staged_blocks.unlink()
             done = spill.commit(key, parts, [])
     return done.files("calls"), done.files("blocks")
 
 
-def _canonical_parts(staged: Path, name: str) -> list[Path]:
+def canonical_parts(staged: Path, name: str) -> list[Path]:
     """The rows of one unsorted spilled frame, written beside it as `<name>-<n>.parquet` parts in
     canonical order (`canonical_order`): whole contigs per part, consecutive in canonical contig order,
     up to `SPILL_PART_ROWS` rows unless one contig alone has more.
 
     Each part is filtered from the staged file, sorted in memory and written, one at a time, so memory
     holds one part. Rows with no `chrom` are left out, as the per-contig read before this did. A frame
-    with no rows is one empty part, so its scan keeps the staged file's schema.
+    with no rows is one empty part, so its scan keeps the staged file's schema. `load`'s spill and
+    `rejoin_split`'s are written through it.
     """
     scan = pl.scan_parquet(staged)
     counts = dict(scan.group_by("chrom").len().drop_nulls("chrom").collect().iter_rows())

@@ -2457,12 +2457,15 @@ What differs from truvari, each with its reason:
   its anchor (Delly's `<TRA>`), is unknown: `size_similarity` is null, the size threshold is not
   checked, and the pair is counted in a warning. truvari without SVLEN sizes an insertion by its
   `end - start`, one base, so any two insertions are equal in size (similarity 1) on no evidence.
-  Such pairs meet by type and distance only, which is weaker than truvari's match with SVLEN.
+  Such pairs meet by type and distance only, which is weaker than truvari's match with SVLEN. truvari
+  also widens each insertion by half its size before the overlap; with no size that cannot be done,
+  so under a `pctovl` above 0 two insertions meet only at one anchor.
 - **CIPOS and CIEND widen the distance test.** truvari reads them only for breakends (`bnd_match`).
   Here each call's extent is widened to the earliest its start and the latest its end can be: the
   start by `|CIPOS[0]|`, the end by `|CIEND[1]|`, or by `|CIPOS[1]|` where CIEND is missing (VCF 4.5:
   assume CIPOS; the frame leaves that to its consumer, which this is). Only the `refdist` test uses
-  the widened extents; size and overlap use the stated ones. A `.` in an interval widens nothing.
+  the widened extents; size and overlap use the stated ones. A `.` widens nothing,
+  except that a `.` for the end's upper bound falls back to CIPOS's, as a missing CIEND does.
   `ci_needed` says when a pair met only by the widening.
 - **No sequence similarity.** truvari's `pctseq` (0.7) runs only when both calls carry sequence; no
   symbolic allele carries one in the frame, so it is never run, as with `--pctseq 0`. A deletion

@@ -1839,18 +1839,24 @@ Rules:
   (chrM, thousands deep) look the same. `kind=` states the format where the content cannot.
 - **The build** is stated by the caller, or inferred from contig lengths where the source gives them
   (an alignment header, mosdepth's summary). Otherwise it is null.
-- **An alignment file is not hashed**: `source_sha256` is null and `facet_id` digests its header, its
-  index and its size. Rejected: the sha256 of the bytes, which would read a 30x BAM a second time over
-  the network for a name.
+- **An indexed alignment file is not hashed**: `source_sha256` is null and `facet_id` digests its
+  header, its index and its size. Rejected: the sha256 of the bytes, which would read a 30x BAM a
+  second time over the network for a name. **One with no index is hashed** (2026-10-26):
+  `source_sha256` is its bytes' sha256, which `facet_id` and the spill key digest beside its header
+  and size. Its header and size alone named it, so a BAM rewritten in place with the same header and
+  byte size but other reads was served the first one's windows under the first one's `facet_id`. The
+  cost is one more read of the file on every call, spill or not; an index is what a pipeline leaves
+  beside its BAMs. Rejected: not spilling an unindexed file, which reads it in full by `depth()` on
+  every call and still gives two such files one `facet_id`.
 - **An alignment file is read once.** `alignment_coverage` spills its windows to the cache
   (`coverage/<key>/`, kind `coverage_spill`, with a manifest, swept and cleared as the loader's spills
   are, docs/ROADMAP_HISTORY.md RM268), and a later call with the same inputs reads the spill. The key
-  digests the file's header, index and size, `window`, `min_mapping_quality`, `filter_flag`,
+  digests the file's header, index and size (its sha256 too, with no index), `window`, `min_mapping_quality`, `filter_flag`,
   `COVERAGE_VERSION` and the polars-bio version, so a spill made with other parameters, or by another
   `COVERAGE_VERSION` or polars-bio, is never served. `assembly_label` is left out: no window depends on
   it, and the facet built on a reused spill still carries the build the call states. The spill trusts
-  the file's identity exactly as far as `facet_id` does: two files with one header, index and byte size
-  would share it. `clear_cache(source=bam)` matches the spill by path, but hashes an existing file to
+  the file's identity exactly as far as `facet_id` does: two indexed files with one header, index and
+  byte size would share it. `clear_cache(source=bam)` matches the spill by path, but hashes an existing file to
   look for digests too, which is one full read of the BAM. Rejected: keying by the just-vcf release,
   which would read every BAM again at each upgrade where `COVERAGE_VERSION` already says when the
   windows change.

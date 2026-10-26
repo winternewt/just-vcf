@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `alignment_coverage` names a BAM or CRAM with no index beside it by the sha256 of its bytes, now in
+  `CoverageFacet.source_sha256`, its `facet_id` and its spill key. Its header and byte size alone named
+  it, so a file rewritten in place with the same header and size but other reads was served the old
+  file's windows under the old `facet_id`. The cost is one more read of an unindexed file per call. An
+  indexed file is named as before. **Values change** for an unindexed file: its `facet_id`, and
+  `source_sha256` from null (docs/SCHEMA.md, "Coverage facets").
+
 - `migrate_store` called after a migration that was cut off between committing the new manifest and
   removing the old version's files returns that migration, read from the manifest's `migrations`,
   and finishes the cleanup. It returned `from_version = to_version`, `migrated` null, which reads as

@@ -10,7 +10,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   30 GB before the block lookup changed and past 45 GB after it (one lazy range join per contig, each
   re-reading the blocks). Now each frame is read once, filtered to the asked contigs, holding only the
   calls that start at an asked position or span more than one base and the blocks that cover a site:
-  1,000 sites take 108 s at a 7.8 GB peak (the load's own), 1M take 235 s at 5.6 GB, nearly all of
+  1,000 sites take 107 s at a 5.3 GB peak (the load's own is 7.8 GB), 1M take 235 s at 5.6 GB, nearly all of
   it reading the frames (F27). Answers do not change. `intervals.covering` collects the as-of join and
   the overlapping blocks together, so the frame is sorted once, and returns a DataFrame; `concordance`
   and `consensus` read blocks through it too. `reference_support` now reads the covering records when

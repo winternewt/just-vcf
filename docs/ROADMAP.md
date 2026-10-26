@@ -615,6 +615,41 @@ rejected:
 
 Not measured on real data yet: no PGP-HMS facet was asked in this change.
 
+*Measured 2026-10-26* (`reference_support` and `genotype_evidence_at` at whole-genome scale, through the
+library, counts only; seeded random positions on the 24 primary contigs, 1k, 100k and 1M, and the
+15,289 somalier sites the package carries; per-phase peak RSS sampled in one process after `load`, on a
+62 GB machine another session shared). On hu416394's loaded gVCF neither the block lookup 6750e05
+brought in nor the one before it could run, so the matching was rewritten (`_covering` reads each frame once,
+`intervals.covering` sorts the blocks once for both of its joins):
+
+- hu416394's bcftools gVCF (GRCh38, 9,651,143 calls, 9,473,303 blocks, loaded as 2,179 per-contig parts,
+  `load` 88 s at 7.8 GB). For 1,000 sites the code before 6750e05 ran past 30 GB and was killed, with
+  the sites on chr21 and chr22 alone too; 6750e05's ran past 55 GB, its block range joins alone past
+  45 GB, where the as-of join they replaced took 21.7 s at 6.1 GB. Now: 1k in 107 s, 100k in 115 s,
+  1M in 235 s, the somalier sites in 108 s, every one within 5.6 GB. Nearly all of it is reading the
+  frames, which costs per part (F27): over the same frames collected into memory, the code before
+  6750e05 against this one takes 1.16 against 1.20 s for 1k, 1.15 against 1.41 s for 100k and 2.41
+  against 2.94 s for 1M. The answers are the same at every site except those inside a block that
+  reaches the next block's start, where every covering block is now found: this file has 927 such
+  blocks, and 2 of the 100k sites and 4 of the 1M fall in one. At 1M: 937,774 `ref_block`, 587
+  `no_call_block`, 2,934 `call_at_position`, 2,670 `call_spans_position`, 55,884 `none`
+  (`outside_blocks`); 2,865 sites with more than one record.
+- The same file lifted to GRCh37 through `hg38ToHg19` (`resolve_ref` 220 s, `liftover` 218 s; 8,422,871
+  blocks, 129,993 reaching the next one's start). Code before 6750e05, 6750e05 and now: 1.6, 2.2 and
+  1.6 s for 1k; 2.9, 3.5 and 4.1 s for 1M; peaks near 8.7 GB for the older two (9.5 GB for
+  6750e05 at 1M), 5.4 GB for 1k and 5.9 GB for 1M now.
+  Now equals 6750e05 on every set; the code before it differs at 5,047 of the 6,825 1M sites inside a
+  reaching block, the overlaps 6750e05 was written for. At 1M: 914,139 `ref_block`, 371
+  `no_call_block`, 2,560 and 2,628 calls at and spanning the position, 80,143 `none`
+  (`absence_not_carried`); 5,898 sites with more than one record.
+- hu80855C's Isaac gVCF (GRCh37, 45,242,155 calls, 138,019,217 blocks, 25 parts): `load` 751 s at a
+  53 GB peak (F26). Now: 1k in 20 s, 100k in 19 s, 1M in 24 s, the somalier sites in 19 s, peaks
+  between 33 and 34.5 GB with the process holding 24 to 31 GB from `load` going in. On 100k sites on chr21 and chr22 the
+  three versions give the same answers (1.3, 1.6 and 1.4 s); the whole-genome sets were not run on
+  the older two, whose memory would have sat on top of that load. At 1M: 894,217 `ref_block`, 90,792
+  `no_call_block`, 14,563 and 269 calls at and spanning the position, no `none`; 534 sites with more
+  than one record.
+
 UCSC's scaffold names meet
 Ensembl's accessions since 2026-10-23, through NCBI's assembly reports rather than the accession inside
 the name (F19, docs/PREVIOUS_ISSUES.md). A VCF with neither

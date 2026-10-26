@@ -318,11 +318,12 @@ def test_vcf_build_hints_name_t2t_and_only_t2t(tmp_path: Path, line: str, build:
 # F9: an array's build from its own rows. The scorer is a pure function over sampled rows and bases.
 
 
-def calls_frame(rows: list[tuple[str, int, list[str | None] | None, str | None]]) -> pl.LazyFrame:
-    """`(chrom, pos, gt_alleles, source_ref)` rows, the only columns the sampler reads."""
-    return pl.LazyFrame(
-        rows, schema={"chrom": pl.String, "pos": pl.UInt32, "gt_alleles": pl.List(pl.String), "source_ref": pl.String}, orient="row"
-    )
+def calls_frame(rows: list[tuple]) -> pl.LazyFrame:
+    """`(chrom, pos, gt_alleles, source_ref[, end_pos])` rows, the only columns the sampler reads.
+    `end_pos` defaults to `pos`, as an array loader writes it for a call of single bases."""
+    full = [(*row, row[1]) if len(row) == 4 else row for row in rows]
+    schema = {"chrom": pl.String, "pos": pl.UInt32, "gt_alleles": pl.List(pl.String), "source_ref": pl.String, "end_pos": pl.UInt32}
+    return pl.LazyFrame(full, schema=schema, orient="row")
 
 
 def test_the_sample_keeps_scorable_array_snvs_only() -> None:
@@ -330,7 +331,7 @@ def test_the_sample_keeps_scorable_array_snvs_only() -> None:
         ("1", 10, ["G", "A"], None),  # het, kept as the sorted distinct alleles
         ("1", 11, ["C", None], None),  # half-call: the called base is enough
         ("1", 12, [None, None], None),  # whole no-call
-        ("1", 13, ["I", "D"], None),  # indel codes
+        ("1", 13, ["I", "D"], None, None),  # indel codes: span unknown
         ("1", 14, ["A", "A"], "A"),  # a VCF row: it has a source REF
         ("MT", 15, ["A"], None),  # MT is never scored
         ("XY", 16, ["A", "A"], None),  # the PAR code, not a primary chromosome
@@ -339,6 +340,35 @@ def test_the_sample_keeps_scorable_array_snvs_only() -> None:
     ]
     sample = sample_snv_rows(calls_frame(rows))
     assert sample.rows() == [("1", 10, ["A", "G"]), ("1", 11, ["C"]), ("X", 17, ["T"])]
+
+
+def test_the_sample_leaves_out_rows_that_are_not_one_base() -> None:
+    """A row is scored at `pos` only when its span is that one base. A Genos insertion site (`end_pos`
+    null, its alleles the inserted bases) sits at the anchor before it, and a spanned row whose alleles
+    happen to be single letters (`AG` read as `A/A`) covers two bases: neither is an SNV at `pos`."""
+    rows = [
+        ("1", 20, ["G", "G"], None, None),  # Genos: one G inserted after pos
+        ("1", 21, ["A", "A"], None, 22),  # Genos or GET-Evidence: two bases called as one
+        ("1", 23, ["G", "GG"], "", None),  # CGI or CASAVA insertion point: an empty source REF
+        ("1", 24, ["C", "T"], None, 24),  # Genos SNV, a one-base span
+    ]
+    assert sample_snv_rows(calls_frame(rows)).rows() == [("1", 24, ["C", "T"])]
+
+
+def test_a_loaded_genos_facet_samples_only_its_one_base_rows(tmp_path: Path) -> None:
+    head = "##FileFormat=Genos\n##ReferenceGenome=UCSC.hg19\n##Columns=CHROM\tBEGIN\tEND\tID\tGENOTYPE\n"
+    body = (
+        "chr1\t99\t100\trs1\tA/G\n"  # one base: the SNV the sample keeps
+        "chr1\t199\t201\trs2\tA/A\n"  # two bases, called as one
+        "chr1\t300\t300\trs3\tG/G\n"  # an insertion site: G inserted after the anchor
+        "chr1\t400\t400\trs4\t-/T\n"  # an insertion site with the empty allele
+        "chr1\t499\t500\trs5\tC/-\n"  # a one-base deletion
+    )
+    path = tmp_path / "genos.tsv"
+    path.write_text(head + body)
+    calls = load(path).calls
+    assert calls.filter(pl.col("end_pos").is_null()).collect().height == 2
+    assert sample_snv_rows(calls).rows() == [("1", 100, ["A", "G"])]
 
 
 def test_the_sample_is_spread_bounded_and_order_independent() -> None:

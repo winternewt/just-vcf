@@ -198,7 +198,10 @@ reference holds no contig of that name itself; the row keeps its source spelling
   from the rows (F9), and then matched as above. Per collection in the store, a deterministic sample
   of the facet's array SNV rows (at most 2,000 per chromosome on 1–22, X and Y, every k-th row by
   position; MT never) is scored: the share whose called alleles include the collection's base at that
-  position, on the forward strand only. A row on a contig the collection lacks is not scored on it; a
+  position, on the forward strand only. An SNV row here has no source REF, a span of one base
+  (`end_pos = pos`) and single-base called alleles. A Genos insertion site, whose alleles are the
+  inserted bases at the anchor before them (`end_pos` null), and a row called over more than one base
+  are not SNVs at `pos` and are left out, as is an insertion point with an empty source REF. A row on a contig the collection lacks is not scored on it; a
   row past the contig's end counts against it. The best collection names its label when it was scored
   on at least 1,000 rows, reaches 60%, and stands 20 points above both the best collection of any
   other label (an unlabelled collection counts as another) and chance (the mean number of distinct
@@ -2667,6 +2670,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-26, F9's row sample): no column changes. The rows `resolve_ref`
+  scores to infer an array's build and check its strand leave out rows not over one base, so a Genos
+  insertion site (`G/G` inserted after a `G`) is no longer scored as an SNV at its anchor
+  (`RESOLVE_VERSION` 12). A facet's inferred `assembly_label`, its `strand_check`, and the rows a
+  mixed strand withholds can change where such rows tipped the scores. Values only.
 
 - **No version change** (2026-10-26, RM4's GRCh36 lengths): no column changes. `infer_assembly`
   knows NCBI36's primary-chromosome lengths, so a VCF, or a coverage facet, whose `##contig` or BAM

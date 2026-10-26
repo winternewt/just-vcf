@@ -262,14 +262,20 @@ class RowsInference(BaseModel):
 def sample_snv_rows(calls: pl.LazyFrame, per_contig: int = ROWS_PER_CONTIG) -> pl.DataFrame:
     """A deterministic sample of array SNV rows: `chrom`, `pos`, `alleles` (distinct called bases, sorted).
 
-    Only rows without a source REF (array rows), on 1–22, X and Y, whose called alleles are all single
-    bases with at least one called. Per chromosome, rows sorted by position and genotype, every k-th row
-    is kept so that at most `per_contig` remain, spread over the whole chromosome. MT is left out: hg19's
-    chrM and rCRS differ, and a label covering both cannot be scored there.
+    Only rows without a source REF (array rows), on 1–22, X and Y, over one base (`end_pos == pos`),
+    whose called alleles are all single bases with at least one called. The span rule leaves out rows
+    that are not an SNV at `pos` although their alleles are single letters: a Genos insertion site
+    (`end_pos` null, at the anchor base before the inserted bases, which are its alleles) and a spanned
+    row (Genos, a GET-Evidence site) called over more than one base. An insertion point with an empty
+    source REF (CGI, CASAVA) has a source REF and is out already. Per chromosome, rows sorted by position
+    and genotype, every k-th row is kept so that at most `per_contig` remain, spread over the whole
+    chromosome. MT is left out: hg19's chrM and rCRS differ, and a label covering both cannot be scored
+    there.
     """
     called = pl.col("gt_alleles").list.drop_nulls()
     snv = (
         pl.col("source_ref").is_null()
+        & (pl.col("end_pos") == pl.col("pos")).fill_null(False)
         & pl.col("chrom").is_in(_NAMES)
         & pl.col("gt_alleles").is_not_null()
         & (called.list.len() > 0)

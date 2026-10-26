@@ -53,10 +53,13 @@ from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_rea
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 11
+RESOLVE_VERSION = 12
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes (10: an insertion
 point's anchor base, and REF over a Genos row's stated span; 11: a point whose every called haplotype is
-the empty allele is left unread, not anchored as a hom-ref call at the base before it)."""
+the empty allele is left unread, not anchored as a hom-ref call at the base before it; 12: the row sample
+the build inference and the strand check score leaves out rows not over one base, a Genos insertion site
+among them, so a facet's inferred label and `strand_check`, and the rows a mixed strand withholds, can
+change; the strand is not in the spill key)."""
 
 CONCATENATED_ALLELES: frozenset[str] = frozenset({"living_dna"})
 """Formats whose multi-letter genotype text is the two allele sequences written back to back, as the

@@ -367,7 +367,9 @@ def test_summary_counts_every_allele_and_excluded_alleles_are_counted(tmp_path: 
     assert int(result.summary["alleles"].sum()) == sites.height
     assert result.summary.equals(summarize(sites))
     excluded = {(row["facet"], row["reason"]): row["alleles"] for row in result.excluded.iter_rows(named=True)}
-    assert excluded == {("a", "symbolic"): 1, ("a", "spanning_deletion"): 1, ("b", "unspecified"): 1}
+    # The `<DEL>` is compared by extent (RM282), so it is no longer left out; b has no SV, so it is `a`'s alone.
+    assert excluded == {("a", "spanning_deletion"): 1, ("b", "unspecified"): 1}
+    assert sites.filter(pl.col("alt") == "<DEL>").select("agreement", "absence", "sv_kind").rows() == [("only_a", "unknown", "DEL")]
     by_class = result.summary.group_by("variant_class").agg(pl.col("alleles").sum())
     assert dict(by_class.iter_rows()) == dict(sites.group_by("variant_class").len().iter_rows())
 

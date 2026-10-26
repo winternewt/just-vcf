@@ -4,6 +4,22 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `concordance` compares structural-variant calls across two facets (RM282). A symbolic allele
+  (`<DEL>`, `<DUP:TANDEM>`, `<INV>`, `<INS>`, `<CNV>`, `<CNn>`) pairs with at most one of the other
+  facet's by type and extent, under truvari bench's matching and defaults (`SvMatching`: `refdist`
+  500, `pctsize` 0.7, `pctovl` 0.0, `typeignore` off; truvari 5.5's `var_match` and `--pick single`).
+  The type is the ALT's, not SVTYPE (DRAGEN writes `SVTYPE=CNV` on a `<DEL>`); CIPOS and CIEND widen
+  the distance test, which truvari does only for breakends; an `<INS>` has no size in the frame, so
+  its size test is withheld and counted, never passed. Pairs compare genotypes as sequence alleles do
+  (`match`, `mismatch`, graded `p_same` from PL). A one-sided SV is `only_a`/`only_b` with `absence`
+  `other_alleles` (an SV of the other facet within `refdist`), `reference` only where that facet is a
+  whole-genome callset that called SVs and was not filtered, else `unknown`: an array, an exome or a
+  small-variant callset never turns an SV into a disagreement. `sites` gains `sv_kind`, `b_alt`,
+  `a_end_pos`, `b_end_pos`, `size_similarity`, `reciprocal_overlap`, `ci_needed`; `key` gains
+  `extent`; `summary` groups by `sv_kind`. **Values change**: symbolic alleles were counted in
+  `excluded` as `symbolic` and are now rows of `sites` (and of RM279's atlas, class `sv`); breakends
+  are still left out, now as `breakend` (docs/SCHEMA.md, "Concordance between two facets").
+
 - `resolve_ref`'s row sample for the build inference and the strand check (F9, F13;
   `assembly.sample_snv_rows`) keeps only rows over one base (`end_pos == pos`). It sampled a Genos
   insertion site, `G/G` inserted after a `G` at the anchor with `end_pos` null, as an SNV at the anchor

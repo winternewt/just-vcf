@@ -207,16 +207,37 @@ Forward/Design alleles (its manifest, HumanOmni2.5-8v1_A, is not on disk); exact
 real data (no PGP-HMS export's chip has its own manifest on disk).
 
 ## RM282 — Structural-variant facets
-Severity: low · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; loading and the `write_vcf` round trip shipped 2026-10-23, merge 04c5db3, schema 0.0.14. Left: comparing SV calls across facets, buildable now (`concordance` leaves an SV allele out, counted as `symbolic`, since it pairs by VRS id or spelling; truvari's matching by extent is the reference, docs/LANDSCAPE.md); a check against a DELLY or Sniffles file waits for one (none on disk, synthetic tests only); minting VRS 2 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` waits on desk #89, meanwhile `sv_no_vrs_model`) · Owner: lead
+Severity: low · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; loading and the `write_vcf` round trip shipped 2026-10-23, merge 04c5db3, schema 0.0.14; `concordance` compares symbolic SV alleles by type and extent under truvari's matching, 2026-10-26, on a builder branch waiting for the lead's merge. Left: breakends in `concordance` (counted as `breakend`; truvari's `bnddist` matching is the reference), buildable now; whether a copy-number allele (`<CN0>`, `<CN3>`) should meet a `<DEL>` or `<DUP>` as a loss or a gain, the person's call (below); a check against a DELLY or Sniffles file waits for one (none on disk, synthetic tests only); minting VRS 2 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` waits on desk #89, meanwhile `sv_no_vrs_model`) · Owner: lead
 
 The person chose load with ids withheld (E11): SV calls load as rows with type and `end_pos`, VRS ids withheld with a reason (VRS 2.x has no SV model; charter: never a non-conforming GA4GH value).
 
 **Built:** the SV columns `sv_type`, `cipos`, `ciend`, `copy_number`, `alt_copy_numbers`, `<CNn>`
 extents, copy-number segments kept out of `blocks` (F18), `sv_no_vrs_model`, and the `write_vcf`
-round trip (docs/SCHEMA.md, "Structural variants"). All five PGP-HMS SV and CNV files load. **Left:**
-comparing SV calls across facets (truvari, LANDSCAPE); no DELLY or Sniffles file exists to check
-against (synthetic tests only); and the question whether VRS 2's `CopyNumberCount`/`CopyNumberChange`
-and `Adjacency` should be minted for CNVs and breakends, which the reason's name presumes away.
+round trip (docs/SCHEMA.md, "Structural variants"). All five PGP-HMS SV and CNV files load.
+
+**Built 2026-10-26:** `concordance` pairs symbolic SV alleles by type and extent (`SvMatching`,
+truvari bench's `refdist` 500, `pctsize` 0.7, `pctovl` 0.0, `--pick single`; docs/SCHEMA.md,
+"Concordance between two facets", lists where it differs from truvari and why), with genotypes
+compared as for sequence alleles and a one-sided SV `unknown` wherever the silent facet cannot speak
+for SVs. Checked on hu416394, the one PGP-HMS person with SV facets (a Manta `.sv.` file, a Canvas
+`.cnv.` file and a bcftools gVCF from one Sequencing.com run; aggregates only): Manta against Canvas
+meets nothing at the defaults, since every Canvas allele is a `<CNn>` and every Manta one a `<DEL>`,
+`<DUP>` or `<INS>` (1,782 SV alleles, 1,657 Manta and 125 Canvas; 1,530 `unknown`, 172 Manta and
+80 Canvas alleles `other_alleles`, near one of the other's); with `typeignore` 35 pairs meet,
+among them 10 `<INS>` against copy-number alleles that have no size to compare, so that switch is
+not a fix. Against the gVCF (chr22) every SV is `only_a` with absence `unknown`, never a
+disagreement. The only other public
+SV facet (docs/LIVE_SAMPLES.md) is hu6ABACE's one DRAGEN `.cnv.` file, so no two SV callers of one
+person were available to compare.
+
+**Left:** breakends (above); no DELLY or Sniffles file exists to check against (synthetic tests
+only); whether a copy-number allele should meet a deletion or duplication as a loss or a gain (it
+needs the expected copy number at the locus, which differs on X and Y, and is the person's call:
+built is the strict reading, type from the ALT's name, reversible by adding a mapping in
+`concordance._sv_side`); whether the frame should keep SVLEN, without which an `<INS>` pair meets by
+type and distance only (docs/SCHEMA.md, "Structural variants"); and the question whether VRS 2's
+`CopyNumberCount`/`CopyNumberChange` and `Adjacency` should be minted for CNVs and breakends, which
+the reason's name presumes away.
 
 ## RM284 — Phasing as CisPhasedBlock
 Severity: low · Status: in progress (`cis_phased_blocks` shipped 2026-10-23, merge 4129dc7; PSL, PSO and PSQ read and written back under VCF 4.5, with withheld blocks naming the allele that withheld them, merge 8b72a46, schema 0.0.15. Nothing buildable is left. Waiting: blocks per window or per run of sequence alleles, so one symbolic allele does not withhold a chromosome's block, on desk #90; a 4.4+ slot-0 block's phase on polars-bio keeping the leading phase indicator (P4 in docs/POLARS_BIO_PENDING_FIXES.md, not filed, the upstream-liaison seat's); the reading of a 4.4+ slot 0 that a PSL names as phased is listed for the person's veto in docs/LAYERS.md, layer 8) · Owner: lead

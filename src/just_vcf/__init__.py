@@ -17,7 +17,7 @@ from just_vcf.coverage import (
     callable_sites,
     read_coverage,
 )
-from just_vcf.concordance import AbsenceReading, Agreement, ComparisonBasis, Concordance, PairKey, concordance
+from just_vcf.concordance import AbsenceReading, Agreement, ComparisonBasis, Concordance, PairKey, SvMatching, concordance
 from just_vcf.consensus import AlleleFrequencyPrior, Consensus, GpReading, RateBasis, consensus, method_error_rates
 from just_vcf.evidence import (
     GENOTYPE_EVIDENCE,
@@ -173,6 +173,7 @@ __all__ = [
     "Resolution",
     "SexChromosomeEvidence",
     "SitePanel",
+    "SvMatching",
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",

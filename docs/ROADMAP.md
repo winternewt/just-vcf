@@ -12,7 +12,7 @@ Severity: medium · Status: in progress (shipped 2026-10-23: KING-robust related
 The person chose both (E6): somalier (MIT) as an optional subprocess, skipped cleanly when absent, and just-vcf's own relatedness on the frames (IBS/KING-style over a validated site panel, so arrays work too). Pedigrees as supplied GA4GH Pedigree data. Feeds RM273's check.
 
 ## RM276 — A durable per-person store
-Severity: medium · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; `Store` and `write_vcf_zarr` shipped 2026-10-23, merge 6830fb7; `call_HQ` in the Zarr export 2026-10-24, merge fbcb3a9. Left, buildable now, no decision: a migration between schema versions, where `store.py` `_check_version` refuses a store of another version with "No migration exists yet"; `cipos`, `ciend` and `alt_copy_numbers` in `vcf_zarr.py`, which counts them as not written) · Owner: lead
+Severity: medium · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; `Store` and `write_vcf_zarr` shipped 2026-10-23, merge 6830fb7; `call_HQ` in the Zarr export 2026-10-24, merge fbcb3a9; `variant_CIPOS`, `variant_CIEND` and `variant_CN` in the Zarr export 2026-10-26, an interval holding -1 or -2, the spec's integer sentinels, written missing and counted. Left, buildable now, no decision: a migration between schema versions, where `store.py` `_check_version` refuses a store of another version with "No migration exists yet") · Owner: lead
 
 The person chose both (E13): a directory per person holding parquet per facet, the links frame and a manifest, read lazily; and a VCF Zarr export (its spec has no gVCF blocks, so blocks stay parquet-only). Facets accumulate; nothing is overwritten (invariant 5).
 
@@ -21,6 +21,8 @@ manifest, a lock, lazy reads into `Loaded` and `Person`; and `write_vcf_zarr`, o
 VCF Zarr 0.4, blocks counted and left in the store. **Left:** a migration between schema versions (a
 store of another version is refused, not migrated); `cipos`, `ciend` and `alt_copy_numbers` in the
 Zarr export; whether `Person` should carry the links (`store.loaded().links` has them).
+*Corrected 2026-10-26:* `cipos`, `ciend` and `alt_copy_numbers` are written (docs/SCHEMA.md, "VCF
+Zarr export").
 *Corrected 2026-10-26:* `Person` carries `links` (merge b8bef07, 2026-10-23, "Person and the CLI keep
 links"), and `Store.person()` builds it from `loaded()`, so its links are the store's; that question is
 closed.

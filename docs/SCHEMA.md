@@ -2068,9 +2068,17 @@ beside it and renamed into place.
   `Number=2` HQ cannot hold it; an `hq` not one per GT slot (no loader writes one) is left out,
   counted; and, where any row has them, `call_GQ`, `call_DP`, `call_AD`,
   `call_GL`, `call_GP`, `call_DS`, `call_PS` (PS-kind sets as integers), `call_FT`, `call_CN`,
-  `variant_SVTYPE` and `variant_JUST_VCF_SPLIT`. AD, GL and GP are written only where they are
-  indexed over the written REF and ALTs. `cipos`, `ciend` and `alt_copy_numbers` are not written yet,
-  counted in a warning.
+  `variant_SVTYPE`, `variant_CIPOS`, `variant_CIEND`, `variant_CN` and `variant_JUST_VCF_SPLIT`. AD, GL
+  and GP are written only where they are indexed over the written REF and ALTs. `variant_CIPOS` and
+  `variant_CIEND` (2026-10-26) hold `cipos` and `ciend` as the frame does, two offsets per ALT in ALT
+  order, `<i4` on a dimension of their own (`CIPOS_dim`, `CIEND_dim`; the spec lets a `Number=.` field
+  name any). An offset of -1 or -2 is a real value there but the spec's integer missing and fill, which
+  a reader can only take as "no value" (the spec does not say so; it fixes the sentinels for every
+  integer field): such a row's interval is written missing, counted in a warning. Rejected: writing it
+  anyway, which stores a value the reader reads as another; and a float array, which keeps every value
+  but declares an Integer field Float. `variant_CN` holds `alt_copy_numbers`, `<f4` on `alt_alleles`
+  (the spec's `Number=A` dimension), a fractional value as it is, where `write_vcf`'s VCF 4.3 leaves it
+  out. polars-bio reads all three back as lists, sentinels as stored.
 - **Missing and padding** are the spec's: `-1` and `-2` for integers, the NaNs `0x7F800001` and
   `0x7F800002` for floats, `"."` and `""` for strings. The last chunk is padded whole, as Zarr v2
   stores it. polars-bio hands the integer sentinels back as they are.

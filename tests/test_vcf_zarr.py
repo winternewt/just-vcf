@@ -290,3 +290,88 @@ def test_haplotype_qualities_not_one_per_gt_slot_are_left_out(tmp_path: Path) ->
     back = read_back(written.path).select(pl.col("genotypes").struct.unnest())
     want = expected_hq(calls.with_columns(pl.when(odd).then(None).otherwise(pl.col("hq")).alias("hq")), calls["gt"].list.len().max())
     assert [row[0] for row in back["HQ"].to_list()] == want
+
+
+SV_META_45 = (
+    '##INFO=<ID=SVLEN,Number=A,Type=Integer,Description="Length of structural variant">',
+    '##INFO=<ID=CIPOS,Number=.,Type=Integer,Description="Confidence interval around POS">',
+    '##INFO=<ID=CIEND,Number=.,Type=Integer,Description="Confidence interval around END">',
+    '##INFO=<ID=CN,Number=A,Type=Float,Description="Copy number of allele">',
+    '##INFO=<ID=END,Number=1,Type=Integer,Description="End position">',
+    '##FORMAT=<ID=CN,Number=1,Type=Float,Description="Copy number">',
+)
+# VCF 4.5 shapes: two offsets per ALT with a missing one, a fractional per-ALT copy number, an ALT
+# with no CIEND, a copy-neutral segment's one pair, a sequence ALT with none, and an interval holding
+# -1, which VCF Zarr's integer arrays read as missing.
+SV_RECORDS_45 = [
+    "1\t100\tcnv\tT\t<CNV>,<CNV>\t.\t.\tSVLEN=30,30;CN=1,2.5;CIPOS=-5,5,.,3;CIEND=-10,10,0,4\tGT:CN\t1/2:3.5",
+    "1\t200\tdel\tT\t<DEL>\t.\t.\tSVLEN=300;CIPOS=-20,20\tGT\t0/1",
+    "1\t600\tins\tT\t<INS>\t.\t.\tSVLEN=40;CIPOS=-1,1;CIEND=3,4\tGT\t0/1",
+    "1\t700\tsnv\tA\tG\t.\t.\t.\tGT\t0/1",
+    "1\t800\tseg\tN\t.\t.\t.\tEND=900;CIPOS=-50,50\tGT:CN\t0/0:2",
+]
+
+
+def sv_loaded(tmp_path: Path) -> Loaded:
+    header = "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "SYNTHETIC_SAMPLE"])
+    path = tmp_path / "sv45.vcf"
+    path.write_text("\n".join(["##fileformat=VCFv4.5", "##contig=<ID=1,length=249250621>", *SV_META_45, header, *SV_RECORDS_45]) + "\n")
+    return load(path)
+
+
+def stored_ints(values: list | None, width: int) -> list[int]:
+    """A list as an integer array stores it: -1 per missing element (all of them for a null list), -2 past its end."""
+    if values is None:
+        return [-1] * width
+    return [-1 if value is None else value for value in values] + [-2] * (width - len(values))
+
+
+def test_sv_intervals_and_per_alt_copy_numbers_are_written(tmp_path: Path) -> None:
+    loaded = sv_loaded(tmp_path)
+    calls = loaded.calls.collect()
+    written = write_vcf_zarr(loaded, tmp_path / "out.vcz")
+    assert {"variant_CIPOS", "variant_CIEND", "variant_CN"} <= set(written.arrays)
+    assert not any("does not write" in warning for warning in written.warnings), written.warnings
+    # The interval holding -1 is written missing, counted; the other interval of that row is kept.
+    clashing = [any(v in (-1, -2) for v in value if v is not None) if value is not None else False for value in calls["cipos"].to_list()]
+    assert sum(clashing) == 1
+    assert (
+        "1 row(s) with a CIPOS offset of -1 or -2, which VCF Zarr reads as a missing or fill value in an integer "
+        "array; their CIPOS written missing"
+    ) in written.warnings
+    assert not any("CIEND offset" in warning for warning in written.warnings)
+
+    root = written.path
+    alleles = calls["alts"].list.len().max() + 1
+    back = pb.scan_vcf_zarr(str(root), use_zero_based=False, info_fields=["CIPOS", "CIEND", "CN"]).collect()
+    for name, key in (("cipos", "CIPOS"), ("ciend", "CIEND")):
+        width = calls[name].list.len().max()
+        meta = json.loads((root / f"variant_{key}" / ".zarray").read_text())
+        assert meta["shape"] == [calls.height, width] and meta["dtype"] == "<i4" and meta["fill_value"] == -2
+        assert json.loads((root / f"variant_{key}" / ".zattrs").read_text())["_ARRAY_DIMENSIONS"] == ["variants", f"{key}_dim"]
+        kept = [
+            None if value is not None and any(v in (-1, -2) for v in value if v is not None) else value for value in calls[name].to_list()
+        ]
+        assert back[key].to_list() == [stored_ints(value, width) for value in kept], key
+
+    # CN on alt_alleles, one fewer than variant_allele's width; a float keeps a fractional value, and
+    # the spec's NaN sentinels tell a missing value from padding on the bytes.
+    width = alleles - 1
+    meta = json.loads((root / "variant_CN" / ".zarray").read_text())
+    assert meta["shape"] == [calls.height, width] and meta["dtype"] == "<f4"
+    assert json.loads((root / "variant_CN" / ".zattrs").read_text())["_ARRAY_DIMENSIONS"] == ["variants", "alt_alleles"]
+    raw = gzip.decompress((root / "variant_CN" / "0.0").read_bytes())
+    bits = list(struct.unpack(f"<{calls.height * width}I", raw[: 4 * calls.height * width]))
+    want_bits = []
+    for value in calls["alt_copy_numbers"].to_list():
+        row = [0x7F800001] * width if value is None else [struct.unpack("<I", struct.pack("<f", v))[0] for v in value]
+        want_bits += row + [0x7F800002] * (width - len(row))
+    assert bits == want_bits
+    got_cn = [[v for v in row if v == v] or None for row in back["CN"].to_list()]
+    assert got_cn == [value or None for value in calls["alt_copy_numbers"].to_list()]
+    assert 2.5 in calls["alt_copy_numbers"].explode(empty_as_null=False).to_list()
+
+
+def test_a_facet_without_sv_fields_writes_no_sv_arrays(tmp_path: Path) -> None:
+    written = write_vcf_zarr(loaded_from(tmp_path, RICH, fmt=RICH_FORMAT), tmp_path / "rich.vcz")
+    assert not {"variant_CIPOS", "variant_CIEND", "variant_CN"} & set(written.arrays)

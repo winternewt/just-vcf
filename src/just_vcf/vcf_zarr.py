@@ -30,15 +30,19 @@ What is written:
   counted;
 - the FORMAT fields any row has: `call_GQ`, `call_DP`, `call_AD`, `call_GL`, `call_GP`, `call_DS`,
   `call_PS` (PS-kind phase sets, as integers), `call_FT`, `call_CN`; and the INFO fields any row has:
-  `variant_SVTYPE`, `variant_JUST_VCF_SPLIT`. `call_AD`, `call_GL` and `call_GP` are written only
-  where they are indexed over the written REF and ALTs, as in `write_vcf`.
+  `variant_SVTYPE`, `variant_CIPOS` and `variant_CIEND` (`cipos`, `ciend`: two offsets per ALT, on a
+  dimension of their own, `CIPOS_dim` and `CIEND_dim`), `variant_CN` (`alt_copy_numbers`, on
+  `alt_alleles`), `variant_JUST_VCF_SPLIT`. An interval holding an offset of -1 or -2, which an integer
+  array can only read as missing or fill, is written missing on that row and counted. `call_AD`,
+  `call_GL` and `call_GP` are written only where they are indexed over the written REF and ALTs, as
+  in `write_vcf`. A fractional copy number is written as it is: `write_vcf`'s VCF 4.3 leaves it out
+  because 4.3 reserves CN as Integer, and a float array has no such limit.
 
 Missing values are the spec's: `-1` for integers, the NaN `0x7F800001` for floats, `"."` for
 strings; padding is `-2`, the NaN `0x7F800002` and `""`. The root's attributes name the facet
 (`facet_id`, `source_sha256`, `format_id`, `derived_from`, the schema version) and never its
 `source_path`; `vcf_meta_information` gives the `fileformat` `write_vcf` would write for the facet
-(VCF 4.5 where a row holds a PSL phase set, else 4.3). Fields not written (`cipos`, `ciend`, `alt_copy_numbers`, `dropped_fields`) are counted
-in a warning where a row has them.
+(VCF 4.5 where a row holds a PSL phase set, else 4.3).
 """
 
 import gzip
@@ -153,7 +157,6 @@ def write_vcf_zarr(
     calls = loaded.calls.with_columns(_unwritable().alias("_unwritable"))
     counts = calls.select(
         *[(pl.col("_unwritable") == reason).sum().alias(reason) for reason in _UNWRITABLE_REASONS],
-        *[pl.col(name).list.len().fill_null(0).gt(0).sum().alias(f"n_{name}") for name in ("cipos", "ciend", "alt_copy_numbers")],
         # As `write_vcf` decides its header: over every row, written or not.
         _has_psl().any().alias("v45"),
     ).collect().row(0, named=True)
@@ -173,15 +176,19 @@ def write_vcf_zarr(
         warnings.append(
             f"{block_count} reference/no-call block(s) not written: VCF Zarr has no blocks; they stay in the parquet store"
         )
-    not_written = {name: counts[f"n_{name}"] for name in ("cipos", "ciend", "alt_copy_numbers") if counts[f"n_{name}"]}
-    if not_written:
-        warnings.append("row(s) with fields VCF Zarr export does not write: " + ", ".join(f"{n} {k}" for k, n in not_written.items()))
     vectors_dropped = rows.filter(pl.col("_has_vector") & ~pl.col("_indexable")).height
     if vectors_dropped:
         warnings.append(
             f"{vectors_dropped} row(s) had GL/GP/AD indexed over another allele list than the written REF and ALTs; "
             "those vectors were left out"
         )
+    for name, key in (("cipos", "CIPOS"), ("ciend", "CIEND")):
+        clashing = rows.filter(pl.col(f"_{name}_sentinel")).height
+        if clashing:
+            warnings.append(
+                f"{clashing} row(s) with a {key} offset of -1 or -2, which VCF Zarr reads as a missing or fill "
+                f"value in an integer array; their {key} written missing"
+            )
     hq_unfit = rows.filter(pl.col("_hq_unfit")).height
     if hq_unfit:
         warnings.append(f"{hq_unfit} row(s) had haplotype qualities that are not one per GT allele; left out of HQ")
@@ -255,8 +262,22 @@ def _columns() -> list[pl.Expr]:
         pl.when(pl.col("sample_filters").list.len() > 0).then(pl.col("sample_filters").list.join(";")).alias("_FT"),
         pl.col("copy_number"),
         pl.col("sv_type"),
+        # An offset of -1 or -2 is a real CIPOS/CIEND value, but VCF Zarr's integer missing and fill:
+        # written, a reader would take it for "no value" or padding. Such a row's interval is written
+        # missing, counted, rather than as a value the store does not hold.
+        *[
+            pl.when(_sentinel_offset(name)).then(None).otherwise(pl.col(name)).alias(f"_{name}")
+            for name in ("cipos", "ciend")
+        ],
+        *[_sentinel_offset(name).alias(f"_{name}_sentinel") for name in ("cipos", "ciend")],
+        pl.col("alt_copy_numbers"),
         pl.col("split_signal").is_not_null().alias("_split"),
     ]
+
+
+def _sentinel_offset(name: str) -> pl.Expr:
+    """True where a confidence interval holds -1 or -2, VCF Zarr's integer missing and fill values."""
+    return pl.col(name).list.eval(pl.element().is_in([_INT_MISSING, _INT_FILL])).list.any().fill_null(False)
 
 
 def _check_order(rows: pl.DataFrame) -> None:
@@ -372,6 +393,34 @@ def _write_store(
     )
     if rows["sv_type"].is_not_null().any():
         array_of("variant_SVTYPE", ["variants"], "|O", (), lambda part: part["sv_type"].to_list(), None)
+    # CIPOS and CIEND as the frame holds them, two offsets per ALT in ALT order (VCF 4.5's shape; a
+    # copy-neutral segment's one pair), on a dimension of their own; CN one value per ALT, on
+    # `alt_alleles` (VCF Zarr's dimension for `Number=A`, one fewer than `alleles`).
+    for key, column, description in (
+        ("CIPOS", "_cipos", "Confidence interval around POS, two values per ALT"),
+        ("CIEND", "_ciend", "Confidence interval around END, two values per ALT"),
+    ):
+        width = rows[column].list.len().max() or 0
+        if width:
+            array_of(
+                f"variant_{key}",
+                ["variants", f"{key}_dim"],
+                "<i4",
+                (width,),
+                lambda part, column=column, width=width: _padded(part[column], width),
+                _INT_FILL,
+                description,
+            )
+    if rows["alt_copy_numbers"].list.len().max():
+        array_of(
+            "variant_CN",
+            ["variants", "alt_alleles"],
+            "<f4",
+            (alleles - 1,),
+            lambda part: _padded(part["alt_copy_numbers"], alleles - 1),
+            "NaN",
+            "Copy number of each ALT allele, as the source wrote it",
+        )
     if rows["_split"].any():
         array_of(f"variant_{SPLIT_INFO_KEY}", ["variants"], "|b1", (), lambda part: part["_split"].to_list(), None)
 

@@ -397,60 +397,57 @@ def _load_cgi(sniffed: Sniffed) -> Loaded:
 
 
 def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, body: Path) -> Loaded:
+    """Read the payload into a typed parquet copy of its rows, then make the frames one locus range at
+    a time (`cgi.range_frames`), each range's rows held in memory once, and spill what the ranges wrote.
+
+    Every step from a row to a frame row works within one locus, so the ranges give the rows the whole
+    file in one plan gave; that plan held every haplotype at once (9 GB for a whole `var`) and ran a
+    second time for the warning counts. The range parts are not an order: `_spill` writes the rows in
+    canonical order whatever order they come in."""
     with open_payload(sniffed) as handle:
         header = cgi.copy_body(handle, body)
-    rows = cgi.prepare(cgi.scan(body, header), sniffed.format)
-    if sniffed.format == cgi.VAR:
-        uniform, segments = cgi.var_parts(rows)
-        haplotypes = cgi.var_haplotypes(segments)
-    else:
-        uniform, haplotypes = cgi.master_var_parts(rows)
-    checks = cgi.locus_checks(haplotypes)
-    good = haplotypes.join(checks.filter(pl.col("problem").is_null()).select("locus"), on="locus", how="semi")
-    calls, none_called = cgi.call_rows(good)
-    stretches = pl.concat([uniform.select("chromosome", "begin", "end", "varType"), none_called], how="vertical")
-    blocks = cgi.block_rows(stretches)
-
-    counts = pl.collect_all(
+    typed = body.with_name("rows.parquet")
+    cgi.prepare(cgi.scan(body, header), sniffed.format).sink_parquet(typed, row_group_size=SPILL_ROW_GROUP)
+    body.unlink()
+    rows = pl.scan_parquet(typed)
+    malformed, chromosomes = pl.collect_all(
         [
             rows.select(cgi.malformed(rows).sum().alias("malformed")),
-            checks.filter(pl.col("problem").is_not_null()).group_by("problem").len().sort("problem"),
-            uniform.group_by("varType").len().sort("varType"),
             rows.filter(~cgi.malformed(rows)).select(pl.col("chromosome").unique()),
-            calls.filter(pl.col("ad_withheld").is_not_null()).group_by("ad_withheld").len().sort("ad_withheld"),
-            checks.filter(pl.col("problem").is_null()).select(pl.col("link_conflicts").sum()),
-            good.select(
-                (pl.col("score").is_not_null() & ~pl.col("score").is_between(0, cgi.HQ_MAX)).sum().alias("hq_out"),
-                # Only where the EAF score goes into `hq`: a `?`, partly called or out-of-range haplotype's is not read.
-                (pl.col("vaf_differs") & pl.col("score").is_between(0, cgi.HQ_MAX)).fill_null(False).sum().alias("vaf_differs"),
-                pl.col("score_not_whole").sum().alias("not_whole"),
-                pl.col("score_not_number").sum().alias("not_number"),
-            ),
         ]
     )
-    warnings = []
-    if counts[0]["malformed"][0]:
-        warnings.append(f"{counts[0]['malformed'][0]} row(s) whose locus, begin or end is not a number, or whose end lies before its begin, dropped")
-    warnings += [f"{n} locus(es) with {problem} dropped" for problem, n in counts[1].iter_rows()]
-    warnings += [f"{n} row(s) without `ad`: {reason}" for reason, n in counts[4].iter_rows()]
-    if counts[5].item():
-        warnings.append(f"{counts[5].item()} haplotype(s) whose rows name more than one hapLink left without a phase set")
-    scores = counts[6].row(0, named=True)
-    if scores["hq_out"]:
-        warnings.append(f"{scores['hq_out']} haplotype score(s) outside 0..{cgi.HQ_MAX} left out of `hq`")
-    if scores["not_whole"]:
-        warnings.append(f"{scores['not_whole']} haplotype score value(s) not a whole number left out of `hq`")
-    if scores["not_number"]:
-        warnings.append(f"{scores['not_number']} haplotype score value(s) not a number left out of `hq`")
-    if scores["vaf_differs"]:
-        warnings.append(f"{scores['vaf_differs']} haplotype(s) whose varScoreVAF differs from the varScoreEAF read into `hq`")
-    by_type = dict(counts[2].iter_rows())
-    if by_type.get("PAR-called-in-X"):
-        warnings.append(f"{by_type['PAR-called-in-X']} chrY stretch(es) called on chrX (PAR-called-in-X) kept as no-call blocks")
-
     facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={})
-    calls_frame, blocks_frame = cgi.to_frames(calls, blocks, facet_id)
-    spilled, spilled_blocks = _spill(facet_id, calls_frame, blocks_frame, origin)
+    tally = cgi.Tally()
+    calls_parts: list[Path] = []
+    blocks_parts: list[Path] = []
+    for index, (low, high) in enumerate(cgi.locus_ranges(rows, cgi.CHUNK_ROWS)):
+        calls, blocks, counted = cgi.range_frames(rows.filter(cgi.in_range(low, high)).collect(), sniffed.format)
+        tally.add(counted)
+        calls_frame, blocks_frame = cgi.to_frames(calls.lazy(), blocks.lazy(), facet_id)
+        calls_parts.append(body.with_name(f"calls-{index:05d}.parquet"))
+        blocks_parts.append(body.with_name(f"blocks-{index:05d}.parquet"))
+        calls_frame.collect().write_parquet(calls_parts[-1], row_group_size=SPILL_ROW_GROUP)
+        blocks_frame.collect().write_parquet(blocks_parts[-1], row_group_size=SPILL_ROW_GROUP)
+
+    warnings = []
+    if malformed["malformed"][0]:
+        warnings.append(f"{malformed['malformed'][0]} row(s) whose locus, begin or end is not a number, or whose end lies before its begin, dropped")
+    warnings += [f"{n} locus(es) with {problem} dropped" for problem, n in sorted(tally.problems.items())]
+    warnings += [f"{n} row(s) without `ad`: {reason}" for reason, n in sorted(tally.ad_withheld.items())]
+    if tally.link_conflicts:
+        warnings.append(f"{tally.link_conflicts} haplotype(s) whose rows name more than one hapLink left without a phase set")
+    if tally.hq_out:
+        warnings.append(f"{tally.hq_out} haplotype score(s) outside 0..{cgi.HQ_MAX} left out of `hq`")
+    if tally.not_whole:
+        warnings.append(f"{tally.not_whole} haplotype score value(s) not a whole number left out of `hq`")
+    if tally.not_number:
+        warnings.append(f"{tally.not_number} haplotype score value(s) not a number left out of `hq`")
+    if tally.vaf_differs:
+        warnings.append(f"{tally.vaf_differs} haplotype(s) whose varScoreVAF differs from the varScoreEAF read into `hq`")
+    if tally.uniform_types.get("PAR-called-in-X"):
+        warnings.append(f"{tally.uniform_types['PAR-called-in-X']} chrY stretch(es) called on chrX (PAR-called-in-X) kept as no-call blocks")
+
+    spilled, spilled_blocks = _spill(facet_id, pl.scan_parquet(calls_parts), pl.scan_parquet(blocks_parts), origin)
     # Unanchored alleles (`""`) count as indels; the member's own name is read for its words only.
     classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
     warnings += class_warnings
@@ -478,7 +475,7 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
         # The files tile the genome in ref and no-call blocks, whatever the type (Decision 4).
         "absence_means": AbsenceMeans.BLOCKS.value,
         **classes,
-        "contig_map": contig_map(counts[3]["chromosome"].to_list()),
+        "contig_map": contig_map(chromosomes["chromosome"].to_list()),
         "dropped_fields": cgi.dropped_fields(sniffed.format, header),
     }
     for warning in warnings:

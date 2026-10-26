@@ -337,7 +337,7 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (32 of the 39 declared formats load since 2026-10-23: the array side, merge 53600af, and the VCF side, merge bd5c02e, 2026-10-22; CGI `var`/masterVarBeta and PGP's key=value table, merge aa095fd; the CGI leftovers, merge 01fca0b; the CASAVA SNP and indel tables, SOAPsnp, FTDNA Big Y, Color's variant set, GET-Evidence GFF and Nirvana JSON, merge 98a476e. Waiting on the person: `oxford_gen`'s chromosome, desk #93; Deflate64 zips, desk #83 (refused meanwhile); a build CASAVA, SOAPsnp, Big Y and Nirvana do not state, desk #92 (they load, but get no REF check or VRS ids). Waiting for data: Geno 2.0 and the headerless Final Report need chip manifests not on disk (HumanOmni2.5-8v1_A for the one PGP Final Report). Not loadable by nature: `promethease_tab_genotype` (no positions), `cgi_summary` and `decodeme_info` (not facets). Buildable now: a whole CGI `var` peaks at 8.9 GB in `loaders/cgi.py`'s haplotype sort; GET-Evidence copies named `<assembly>.tsv.bz2` are unchecked) · Owner: lead
+Severity: high · Status: in progress (32 of the 39 declared formats load since 2026-10-23: the array side, merge 53600af, and the VCF side, merge bd5c02e, 2026-10-22; CGI `var`/masterVarBeta and PGP's key=value table, merge aa095fd; the CGI leftovers, merge 01fca0b; the CASAVA SNP and indel tables, SOAPsnp, FTDNA Big Y, Color's variant set, GET-Evidence GFF and Nirvana JSON, merge 98a476e. Waiting on the person: `oxford_gen`'s chromosome, desk #93; Deflate64 zips, desk #83 (refused meanwhile); a build CASAVA, SOAPsnp, Big Y and Nirvana do not state, desk #92 (they load, but get no REF check or VRS ids). Waiting for data: Geno 2.0 and the headerless Final Report need chip manifests not on disk (HumanOmni2.5-8v1_A for the one PGP Final Report). Not loadable by nature: `promethease_tab_genotype` (no positions), `cgi_summary` and `decodeme_info` (not facets). Buildable now: GET-Evidence copies named `<assembly>.tsv.bz2` are unchecked) · Owner: lead
 
 **Shipped 2026-10-23: the site tables** (`loaders/site_tables.py`): CASAVA SNP and indel tables,
 SOAPsnp, Big Y, Color's variant set and GET-Evidence GFFs; then Nirvana JSON (`loaders/nirvana.py`),
@@ -485,8 +485,14 @@ The 1.x layout (formats 1.6 and 1.7: `totalScore`, no filter column) loads as it
 takes columns by name; two PGP-HMS files have it (GET-Evidence collections), and a whole 1.6 file
 loads as a `wgs` genome with no row dropped (tested, opt-in).
 
-**Left for CGI:** memory (a whole `var` peaks at 8.9 GB, the haplotype sort);
-GET-Evidence copies named `<assembly>.tsv.bz2`, not checked.
+**Left for CGI:** GET-Evidence copies named `<assembly>.tsv.bz2`, not checked. Memory is done
+(2026-10-26): a file is read one locus range of about 2M rows at a time (`cgi.locus_ranges`), each
+range's haplotypes made once in memory. Measured on hu1B2689's GS000039664 (233 MB `var`, 18.9M rows,
+and its 243 MB `masterVarBeta`) under a 30 GB cap: `var` 17.3 GB peak, 493 s → 3.3 GB, 85 to 120 s;
+`masterVarBeta` 22.3 GB, 631 s → 4.3 GB, 147 s; frames, facet and warnings identical. The 8.9 GB
+noted before was the whole-file plan alone; the warning counts ran seven such plans side by side, and
+the spill ran it again. What is left of the time is bz2 (31 to 97 s for `copy_body`) and the
+parquet copy of the rows (about 25 s).
 
 **Answered 2026-10-22: the HumanOmni2.5 Final Report that RM4's chip sweep could not load.** Its
 columns are SNP Name, Sample ID, Allele1/Allele2 - Forward, Allele1/Allele2 - Design and GC Score:

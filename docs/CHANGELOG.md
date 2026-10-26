@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `build_pca_panel` checks `extra_meta` before it writes anything (audit 12). It wrote the sites and
+  reference-sample parquet files first and only then refused an `extra_meta` key that would replace
+  one of its own, leaving a new matrix beside the old meta file. The clash check (against the new
+  `ancestry.pca.PANEL_META_KEYS`) and a JSON check now run first; `extra_meta` that is not JSON is a
+  `ValueError` (it was a `TypeError` after the parquet files were written). The three files are
+  written under temporary names in the panel directory and moved into place with `os.replace`, the
+  meta file last, so a refused or failed rebuild leaves the previous panel loadable and unchanged.
 - `load`'s cache sweep retires cached `scan_stats` results an earlier edit of the VCF loader counted
   (the person's decision, audit 12). The loader's code digest, `_STATS_CODE`, was in a stats entry's
   key but not among its version keys, so an entry written under another digest with the same

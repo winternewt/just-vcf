@@ -6,6 +6,7 @@ well separated. Every person is drawn from one population's frequencies, written
 """
 
 import gzip
+import json
 import os
 import subprocess
 import sys
@@ -26,10 +27,12 @@ from just_vcf.ancestry import (  # noqa: E402
     continental_of,
     infer_ancestry,
     build_prive_reference,
+    load_pca_panel,
     panel_assemblies,
     prive_proportions,
 )
 from just_vcf.ancestry._projection import DEFAULT_MISSING, build_reference_pca  # noqa: E402
+from just_vcf.ancestry.pca import PANEL_META_KEYS, panel_paths  # noqa: E402
 from just_vcf.ancestry.sites import facet_of, panel_sites, site_dosages  # noqa: E402
 from just_vcf.assembly import ASSEMBLY_LENGTHS  # noqa: E402
 from just_vcf.schema import BLOCKS, conform  # noqa: E402
@@ -117,6 +120,27 @@ def test_build_separates_the_three_populations(panel) -> None:
     panel_dir, sites, _, loo = panel
     assert loo >= 0.95
     assert panel_assemblies(panel_dir, "synth") == ["GRCh37"]
+
+
+@pytest.mark.parametrize(
+    ("extra_meta", "match"),
+    [({"n_variants": 1}, "would replace"), ({"source": {"files": {"a", "b"}}}, "JSON")],
+    ids=["clash", "not_json"],
+)
+def test_a_refused_rebuild_leaves_the_previous_panel_whole(tmp_path: Path, extra_meta: dict, match: str) -> None:
+    """`extra_meta` is checked before any file is written: a rebuild it refuses, from other data,
+    leaves the three files of the panel already there as they were, and no temporary file beside them."""
+    sites, _, genotypes, labels = synthetic_panel(SEED)
+    panel_dir = tmp_path / "panels"
+    build_pca_panel(genotypes, sites, labels, panel="synth", assembly="GRCh37", panel_dir=panel_dir)
+    before = {path.name: path.read_bytes() for path in sorted(panel_dir.iterdir())}
+    half = sites.height // 2
+    with pytest.raises(ValueError, match=match):
+        build_pca_panel(genotypes[:half], sites.head(half), labels, panel="synth", assembly="GRCh37", panel_dir=panel_dir, extra_meta=extra_meta)
+    assert {path.name: path.read_bytes() for path in sorted(panel_dir.iterdir())} == before
+    assert load_pca_panel(panel_dir, "synth", "GRCh37").sites.height == sites.height
+    written = json.loads(panel_paths(panel_dir, "synth", "GRCh37")["meta"].read_text())
+    assert set(written) == PANEL_META_KEYS, "the keys extra_meta is checked against are the keys written"
 
 
 @pytest.mark.parametrize("group", sorted(POPULATIONS))

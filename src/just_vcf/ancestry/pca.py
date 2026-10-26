@@ -20,6 +20,7 @@ matrix it would produce.
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +45,23 @@ DEFAULT_DIM_REF = 10
 DEFAULT_COVERAGE_FLOOR = 0.2
 """Below this fraction of panel sites read, the estimate is unknown (just-prs's value). OADP fills a
 missing site with the panel mean, so a thinly covered genome is pulled toward the panel's centre."""
+
+PANEL_META_KEYS: frozenset[str] = frozenset(
+    {
+        "panel",
+        "build",
+        "dim_ref",
+        "dim_stu",
+        "dim_online",
+        "s",
+        "knn_k",
+        "loo_accuracy",
+        "n_reference",
+        "n_variants",
+        "superpopulations",
+    }
+)
+"""The keys `build_pca_panel` writes to a panel's meta file; a builder's `extra_meta` may not use them."""
 
 RESOLUTIONS: frozenset[str] = frozenset({"superpop", "population"})
 """`superpop`: the panel's broad groups. `population`: its fine populations, where it has them."""
@@ -118,12 +136,23 @@ def build_pca_panel(
     follow `labels` (`iid, superpop, population`). `assembly` is the label of the assembly the
     positions are on (`GRCh37`, `GRCh38`, `T2T-CHM13`), the same vocabulary as `facets.assembly_label`.
     `extra_meta` adds keys to the meta file (a builder's record of its source and rules); it may not
-    replace one this function writes.
+    replace one this function writes, and must be JSON. Either is refused before anything is written.
+
+    The three files are written under temporary names in `panel_dir` and then moved over the old ones,
+    the meta file last, so a build that fails leaves the panel already there whole. The three moves
+    are not one atomic step: a process killed between them leaves new parquet files beside old meta.
     """
     if genotypes.shape[0] != sites.height:
         raise ValueError(f"genotypes has {genotypes.shape[0]} rows, sites {sites.height}")
     if genotypes.shape[1] != labels.height:
         raise ValueError(f"genotypes has {genotypes.shape[1]} columns, labels {labels.height}")
+    clash = sorted(PANEL_META_KEYS & set(extra_meta or {}))
+    if clash:
+        raise ValueError(f"extra_meta would replace {clash}")
+    try:
+        json.dumps(extra_meta or {})
+    except TypeError as error:
+        raise ValueError(f"extra_meta is not JSON: {error}") from error
 
     model = build_reference_pca(genotypes, dim_ref=dim_ref)
     superpops = labels["superpop"].cast(pl.String).to_numpy()
@@ -131,6 +160,39 @@ def build_pca_panel(
 
     panel_dir.mkdir(parents=True, exist_ok=True)
     paths = panel_paths(panel_dir, panel, assembly)
+    temporary = {name: path.with_name(f".{path.name}.tmp-{os.getpid()}") for name, path in paths.items()}
+    try:
+        _write_panel(model, sites, labels, temporary, knn_k, loo, panel=panel, assembly=assembly, extra_meta=extra_meta)
+        for name in ("sites", "refpcs", "meta"):
+            os.replace(temporary[name], paths[name])
+    finally:
+        for path in temporary.values():
+            path.unlink(missing_ok=True)
+    logger.info("panel %s on %s: %d sites, %d reference samples, LOO accuracy %.4f", panel, assembly, sites.height, labels.height, loo)
+    return PanelBuild(
+        sites_path=paths["sites"],
+        refpcs_path=paths["refpcs"],
+        meta_path=paths["meta"],
+        loo_accuracy=loo,
+        n_sites=sites.height,
+        n_reference=labels.height,
+    )
+
+
+def _write_panel(
+    model: ReferencePCA,
+    sites: pl.DataFrame,
+    labels: pl.DataFrame,
+    paths: dict[str, Path],
+    knn_k: int,
+    loo: float,
+    *,
+    panel: str,
+    assembly: str,
+    extra_meta: dict | None,
+) -> None:
+    """The three files of a built panel, at `paths`."""
+    superpops = labels["superpop"].cast(pl.String).to_numpy()
     sites.select(
         pl.col("chrom").cast(pl.String),
         pl.col("pos").cast(pl.Int64),
@@ -162,20 +224,8 @@ def build_pca_panel(
         "n_variants": sites.height,
         "superpopulations": sorted({str(x) for x in superpops.tolist()}),
     }
-    clash = sorted(set(meta) & set(extra_meta or {}))
-    if clash:
-        raise ValueError(f"extra_meta would replace {clash}")
     meta.update(extra_meta or {})
     paths["meta"].write_text(json.dumps(meta, indent=2))
-    logger.info("panel %s on %s: %d sites, %d reference samples, LOO accuracy %.4f", panel, assembly, sites.height, labels.height, loo)
-    return PanelBuild(
-        sites_path=paths["sites"],
-        refpcs_path=paths["refpcs"],
-        meta_path=paths["meta"],
-        loo_accuracy=loo,
-        n_sites=sites.height,
-        n_reference=labels.height,
-    )
 
 
 def load_pca_panel(panel_dir: Path, panel: str, assembly: str) -> PcaPanel:

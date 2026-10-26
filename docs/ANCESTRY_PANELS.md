@@ -56,7 +56,10 @@ project's publication; just-vcf reads them and redistributes nothing.
 
 Three files per panel and assembly (`ancestry_model_<panel>_<assembly>.parquet`,
 `ancestry_refpcs_<panel>_<assembly>.parquet`, `ancestry_model_<panel>_<assembly>_meta.json`), read by
-`infer_ancestry(loaded, panel_dir, panel)`; `build_pca_panel` writes them from a genotype matrix.
+`infer_ancestry(loaded, panel_dir, panel)`; `build_pca_panel` writes them from a genotype matrix. It
+checks a builder's `extra_meta` (no key of its own replaced, JSON only) before writing anything, then
+writes the three under temporary names and moves them into place, the meta file last, so a rebuild
+that is refused or fails leaves the panel already there whole.
 
 just-prs builds them offline with plink2 (QC, LD pruning) and numpy:
 

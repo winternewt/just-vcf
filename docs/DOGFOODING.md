@@ -145,3 +145,19 @@ counting over the frames is inside the figure, so `load`'s share there is not me
 into: where in `load` the memory goes (the per-contig spill is meant to bound it, PREVIOUS_ISSUES has
 the 6.4-million-call DeepVariant file at 3.6 GB), and why a load whose frames are cached still takes
 89 s at the same peak. Blocks nothing yet; a 30x Isaac gVCF is near the edge of this machine.
+
+## F31 — A lift can name one target contig two ways in one facet
+
+Severity: low · Found 2026-10-26 writing hu1C1368's PGP-HMS Manta file lifted to GRCh38 (F30's repair).
+
+The lifted facet has rows on `chrUn_KI270742v1`, the name UCSC's chain gives the scaffold, while a
+breakend lifted onto that scaffold names its mate `KI270742.1`, the target collection's `Contig.name`
+(RM6's "Lifting breakends" names mates that way), which `canonical_chrom` keeps as it is. So one
+contig carries two canonical names in one facet. `write_vcf` copes since F30: both names are declared
+under `stored` and `chr`, merged into one `##contig` line under `source`. What does not cope:
+`concordance` matching a mate against another facet's `chrom` misses a mate on that contig, and if rows
+ever stood on both names, a `source` body would show one contig in two separate runs, which tabix
+refuses. It predates F30; the lift's rows take the chain's name and its mates the collection's.
+Repairs: name lifted rows by the collection too, which renames every lifted scaffold row; or map the
+chain's name to the collection's through F19's alias table before either is written, which is the
+table's job. Not fixed: which name a lifted facet should carry is a naming rule for the whole lift.

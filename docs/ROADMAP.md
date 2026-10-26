@@ -995,7 +995,8 @@ with what was rejected:
   below): a gVCF block record needs the REF base at its start, and the `blocks` frame holds none.
 - Contig names: `stored` (canonical), `chr` (a listed map, `MT` → `chrM`, nothing by pattern; other
   contigs unchanged), or `source` (the facet's `contig_map`, and its `header_contigs` for a declared
-  contig with no rows; refused where the source spelled one contig two ways). `##contig` lines are sorted in the rows' canonical order, so a tool that checks
+  contig with no rows; refused where the source spelled one contig two ways). Since 2026-10-26 (F30) a breakend's mate
+  contig inside ALT is written through the same naming, and declared. `##contig` lines are sorted in the rows' canonical order, so a tool that checks
   records against the header's order (GATK) accepts the file. Rejected: the source header's order,
   which can put `chrM` first while the rows put it after `Y`.
 - The header names `facet_id`, `source_sha256`, `format_id`, a derived facet's parent and relation, the
@@ -1354,7 +1355,8 @@ Decisions, each with what was rejected:
   swap, which exists because a minus strand turns POS into END; a breakend's POS stays its own.
 - The mate is named by the target collection's `Contig.name`. Rejected: the source's spelling with
   `chr` added or dropped by pattern, which is the name-pattern rule F19 rejected. `write_vcf`'s
-  `contig_names` does not reach inside an ALT (F30).
+  `contig_names` did not reach inside an ALT (F30; *corrected 2026-10-26*, merge 0bc11c1: the mate is
+  written as CHROM is, and every mate contig is declared).
 - No mate pairing step: the two records of an adjacency lift the same two points by the same rule,
   so they stay mates (checked on 676 synthetic translocations through `hg19ToHg38`, every one).
   Rejected: pairing by MATEID, which the frame does not keep.
@@ -1371,7 +1373,8 @@ through the inverse chain, 1,213 of 1,215 and 1,030 of 1,038 return as their sou
 other one has an end pyliftover also sends elsewhere on the way back. `concordance` of the returned
 facets against the sources: 607 and 518 adjacencies `match`. Writing a lifted facet with
 `contig_names="chr"` leaves every mate contig undeclared in the header (F30, true of a loaded facet
-too).
+too). *Corrected 2026-10-26:* F30 is resolved, merge 0bc11c1; the same lifted hu1C1368 facet written
+with `chr` declares all 1,216 mates.
 
 
 ## RM271 — VRS allele ids

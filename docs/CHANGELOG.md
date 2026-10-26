@@ -80,7 +80,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   the row holds: a null in `gt` and `gt_alleles` for each slot that is not an index, and the text in
   `source_gt`. It said "gt and gt_alleles null", but `gt` is a list of one slot per haplotype the text
   separates (`N/A` reads `[null, null]`), and a slot that is an index is read (`0/x` reads `[0, null]`).
-  Wording only.
+  Wording only. **Superseded within this release** by the entry above that withholds such a genotype
+  whole: `N/A` and `0/x` both read `gt` null now, with the text in `source_gt`, and the warning says so.
+  This entry records the wording in between; neither frame it describes ships.
 
 - A VCF read through a copy that declares its `Float` integer keys `Type=String` (`retyped_whole`)
   says so: one load warning names each key so read and its declared Type (`FORMAT/DP (Type=Float)`),

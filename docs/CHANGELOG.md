@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `ReferenceStore.add_fasta(…, assembly_label=…)` refuses the asserted label when any sequence whose
+  canonical name is `1` has a length that names another assembly. It checked the label the lengths
+  give, and since the entry below that is unknown for a FASTA serving contig 1 twice, so GRCh37's
+  `chr1` beside a GRCh38-length `1` took an asserted `GRCh37` (or `GRCh38`) that its own lengths
+  contradict, and `assembly_label` then answered it. Both are refused again with the error the
+  single-contig-1 case gives (`its contig 1 is GRCh38's length, not GRCh37's`). A label every contig 1
+  length names, or that no length contradicts, is kept as before. Without an assertion the collection
+  still has no label.
 - A reference collection with two sequences whose canonical name is `1` (`chr1` and `1`) no longer gets
   an assembly label from its lengths (audit 12). `ReferenceStore._label_from_lengths` built a dict of
   canonical name to length, so the later sequence overwrote the earlier one: GRCh37's `chr1` followed

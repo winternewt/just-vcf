@@ -53,14 +53,6 @@ def read_sites(path: Path) -> list[tuple[str, int, str, str]]:
     return records
 
 
-def collection_for(store: ReferenceStore, assembly: str) -> str:
-    """The one collection in the store whose assembly is `assembly`."""
-    found = [digest for digest in store.collections() if store.assembly_label(digest) == assembly]
-    if len(found) != 1:
-        raise ValueError(f"the store holds {len(found)} collections of {assembly}; need exactly one")
-    return found[0]
-
-
 def derive(records: list[tuple[str, int, str, str]], store: ReferenceStore, assembly: str) -> tuple[pl.DataFrame, Counter[str]]:
     """The kept sites as `chrom, pos, ref, alt` in canonical order, and a count per dropped reason."""
     dropped: Counter[str] = Counter()
@@ -75,7 +67,7 @@ def derive(records: list[tuple[str, int, str, str]], store: ReferenceStore, asse
             dropped["strand-ambiguous (A/T or C/G)"] += 1
         else:
             kept.append((chrom, pos, ref, alt))
-    digest = collection_for(store, assembly)
+    digest = store.collection_for(assembly)
     contigs = store.contigs_by_chrom(digest)
     checked: list[tuple[str, int, str, str]] = []
     by_chrom: dict[str, list[tuple[str, int, str, str]]] = {}

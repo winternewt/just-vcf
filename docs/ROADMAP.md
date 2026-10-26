@@ -955,14 +955,15 @@ should read as `wgs` (and so be gated by its filter instead) is open. A genotype
 not counted.
 
 ## RM5 — Population inference
-Severity: medium · Status: in progress (PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped 2026-10-22 as `just_vcf.ancestry`, merge 4c6c9c1; panels in docs/ANCESTRY_PANELS.md. Left, buildable now: the AADR Human Origins builder (just-prs `aadr.py`, `eigenstrat.py`; the AADR files are on Krypton); an uncertainty for the PCA path beyond the vote and its margin; a consensus that does not multiply one panel's methods as if independent. Waiting for data: a real reference-PCA panel (a just-prs `1000g`/`hgdp_1kg` build), none on this machine. Waiting on the person: desk #73, whether Privé's files may be a fixture) · Owner: lead
+Severity: medium · Status: in progress (PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped 2026-10-22 as `just_vcf.ancestry`, merge 4c6c9c1; panels in docs/ANCESTRY_PANELS.md. The AADR Human Origins builder (`build_aadr_panel`, from just-prs `aadr.py`, `eigenstrat.py`) shipped 2026-10-26 on a builder branch waiting for the lead's merge: the first real reference-PCA panel, `aadr_ho` (2,556 present-day West Eurasians, 184,833 sites, built in under a minute from the Krypton files; hu6ABACE placed in Europe, population GBR). Left, buildable now: an uncertainty for the PCA path beyond the vote and its margin; a consensus that does not multiply one panel's methods as if independent; `aadr_ho`'s regions overlap along clines (Eastern Asia 0/32 in leave-one-out, the first Central Asian sample placed in Europe), so `test_ancestry_panels.py`'s own-sample check fails on it. Waiting for data: a 1000 Genomes or HGDP reference-PCA panel (a just-prs `1000g`/`hgdp_1kg` build), none on this machine. Waiting on the person: desk #73, whether Privé's files may be a fixture) · Owner: lead
 
 Port the just-prs `ancestry/` package (PCA projection, KNN, proportions, consensus) behind the
 `[ancestry]` extra, without the `PRSCatalog` wrappers or the Hugging Face pull.
 
-Left: no reference-PCA panel exists on this machine, so `infer_ancestry` has run only on synthetic
-panels (a just-prs `1000g`/`hgdp_1kg` build fetched by hand would be the first real one); the AADR
-Human Origins builder (just-prs `aadr.py`, `eigenstrat.py`) is not ported; there is no uncertainty for
+Left: `infer_ancestry` has run on one real panel, `aadr_ho` (built 2026-10-26 by `build_aadr_panel`,
+docs/ANCESTRY_PANELS.md), which covers West Eurasia only, by geographic regions that overlap where the
+populations form a cline; no 1000 Genomes or HGDP panel is on this machine (a just-prs
+`1000g`/`hgdp_1kg` build fetched by hand would be the first worldwide one); there is no uncertainty for
 the PCA path beyond the vote and its margin (a site bootstrap does not apply to OADP as it does to
 Privé's sums); the consensus multiplies methods from one panel as if independent; a facet on
 another assembly waits for RM6's liftover.

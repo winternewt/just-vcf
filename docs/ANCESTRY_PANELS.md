@@ -52,7 +52,7 @@ Caveats: GRCh37 only; South America is the only American group; Middle Eastern w
 continental counterpart and is dropped from a consensus. The two files are data from a GPL-licensed
 project's publication; just-vcf reads them and redistributes nothing.
 
-## Reference-PCA panels in just-prs's layout (none built on this machine)
+## Reference-PCA panels in just-prs's layout
 
 Three files per panel and assembly (`ancestry_model_<panel>_<assembly>.parquet`,
 `ancestry_refpcs_<panel>_<assembly>.parquet`, `ancestry_model_<panel>_<assembly>_meta.json`), read by
@@ -65,15 +65,107 @@ just-prs builds them offline with plink2 (QC, LD pruning) and numpy:
   `just-dna-seq/pgs-catalog` under `data/ancestry/`; a copy fetched from there by hand reads here
   unchanged, but none was on this machine on 2026-10-22, so that path is untested against a real
   panel.
-- `aadr_ho`, GRCh37, from AADR Human Origins present-day West Eurasians (an EIGENSTRAT reader and
-  selection in just-prs `ancestry/aadr.py`, `eigenstrat.py`, not ported). The AADR files are on Krypton
-  under `genomes/dataverse_66p1/`.
+- `aadr_ho`, GRCh37, from AADR Human Origins present-day West Eurasians. Built here by
+  `build_aadr_panel` (next section).
 
 A panel's `ref` column has to be the assembly's reference allele: an absent site in a whole-genome
 facet is read as homozygous for it.
 
+## AADR Human Origins (`aadr_ho`, GRCh37): built here
+
+AADR, the Allen Ancient DNA Resource (Reich lab, https://dataverse.harvard.edu/dataverse/reich_lab),
+publishes ancient and present-day individuals in EIGENSTRAT files. Release v66.p1 is on Krypton under
+`genomes/dataverse_66p1/`, with AADR's `v66.p1__files.md5sum`. The builder reads four of them, from
+whatever path the caller gives:
+
+| File | What is read |
+|---|---|
+| `v66.p1_compatibility_HO.aadr.patch.PUB.geno` | genotypes, packed `TGENO` (1.9 GB; only the chosen individuals' records are read) |
+| `….snp` | 276,725 sites: position (hg19) and two alleles, the first one counted |
+| `….ind` | 27,594 individuals: genetic id and group label |
+| `v66.p1_compatibility_HO.aadr.PUB.anno` | per individual: date, data type, assessment, political entity, coordinates |
+
+`compatibility_HO` is AADR's subset of the Human Origins sites chosen so that array and shotgun data
+can be analysed together (its README), which the panel does. The plain `HO` files (584,131 sites) have
+the same layout but were not built here. The `.geno` may also be the older site-major packed `GENO` or
+text EIGENSTRAT; those two were tested on synthetic files only.
+
+```python
+from pathlib import Path
+from just_vcf.ancestry import build_aadr_panel, infer_ancestry
+
+aadr = Path("/mnt/krypton/Genomes/genomes/dataverse_66p1")
+build_aadr_panel(aadr / "v66.p1_compatibility_HO.aadr.patch.PUB", aadr / "v66.p1_compatibility_HO.aadr.PUB.anno", Path("panels"))
+estimate = infer_ancestry(loaded, Path("panels"), "aadr_ho")
+```
+
+It needs a refget store holding one GRCh37 collection (`reference=`, default the library's own store,
+`JUST_VCF_REFERENCE_DIR`), and refuses without one: every site's REF is read from it.
+
+**Who goes in.** Each rule in order; the first one an individual fails is the reason it is counted
+under:
+
+1. listed in the `.anno`;
+2. present-day (`Date mean in BP` 0): the ancient individuals are out, as in just-prs;
+3. diploid data (`Data type` `HumanOrigins` or `Shotgun.diploid`): pseudo-haploid shotgun and capture
+   data, one read per site, would look homozygous everywhere, and the reference genomes (human, chimp,
+   gorilla, ancestral) are not people;
+4. `ASSESSMENT` `Pass`, `PROVISIONAL_PASS` or `MERGE_PASS`;
+5. a group label without `Ignore` at its start and without a `-` qualifier: AADR marks outliers,
+   relatives, duplicates and QC removals that way (`-o`, `-oPCA`, `-oRelative`, `-QCremove`, `-Dup`,
+   `-1`, `-Discovery`);
+6. a latitude and longitude;
+7. inside the box, by default just-prs's West Eurasia: latitude 30 to 75, longitude -25 to 90
+   (`box=` takes another);
+8. a region for its political entity (below);
+9. once per person: where AADR lists one person under two genetic ids (`Individual ID` shared, usually
+   a Human Origins genotype and a shotgun genome), the `HumanOrigins` one is kept, else the first.
+
+`population` is the `.ind` group label (161 of them in the default build). `superpop` is a region:
+the political entity's United Nations M49 region, Europe as one region and Sub-Saharan Africa as one,
+with Russia split at 60°E into Europe and Siberia, which M49 does not do (`AADR_REGIONS`,
+`region_of`). Where AADR's samples were collected away from their ancestry's region (the USA, Barbados:
+1000 Genomes' CEU, ASW, ACB) there is no region and they are left out. A region is geography, not
+genetics: Kalmyks, west of the Urals, are in Europe, Iran is in Southern Asia, and the box's slice of China is
+Xinjiang. For a consensus, a region folds onto a continental group through `continental_of` on its
+name: Europe to EUR, Northern and Sub-Saharan Africa to AFR, Latin America to AMR. The Asian regions,
+Oceania and Siberia fold onto nothing and are dropped, as Middle Eastern groups are: their samples are
+not what 1000 Genomes' EAS or SAS sampled.
+
+**Which sites.** Each rule in order: an autosome; one base each, A, C, G or T; not A/T or C/G (Human
+Origins has none by design, so this drops nothing here); one record at the position; a contig the
+GRCh37 store holds; one of the two alleles the reference base there, the alleles swapped where it is
+the second (REF is read from the store, never taken from the file or a genotype); minor allele
+frequency at least 0.02 over the chosen individuals. No LD pruning, as in just-prs. The panel then
+keeps 20 components (just-prs's choice, for fine structure within Europe); `knn_k` stays 20.
+
+**Measured 2026-10-26** from Krypton, GRCh37 store `/data/just-dna-cache/reference/store`:
+
+| | |
+|---|---|
+| Individuals | 2,556 of 27,594. Out: 19,120 ancient, 244 not diploid, 1 assessment, 440 flagged labels, 537 without coordinates, 4,132 outside the box, 564 second representations |
+| Regions | Europe 1,388, Western Asia 344, Southern Asia 307, Siberia 216, Central Asia 164, Northern Africa 105, Eastern Asia 32 |
+| Sites | 184,833 of 276,725; every one of the 276,725 had the GRCh37 base as its first allele (none swapped, none dropped for it); 91,892 below the frequency floor |
+| Files | sites 116 MB, reference samples 1.6 MB |
+| Build | 24 to 54 s (the slower one reading the `.geno` from Krypton cold), peak 6.1 GiB |
+| Leave-one-out | 0.944 by region. Per region: Central Asia 162/164, Europe 1,348/1,388, Northern Africa 103/105, Siberia 195/216, Southern Asia 290/307, Western Asia 314/344, Eastern Asia 0/32 (its Xibo, Uyghur and Kyrgyz samples are voted Central Asian) |
+| hu6ABACE (PGP-HMS, DRAGEN SNV genome, GRCh37) | 184,832 of 184,833 sites used: 85,971 observed, 98,861 absent read as reference, 1 unusable. Region Europe, all 20 neighbours; population GBR, margin 0.50. Load and placement 55 s |
+
+The regions overlap where the populations form a cline. `tests/test_ancestry_panels.py`'s check that
+each panel's first reference sample of every group lands in its group fails on this panel: the first
+Central Asian sample (a Karakalpak, 10 Central Asian and 9 European neighbours in its own leave-one-out)
+is placed in Europe, and Eastern Asia's first (a Xibo) would follow. That is the panel, not the check,
+so the check is left as it is; RM5 lists it.
+
+AADR is a published research dataset. The builder reads it from the caller's path and nothing derived
+from it is in the repository: the tests write synthetic EIGENSTRAT files with made-up individuals.
+
 ## Testing against a panel
 
-`JUST_VCF_ANCESTRY_DIR` names one directory holding any of the above. `tests/test_ancestry_panels.py`
+`JUST_VCF_ANCESTRY_DIR` names one directory holding any of the above, and may hold AADR's
+`compatibility_HO` release at its top level or one directory down (`dataverse_66p1/`):
+`tests/test_ancestry_aadr.py` then builds `aadr_ho` from it into a temporary directory and places
+PGP-HMS hu6ABACE, read from `JUST_VCF_SAMPLES_DIR`, with the GRCh37 store `JUST_VCF_TEST_REFERENCE_DIR`
+names; it skips without any of the three. `tests/test_ancestry_panels.py`
 draws people from the Privé groups' own frequencies, and rebuilds each PCA panel's reference samples
 from its stored factors, and checks each lands where it was drawn from. Both skip without the variable.

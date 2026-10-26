@@ -4,6 +4,25 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `just_vcf.ancestry.build_aadr_panel` builds a reference-PCA panel, `aadr_ho` on GRCh37, from AADR's
+  Human Origins release (RM5), so `infer_ancestry`'s PCA path has a real panel to run on. Ported from
+  just-prs `ancestry/aadr.py` and `eigenstrat.py` (docs/PROVENANCE.md). New module
+  `just_vcf.ancestry.eigenstrat` reads `.ind`, `.snp`, `.anno` (by header name) and `.geno` in the
+  transposed packed (`TGENO`, what AADR v66 ships), site-major packed and text layouts, told apart by
+  their first bytes and checked against the line counts and the file size. The panel is AADR's
+  present-day individuals with diploid data, a passing assessment and an unflagged group label, inside
+  just-prs's West Eurasia box, one representation per person; `population` is the group label,
+  `superpop` a region from the political entity (UN M49, Russia split at the Urals; `AADR_REGIONS`,
+  `region_of`). Sites: autosomal one-base SNVs, not A/T or C/G, one record per position, REF read from a
+  GRCh37 refget store (the build refuses without one; a `.snp` line listing it second is swapped),
+  minor allele frequency at least 0.02. The result, `AadrBuild`, and the panel's meta file count every
+  individual and site left out, by reason (`INDIVIDUAL_EXCLUSIONS`, `SITE_DROPS`). `build_pca_panel`
+  takes `extra_meta` (added keys only). `ReferenceStore.collection_for(assembly)` replaces
+  `scripts/relatedness_sites.py`'s own copy. Measured 2026-10-26 on v66.p1 `compatibility_HO` from
+  Krypton: 2,556 of 27,594 individuals, 184,833 of 276,725 sites, 24-54 s, peak 6.1 GiB, leave-one-out
+  0.944 by region; PGP-HMS hu6ABACE placed in Europe (population GBR). The regions overlap along clines
+  (Eastern Asia 0/32 in leave-one-out), and `test_ancestry_panels.py`'s own-sample check fails on this
+  panel; docs/ANCESTRY_PANELS.md has the rules and the numbers.
 - A VCF load run again reads its records through polars-bio once, to spill them (F26). The first pass,
   `scan_stats`, which counts what the warnings and the facet need, is stored in the cache as
   `stats/<key>/stats.json` (a new entry kind, `scan_stats`, with its manifest), and a load whose key is

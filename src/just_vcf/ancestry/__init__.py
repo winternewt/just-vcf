@@ -7,7 +7,8 @@ panel on its own `assembly_label`; a facet without one, or on another assembly, 
 assumed build.
 
 Ported from just-prs `ancestry/` (docs/PROVENANCE.md), without its `PRSCatalog` wrappers and without
-its Hugging Face download: a panel is a local path the caller passes.
+its Hugging Face download: a panel is a local path the caller passes. `build_aadr_panel` builds one
+from AADR's Human Origins release (`just_vcf.ancestry.aadr`).
 """
 
 try:
@@ -18,6 +19,15 @@ except ImportError as error:
         "`uv add 'just-vcf[ancestry]'` or `pip install 'just-vcf[ancestry]'`"
     ) from error
 
+from just_vcf.ancestry.aadr import (
+    AADR_REGIONS,
+    INDIVIDUAL_EXCLUSIONS,
+    SITE_DROPS,
+    WEST_EURASIA,
+    AadrBuild,
+    build_aadr_panel,
+    region_of,
+)
 from just_vcf.ancestry.consensus import CANONICAL_SUPERPOPS, consensus, continental_of, to_continental
 from just_vcf.ancestry.pca import (
     DEFAULT_COVERAGE_FLOOR,
@@ -35,19 +45,25 @@ from just_vcf.ancestry.prive import PRIVE_ASSEMBLY, PriveBuild, build_prive_refe
 from just_vcf.ancestry.result import ANCESTRY_METHODS, ANCESTRY_REASONS, PROPORTION_METHODS, AncestryEstimate
 
 __all__ = [
+    "AADR_REGIONS",
     "ANCESTRY_METHODS",
     "ANCESTRY_REASONS",
     "CANONICAL_SUPERPOPS",
     "DEFAULT_COVERAGE_FLOOR",
     "DEFAULT_DIM_REF",
     "DEFAULT_KNN_K",
+    "INDIVIDUAL_EXCLUSIONS",
     "PRIVE_ASSEMBLY",
     "PROPORTION_METHODS",
     "RESOLUTIONS",
+    "SITE_DROPS",
+    "WEST_EURASIA",
+    "AadrBuild",
     "AncestryEstimate",
     "PanelBuild",
     "PcaPanel",
     "PriveBuild",
+    "build_aadr_panel",
     "build_pca_panel",
     "build_prive_reference",
     "consensus",
@@ -56,5 +72,6 @@ __all__ = [
     "load_pca_panel",
     "panel_assemblies",
     "prive_proportions",
+    "region_of",
     "to_continental",
 ]

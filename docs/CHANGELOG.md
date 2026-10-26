@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `liftover` lifts the `blocks` frame (RM6). A gVCF reference or no-call block is cut wherever the
+  chain's mapping changes: the pieces inside one chain block with one target lift, with `kind`, `gq`,
+  `dp_min` and `gl` unchanged, and the rest stays behind, counted in bases per reason in the new
+  `Lifted.block_reasons` and in the warnings. A block crossing a chain gap becomes several blocks,
+  never one stretched over the gap; minus-strand and other-contig pieces lift as rows do. The frame
+  keeps no block REF, so `write_vcf(..., blocks=True)` on the lifted facet reads it from the target.
+  The lifted facet had an empty `blocks` frame; its `absence_means` stays `unknown`. **Values change**:
+  lifted facets get a new `facet_id` (`LIFT_VERSION` 8). Additive otherwise: minor (docs/SCHEMA.md,
+  "Lifting blocks").
+
 - A facet records the rule that read its REF, and the store refuses a held facet given again in
   another REF state (schema 0.0.20). `resolve_ref` keeps a facet's `facet_id`, so `Store.add` of the
   facet resolved under a newer `RESOLVE_VERSION`, or of the loaded facet once its resolved twin was

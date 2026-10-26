@@ -27,9 +27,17 @@ short:
    Where it equals the parent's REF the row keeps its alleles; where it equals one of the ALTs, REF
    and that ALT swap and the genotype indices follow (`bcftools +liftover`'s and Picard's swap);
    where it equals none, the row is unlifted (`ref_mismatch_after_lift`).
-4. **Withheld in this slice**, each counted: a minus-strand indel whose lifted span starts at the
-   target contig's first base (no base before it to anchor on), symbolic alleles and `*`, rows
-   flagged as one record of a pre-split site, and the `blocks` frame.
+4. **Blocks.** A reference or no-call block's span is cut wherever the chain's mapping changes
+   (the same axis as step 2): each piece inside one block with one target lifts, with the block's
+   `kind`, `gq`, `dp_min` and `gl` unchanged; the pieces in no block, in more than one target, or on
+   a target contig the collection lacks stay behind, counted in bases. A block that maps whole to one
+   interval lifts whole; one crossing a chain gap or edge becomes several blocks, never one stretched
+   over the gap. A piece on a minus-strand block or another contig lifts like a row does (a block has
+   no allele to complement). The frame keeps no block REF: an export reads it from the target
+   (`write_vcf(..., blocks=True)` reads `ref_seqcol_digest`, which is the target's).
+5. **Withheld in this slice**, each counted: a minus-strand indel whose lifted span starts at the
+   target contig's first base (no base before it to anchor on), symbolic alleles and `*`, and rows
+   flagged as one record of a pre-split site.
 
 A lifted row's `source_ref`, `ref_check`, `source_gt`, VRS ids, `cipos` and `ciend` are null: they described the
 source's representation on the source assembly. `gl`, `gp` and `ad` stay indexed over
@@ -56,15 +64,16 @@ from just_vcf import cache
 from just_vcf.links import LIFTOVER_TO, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import PRIMARY, Contig, ReferenceMismatchError, ReferenceStore, _derive_array_alleles, _span, _store_for
-from just_vcf.schema import CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceMeans, AssemblyLabelBasis, RefCheck, canonical_chrom, canonical_order, empty
+from just_vcf.schema import BLOCKS, CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceMeans, AssemblyLabelBasis, RefCheck, canonical_chrom, canonical_order, empty
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 7
+LIFT_VERSION = 8
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
 row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
 `phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
-6: the lifted facet's `reference` is null, since it named the source's file; 7: schema 0.0.19's `hq` carried)."""
+6: the lifted facet's `reference` is null, since it named the source's file; 7: schema 0.0.19's `hq` carried;
+8: the `blocks` frame lifted)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -121,6 +130,9 @@ REPORT = pl.Schema(
 """`Lifted.report`: the parent's `calls` row, then where it went (`lift_chrom`, 1-based `lift_pos`,
 the block's strand `+`/`-`, whether REF and an ALT swapped) or why not (`lift_reason`, null when lifted)."""
 
+BLOCK_REPORT = pl.Schema({"lift_reason": pl.String, "pieces": pl.UInt64, "bases": pl.UInt64})
+"""What a lift left behind of the `blocks` frame: per reason, the pieces and the bases in them."""
+
 _SEQUENCE = r"^[ACGTN]+$"
 _COMPLEMENT = (["A", "C", "G", "T"], ["T", "G", "C", "A"])
 _FAR = 1 << 40
@@ -139,6 +151,9 @@ class Lifted(BaseModel):
     `.unmap` (the rows with a `lift_reason`) and bcftools' `--write-src` (the rows without) in one frame."""
     reasons: dict[str, int]
     """Unlifted rows per reason, sorted by reason."""
+    block_reasons: dict[str, int] = {}
+    """Bases of the parent's `blocks` left behind, per reason (the `UNLIFTED_REASONS` a position can
+    have), sorted by reason. A block partly lifted counts only its unlifted part here."""
 
 
 @dataclass(frozen=True)
@@ -297,30 +312,36 @@ def liftover(
     target_contigs = _target_contigs(chain, store, target_digest)
 
     facet_id = _derived_id(facet["facet_id"], chain.sha256, target_digest)
-    blocks = loaded.blocks.select(pl.len()).collect().item()
     entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
     with cache.spilling(entry, cache.LIFT_SPILL, _VERSIONS, cache.derived_origin(facet, facet_id)) as spill:
         # Streamed to parquet once, so each contig below is a filtered scan; its bytes key the result,
         # with what else the warnings name, so a run on the same input reuses what an earlier one wrote.
         staged = spill.stage / "input.parquet"
         loaded.calls.sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
-        named = {"chain_name": chain.name, "blocks": blocks, "labels": [store.assembly_label(source_digest), store.assembly_label(target_digest)]}
-        key = cache.content_key([staged], {**facet, "_lift": named})
+        staged_blocks = spill.stage / "input-blocks.parquet"
+        loaded.blocks.sink_parquet(staged_blocks, row_group_size=SPILL_ROW_GROUP)
+        named = {"chain_name": chain.name, "labels": [store.assembly_label(source_digest), store.assembly_label(target_digest)]}
+        key = cache.content_key([staged, staged_blocks], {**facet, "_lift": named})
         done = spill.find(key)
         if done is None:
-            done = _lift_into(spill, key, staged, chain, source_ok, store, target_contigs, facet_id, blocks, source_digest, target_digest)
+            done = _lift_into(spill, key, staged, staged_blocks, chain, source_ok, store, target_contigs, facet_id, source_digest, target_digest)
     calls_parts = done.files("calls")
     report_parts = done.files("report")
+    blocks_parts = done.files("blocks")
+    block_report_parts = done.files("block_report")
     calls = pl.scan_parquet(calls_parts) if calls_parts else empty(CALLS)
     report = pl.scan_parquet(report_parts) if report_parts else empty(REPORT)
-    # Read back from the report, so a reused generation gives the same counts as the run that wrote it.
+    lifted_blocks = pl.scan_parquet(blocks_parts) if blocks_parts else empty(BLOCKS)
+    # Read back from the reports, so a reused generation gives the same counts as the run that wrote it.
     found = dict(report.filter(pl.col("lift_reason").is_not_null()).group_by("lift_reason").len().collect().iter_rows())
     reasons = {reason: found[reason] for reason in sorted(found)}
+    block_found = dict(pl.scan_parquet(block_report_parts).select("lift_reason", "bases").collect().iter_rows()) if block_report_parts else {}
+    block_reasons = {reason: block_found[reason] for reason in sorted(block_found)}
     warnings = done.warnings
     for warning in warnings:
         logger.warning("%s: %s", facet_id, warning)
 
-    present = calls.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
+    present = pl.concat([calls.select("chrom"), lifted_blocks.select("chrom")]).unique().collect()["chrom"].to_list()
     names = {chrom: contig.name for chrom, contig in target_contigs.items()}
     label = store.assembly_label(target_digest)
     chain_input = [{"role": "chain", "name": chain.name, "sha256": chain.sha256}]
@@ -347,14 +368,14 @@ def liftover(
     derived = Loaded(
         facets=facets.select(FACETS.names()),
         calls=calls,
-        blocks=loaded.blocks.clear().with_columns(pl.lit(facet_id).alias("facet_id")),
+        blocks=lifted_blocks,
         links=derived_links(
             loaded.links, facet["facet_id"], facet_id, RELATION, step="liftover", step_version=str(LIFT_VERSION), derivation_inputs=chain_input
         ),
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )
-    return Lifted(loaded=derived, report=report, reasons=reasons)
+    return Lifted(loaded=derived, report=report, reasons=reasons, block_reasons=block_reasons)
 
 
 _VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "LIFT_VERSION": LIFT_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
@@ -365,16 +386,16 @@ def _lift_into(
     spill: cache.Spill,
     key: str,
     staged: Path,
+    staged_blocks: Path,
     chain: Chain,
     source_ok: dict[str, bool],
     store: ReferenceStore,
     target_contigs: dict[str, Contig],
     facet_id: str,
-    blocks: int,
     source_digest: str,
     target_digest: str,
 ) -> cache.Committed:
-    """Lift the staged input contig by contig into the spill's stage, and commit it as the generation `key`."""
+    """Lift the staged `calls` and `blocks` contig by contig into the spill's stage, and commit it as the generation `key`."""
     source = pl.scan_parquet(staged)
     chroms = source.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
     counts: Counter[str] = Counter()
@@ -400,9 +421,127 @@ def _lift_into(
             calls_parts.append(part)
         for part in lifted_parts:
             part.unlink()
+    blocks_parts, block_report = _lift_blocks_into(spill, staged_blocks, chain, source_ok, target_contigs, facet_id, counts)
+    block_report_parts: list[Path] = []
+    if block_report.height:
+        block_report_parts.append(spill.stage / "block-report.parquet")
+        block_report.write_parquet(block_report_parts[-1])
     reasons = {reason: counts[f"reason:{reason}"] for reason in sorted(UNLIFTED_REASONS) if counts[f"reason:{reason}"]}
-    warnings = _warnings(counts, reasons, blocks, chain, store, source_digest, target_digest)
-    return spill.commit(key, {"calls": calls_parts, "report": report_parts}, warnings)
+    warnings = _warnings(counts, reasons, block_report, chain, store, source_digest, target_digest)
+    groups = {"calls": calls_parts, "report": report_parts, "blocks": blocks_parts, "block_report": block_report_parts}
+    return spill.commit(key, groups, warnings)
+
+
+def _lift_blocks_into(
+    spill: cache.Spill, staged: Path, chain: Chain, source_ok: dict[str, bool], targets: dict[str, Contig], facet_id: str, counts: Counter[str]
+) -> tuple[list[Path], pl.DataFrame]:
+    """Lift the staged `blocks` contig by contig: the lifted blocks' files, sorted per target contig,
+    and the `BLOCK_REPORT` of what stayed behind."""
+    source = pl.scan_parquet(staged)
+    chroms = source.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
+    pieces: list[Path] = []
+    left: list[pl.DataFrame] = []
+    for index, chrom in enumerate(sorted(chroms, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
+        rows = source.filter(pl.col("chrom") == chrom).collect()
+        lifted, behind = _lift_block_contig(rows, chrom, chain, source_ok.get(chrom), targets, facet_id, counts)
+        left.append(behind)
+        if lifted.height:
+            pieces.append(spill.stage / f"lifted-blocks-{index:05d}.parquet")
+            lifted.write_parquet(pieces[-1], row_group_size=SPILL_ROW_GROUP)
+    staged.unlink()
+    parts: list[Path] = []
+    if pieces:
+        scan = pl.scan_parquet(pieces)
+        present = scan.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
+        for index, chrom in enumerate(sorted(present, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
+            part = spill.stage / f"blocks-{index:05d}.parquet"
+            ordered = canonical_order(scan.filter(pl.col("chrom") == chrom)).collect()
+            # Two source regions the chain sends to one place give overlapping blocks; both are kept (charter 8).
+            counts["block_overlaps"] += int(ordered.select((pl.col("pos") <= pl.col("end_pos").cum_max().shift(1)).sum()).item() or 0)
+            ordered.write_parquet(part, row_group_size=SPILL_ROW_GROUP)
+            parts.append(part)
+        for part in pieces:
+            part.unlink()
+    behind = pl.concat(left) if left else pl.DataFrame(schema={"lift_reason": pl.String, "_length": pl.Int64})
+    report = (
+        behind.group_by("lift_reason")
+        .agg(pl.len().cast(pl.UInt64).alias("pieces"), pl.col("_length").sum().cast(pl.UInt64).alias("bases"))
+        .sort("lift_reason")
+        .select(BLOCK_REPORT.names())
+    )
+    return parts, report
+
+
+def _lift_block_contig(
+    rows: pl.DataFrame, chrom: str, chain: Chain, contig_ok: bool | None, targets: dict[str, Contig], facet_id: str, counts: Counter[str]
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """One source contig's blocks: (the lifted pieces as `blocks` rows, the pieces left behind as
+    `lift_reason` and `_length` in bases).
+
+    Each block is cut at every segment of the chain's axis it overlaps (`_segments`: the axis is cut
+    wherever the set of targets changes, so a gap, a block edge or a change of offset is a cut). A
+    piece in one segment with one target lifts by that chain block's offset; the rest stays behind.
+    """
+    counts["blocks"] += rows.height
+    start, end = _span(pl.col("pos"), pl.col("end_pos").cast(pl.Int64) - pl.col("pos").cast(pl.Int64) + 1)
+    work = rows.with_row_index("_b").with_columns(start.alias("_s0"), end.alias("_e0"))
+    chain_blocks = chain.blocks.filter(pl.col("t_chrom") == chrom)
+    if not contig_ok or chain_blocks.is_empty():
+        reason = "contig_not_in_chain" if contig_ok is None else "chain_contig_mismatch" if contig_ok is False else "no_chain_block"
+        counts["blocks_left"] += rows.height
+        behind = work.select(pl.lit(reason).alias("lift_reason"), (pl.col("_e0") - pl.col("_s0")).alias("_length"))
+        return pl.DataFrame(schema=BLOCKS), behind
+    segments = _segments(chain_blocks).with_columns(pl.col("seg_start").shift(-1).fill_null(_FAR).alias("seg_end"))
+    first = (
+        work.select("_b", "_s0")
+        .sort("_s0")
+        .join_asof(segments.select("seg_start", pl.col("seg").alias("_seg_s")), left_on="_s0", right_on="seg_start", strategy="backward")
+    )
+    last = (
+        work.select("_b", (pl.col("_e0") - 1).alias("_last"))
+        .sort("_last")
+        .join_asof(segments.select("seg_start", pl.col("seg").alias("_seg_e")), left_on="_last", right_on="seg_start", strategy="backward")
+    )
+    cut = (
+        work.join(first.select("_b", "_seg_s"), on="_b", how="left")
+        .join(last.select("_b", "_seg_e"), on="_b", how="left")
+        .with_columns(pl.int_ranges(pl.col("_seg_s"), pl.col("_seg_e") + 1, dtype=pl.UInt32).alias("seg"))
+        .explode("seg", empty_as_null=False)
+        .join(segments.select("seg", "seg_start", "seg_end", "depth", "seg_block"), on="seg", how="left")
+        .with_columns(pl.max_horizontal("_s0", "seg_start").alias("_p0"), pl.min_horizontal("_e0", "seg_end").alias("_p1"))
+        .join(chain_blocks.select(pl.col("block").alias("seg_block"), "t_start", "q_chrom", "q_start", "q_size", "q_minus"), on="seg_block", how="left")
+    )
+    names = {name: canonical_chrom(name) for name in cut["q_chrom"].drop_nulls().unique().to_list()}
+    target = pl.col("q_chrom").replace_strict(names, default=None, return_dtype=pl.String)
+    reason = (
+        pl.when(pl.col("depth") == 0)
+        .then(pl.lit("no_chain_block"))
+        .when(pl.col("depth") >= 2)
+        .then(pl.lit("multiple_targets"))
+        .when(~target.is_in(list(targets)).fill_null(True))
+        .then(pl.lit("target_contig_unmatched"))
+    )
+    length = pl.col("_p1") - pl.col("_p0")
+    offset = pl.col("_p0") - pl.col("t_start")
+    q0 = pl.when(pl.col("q_minus")).then(pl.col("q_size") - (pl.col("q_start") + offset + length)).otherwise(pl.col("q_start") + offset)
+    cut = cut.with_columns(reason.alias("lift_reason"), length.alias("_length"), target.alias("_q_chrom"), q0.alias("_q0"))
+    ok = pl.col("lift_reason").is_null()
+    per_block = cut.group_by("_b").agg(ok.sum().alias("lifted"), (~ok).sum().alias("left"))
+    counts["blocks_whole"] += per_block.filter((pl.col("lifted") == 1) & (pl.col("left") == 0)).height
+    counts["blocks_split"] += per_block.filter((pl.col("lifted") >= 1) & ((pl.col("lifted") > 1) | (pl.col("left") > 0))).height
+    counts["blocks_left"] += per_block.filter(pl.col("lifted") == 0).height
+    lifted = cut.filter(ok)
+    counts["block_pieces"] += lifted.height
+    counts["block_minus"] += int(lifted["q_minus"].sum() or 0)
+    counts["block_other_contig"] += lifted.filter(pl.col("_q_chrom") != chrom).height
+    out = lifted.sort("_b", "_p0").select(
+        pl.lit(facet_id).alias("facet_id"),
+        pl.col("_q_chrom").alias("chrom"),
+        _to_pos(pl.col("_q0")).alias("pos"),
+        (pl.col("_q0") + pl.col("_length")).cast(pl.UInt32).alias("end_pos"),
+        *[pl.col(name) for name in BLOCKS.names() if name not in ("facet_id", "chrom", "pos", "end_pos")],
+    )
+    return out.cast(dict(BLOCKS)), cut.filter(~ok).select("lift_reason", "_length")
 
 
 def _derived_id(parent_id: str, chain_sha256: str, target: str) -> str:
@@ -741,7 +880,9 @@ def _swap(rows: pl.DataFrame) -> pl.DataFrame:
     return rows.with_columns(pl.Series("alts", alts_out, dtype=CALLS["alts"]), pl.Series("gt", gts_out, dtype=CALLS["gt"]))
 
 
-def _warnings(counts: Counter[str], reasons: dict[str, int], blocks: int, chain: Chain, store: ReferenceStore, source: str, target: str) -> list[str]:
+def _warnings(
+    counts: Counter[str], reasons: dict[str, int], block_report: pl.DataFrame, chain: Chain, store: ReferenceStore, source: str, target: str
+) -> list[str]:
     source_label = store.assembly_label(source) or source
     target_label = store.assembly_label(target) or target
     lines = [
@@ -765,6 +906,20 @@ def _warnings(counts: Counter[str], reasons: dict[str, int], blocks: int, chain:
         lines.append(f"{counts['other_contig']} row(s) lifted to another contig than their source's; phase sets cleared on {counts['phase_cleared']}")
     for reason, count in reasons.items():
         lines.append(f"{count} row(s) not lifted: {REASON_TEXT[reason]} [{reason}]")
-    if blocks:
-        lines.append(f"{blocks} block(s) not lifted (lifting blocks is not built); the lifted facet's absence_means is unknown")
+    if counts["blocks"]:
+        lines.append(
+            f"{counts['blocks']} block(s): {counts['blocks_whole']} lifted whole, {counts['blocks_split']} lifted in part or cut at a chain "
+            f"gap or edge, {counts['blocks_left']} left behind; {counts['block_pieces']} lifted block(s) written, kind, GQ, MIN_DP and GL "
+            "unchanged; the lifted facet's absence_means is unknown"
+        )
+    if counts["block_minus"] or counts["block_other_contig"]:
+        lines.append(
+            f"{counts['block_minus']} lifted block(s) on minus-strand chain blocks, {counts['block_other_contig']} on another contig than their source's"
+        )
+    for reason, pieces, bases in block_report.iter_rows():
+        lines.append(f"{bases} block base(s) in {pieces} piece(s) not lifted: {REASON_TEXT[reason]} [{reason}]")
+    if counts["block_overlaps"]:
+        lines.append(
+            f"{counts['block_overlaps']} lifted block(s) overlap another on the target (two source regions the chain sends to one place); both kept"
+        )
     return lines

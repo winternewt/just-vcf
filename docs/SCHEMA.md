@@ -1048,8 +1048,31 @@ Not lifted, each counted in the warnings and named in the report's `lift_reason`
 `<*>`, breakends: an SV's extent is not lifted), `split_flagged` (run `rejoin_split` first),
 `contig_not_in_chain`, `chain_contig_mismatch`, `no_chain_block`, `split_across_blocks`,
 `multiple_targets`, `target_contig_unmatched`, `indel_minus_strand` (a minus-strand indel lifted to
-the target contig's first base, with no base before it to re-anchor on) and `ref_mismatch_after_lift`. The `blocks` frame is not lifted; the
-derived facet has none, and the warnings count the parent's.
+the target contig's first base, with no base before it to re-anchor on) and `ref_mismatch_after_lift`.
+
+**Lifting blocks** (2026-10-26, `LIFT_VERSION` 8). A `blocks` row's span (`pos` to `end_pos`) is cut
+on the axis step 2 judges a row's span on: the chain's blocks, cut wherever the set of targets
+changes, so at every gap on either side, every block edge and every change of offset. Each piece
+inside one chain block with one target lifts by that block's offset, as a row's start does (on a
+minus-strand block the piece's forward start is the image of its last base); a block has no alleles,
+so nothing is complemented. A block that maps whole to one interval of the same length lifts as one
+block; one that crosses a gap or an edge becomes one block per piece, never one block stretched over
+the gap, and never merged with its neighbour even where the two pieces touch on the target (a source
+deletion leaves two adjacent target intervals whose bases were not adjacent). A piece on another
+contig or a minus-strand block lifts like a row (rows there are lifted too). `kind`, `gq`, `dp_min`
+and `gl` carry unchanged onto every piece: they are the block's own evidence, and `gl` is over
+`[REF, <*>]`, which a lift does not reorder. The frame keeps no block REF, so there is nothing to
+re-read or carry: `write_vcf(..., blocks=True)` reads each block's first base from the facet's
+`ref_seqcol_digest`, which on a lifted facet is the target (charter 10). A piece in no chain block, in
+more than one target, on a target contig the collection lacks, or on a source contig the chain does
+not cover or covers at another size stays behind with the row reason of the same name, and is counted
+in bases: `Lifted.block_reasons` (bases per reason) and a warning line per reason with the pieces and
+bases. Lifted pieces are sorted into canonical order per target contig. Two source regions the chain
+sends to one place give overlapping lifted blocks; both are kept and counted (charter 8). The lifted
+facet's `absence_means` stays `unknown`: a position no lifted block or row covers says nothing, which
+is what `blocks` would say too (`absence_is_reference` answers `None` for both), and `unknown` keeps
+one rule for every lifted facet. Checked against pyliftover base by base on synthetic blocks over the
+GRCh37 autosomes through UCSC's `hg19ToHg38` (opt-in, `tests/test_liftover_chain.py`).
 
 **`end_pos`.** It is named apart from polars-bio's `end` because that value is wrong for symbolic SV
 alleles (P3), so the two must not share a name. The rule follows VCF 4.5's computed END:
@@ -2070,10 +2093,12 @@ frame stops working when its files go.
   are removed by the next run. Rejected: keying reuse on the facet id and versions alone, which would
   hand a filtered `Loaded` the full facet's rows; and replacing the files in place, which broke the
   earlier frame (`Invalid thrift` on its next `collect`). The manifest's `SPILL_LAYOUT` key (2) retires,
-  through the sweep, entries written before generations. `liftover`'s generation holds two groups,
-  the lifted `calls` and the `report`; its key also takes the chain's file name, the parent's block
-  count and the two collections' labels, which its warnings name, and `Lifted.reasons` is read back
-  from the report, so a reused generation answers as the run that wrote it. Its spill, once
+  through the sweep, entries written before generations. `liftover`'s generation holds four groups,
+  the lifted `calls`, the `report`, the lifted `blocks` and the `block_report`; its key is the bytes of
+  the staged parent `calls` and `blocks` (the blocks since `LIFT_VERSION` 8, when they began to be
+  lifted; before, only their count), and takes the chain's file name and the two collections' labels,
+  which its warnings name. `Lifted.reasons` and `Lifted.block_reasons` are read back from the two
+  reports, so a reused generation answers as the run that wrote it. Its spill, once
   `frames/<facet_id>-<SCHEMA_VERSION>-lift/` with no manifest, removed and rewritten on every run, is
   now `frames/<facet_id>-<SCHEMA_VERSION>/` like the others; the old name is swept by `liftover`.
 - `load` sinks `calls.parquet` and `blocks.parquet` into its stage on every run, as before, and keys
@@ -2663,6 +2688,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-26, RM6: blocks lifted): no column changes. `liftover` lifts the
+  `blocks` frame ("Lifting blocks" above), where the lifted facet had none; `Lifted` gains
+  `block_reasons`. Lifted facets get a new `facet_id` (`LIFT_VERSION` 8). Additive: minor.
 
 - **No version change** (2026-10-26, RM276's store migration): no column of `facets`, `calls`,
   `blocks` or `links` changes. `migrate_store` rewrites a store of an older version to this one by a

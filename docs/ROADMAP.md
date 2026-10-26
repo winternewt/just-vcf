@@ -835,7 +835,7 @@ target's `assembly_label`, so lifting first is the path; the ancestry functions 
 `assembly_mismatch` for a facet on another assembly and do not lift it themselves. Not tested end to end.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f), INFO SVLEN in `write_vcf` as `end_pos - pos` per length-type SV allele (2026-10-26; the frame keeps no SVLEN of its own, so an `<INS>` length is not written; whether to keep one is the person's call, docs/SCHEMA.md "Structural variants"). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Left, buildable now: `blocks` and symbolic SVs in a lift (`liftover` leaves both behind, counted as `allele_not_sequence` for SVs); anchoring across a small gap of one chain; strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable) · Owner: lead
+Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f), INFO SVLEN in `write_vcf` as `end_pos - pos` per length-type SV allele (2026-10-26; the frame keeps no SVLEN of its own, so an `<INS>` length is not written; whether to keep one is the person's call, docs/SCHEMA.md "Structural variants"), `blocks` in a lift, cut at every chain gap and edge, `LIFT_VERSION` 8 (2026-10-26, docs/SCHEMA.md "Lifting blocks"). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Left, buildable now: symbolic SVs in a lift (`liftover` leaves them behind, counted as `allele_not_sequence`); anchoring across a small gap of one chain; strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -1113,6 +1113,26 @@ VCF 4.5 (RM284, merge 8b72a46, 2026-10-23). `normalize` re-aligns a `liftover_to
 6ce13b0, 2026-10-23; the liftover decisions above say so). The hs1 chains lift T2T-CHM13 to GRCh38
 (RM286, merge 795874f, tested in `tests/test_chm13.py`). Still open: strand, blocks and symbolic SVs in
 a lift, and anchoring across a small gap.
+
+**Shipped 2026-10-26: blocks in a lift** (rules in docs/SCHEMA.md, "Lifting blocks"; `LIFT_VERSION`
+8). A block is cut on the same axis a row's span is judged on, each piece in one chain block with one
+target lifts with its evidence unchanged, and the rest is counted in bases (`Lifted.block_reasons`).
+Tested on the synthetic chain against the construction's own base-by-base mapping (a block across a
+source deletion, over a doubly mapped stretch, on the minus strand, before the first chain block, on
+a contig the chain lacks, to a target contig the collection lacks), by a `write_vcf(blocks=True)`
+round trip whose block REFs are the target's, and opt-in against pyliftover over 132 synthetic blocks
+on the GRCh37 autosomes through `hg19ToHg38` (148 lifted pieces, 247,177 bases behind). Not run on a
+real gVCF yet. Decisions, each with what was rejected:
+
+- Pieces that touch on the target stay separate blocks. Rejected: merging them, which would state a
+  block over target bases whose source bases were never adjacent (a source deletion's two sides).
+- Bases behind are counted per reason, not reported per block. Rejected: a per-block report beside
+  `Lifted.report`, which on a WGS gVCF is tens of millions of rows to say what the counts say.
+- `absence_means` stays `unknown`. Rejected: `blocks` when the parent's was `blocks`; it reads the same
+  through `absence_is_reference` (`None` either way), and one value for every lifted facet keeps the
+  earlier rule. Reversible: one line in `liftover`, and the facet's id would change with it.
+- Overlapping lifted blocks (two source regions sent to one target) are kept and counted. Rejected:
+  dropping one, which picks a winner the data does not choose (charter 8).
 
 
 ## RM271 — VRS allele ids

@@ -3,6 +3,38 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F29 — Reading blocks over a facet with hundreds of contigs exhausts memory
+
+Severity: medium · Found 2026-10-26 dogfooding RM282's breakends on the PGP-HMS Manta files.
+
+`concordance` of hu416394's Manta file (GRCh38, its calls on 942 contigs: alts, decoys, HLA) against
+itself with the records at odd positions dropped grew past 36 GB resident before it was stopped; the
+same probe on hu1C1368's file (24 contigs) finishes in 3 s. The memory goes to `_block_reading`, which
+reads the other facet's blocks under each one-sided sequence allele through `intervals.covering`, and
+the file has no blocks at all. `covering` builds one range-join branch per contig of its probes, each
+over the facet's lazily scanned blocks, and that facet's spill is 942 per-contig parquet files. Over
+hu416394's calls as probes, `covering` takes 0.5 s for one contig and fails to allocate under a 30 GB
+address-space cap for all 942. On hu1C1368's (24 contigs, 24 files) it takes 2.7 s for all of them,
+0.24 s for 8 and 0.01 s with the blocks as an empty in-memory frame: the cost grows with branches
+times files. Manta against Canvas (a 22-file spill) ran; a file against itself never reads blocks,
+since every sequence allele meets its twin.
+
+Surfaced, not fixed: `covering` is shared with `genotype_evidence_at` and `reference_support`, and
+its plan was chosen for gVCF blocks. A candidate repair is to collect the intervals that reach their
+successor once and run the per-contig range join only on contigs that have any; whether collecting is
+safe for a lifted 30x gVCF's overlapping blocks (hundreds of thousands) is the measurement it needs
+first. Not measured: whether a GRCh38 gVCF with alt contigs (its blocks spilled per contig too) meets
+the same wall in `genotype_evidence_at`.
+
+**Resolved 2026-10-26** by two changes on main that this branch had not yet met: `intervals.covering`
+collects the as-of join and the overlapping blocks in one `pl.collect_all` and range-joins in memory
+(merge ccf4829), and `load` writes its spill in canonical order in parts of whole contigs, so the 942
+per-contig files became a few parts read in one scan (F27, merge c4def55). The same probe, hu416394's
+Manta file against itself with the odd positions dropped, now runs end to end in 6 s under a 30 GB
+cap (1,248 `match`, 427 `only_a`, as expected). The candidate repair above is what ccf4829 did; the
+alt-contig gVCF case it left unmeasured is covered by RM3's measurement on hu416394's gVCF.
+Code: `src/just_vcf/intervals.py` (`covering`), `src/just_vcf/loading.py` (`_canonical_parts`).
+
 ## F27 — Every read of a loaded VCF facet's frames pays one scan and sort per source contig
 
 Severity: medium · Found 2026-10-26 measuring `reference_support` and `genotype_evidence_at` at

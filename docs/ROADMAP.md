@@ -239,7 +239,7 @@ PGP-HMS Manta files (aggregates): hu416394's 3,350 breakend records are 1,675 ad
 hu1C1368's 1,228 are 614 (DRAGEN's SV caller, Manta's GenerateSVCandidates 1.5.1, a file this entry
 had missed), every one meeting itself; hu1C1368's against itself with half its records dropped meets
 exactly the 467 adjacencies that kept one. No person has two
-breakend facets, so no two callers were compared. The dogfood ran into F29 (`concordance` against
+breakend facets, so no two callers were compared. The dogfood ran into F29, resolved the same day (`concordance` against
 hu416394's Manta file with one-sided sequence alleles exhausts memory), which is not RM282's.
 
 **Left:** whether a symbolic `<DEL>`, `<DUP>` or `<INV>` should meet the breakends another caller

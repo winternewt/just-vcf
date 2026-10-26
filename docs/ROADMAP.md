@@ -950,7 +950,7 @@ target's `assembly_label`, so lifting first is the path; the ancestry functions 
 `assembly_mismatch` for a facet on another assembly and do not lift it themselves. Not tested end to end.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f), INFO SVLEN in `write_vcf` as `end_pos - pos` per length-type SV allele (2026-10-26; the frame keeps no SVLEN of its own, so an `<INS>` length is not written; whether to keep one is the person's call, docs/SCHEMA.md "Structural variants"), `blocks` in a lift, cut at every chain gap and edge, `LIFT_VERSION` 8, and symbolic SVs in a lift by both ends, `LIFT_VERSION` 9 (2026-10-26, docs/SCHEMA.md "Lifting blocks", "Lifting symbolic SVs"). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Left, buildable now: breakends in a lift (left behind as `breakend_not_lifted`: the mate position, its contig name inside ALT and the bracket orientation per strand); anchoring across a small gap of one chain; strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable) · Owner: lead
+Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f), INFO SVLEN in `write_vcf` as `end_pos - pos` per length-type SV allele (2026-10-26; the frame keeps no SVLEN of its own, so an `<INS>` length is not written; whether to keep one is the person's call, docs/SCHEMA.md "Structural variants"), `blocks` in a lift, cut at every chain gap and edge, `LIFT_VERSION` 8, and symbolic SVs in a lift by both ends, `LIFT_VERSION` 9 (2026-10-26, docs/SCHEMA.md "Lifting blocks", "Lifting symbolic SVs"); breakends in a lift by their own position and each mate's, the mate's contig renamed inside ALT and the brackets turned per strand, `LIFT_VERSION` 11 (2026-10-26, on a builder branch waiting for the lead's merge; docs/SCHEMA.md "Lifting breakends"). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Left, buildable now: anchoring across a small gap of one chain; strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -1292,7 +1292,7 @@ strands). Not run on a real SV file yet (the PGP-HMS Manta, Canvas and DRAGEN fi
 - On a minus strand `cipos`/`ciend` are mirrored and swapped, a missing CIEND read as CIPOS (VCF 4.5).
   Rejected: carrying them unchanged, which would put the old END's interval on the new POS reversed;
   and withholding them, which drops what the caller said about precision.
-- Breakends stay behind, counted under their own reason. Rejected for this slice: lifting them, which
+- Breakends stay behind, counted under their own reason (lifted since, "breakends in a lift" below). Rejected for this slice: lifting them, which
   needs the mate lifted on any contig, its name rewritten inside ALT (the frame stores canonical names,
   the ALT the source's spelling) and the brackets turned per strand, with both mate records agreeing.
 - `<INS>` lifts as a point at its anchor. The frame keeps no inserted length, so nothing else moves.
@@ -1311,6 +1311,51 @@ crosses a chain gap (lifted length changed within 5%). Reloaded, every lifted SV
 except hu416394's decoy-heavy header (F24). **No CNV file lifts**: DRAGEN and Canvas write REF `N`,
 which `resolve_ref` reads as a mismatch (F23), so 0 of 1,324 copy-number rows, segments included,
 have lifted on real data.
+
+**Built 2026-10-26: breakends in a lift** (on a builder branch waiting for the lead's merge; rules and
+the strand table in docs/SCHEMA.md, "Lifting breakends"; `LIFT_VERSION` 11). POS lifts as one base,
+each ALT's mate through the same chain on whatever contig it names, the ALT rewritten with the mate
+as the target collection names it, and the form turned by each end's strand per VCF 4.3 §5.4.
+Decisions, each with what was rejected:
+
+- The mate lift, the rewrite and the same-contig checks (target contig, order, 5% distance) follow
+  liftoverSV, the one VCF lifter read that lifts a mate. Rejected: its strand handling, which drops
+  pyliftover's strand and so never turns a bracket (§5.4 contradicts it); its strand-blind order
+  check, which would drop every pair lifted correctly through one inverted block (here order is
+  checked only where both ends share a strand); and its silent anchor base (here compared, as for a
+  symbolic SV on a plus strand). bcftools +liftover, Picard and CrossMap lift no mate (SCHEMA cites
+  where).
+- The strand rule is derived from the four sentences as two sides per form, each flipped by its own
+  end's strand, not written as sixteen cases; the tests check it a second way, by the novel sequence
+  each ALT asserts on the source and on the target. Rejected: one flip for the record (bcftools'
+  accidental reversal of the whole string), which is right only when both ends share a strand.
+- No reason for "ends on two strands": every strand pair has a form that states the same join, so
+  nothing is inconsistent with one rewrite. A mate on the record's own contig that lands on the other
+  strand is kept when its distance holds. Rejected: `sv_ends_apart`'s "contigs or strands" for
+  breakends, which would drop joins the notation states exactly; new `breakend_*` reasons instead of
+  reusing the `sv_` ones, whose wording includes strands.
+- `cipos` mirrors with POS's strand, `ciend` with each mate's; no swap. Rejected: the SV rule's
+  swap, which exists because a minus strand turns POS into END; a breakend's POS stays its own.
+- The mate is named by the target collection's `Contig.name`. Rejected: the source's spelling with
+  `chr` added or dropped by pattern, which is the name-pattern rule F19 rejected. `write_vcf`'s
+  `contig_names` does not reach inside an ALT (F30).
+- No mate pairing step: the two records of an adjacency lift the same two points by the same rule,
+  so they stay mates (checked on 676 synthetic translocations through `hg19ToHg38`, every one).
+  Rejected: pairing by MATEID, which the frame does not keep.
+- `breakend_not_lifted` is kept, narrowed to what the lift cannot read. Rejected: dropping it, which
+  would leave an unparseable bracket ALT to `allele_not_sequence`, a reason about something else.
+
+*Dogfooded 2026-10-26 on the PGP-HMS Manta files* (counts only; SCHEMA has the breakdown). hu1C1368
+1,216 of 1,228 breakend records lift to GRCh38; hu416394 1,043 of 3,350 to GRCh37, the rest mostly on
+decoys or pointing at them (1,147 records on decoys and 691 mates on them, which UCSC's chain does not
+cover; F25's scaffold spelling 163 and 20). Every new reason fired on real rows except
+`breakend_ends_apart` (`breakend_distance_changed` 22, `breakend_ends_reversed` 4,
+`breakend_mate_not_lifted` 749). 11 POS and 11 mates landed on minus-strand blocks. Lifted back
+through the inverse chain, 1,213 of 1,215 and 1,030 of 1,038 return as their source record; every
+other one has an end pyliftover also sends elsewhere on the way back. `concordance` of the returned
+facets against the sources: 607 and 518 adjacencies `match`. Writing a lifted facet with
+`contig_names="chr"` leaves every mate contig undeclared in the header (F30, true of a loaded facet
+too).
 
 
 ## RM271 — VRS allele ids

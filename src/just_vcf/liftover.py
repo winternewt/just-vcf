@@ -43,11 +43,20 @@ short:
    image is reversed: a padded SV's new POS is the target's base before the image of END, a segment's
    the image of END itself. REF (one base) is read from the target there, and on a plus-strand block
    must equal the source's. The ALTs stay as written; `cipos` and `ciend` carry, mirrored and swapped
-   on a minus-strand block. Breakends are left behind (`breakend_not_lifted`): their mate position
-   is on any contig and its bracket orientation flips with each end's strand.
-6. **Withheld in this slice**, each counted: a minus-strand indel or SV whose new anchor would be
-   before the target contig's first base, breakends, other symbolic alleles and `*`, and rows
-   flagged as one record of a pre-split site.
+   on a minus-strand block.
+6. **Breakends** (`t[p[`, `t]p]`, `]p]t`, `[p[t`, single `t.`/`.t`): POS lifts as one base and the
+   mate position inside each ALT through the same chain, on whatever contig it names; the ALT is
+   rewritten with the mate as the target collection names it. An end landing on a minus-strand block
+   flips the side it keeps (`breakends.turned`): the record's flip moves `t`, reverse-complemented,
+   across the brackets, the mate's turns them. REF, the target's base at the new POS, must equal the
+   source's (complemented on a minus block). A mate on the record's own source contig must land on
+   its target contig, in the order the strand gives, at a distance within `SV_LENGTH_TOLERANCE`
+   (liftoverSV's checks). `cipos` mirrors with POS's strand and `ciend` with the mate's; they never
+   swap, since POS stays POS.
+7. **Withheld in this slice**, each counted: a minus-strand indel or SV whose new anchor would be
+   before the target contig's first base, breakend ALTs that are none of the forms or sit beside
+   another kind of allele, other symbolic alleles and `*`, and rows flagged as one record of a
+   pre-split site.
 
 A lifted row's `source_ref`, `ref_check`, `source_gt` and VRS ids are null, and so are a sequence row's
 `cipos` and `ciend`: they described the source's representation on the source assembly (an SV's
@@ -65,13 +74,14 @@ import hashlib
 import json
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf import cache
+from just_vcf.breakends import mate_contig, parse_breakend, turned
 from just_vcf.links import LIFTOVER_TO, derived_links
 from just_vcf.loaders.vcf import _SV_LENGTH_TYPES
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
@@ -80,13 +90,14 @@ from just_vcf.schema import BLOCKS, CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, 
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 10
+LIFT_VERSION = 11
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
 row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
 `phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
 6: the lifted facet's `reference` is null, since it named the source's file; 7: schema 0.0.19's `hq` carried;
 8: the `blocks` frame lifted; 9: symbolic SVs and copy-number segments lifted by both ends; 10: on a
-minus strand, a source SV with CIEND and no CIPOS gets `ciend = [0, 0]`, its precise POS, not null)."""
+minus strand, a source SV with CIEND and no CIPOS gets `ciend = [0, 0]`, its precise POS, not null;
+11: breakends lifted by both ends, the mate rewritten inside ALT and the brackets turned per strand)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -109,11 +120,16 @@ UNLIFTED_REASONS: frozenset[str] = frozenset(
         "indel_minus_strand",
         "ref_mismatch_after_lift",
         # Symbolic SVs (step 5).
-        "breakend_not_lifted",
         "sv_end_unlifted",
         "sv_ends_apart",
         "sv_ends_reversed",
         "sv_length_changed",
+        # Breakends (step 6).
+        "breakend_not_lifted",
+        "breakend_mate_not_lifted",
+        "breakend_ends_apart",
+        "breakend_ends_reversed",
+        "breakend_distance_changed",
     }
 )
 """Why a parent row is not in the lifted facet; the report's `lift_reason`. An open vocabulary (str)."""
@@ -134,7 +150,14 @@ REASON_TEXT: dict[str, str] = {
     "target_contig_unmatched": "the chain's target contig is not in the target collection, or its size differs",
     "indel_minus_strand": "an indel or SV on a minus-strand block lifted to the target contig's first base, with no base before it to anchor on",
     "ref_mismatch_after_lift": "the target's REF equals none of the row's alleles (an SV's: its padding base differs)",
-    "breakend_not_lifted": "a breakend: its mate position and bracket orientation are not lifted",
+    "breakend_not_lifted": (
+        "a breakend ALT that is none of VCF's four forms or a single breakend (brackets that do not pair, bases other than ACGTN), "
+        "a breakend beside another kind of allele, or a breakend whose REF is not one base"
+    ),
+    "breakend_mate_not_lifted": "a breakend whose mate position has no single chain target (no block, several, or a contig the chain or the target lacks)",
+    "breakend_ends_apart": "a breakend whose mate is on its own source contig but lands on another target contig",
+    "breakend_ends_reversed": "a breakend whose mate is on its own source contig and on one strand with it, but lands on the other side of it",
+    "breakend_distance_changed": "a breakend whose mate is on its own source contig and lands at a distance differing by more than SV_LENGTH_TOLERANCE",
     "sv_end_unlifted": "an SV whose end_pos has no single chain target (no block, several, or a target contig the collection lacks)",
     "sv_ends_apart": "an SV whose POS and end_pos land on different target contigs or strands",
     "sv_ends_reversed": "an SV whose POS and end_pos land in reversed order on the target",
@@ -172,8 +195,14 @@ _SV_ALLELE = rf"^<({'|'.join((*_SV_LENGTH_TYPES, 'INS'))})(:[^>]*)?>$"
 """A symbolic SV allele the lift reads: the loader's length types (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`,
 `<CNn>`, subtypes included), whose extent is `end_pos`, and `<INS>`, a point at its anchor."""
 _BREAKEND = r"[\[\]]|^\.[ACGTN]+$|^[ACGTN]+\.$"
-"""A breakend allele (`N[2:123[`, `]2:123]N`) or a single breakend (`.N`, `N.`)."""
+"""A breakend allele (`N[2:123[`, `]2:123]N`) or a single breakend (`.N`, `N.`), as the row's ALT shows it."""
+_LIFTABLE_BREAKEND = (
+    r"^[ACGTN]+\[[^\[\]]+:\d+\[$|^[ACGTN]+\][^\[\]]+:\d+\]$|^\[[^\[\]]+:\d+\[[ACGTN]+$|^\][^\[\]]+:\d+\][ACGTN]+$|^\.[ACGTN]+$|^[ACGTN]+\.$"
+)
+"""A breakend ALT the lift reads: one of the four forms with brackets that pair, or a single breakend,
+its bases ACGTN (`breakends.parse_breakend` reads the same)."""
 _COMPLEMENT = (["A", "C", "G", "T"], ["T", "G", "C", "A"])
+_BASE_COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
 _FAR = 1 << 40
 """An end past every contig, closing the last gap segment of a chain's source contig."""
 
@@ -210,6 +239,16 @@ class Chain:
     """Source contig sizes by canonical name; more than one size means the chain contradicts itself."""
     target_sizes: dict[str, set[int]]
     """Target contig sizes by the chain's own names."""
+    segments: dict[str, pl.DataFrame] = field(default_factory=dict, compare=False, repr=False)
+    """`_segments` per source contig, filled as a lift asks for them: breakend mates lie on any contig,
+    so one contig's axis is read once per lift rather than once per contig whose breakends point at it."""
+
+
+def _contig_segments(chain: Chain, chrom: str) -> pl.DataFrame:
+    """The chain's axis on source contig `chrom` (`_segments`), computed once per chain."""
+    if chrom not in chain.segments:
+        chain.segments[chrom] = _segments(chain.blocks.filter(pl.col("t_chrom") == chrom))
+    return chain.segments[chrom]
 
 
 def read_chain(path: Path | str) -> Chain:
@@ -382,6 +421,11 @@ def liftover(
 
     present = pl.concat([calls.select("chrom"), lifted_blocks.select("chrom")]).unique().collect()["chrom"].to_list()
     names = {chrom: contig.name for chrom, contig in target_contigs.items()}
+    # A lifted breakend names its mate's contig inside ALT, as the target collection names it: those
+    # contigs are the rows' too, though no row may stand on one.
+    by_name = {name: chrom for chrom, name in names.items()}
+    spelled = calls.filter(pl.col("alts").list.join(",").str.contains(r"[\[\]]")).select(mate_contig(pl.col("alts").explode(empty_as_null=False)).alias("_name")).drop_nulls().unique().collect()
+    present = sorted({*present, *(by_name[name] for name in spelled["_name"].to_list() if name in by_name)})
     label = store.assembly_label(target_digest)
     chain_input = [{"role": "chain", "name": chain.name, "sha256": chain.sha256}]
     facets = parent.lazy().with_columns(
@@ -442,7 +486,7 @@ def _lift_into(
     report_parts: list[Path] = []
     for index, chrom in enumerate(sorted(chroms, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
         rows = source.filter(pl.col("chrom") == chrom).collect()
-        report, lifted = _lift_contig(rows, chrom, chain, source_ok.get(chrom), store, target_contigs, facet_id, counts)
+        report, lifted = _lift_contig(rows, chrom, chain, source_ok, store, target_contigs, facet_id, counts)
         report_parts.append(spill.stage / f"report-{index:05d}.parquet")
         report.write_parquet(report_parts[-1], row_group_size=SPILL_ROW_GROUP)
         if lifted.height:
@@ -665,18 +709,21 @@ def _lift_contig(
     rows: pl.DataFrame,
     chrom: str,
     chain: Chain,
-    contig_ok: bool | None,
+    source_ok: dict[str, bool],
     store: ReferenceStore,
     targets: dict[str, Contig],
     facet_id: str,
     counts: Counter[str],
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """One source contig's rows: (the report rows, the lifted `calls` rows)."""
+    """One source contig's rows: (the report rows, the lifted `calls` rows). `source_ok` is every
+    source contig's fitness (`_check_source`): a breakend's mate may lie on any of them."""
+    contig_ok = source_ok.get(chrom)
     counts["rows"] += rows.height
     alts = pl.col("alts").fill_null(pl.lit([], dtype=CALLS["alts"]))
     not_sequence = alts.list.eval(~pl.element().str.to_uppercase().str.contains(_SEQUENCE)).list.any()
     breakend = alts.list.eval(pl.element().str.to_uppercase().str.contains(_BREAKEND)).list.any()
     ref_length = pl.col("ref").str.len_chars().cast(pl.Int64)
+    liftable_breakend = ((alts.list.len() > 0) & alts.list.eval(pl.element().str.to_uppercase().str.contains(_LIFTABLE_BREAKEND)).list.all() & (ref_length == 1)).fill_null(False)
     symbolic_sv = (alts.list.len() > 0) & alts.list.eval(pl.element().str.contains(_SV_ALLELE)).list.all()
     segment = (alts.list.len() == 0) & (pl.col("end_pos").cast(pl.Int64) > pl.col("pos").cast(pl.Int64) + ref_length - 1)
     extent = (symbolic_sv | segment).fill_null(False)
@@ -685,9 +732,9 @@ def _lift_contig(
         .then(pl.lit("ref_unread"))
         .when((pl.col("ref_check") == RefCheck.MISMATCH.value).fill_null(False))
         .then(pl.lit("source_ref_mismatch"))
-        .when(breakend)
+        .when(breakend & ~liftable_breakend)
         .then(pl.lit("breakend_not_lifted"))
-        .when((not_sequence & ~symbolic_sv) | (extent & (ref_length != 1)))
+        .when((not_sequence & ~symbolic_sv & ~liftable_breakend) | (extent & (ref_length != 1)))
         .then(pl.lit("allele_not_sequence"))
         .when(pl.col("split_signal").is_not_null())
         .then(pl.lit("split_flagged"))
@@ -697,27 +744,33 @@ def _lift_contig(
     elif not contig_ok:
         reason = reason.otherwise(pl.lit("chain_contig_mismatch"))
     start, end = _span(pl.col("pos"), pl.col("ref").str.len_chars())
-    work = rows.with_row_index("_row").with_columns(reason.alias("lift_reason"), start.alias("_s0"), end.alias("_e0"), extent.alias("_sv"))
+    work = rows.with_row_index("_row").with_columns(
+        reason.alias("lift_reason"), start.alias("_s0"), end.alias("_e0"), extent.alias("_sv"), liftable_breakend.alias("_bnd")
+    )
 
     blocks = chain.blocks.filter(pl.col("t_chrom") == chrom)
     candidates = work.filter(pl.col("lift_reason").is_null())
-    placed_columns = ["_row", "_reason2", "_q_chrom", "_q0", "_minus", "_reanchor", "_t_ref", "_swap", "_new_end"]
+    placed_columns = ["_row", "_reason2", "_q_chrom", "_q0", "_minus", "_reanchor", "_t_ref", "_swap", "_new_end", *_BND_PLACED]
     if candidates.height and blocks.height:
-        sequence = candidates.filter(~pl.col("_sv"))
-        sequence = _read_target(_place(sequence, blocks, targets), store, targets).with_columns(pl.lit(None, dtype=pl.Int64).alias("_new_end"))
-        svs = _place_sv(candidates.filter(pl.col("_sv")), blocks, store, targets)
-        placed = pl.concat([sequence.select(placed_columns), svs.select(placed_columns)], how="vertical")
+        sequence = candidates.filter(~pl.col("_sv") & ~pl.col("_bnd"))
+        sequence = _with_nulls(_read_target(_place(sequence, blocks, targets), store, targets).with_columns(pl.lit(None, dtype=pl.Int64).alias("_new_end")), _BND_PLACED)
+        svs = _with_nulls(_place_sv(candidates.filter(pl.col("_sv")), blocks, store, targets), _BND_PLACED)
+        bnds = _place_bnd(candidates.filter(pl.col("_bnd")), chrom, blocks, chain, source_ok, store, targets, counts)
+        placed = pl.concat([part.select(placed_columns) for part in (sequence, svs, bnds)], how="vertical")
         work = work.join(placed, on="_row", how="left", maintain_order="left")
         work = work.with_columns(pl.coalesce("lift_reason", "_reason2").alias("lift_reason"))
     else:
-        work = work.with_columns(
-            pl.lit(None, dtype=pl.String).alias("_q_chrom"),
-            pl.lit(None, dtype=pl.Int64).alias("_q0"),
-            pl.lit(None, dtype=pl.Boolean).alias("_minus"),
-            pl.lit(None, dtype=pl.Boolean).alias("_reanchor"),
-            pl.lit(None, dtype=pl.String).alias("_t_ref"),
-            pl.lit(None, dtype=pl.Boolean).alias("_swap"),
-            pl.lit(None, dtype=pl.Int64).alias("_new_end"),
+        work = _with_nulls(
+            work.with_columns(
+                pl.lit(None, dtype=pl.String).alias("_q_chrom"),
+                pl.lit(None, dtype=pl.Int64).alias("_q0"),
+                pl.lit(None, dtype=pl.Boolean).alias("_minus"),
+                pl.lit(None, dtype=pl.Boolean).alias("_reanchor"),
+                pl.lit(None, dtype=pl.String).alias("_t_ref"),
+                pl.lit(None, dtype=pl.Boolean).alias("_swap"),
+                pl.lit(None, dtype=pl.Int64).alias("_new_end"),
+            ),
+            _BND_PLACED,
         )
         if candidates.height:
             work = work.with_columns(pl.col("lift_reason").fill_null(pl.lit("no_chain_block")))
@@ -734,10 +787,196 @@ def _lift_contig(
         pl.col("lift_reason"),
     )
     lifted = pl.concat(
-        [_lifted_rows(work.filter(ok & ~pl.col("_sv")), facet_id, chrom, counts), _lifted_sv_rows(work.filter(ok & pl.col("_sv")), facet_id, chrom, counts)],
+        [
+            _lifted_rows(work.filter(ok & ~pl.col("_sv") & ~pl.col("_bnd")), facet_id, chrom, counts),
+            _lifted_sv_rows(work.filter(ok & pl.col("_sv")), facet_id, chrom, counts),
+            _lifted_bnd_rows(work.filter(ok & pl.col("_bnd")), facet_id, chrom, counts),
+        ],
         how="vertical",
     )
     return report, lifted
+
+
+_BND_PLACED = {"_bnd_alts": CALLS["alts"], "_bnd_cipos": CALLS["cipos"], "_bnd_ciend": CALLS["ciend"]}
+"""What `_place_bnd` adds to a placed breakend row: its rewritten ALTs and intervals (null elsewhere)."""
+
+
+def _with_nulls(frame: pl.DataFrame, columns: dict[str, pl.DataType]) -> pl.DataFrame:
+    return frame.with_columns(pl.lit(None, dtype=dtype).alias(name) for name, dtype in columns.items())
+
+
+def _mirror_pairs(values: list[int | None] | None, flips: list[bool]) -> list[int | None] | None:
+    """Confidence-interval pairs (two offsets per ALT), pair `i` mirrored (`[lo, hi]` to `[-hi, -lo]`)
+    where `flips[i]` holds (the last flag standing for any pair past the ALTs)."""
+    if values is None:
+        return None
+    out: list[int | None] = []
+    for index in range(0, len(values) - 1, 2):
+        low, high = values[index], values[index + 1]
+        if flips[min(index // 2, len(flips) - 1)]:
+            low, high = (None if high is None else -high), (None if low is None else -low)
+        out += [low, high]
+    return out
+
+
+def _place_bnd(
+    rows: pl.DataFrame,
+    chrom: str,
+    blocks: pl.DataFrame,
+    chain: Chain,
+    source_ok: dict[str, bool],
+    store: ReferenceStore,
+    targets: dict[str, Contig],
+    counts: Counter[str],
+) -> pl.DataFrame:
+    """Each breakend row's target from its own position and every ALT's mate, or why it has none
+    (`_reason2`), with the rewritten ALTs (`_bnd_alts`) and intervals.
+
+    POS is placed as a one-base span, as an SNV's is, and the target's base there read: it must be
+    the source's REF, complemented on a minus-strand block (the base at POS is part of the joined
+    sequence, unlike a symbolic SV's padding base). Each mate is placed the same way through the
+    chain blocks of the contig it names (`breakend_mate_not_lifted` where any has no single target).
+    A mate on the row's own source contig is held to liftoverSV's checks on its two ends: one target
+    contig (`breakend_ends_apart`), their order kept on a plus strand and reversed on a minus one when
+    both share a strand (`breakend_ends_reversed`), and their distance within `SV_LENGTH_TOLERANCE`
+    (`breakend_distance_changed`). The ALT is then `breakends.turned` by both ends' strands, the mate
+    named as the target collection names it. Few rows, so the per-ALT work is plain Python.
+    """
+    if rows.is_empty():
+        return _with_nulls(
+            rows.select("_row").with_columns(
+                pl.lit(None, dtype=pl.String).alias("_reason2"),
+                pl.lit(None, dtype=pl.String).alias("_q_chrom"),
+                pl.lit(None, dtype=pl.Int64).alias("_q0"),
+                pl.lit(None, dtype=pl.Boolean).alias("_minus"),
+                pl.lit(False).alias("_reanchor"),
+                pl.lit(None, dtype=pl.String).alias("_t_ref"),
+                pl.lit(False).alias("_swap"),
+                pl.lit(None, dtype=pl.Int64).alias("_new_end"),
+            ),
+            _BND_PLACED,
+        )
+    own = _place(rows.select("_row", "_s0", "_e0"), blocks, targets, _contig_segments(chain, chrom))
+    bases: dict[int, str] = {}
+    readable = own.filter(pl.col("_reason2").is_null())
+    for target in sorted(readable["_q_chrom"].unique().to_list()):
+        part = readable.filter(pl.col("_q_chrom") == target)
+        read = store.fetch(targets[target], [(start, start + 1) for start in part["_q0"].to_list()])
+        bases.update(zip(part["_row"].to_list(), (base.upper() for base in read), strict=True))
+
+    # Every ALT's mate, read and grouped by the contig it names, placed through that contig's blocks.
+    parsed = {row: [parse_breakend(alt) for alt in alts] for row, alts in rows.select("_row", "alts").iter_rows()}
+    mates = [(row, k, canonical_chrom(b.mate_contig), b.mate_pos) for row, found in parsed.items() for k, b in enumerate(found) if b.mate_contig is not None]
+    mate_frame = pl.DataFrame(mates, schema={"_row": pl.UInt32, "_k": pl.Int64, "_mchrom": pl.String, "_mpos": pl.Int64}, orient="row")
+    placed_mates: dict[tuple[int, int], tuple[str | None, str | None, int | None, bool | None]] = {}
+    for mate_chrom in sorted(mate_frame["_mchrom"].unique().to_list()):
+        part = mate_frame.filter(pl.col("_mchrom") == mate_chrom).with_row_index("_id")
+        ok = source_ok.get(mate_chrom)
+        mate_blocks = chain.blocks.filter(pl.col("t_chrom") == mate_chrom)
+        if not ok or mate_blocks.is_empty():
+            cause = "contig_not_in_chain" if ok is None else "chain_contig_mismatch" if ok is False else "no_chain_block"
+            placed_mates.update({(row, k): (cause, None, None, None) for row, k in part.select("_row", "_k").iter_rows()})
+            continue
+        s0, e0 = _span(pl.col("_mpos"), pl.lit(1))
+        found = _place(part.select(pl.col("_id").alias("_row"), s0.alias("_s0"), e0.alias("_e0")), mate_blocks, targets, _contig_segments(chain, mate_chrom))
+        for (row, k), (cause, target, q0, minus) in zip(part.select("_row", "_k").iter_rows(), found.select("_reason2", "_q_chrom", "_q0", "_minus").iter_rows(), strict=True):
+            placed_mates[(row, k)] = (cause, target, q0, minus)
+
+    out: dict[str, list] = {name: [] for name in ("_row", "_reason2", "_t_ref", "_bnd_alts", "_bnd_cipos", "_bnd_ciend")}
+    for (row, pos, ref, cipos, ciend), (_, cause, target, q0, minus) in zip(
+        rows.select("_row", "pos", "ref", "cipos", "ciend").iter_rows(), own.select("_row", "_reason2", "_q_chrom", "_q0", "_minus").iter_rows(), strict=True
+    ):
+        found = parsed[row]
+        reason, alts, mate_minus = cause, None, [False] * len(found)
+        if reason is None:
+            anchor = ref.upper().translate(_BASE_COMPLEMENT) if minus else ref.upper()
+            reason = "ref_mismatch_after_lift" if bases.get(row) != anchor else None
+        if reason is None:
+            failed = [placed_mates[(row, k)][0] for k, b in enumerate(found) if b.mate_contig is not None and placed_mates[(row, k)][0] is not None]
+            for mate_cause in failed:
+                counts[f"bnd_mate:{mate_cause}"] += 1
+            reason = "breakend_mate_not_lifted" if failed else None
+        if reason is None:
+            checks: set[str] = set()
+            for k, b in enumerate(found):
+                if b.mate_contig is None:
+                    continue
+                _, mate_target, mate_q0, minus_k = placed_mates[(row, k)]
+                mate_minus[k] = bool(minus_k)
+                if canonical_chrom(b.mate_contig) != chrom:
+                    continue
+                source_gap, lifted_gap = b.mate_pos - pos, mate_q0 - q0
+                if mate_target != target:
+                    checks.add("breakend_ends_apart")
+                elif minus_k == minus and (lifted_gap > 0) - (lifted_gap < 0) != ((source_gap > 0) - (source_gap < 0)) * (-1 if minus else 1):
+                    checks.add("breakend_ends_reversed")
+                elif abs(abs(lifted_gap) - abs(source_gap)) > SV_LENGTH_TOLERANCE * abs(source_gap):
+                    checks.add("breakend_distance_changed")
+            reason = next((check for check in ("breakend_ends_apart", "breakend_ends_reversed", "breakend_distance_changed") if check in checks), None)
+        if reason is None:
+            counts["bnd_mate_minus"] += sum(mate_minus)
+            alts = []
+            for k, b in enumerate(found):
+                if b.mate_contig is None:
+                    alts.append(turned(b, bool(minus), False, None, None))
+                    continue
+                _, mate_target, mate_q0, _ = placed_mates[(row, k)]
+                alts.append(turned(b, bool(minus), mate_minus[k], targets[mate_target].name, mate_q0 + 1))
+        out["_row"].append(row)
+        out["_reason2"].append(reason)
+        out["_t_ref"].append(bases.get(row) if reason is None else None)
+        out["_bnd_alts"].append(alts)
+        out["_bnd_cipos"].append(_mirror_pairs(cipos, [bool(minus)]) if reason is None else None)
+        out["_bnd_ciend"].append(_mirror_pairs(ciend, mate_minus) if reason is None else None)
+    result = pl.DataFrame(
+        out,
+        schema={"_row": rows.schema["_row"], "_reason2": pl.String, "_t_ref": pl.String, **_BND_PLACED},
+    )
+    placed = own.select("_row", "_q_chrom", "_q0", "_minus").join(result, on="_row", how="left", maintain_order="left")
+    return placed.with_columns(
+        pl.when(pl.col("_reason2").is_null()).then(pl.col(name)).alias(name) for name in ("_q_chrom", "_q0")
+    ).with_columns(
+        pl.lit(False).alias("_reanchor"),
+        pl.lit(False).alias("_swap"),
+        (pl.col("_q0") + 1).alias("_new_end"),
+    )
+
+
+def _lifted_bnd_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: Counter[str]) -> pl.DataFrame:
+    """The lifted `calls` rows of breakends: placed at their own position's image, REF the target's
+    base, the ALTs as `_place_bnd` rewrote them, in `gt_alleles` and `source_alleles` too."""
+    if work.is_empty():
+        return pl.DataFrame(schema=CALLS)
+    moved_contig = pl.col("_q_chrom") != source_chrom
+    counts["lifted"] += work.height
+    counts["bnd_lifted"] += work.height
+    counts["bnd_minus"] += int(work["_minus"].sum())
+    counts["other_contig"] += int(work.select(moved_contig.sum()).item())
+    counts["phase_cleared"] += int(work.select((moved_contig & pl.col("phased").is_not_null()).sum()).item())
+    columns: dict[str, list] = {"gt_alleles": [], "source_alleles": []}
+    for ref, new_ref, alts, new_alts, gt_alleles, source_alleles in work.select("ref", "_t_ref", "alts", "_bnd_alts", "gt_alleles", "source_alleles").iter_rows():
+        moved = {ref.upper(): new_ref, **{old.upper(): new for old, new in zip(alts, new_alts, strict=True)}}
+        for name, alleles in (("gt_alleles", gt_alleles), ("source_alleles", source_alleles)):
+            columns[name].append(None if alleles is None else [None if allele is None else moved.get(allele.upper(), allele) for allele in alleles])
+    out = work.with_columns(
+        pl.lit(facet_id).alias("facet_id"),
+        pl.col("_q_chrom").alias("chrom"),
+        _to_pos(pl.col("_q0")).alias("pos"),
+        pl.col("_new_end").cast(pl.UInt32).alias("end_pos"),
+        pl.col("_t_ref").alias("ref"),
+        pl.col("_bnd_alts").alias("alts"),
+        pl.col("_bnd_cipos").alias("cipos"),
+        pl.col("_bnd_ciend").alias("ciend"),
+        *[pl.Series(name, values, dtype=CALLS[name]) for name, values in columns.items()],
+        pl.lit(None, dtype=CALLS["source_ref"]).alias("source_ref"),
+        pl.lit(None, dtype=CALLS["ref_check"]).alias("ref_check"),
+        pl.lit(None, dtype=CALLS["source_gt"]).alias("source_gt"),
+        pl.lit(None, dtype=CALLS["vrs_allele_ids"]).alias("vrs_allele_ids"),
+        pl.lit(None, dtype=CALLS["vrs_errors"]).alias("vrs_errors"),
+        *[pl.when(moved_contig).then(None).otherwise(pl.col(name)).alias(name) for name in ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities")],
+    )
+    return out.select(CALLS.names())
+
 
 
 def _place_sv(rows: pl.DataFrame, blocks: pl.DataFrame, store: ReferenceStore, targets: dict[str, Contig]) -> pl.DataFrame:
@@ -866,9 +1105,10 @@ def _lifted_sv_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts
     return out.select(CALLS.names())
 
 
-def _place(rows: pl.DataFrame, blocks: pl.DataFrame, targets: dict[str, Contig]) -> pl.DataFrame:
-    """Each row's block, target contig and 0-based target start, or why it has none (`_reason2`)."""
-    segments = _segments(blocks)
+def _place(rows: pl.DataFrame, blocks: pl.DataFrame, targets: dict[str, Contig], segments: pl.DataFrame | None = None) -> pl.DataFrame:
+    """Each row's block, target contig and 0-based target start, or why it has none (`_reason2`).
+    `segments` is `_segments(blocks)` where the caller holds it already."""
+    segments = _segments(blocks) if segments is None else segments
     by_start = rows.select("_row", "_s0", "_e0").sort("_s0")
     first = by_start.join_asof(
         segments.rename({"seg": "seg_s", "depth": "depth_s", "seg_block": "block_s", "covered_cum": "cov_s", "multi_cum": "multi_s"}),
@@ -1076,6 +1316,17 @@ def _warnings(
         lines.append(
             f"{counts['sv_lifted']} lifted row(s) were symbolic SVs or copy-number segments, placed by both ends (length within "
             f"{SV_LENGTH_TOLERANCE:.0%}), {counts['sv_minus']} of them on minus-strand blocks (cipos and ciend mirrored and swapped)"
+        )
+    if counts["bnd_lifted"]:
+        lines.append(
+            f"{counts['bnd_lifted']} lifted row(s) were breakends, each mate lifted through the chain and named inside ALT as the target "
+            f"collection names it; {counts['bnd_minus']} with POS on a minus-strand block (t reverse-complemented to the brackets' other "
+            f"side, cipos mirrored), {counts['bnd_mate_minus']} mate(s) on one (brackets turned, ciend mirrored)"
+        )
+    mate_causes = sorted(key for key in counts if key.startswith("bnd_mate:"))
+    if mate_causes:
+        lines.append(
+            "breakend mate(s) not lifted, by the mate position's reason: " + ", ".join(f"{counts[key]} {key.removeprefix('bnd_mate:')}" for key in mate_causes)
         )
     if counts["reanchored"]:
         lines.append(

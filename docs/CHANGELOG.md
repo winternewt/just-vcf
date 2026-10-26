@@ -4,6 +4,25 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `liftover` lifts breakends (RM6; docs/SCHEMA.md, "Lifting breakends"), which it left behind before.
+  POS lifts as one base and must keep its REF (complemented on a minus-strand block); each ALT's mate
+  lifts through the chain on whatever contig it names and is written back as the target collection
+  names that contig; the bracket form turns per VCF 4.3 §5.4 with each end's strand (a strand table in
+  SCHEMA), `t` reverse-complemented to the brackets' other side when POS lands on a minus block. A
+  mate on the record's own contig must keep its target contig, its order (where the strands agree)
+  and its distance within 5%, as liftoverSV checks. Single breakends lift by their one position;
+  `cipos` mirrors with POS's strand and `ciend` with each mate's, never swapped. New reasons:
+  `breakend_mate_not_lifted`, `breakend_ends_apart`, `breakend_ends_reversed`,
+  `breakend_distance_changed`; **`breakend_not_lifted` now means only a breakend the lift cannot read**
+  (none of the four forms, beside another allele kind, REF over one base): a pre-1.0 narrowing. A
+  lifted facet's `contig_map` lists the contigs only a breakend ALT names. `LIFT_VERSION` 11, so lifted
+  facets get new ids. The breakend ALT reading moved from `concordance` to `just_vcf.breakends`, shared
+  by both; `concordance.BREAKEND_FORMS` moved with it. A lift reads each contig's chain axis once
+  (cached on the `Chain`) wherever breakend mates point. Measured on the PGP-HMS Manta files: hu1C1368
+  1,216 of 1,228 breakend records lift to GRCh38, hu416394 1,043 of 3,350 to GRCh37 (most of the rest
+  on or pointing at decoys); a round trip through the inverse chain gives back all but 2 and 8, which
+  pyliftover also sends elsewhere.
+
 - `load` writes a facet's spill in canonical order once, so `calls` and `blocks` are one scan of the
   spill's part files with no sort when they are read (F27). Before, each frame was a union of one
   filtered scan and sort per contig with rows, re-run on every read: 2,179 of them on PGP-HMS

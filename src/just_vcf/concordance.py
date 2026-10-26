@@ -58,11 +58,12 @@ from pathlib import Path
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
+from just_vcf.breakends import SINGLE_BREAKEND, breakend_parts
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
 from just_vcf.intervals import covering, nearest_block
 from just_vcf.loading import Loaded
 from just_vcf.reference import PRIMARY, ReferenceMismatchError, ReferenceStore, _store_for
-from just_vcf.schema import CONTIG_ALIASES, CONTIG_RANK, BlockKind, VariantClass, canonical_chrom, canonical_chrom_expr, enum_dtype
+from just_vcf.schema import CONTIG_RANK, BlockKind, VariantClass, canonical_chrom, canonical_chrom_expr, enum_dtype
 
 logger = logging.getLogger(__name__)
 
@@ -394,7 +395,7 @@ def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame 
             variant_class_expr(pl.col("_ref"), pl.col("alt")).alias("variant_class"),
         )
         .drop("ref", "source_ref", "vrs_allele_ids")
-        .with_columns(_breakend_parts(pl.col("alt")))
+        .with_columns(breakend_parts(pl.col("alt")))
         .collect()
     )
     reason = (
@@ -404,7 +405,7 @@ def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame 
         .then(pl.lit("spanning_deletion"))
         .when(pl.col("alt").is_in(list(NOT_A_VARIANT)))
         .then(pl.lit("not_a_variant"))
-        .when((pl.col("variant_class") == VariantClass.SV.value) & pl.col("alt").str.contains(_SINGLE_BREAKEND))
+        .when((pl.col("variant_class") == VariantClass.SV.value) & pl.col("alt").str.contains(SINGLE_BREAKEND))
         .then(pl.lit("single_breakend"))
         .when((pl.col("variant_class") == VariantClass.SV.value) & ~pl.col("alt").str.starts_with("<") & pl.col("_form").is_null())
         .then(pl.lit("breakend_unparsed"))
@@ -1026,41 +1027,7 @@ def _sv_one_sided(
 
 
 _BND_INPUTS = ("_form", "_mate_chrom", "_mate_pos")
-"""What `_alleles` parses from a breakend's ALT (`_breakend_parts`), null on any other allele."""
-
-BREAKEND_FORMS: tuple[str, ...] = ("t[p[", "t]p]", "]p]t", "[p[t")
-"""VCF 4.2-4.5's four breakend ALT forms (`t` the bases at POS, `p` the mate's `contig:position`), the
-values of `_form`. They are truvari's four `(direction, strand)` pairs (`bnd_direction_strand`):
-`t[p[` left/direct, `[p[t` left/complement, `t]p]` right/direct, `]p]t` right/complement."""
-
-_SINGLE_BREAKEND = r"^\.[A-Za-z]+$|^[A-Za-z]+\.$"
-"""A single breakend (`.A`, `A.`): a join to sequence the file does not place."""
-
-_BASES_FIRST = r"^[A-Za-z]+([\[\]])([^\[\]]+):(\d+)([\[\]])$"
-_BASES_LAST = r"^([\[\]])([^\[\]]+):(\d+)([\[\]])[A-Za-z]+$"
-"""A breakend ALT with its bases before (`t[p[`, `t]p]`) or after (`]p]t`, `[p[t`) the mate. The
-contig runs to the last `:` before the digits, so a name holding `:` (`HLA-A*01:01:01:01`) reads;
-truvari's `[^\\[\\]:]+` would refuse it."""
-
-
-def _breakend_parts(alt: pl.Expr) -> list[pl.Expr]:
-    """`_form`, `_mate_chrom` (canonical) and `_mate_pos` of a breakend ALT, all null where the ALT is
-    none of the four forms: brackets that do not pair, or no `contig:position` between them."""
-    first, last = alt.str.extract_groups(_BASES_FIRST), alt.str.extract_groups(_BASES_LAST)
-    f_open, f_close = first.struct.field("1"), first.struct.field("4")
-    l_open, l_close = last.struct.field("1"), last.struct.field("4")
-    position = pl.coalesce(first.struct.field("3"), last.struct.field("3")).cast(pl.Int64, strict=False)
-    form = (
-        pl.when(position.is_null())
-        .then(None)
-        .when(f_open.is_not_null() & (f_open == f_close))
-        .then(pl.when(f_open == "[").then(pl.lit("t[p[")).otherwise(pl.lit("t]p]")))
-        .when(l_open.is_not_null() & (l_open == l_close))
-        .then(pl.when(l_open == "[").then(pl.lit("[p[t")).otherwise(pl.lit("]p]t")))
-    )
-    contig = pl.coalesce(first.struct.field("2"), last.struct.field("2")).replace(CONTIG_ALIASES)
-    return [form.alias("_form"), pl.when(form.is_not_null()).then(contig).alias("_mate_chrom"), pl.when(form.is_not_null()).then(position).alias("_mate_pos")]
-
+"""What `_alleles` parses from a breakend's ALT (`breakends.breakend_parts`), null on any other allele."""
 
 def _not_after(left: list[pl.Expr], right: list[pl.Expr]) -> pl.Expr:
     """Whether the tuple `left` sorts before `right` or equals it, element by element."""

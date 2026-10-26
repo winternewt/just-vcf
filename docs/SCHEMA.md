@@ -1074,12 +1074,15 @@ Not lifted, each counted in the warnings and named in the report's `lift_reason`
 `UNLIFTED_REASONS`): `ref_unread`, `source_ref_mismatch`, `allele_not_sequence` (the empty allele of
 an unanchored deletion, which `normalize` anchors first; `*`, `<*>` and symbolic alleles the SV rule
 below does not read, such as Delly's `<TRA>` or a symbolic SV beside a sequence ALT; an SV or segment
-whose REF is longer than its padding base), `breakend_not_lifted`, `split_flagged` (run
+whose REF is longer than its padding base), `split_flagged` (run
 `rejoin_split` first), `contig_not_in_chain`, `chain_contig_mismatch`, `no_chain_block`,
 `split_across_blocks`, `multiple_targets`, `target_contig_unmatched`, `indel_minus_strand` (a
 minus-strand indel or SV lifted to the target contig's first base, with no base before it to
-re-anchor on), `ref_mismatch_after_lift`, and for SVs `sv_end_unlifted`, `sv_ends_apart`,
-`sv_ends_reversed` and `sv_length_changed`.
+re-anchor on), `ref_mismatch_after_lift`, for SVs `sv_end_unlifted`, `sv_ends_apart`,
+`sv_ends_reversed` and `sv_length_changed`, and for breakends `breakend_not_lifted` (an ALT with
+brackets that is none of the four forms, a breakend beside another kind of allele, or a REF longer
+than one base), `breakend_mate_not_lifted`, `breakend_ends_apart`, `breakend_ends_reversed` and
+`breakend_distance_changed`.
 
 **Lifting symbolic SVs** (2026-10-26, `LIFT_VERSION` 9). A row whose every ALT is a symbolic SV the
 loader gives an extent (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`, `<CNn>`, subtypes included) or `<INS>`, and
@@ -1117,15 +1120,124 @@ ends rather than its REF span, with one base of REF:
    interval, so both are set. Where it wrote CIEND and no CIPOS, its POS is precise and its END is
    not: the new END, the old POS's image, gets `ciend = [0, 0]` per ALT, since a null there would read
    as the new CIPOS by the same rule (`LIFT_VERSION` 10). Neither written stays neither.
-6. Breakends (`N[2:123[`, `]2:123]N`, `.N`) are left behind as `breakend_not_lifted`. Lifting one
-   needs its mate position lifted through the chain on whatever contig it names, the mate's contig
-   name rewritten inside the ALT, and the brackets turned for each end that lands on a minus strand,
-   with the mate record kept consistent; that is a slice of its own.
+6. Breakends (`N[2:123[`, `]2:123]N`, `.N`) are not this rule's: they lift by their own position and
+   their mate's ("Lifting breakends" below).
 
 Tested on the synthetic chain against the construction (each reason, both strands, a segment, the
 5% boundary, `cipos`/`ciend` on both strands, a write and reload), and opt-in against pyliftover's
 placing of both ends of 550 `<DEL>`s of 50 bases to 200 kb over the GRCh37 autosomes through
 `hg19ToHg38` (`tests/test_liftover_chain.py`).
+
+**Lifting breakends** (2026-10-26, `LIFT_VERSION` 11). A row whose every ALT is a breakend, one of
+VCF's four forms (`t[p[`, `t]p]`, `]p]t`, `[p[t`, brackets paired, bases `ACGTN`) or a single
+breakend (`t.`, `.t`), with a REF of one base, is lifted by its own position and each ALT's mate
+(`just_vcf.breakends` reads the ALT; `concordance` reads it there too):
+
+1. POS lifts as one base, by step 2's rule. The target's base there is the new REF, and must equal
+   the source's REF, complemented on a minus-strand block (`ref_mismatch_after_lift`): the base at a
+   breakend's POS is part of the joined sequence, not a padding base before an event as a symbolic
+   SV's is, so it is compared on both strands, as an SNV's is.
+2. Each ALT's mate position `p` lifts as one base through the chain blocks of the contig the ALT names
+   (read with `canonical_chrom`), whichever contig that is. A mate with no single target (in no block,
+   in several, on a contig the chain does not cover or whose size it states differently, or landing
+   on a contig the target collection lacks) leaves the row behind as `breakend_mate_not_lifted`; a
+   warning counts the mates by their own position's reason.
+3. A mate on the row's own source contig is held to liftoverSV's three checks on its two ends: they
+   land on one target contig (`breakend_ends_apart`); where both land on one strand, their order is
+   kept on a plus strand and reversed on a minus one (`breakend_ends_reversed`); and their distance
+   differs from the source's by at most `SV_LENGTH_TOLERANCE` (5%) of it (`breakend_distance_changed`).
+   Ends on two strands have no order to keep. A mate on another source contig is checked by nothing
+   more (liftoverSV's translocation).
+4. The ALT is rewritten: the mate's contig as the target collection names it (`Contig.name`, so
+   `chr2` or `2` as the target FASTA did), its position the image of `p`, and the form turned by both
+   ends' strands (the table below). `t` is reverse-complemented when POS lands on a minus-strand
+   block, so REF's base, now its complement, moves to the other end of `t` and any inserted bases are
+   reverse-complemented on the other side of it; a flip of the mate alone leaves `t` as written.
+5. `cipos` is about POS and mirrors (`[lo, hi]` to `[-hi, -lo]`) when POS lands on a minus-strand
+   block; `ciend`, which `concordance` reads as the mate's interval (truvari's reading), mirrors per
+   ALT when that ALT's mate does. Unlike a symbolic SV's, they never swap: POS stays POS. A breakend
+   VCF placed at the left-most position of its interval is not moved back there on a minus strand.
+6. `end_pos` is the new POS; `gt_alleles` and `source_alleles` take the new REF and ALTs where they
+   held the old; `gt`, `sv_type`, `dosage` and the rest carry, the phase cleared on another contig as
+   for any row. The lifted facet's `contig_map` lists every contig an ALT names, rows or none.
+
+Mate records stay consistent without pairing them: each lifts the same two points by the same
+function, so the record at `p` lands where its mate's ALT now points, whatever the strands (checked on
+676 lifted records of synthetic translocations through `hg19ToHg38`, every one). Manta's mates stated
+a few bases apart (F28) are two points, and could straddle a chain edge; each is lifted as it says.
+The frame keeps no MATEID, and none is needed.
+
+*The strand table.* VCF 4.3 §5.4: `t[p[` "piece extending to the right of p is joined after t";
+`t]p]` "reverse comp piece extending left of p is joined after t"; `]p]t` "piece extending to the
+left of p is joined before t"; `[p[t` "reverse comp piece extending right of p is joined before t".
+So each form states two sides: the side of POS whose sequence takes part in the join (left of POS
+when `t` comes first, right when it comes last) and the side of `p` (right of `p` with `[`, left with
+`]`): `t[p[` (L, R), `t]p]` (L, L), `]p]t` (R, L), `[p[t` (R, R). A minus-strand block reverses the
+sequence around an end, so what lay left of it lies right of its image: the record's side flips when
+POS lands on one, the mate's when `p` does, and the lifted form is the one stating the new pair.
+
+| Source form | POS +, mate + | POS +, mate − | POS −, mate + | POS −, mate − |
+|---|---|---|---|---|
+| `t[p[` | `t[p[` | `t]p]` | `[p[t` | `]p]t` |
+| `t]p]` | `t]p]` | `t[p[` | `]p]t` | `[p[t` |
+| `]p]t` | `]p]t` | `[p[t` | `t]p]` | `t[p[` |
+| `[p[t` | `[p[t` | `]p]t` | `t[p[` | `t]p]` |
+
+A flip at POS alone moves `t` across the brackets and keeps their direction; a flip at the mate alone
+turns the brackets and keeps `t` where it is; both give the full reversal (`t[p[` and `]p]t`, `t]p]`
+and `[p[t`), which is how a mate pair's two records already relate. A single breakend's dot moves
+with POS's side: `t.` becomes `.t'` on a minus block, `t'` being `t` reverse-complemented. The table
+is checked against the sentences themselves: the tests read the novel sequence each ALT asserts from
+the source and the target, and require the two to be one molecule, read one way or the other.
+
+*Against the tools that lift VCF* (read 2026-10-26, none run):
+
+- **liftoverSV** 0.3.1_beta (GPL-3, commit e62dcbf; `share/python3/liftoverSV/core/liftover_engine.py`,
+  `LiftoverEngine._lift_square_bracketed_alt_notation`) is the one that lifts a breakend's mate: it
+  lifts `p` through the chain, rewrites `contig:pos`, takes the anchor base from the target, and for
+  a mate on the record's own contig (its `normalize_svtype` gives no `TRA`) drops the record when the
+  ends land on two contigs, in reversed order, or at a distance changed by more than 5%. Followed
+  here: the mate's lift, the rewrite, and the three checks. Not followed, each where it contradicts
+  the spec or this rule: its `ChainLifter.lift` (`io_tools/chain_lifter.py`) keeps pyliftover's
+  contig and position and drops the strand, so a breakend on a minus-strand block keeps its brackets
+  and `t`, which §5.4 contradicts (the table above); its order check ignores strands, so a pair lifted
+  correctly through one inverted block, whose order must reverse, would be dropped (here order is
+  checked only where both ends share a strand, reversed expected on minus); and it takes the target's
+  anchor base without comparing, which this lift compares, as it does for a symbolic SV on a plus
+  strand.
+- **bcftools +liftover** (MIT, `freeseek/score` `liftover.c`, `LIFTOVER_VERSION` 2026-02-06,
+  `process`): `bcf_is_symbolic` tests only `<` and `*`, so a breakend is read as a sequence allele and,
+  on a minus-strand block, `reverse_complement` turns the whole ALT string: its IUPAC table (`rev_nt`)
+  maps `[` to `]`, so the brackets turn as the both-minus column does, but the mate's `contig:pos` is
+  reversed with them (`A[2:100[` becomes `]001:2]T`) and never lifted.
+- **Picard LiftoverVcf** (`picard/util/LiftoverUtils.java`, `reverseComplement(Allele)`) returns a
+  symbolic allele unchanged, and htsjdk counts breakends as symbolic (`Allele.wouldBeSymbolicAllele`:
+  `wouldBeBreakpoint`, `wouldBeSingleBreakend`): the ALT is kept verbatim on either strand, the mate
+  unlifted.
+- **CrossMap** (`cmmodule/mapvcf.py`, `crossmap_vcf_file`, commit 2fefee4): `is_dna` fails on a
+  bracket, so the ALT is appended verbatim, the mate unlifted.
+
+Tested on a synthetic chain with plus- and minus-strand blocks (`tests/test_liftover_bnd.py`): each
+form under each pair of strands, a mate on another contig, a mate in a gap and on a contig the chain
+does not cover, each same-contig check, single breakends on both strands, inserted bases, two ALTs,
+the intervals, a write and reload, and a lift through the inverse chain giving back every record.
+Opt-in (`tests/test_liftover_chain.py`): 800 synthetic translocation records over the GRCh37
+autosomes through `hg19ToHg38`, each end where pyliftover puts it, the form by the table, and
+`hg38ToHg19` giving all 676 lifted records back.
+
+Measured 2026-10-26 on the PGP-HMS Manta files (aggregates only). hu1C1368 (GRCh37 to 38): 1,216 of
+1,228 breakend records lift (4 with POS and 4 mates on minus-strand blocks); behind, 10
+`breakend_distance_changed`, 1 `breakend_mate_not_lifted`, 1 `no_chain_block`. Lifted back through
+`hg38ToHg19`, 1,215 return and 1,213 are their source record exactly; the 2 that are not have one end
+that pyliftover also sends elsewhere on the way back (the two chains are not each other's inverse
+there). `concordance` of the returned facet against the source: 607 adjacencies `match`, 7 `only_b`
+(both records left behind), 1 `only_a`. hu416394 (GRCh38 to 37): 1,043 of 3,350 lift (7 POS and 7
+mates on minus-strand blocks); behind, 1,310 `ref_unread` (1,147 on decoys, 163 on F25's scaffolds),
+748 `breakend_mate_not_lifted` (691 mates on decoys, which UCSC's chain does not cover, 20 on F25's
+scaffolds, 37 in chain gaps), 233 `no_chain_block`, 12 `breakend_distance_changed`, 4
+`breakend_ends_reversed`. Back through `hg19ToHg38`, 1,038 return, 1,030 exactly, the 8 others again
+ends pyliftover sends elsewhere; `concordance`: 518 `match`, 4 `only_a`, 1,157 `only_b`. About 30 s per
+file for load, `resolve_ref` and both lifts.
 
 **Lifting blocks** (2026-10-26, `LIFT_VERSION` 8). A `blocks` row's span (`pos` to `end_pos`) is cut
 on the axis step 2 judges a row's span on: the chain's blocks, cut wherever the set of targets
@@ -2984,6 +3096,17 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-26, RM6: breakends lifted): no column changes. `liftover` lifts
+  breakends by their own position and each mate's ("Lifting breakends" above), where it left every
+  one behind as `breakend_not_lifted`. `UNLIFTED_REASONS` gains `breakend_mate_not_lifted`,
+  `breakend_ends_apart`, `breakend_ends_reversed` and `breakend_distance_changed` (an open
+  vocabulary); `breakend_not_lifted` stays, narrowed to the breakends the lift cannot read (an ALT
+  with brackets that is none of the four forms, a breakend beside another kind of allele, a REF of
+  more than one base). Lifted facets get a new `facet_id` (`LIFT_VERSION` 11), and a lifted facet's
+  `contig_map` also lists the contigs only a breakend ALT names. **Values change**: lifted breakend
+  rows appear, and the reason of those left behind. A narrowed meaning is a break of an open
+  vocabulary, pre-1.0.
 
 - **No version change** (2026-10-26, RM282 breakends in concordance): no column of `facets`, `calls`
   or `blocks` changes, and `sites` keeps its columns. `concordance` compares breakends ("Breakends",

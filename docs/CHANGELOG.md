@@ -4,6 +4,64 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A reference collection with two sequences whose canonical name is `1` (`chr1` and `1`) no longer gets
+  an assembly label from its lengths (audit 12). `ReferenceStore._label_from_lengths` built a dict of
+  canonical name to length, so the later sequence overwrote the earlier one: GRCh37's `chr1` followed
+  by a GRCh38-length `1` was labelled GRCh38. It now answers unknown when contig 1 is served twice, as
+  `contigs_by_chrom` already lists both and `resolve_ref` and `build_aadr_panel` read neither.
+  `assembly_label` then falls back to a label the caller asserted with `add_fasta`, as for a reference
+  without contig 1; without one, `collection_for` finds the collection under no assembly.
+- `ReferenceStore.fetch` uppercases what it returns itself, as its docstring promised (audit 12). It
+  returned gtars's substrings as they came; `liftover`, `resolve_ref` and `normalize` uppercased after
+  it, `build_aadr_panel`'s REF read did not. gtars already stores every sequence uppercased (checked:
+  a soft-masked FASTA reads back uppercase with encoding on or off, and 0 lowercase of 2,400 bases in
+  a soft-masked hg19 region), so no output changes today; the guard holds for any store underneath.
+  A text already uppercase is not copied. The seven `.upper()` calls on `fetch`'s results in
+  `liftover.py`, `reference.py` and `normalize.py` are gone; those on a facet's own alleles stay.
+- `build_pca_panel` checks `extra_meta` before it writes anything (audit 12). It wrote the sites and
+  reference-sample parquet files first and only then refused an `extra_meta` key that would replace
+  one of its own, leaving a new matrix beside the old meta file. The clash check (against the new
+  `ancestry.pca.PANEL_META_KEYS`) and a JSON check now run first; `extra_meta` that is not JSON is a
+  `ValueError` (it was a `TypeError` after the parquet files were written). The three files are
+  written under temporary names in the panel directory and moved into place with `os.replace`, the
+  meta file last, so a refused or failed rebuild leaves the previous panel loadable and unchanged.
+- `load`'s cache sweep retires cached `scan_stats` results an earlier edit of the VCF loader counted
+  (the person's decision, audit 12). The loader's code digest, `_STATS_CODE`, was in a stats entry's
+  key but not among its version keys, so an entry written under another digest with the same
+  `STATS_VERSION` was never read again and never swept: small JSON orphans piled up until
+  `clear_cache`. The digest is now a version key, `STATS_CODE` (`stats_versions()`), and
+  `cache.sweep_stale` takes `digests=`, keys compared for equality only: an entry whose digest differs
+  is behind unless a numbered key is ahead. The grace period still applies. A newer install sharing
+  the cache under the same numbered versions can lose its stats entries this way and count them again
+  on its next load; only the stats sweep passes `digests`, since nothing reads a stats entry after its
+  load returned. Every stats entry written before this change lacks the key and is swept once its
+  grace period has run. `cache.py`'s module docstring now lists every input of the stats key.
+- `tests/test_ancestry_panels.py`'s own-sample check accepts a reference sample placed on its region's
+  border with one other region (the person's option 1, 2026-10-26): in its own region, or a two-way vote
+  (its own region and the leader at least 0.9 together) with its own region at least a third. It
+  failed on `aadr_ho`, whose regions meet along clines: a Karakalpak 0.35 Central Asian and 0.60
+  European, a Xibo 0.40 Eastern Asian and 0.60 Central Asian. Not a skip: the test also shuffles the
+  panel's region labels and asserts the check then fails (on `aadr_ho` it fails six of seven regions),
+  and an always-on test shows the same on a synthetic panel. Tests only; no library change.
+- `build_aadr_panel` refuses an `.anno` that lists one Genetic ID more than once, with a `ValueError`
+  naming how many repeat, before reading any genotype (audit 12). The `.ind` was left-joined to the
+  `.anno` with no check, so a repeated row selected that person's `.geno` column twice and weighed
+  them double in the frequencies and the PCA. AADR v66.p1's `compatibility_HO` `.anno` has no repeat.
+- **`build_aadr_panel` keeps AADR's numbered sub-groups** (the person's decision, 2026-10-26: "keep
+  numbered AADR groups"). Rule 5 excluded every group label with a `-` in it, which also dropped
+  `Kumyk-1`, `Uzbek-2`, `Hazara_1-1` and the like. AADR's README names only `Ignore_` and outliers as
+  marks to filter on. Rule 5 now reads every `-` qualifier of a label (`group_label_flag`): `Ignore` at
+  the start, an outlier qualifier (`-o`, `-o…`) or one of the new `QC_QUALIFIERS` (`QCremove`, `Dup`,
+  `Discovery`, `NotPermittedToPublish`, `DontUseHighlyProblematic`, each read off v66.p1's `.ind`)
+  excludes; a qualifier of digits is a sub-group and is kept, with `population` the label as written.
+  A qualifier that is neither is counted under a new reason, `group label qualifier not recognised`,
+  with a warning naming the labels. **Changed names:** the reason `group label flagged (Ignore_ or a
+  -qualifier)` is now `group label flagged (Ignore_ or a QC qualifier)`, and `INDIVIDUAL_EXCLUSIONS`
+  has one entry more, so a panel meta's `selection.excluded` keys differ. Rebuilt from Krypton:
+  2,567 individuals (was 2,556; 22 in 16 numbered sub-groups, 11 of them people who were in under their
+  shotgun genome's bare label and are now in under their Human Origins genotype's numbered one),
+  184,882 sites, leave-one-out 0.942; hu6ABACE still in Europe, population GBR. docs/ANCESTRY_PANELS.md
+  has the rule and the counts.
 - `just_vcf.ancestry.build_aadr_panel` builds a reference-PCA panel, `aadr_ho` on GRCh37, from AADR's
   Human Origins release (RM5), so `infer_ancestry`'s PCA path has a real panel to run on. Ported from
   just-prs `ancestry/aadr.py` and `eigenstrat.py` (docs/PROVENANCE.md). New module

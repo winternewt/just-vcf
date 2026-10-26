@@ -456,7 +456,7 @@ def _windows(store: ReferenceStore, contig: Contig, requests: list[tuple[int, in
     bases = store.fetch(contig, [ranges[index] for index in reads])
     windows = [""] * len(requests)
     for index, text in zip(reads, bases):
-        windows[index] = text.upper()
+        windows[index] = text
     return list(zip(windows, starts))
 
 
@@ -466,7 +466,7 @@ def _anchor_after(store: ReferenceStore, contig: Contig, ref: str, alt: str) -> 
     if len(ref) >= contig.length:
         return None
     # 1-based base len(ref) + 1 is 0-based [len(ref), len(ref) + 1).
-    after = store.fetch(contig, [(len(ref), len(ref) + 1)])[0].upper()
+    after = store.fetch(contig, [(len(ref), len(ref) + 1)])[0]
     return ref + after, alt + after
 
 

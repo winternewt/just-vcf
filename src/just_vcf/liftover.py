@@ -946,7 +946,7 @@ def _place_bnd(
     for target in sorted(readable["_q_chrom"].unique().to_list()):
         part = readable.filter(pl.col("_q_chrom") == target)
         read = store.fetch(targets[target], [(start, start + 1) for start in part["_q0"].to_list()])
-        bases.update(zip(part["_row"].to_list(), (base.upper() for base in read), strict=True))
+        bases.update(zip(part["_row"].to_list(), read, strict=True))
 
     # Every ALT's mate on a reference contig, where `_mate_places` put it. A mate on a contig of the
     # assembly file is placed by no chain: it stays where the ALT says, on the strand it was.
@@ -1161,7 +1161,7 @@ def _place_sv(rows: pl.DataFrame, blocks: pl.DataFrame, store: ReferenceStore, t
         part = readable.filter(pl.col("_q_chrom") == chrom)
         starts = part["_q0"].to_list()
         read = store.fetch(targets[chrom], [(start, start + 1) for start in starts])
-        bases.append(part.select("_row", pl.Series("_t_ref", [base.upper() for base in read], dtype=pl.String)))
+        bases.append(part.select("_row", pl.Series("_t_ref", read, dtype=pl.String)))
     read_frame = pl.concat(bases) if bases else pl.DataFrame(schema={"_row": rows.schema["_row"], "_t_ref": pl.String})
     rows = rows.join(read_frame, on="_row", how="left", maintain_order="left")
     # On a plus-strand block the anchor is the source's own base, so the target's must equal it; on a
@@ -1302,7 +1302,7 @@ def _read_target(rows: pl.DataFrame, store: ReferenceStore, targets: dict[str, C
         part = readable.filter(pl.col("_q_chrom") == chrom).select("_row", "_q0", (pl.col("_q0") + pl.col("_e0") - pl.col("_s0")).alias("_q1"))
         spans = part.select("_q0", "_q1").unique().sort("_q0", "_q1")
         bases = store.fetch(targets[chrom], list(zip(spans["_q0"].to_list(), spans["_q1"].to_list())))
-        table = spans.with_columns(pl.Series("_bases", [text.upper() for text in bases], dtype=pl.String))
+        table = spans.with_columns(pl.Series("_bases", bases, dtype=pl.String))
         pieces.append(part.join(table, on=["_q0", "_q1"], how="left").select("_row", "_bases"))
     if pieces:
         read = pl.concat(pieces)

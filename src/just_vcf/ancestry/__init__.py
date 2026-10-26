@@ -22,10 +22,12 @@ except ImportError as error:
 from just_vcf.ancestry.aadr import (
     AADR_REGIONS,
     INDIVIDUAL_EXCLUSIONS,
+    QC_QUALIFIERS,
     SITE_DROPS,
     WEST_EURASIA,
     AadrBuild,
     build_aadr_panel,
+    group_label_flag,
     region_of,
 )
 from just_vcf.ancestry.consensus import CANONICAL_SUPERPOPS, consensus, continental_of, to_continental
@@ -55,6 +57,7 @@ __all__ = [
     "INDIVIDUAL_EXCLUSIONS",
     "PRIVE_ASSEMBLY",
     "PROPORTION_METHODS",
+    "QC_QUALIFIERS",
     "RESOLUTIONS",
     "SITE_DROPS",
     "WEST_EURASIA",
@@ -68,6 +71,7 @@ __all__ = [
     "build_prive_reference",
     "consensus",
     "continental_of",
+    "group_label_flag",
     "infer_ancestry",
     "load_pca_panel",
     "panel_assemblies",

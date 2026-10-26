@@ -296,6 +296,22 @@ def test_versions_are_ordered_numerically_and_only_behind_is_older(versions: dic
     assert cache._older(versions, current) is older
 
 
+@pytest.mark.parametrize(
+    ("versions", "current", "older"),
+    [
+        ({"S": "1", "C": "aa"}, {"S": "1", "C": "bb"}, True),
+        ({"S": "1", "C": "aa"}, {"S": "1", "C": "aa"}, False),
+        ({"S": "0", "C": "aa"}, {"S": "1", "C": "aa"}, True),
+        ({"S": "2", "C": "aa"}, {"S": "1", "C": "bb"}, False),
+        ({"S": "1"}, {"S": "1", "C": "bb"}, True),
+    ],
+)
+def test_a_digest_key_is_behind_whenever_it_differs_and_no_number_is_ahead(versions: dict, current: dict, older: bool) -> None:
+    assert cache._older(versions, current, frozenset({"C"})) is older
+    if versions.get("C", "aa") != current["C"] and versions["S"] == current["S"]:
+        assert cache._older(versions, current) is ("C" not in versions), "without `digests` a differing digest cannot be ordered"
+
+
 def test_each_derived_step_sweeps_its_own_kind(tmp_path: Path, default_store: ReferenceStore) -> None:
     stale_rejoin = aged(write_entry("frames", f"{'d' * 32}-{SCHEMA_VERSION}", cache.REJOIN_SPILL, {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": 0}))
     stale_resolve = aged(legacy_entry("frames", f"{'e' * 32}-{SCHEMA_VERSION}-ref-SQ_ab-c-{RESOLVE_VERSION - 1}"))

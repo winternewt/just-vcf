@@ -9,15 +9,19 @@ East and Central Asia. docs/ANCESTRY_PANELS.md has the rules in prose and a meas
 
 Who goes in, each rule applied in this order, the first one an individual fails being its reason:
 
-1. in the `.anno` file;
+1. in the `.anno` file. An `.anno` listing one Genetic ID twice is refused before anything is read
+   from the `.geno`: the join would select that person's genotypes twice;
 2. present-day: `Date mean in BP` is 0;
 3. diploid data: `Data type` is `HumanOrigins` (the array) or `Shotgun.diploid` (a genome with diploid
    calls). Pseudo-haploid shotgun and capture data (one read per site) and the reference genomes
    (chimpanzee, gorilla, the ancestral and human references) are out;
 4. `ASSESSMENT` is `Pass`, `PROVISIONAL_PASS` or `MERGE_PASS`;
-5. the `.ind` group label does not start with `Ignore` and carries no `-` qualifier (AADR marks
-   outliers, relatives, duplicates and QC removals that way: `-o`, `-oPCA`, `-oRelative`, `-QCremove`,
-   `-Dup`, `-1`, `-Discovery`);
+5. the `.ind` group label does not start with `Ignore` and carries no QC qualifier (`group_label_flag`,
+   `QC_QUALIFIERS`). A label is a name, then any number of `-` qualifiers. AADR's README names `Ignore_`
+   and outliers as the marks of individuals to filter out; the qualifiers that say so are `-o` and
+   every `-o…` (`-oPCA`, `-oRelative`, `-oAfrica`) and the ones in `QC_QUALIFIERS`. A qualifier of
+   digits only names a sub-group (`Kumyk-1`, `Hazara_1-1`) and is kept. Any other qualifier is neither,
+   so it is counted under a reason of its own rather than taken for either;
 6. a latitude and a longitude;
 7. inside the box (`WEST_EURASIA` unless the caller passes another);
 8. a region for its `Political Entity` (`AADR_REGIONS`, `region_of`);
@@ -25,7 +29,8 @@ Who goes in, each rule applied in this order, the first one an individual fails 
    `Genetic ID`s, typically a Human Origins genotype and a shotgun genome). The `HumanOrigins` one is
    kept, else the first in `.ind` order.
 
-`population` is the `.ind` group label. `superpop` is the region: a United Nations M49 geographic
+`population` is the `.ind` group label as written: AADR's numbered sub-groups (`Kumyk-1`, `Kumyk-2`)
+are separate groups there and stay separate here. `superpop` is the region: a United Nations M49 geographic
 region of the political entity, Europe as one, Sub-Saharan Africa as one, and Russia split at 60°E
 (the Urals) into Europe and Siberia, which M49 does not do. It is geography, not genetics: a
 Kalmyk sample at 45°E is in Europe. Folding onto the five continental groups goes through
@@ -131,12 +136,31 @@ AADR_REGIONS: dict[str, str | None] = {
 Abkhazia under Georgia's and Taiwan under Eastern Asia). An entity not listed, or listed as None, puts
 its individuals out of the panel, counted."""
 
+QC_QUALIFIERS: frozenset[str] = frozenset(
+    {
+        "QCremove",  # failed quality control; v66.p1 `.ind`, e.g. `Kumyk-QCremove`
+        "Dup",  # a duplicate of another individual; v66.p1 `.ind`, e.g. `Adygei-Dup`
+        "Discovery",  # a Human Origins ascertainment sample (Patterson 2012: the sites were found in its genome); v66.p1 `.ind`, e.g. `French-Discovery`
+        "NotPermittedToPublish",  # v66.p1 `.ind`, one ancient individual
+        "DontUseHighlyProblematic",  # v66.p1 `.ind`, one ancient individual
+    }
+)
+"""The `.ind` group-label qualifiers, besides `-o` and every `-o…` (outliers, AADR's README), that mark an
+individual to leave out, each read off AADR v66.p1's `compatibility_HO` `.ind` file (2026-10-26). The
+other qualifiers there are digits (a numbered sub-group, kept) or name an ancient analysis cluster
+(`-A`, `-B`, `-C`, `-lowEastEU`, `-highEastEU`, `-Africa`, `-3CentralEuropean`); none of those reaches
+rule 5 in v66.p1, since every individual carrying one is ancient."""
+
+LABEL_FLAGGED = "group label flagged (Ignore_ or a QC qualifier)"
+LABEL_UNRECOGNISED = "group label qualifier not recognised"
+
 INDIVIDUAL_EXCLUSIONS: tuple[str, ...] = (
     "not in the annotation file",
     "ancient (date mean in BP not 0)",
     "not diploid data (HumanOrigins or Shotgun.diploid)",
     "assessment not a pass",
-    "group label flagged (Ignore_ or a -qualifier)",
+    LABEL_FLAGGED,
+    LABEL_UNRECOGNISED,
     "no latitude or longitude",
     "outside the region box",
     "political entity has no ancestry region",
@@ -181,6 +205,23 @@ class AadrBuild(BaseModel):
     """Kept sites whose `.snp` line lists the reference base second."""
 
 
+def group_label_flag(group: str) -> str | None:
+    """Why rule 5 leaves a `.ind` group label out (`LABEL_FLAGGED` or `LABEL_UNRECOGNISED`), or None
+    where it keeps it.
+
+    The label is split at every `-`: the first piece is the name, each later piece a qualifier, and
+    every qualifier is read, so `Ulgii-1-Dup` is flagged for its `Dup`. `LABEL_FLAGGED`: the label
+    starts with `Ignore`, or a qualifier starts with `o` (an outlier) or is in `QC_QUALIFIERS`.
+    Otherwise `LABEL_UNRECOGNISED` where a qualifier is not digits (an empty one included), else kept.
+    """
+    name, *qualifiers = group.split("-")
+    if name.startswith("Ignore") or any(q.startswith("o") or q in QC_QUALIFIERS for q in qualifiers):
+        return LABEL_FLAGGED
+    if any(not (q.isascii() and q.isdigit()) for q in qualifiers):
+        return LABEL_UNRECOGNISED
+    return None
+
+
 def region_of(political_entity: str, longitude: float) -> str | None:
     """The region an individual is filed under (`AADR_REGIONS`, Russia split at the Urals), or None."""
     region = AADR_REGIONS.get(political_entity)
@@ -215,7 +256,13 @@ def build_aadr_panel(
     layout = geno_layout(geno)
 
     ind = read_ind(ind_path).with_row_index("row")
-    chosen, excluded, regions = _choose(ind, read_anno(anno), box)
+    annotations = read_anno(anno)
+    repeated = annotations["genetic_id"].is_duplicated().sum()
+    if repeated:
+        # Joined to the .ind, a repeated row would select that person's .geno column twice.
+        n_ids = annotations.filter(annotations["genetic_id"].is_duplicated())["genetic_id"].n_unique()
+        raise ValueError(f"{anno.name}: {n_ids} Genetic IDs appear more than once ({repeated} rows); each must be listed once")
+    chosen, excluded, regions = _choose(ind, annotations, box)
     if chosen.height < 8 * dim_ref:
         raise ValueError(f"{chosen.height} individuals chosen; {dim_ref} components need at least {8 * dim_ref}")
 
@@ -296,17 +343,20 @@ def _choose(ind: pl.DataFrame, anno: pl.DataFrame, box: tuple[float, float, floa
     """The chosen individuals (`row, genetic_id, group, region`, in `.ind` order), the count per
     exclusion reason, and the count per region."""
     lat_min, lat_max, lon_min, lon_max = box
+    flags = {group: group_label_flag(group) for group in ind["group"].unique().to_list()}
     joined = ind.join(anno, on="genetic_id", how="left", maintain_order="left").with_columns(
         pl.struct("political_entity", "longitude")
         .map_elements(_region_of_row, return_dtype=pl.String)
-        .alias("region")
+        .alias("region"),
+        pl.col("group").replace_strict(flags, return_dtype=pl.String).alias("label_flag"),
     )
     rules = [
         pl.col("individual_id").is_not_null(),
         pl.col("date_bp") == 0,
         pl.col("data_type").is_in(DIPLOID_DATA_TYPES),
         pl.col("assessment").is_in(PASSING_ASSESSMENTS),
-        ~(pl.col("group").str.starts_with("Ignore") | pl.col("group").str.contains("-", literal=True)),
+        pl.col("label_flag").fill_null("") != LABEL_FLAGGED,
+        pl.col("label_flag").fill_null("") != LABEL_UNRECOGNISED,
         pl.col("latitude").is_not_null() & pl.col("longitude").is_not_null(),
         pl.col("latitude").is_between(lat_min, lat_max) & pl.col("longitude").is_between(lon_min, lon_max),
         pl.col("region").is_not_null(),
@@ -329,6 +379,13 @@ def _choose(ind: pl.DataFrame, anno: pl.DataFrame, box: tuple[float, float, floa
     )
     tally = Counter(joined["why"].drop_nulls().to_list())
     excluded = {reason: tally.get(reason, 0) for reason in INDIVIDUAL_EXCLUSIONS}
+    unrecognised = Counter(joined.filter(pl.col("why") == LABEL_UNRECOGNISED)["group"].to_list())
+    if unrecognised:
+        logger.warning(
+            "%d individuals left out for a group-label qualifier that is neither a sub-group number nor a known QC mark: %s",
+            sum(unrecognised.values()),
+            ", ".join(f"{group} ({n})" for group, n in sorted(unrecognised.items())),
+        )
     chosen = joined.filter(pl.col("why").is_null()).select("row", "genetic_id", "group", "region")
     regions = dict(sorted(Counter(chosen["region"].to_list()).items()))
     return chosen, excluded, regions

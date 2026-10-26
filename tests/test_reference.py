@@ -11,7 +11,7 @@ import pytest
 
 from just_vcf import ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, normalize, reference_dir, resolve_ref
 from just_vcf.loading import Loaded
-from just_vcf.reference import _span
+from just_vcf.reference import Contig, _span
 from just_vcf.schema import CALLS, FACETS, StrandCheck
 from just_vcf.strand import MAX_FORWARD_MINUS, MIN_HETS, check_strand
 
@@ -263,6 +263,41 @@ def test_soft_masked_and_gzipped_fasta_reads_uppercase(tmp_path: Path) -> None:
     _, calls = frames(resolve_ref(load(vcf(tmp_path, records, contig_lines({"1": 3000}))), s))
     assert calls["ref"].to_list() == [base("1", 7, 3)]
     assert calls["ref_check"].cast(pl.String).to_list() == ["match"]  # VCF REF bases are case-insensitive
+
+
+def test_fetch_returns_uppercase_from_a_soft_masked_fasta(tmp_path: Path) -> None:
+    """`fetch` keeps its "Uppercase" promise over soft-masked (lowercase) bases, N runs included."""
+    masked = {"1": SEQ["1"][:100] + SEQ["1"][100:400].lower() + "n" * 50 + SEQ["1"][450:]}
+    s = ReferenceStore.in_memory()
+    (contig,) = s.contigs(s.add_fasta(write_fasta(tmp_path / "masked.fa", masked)))
+    assert s.fetch(contig, [(90, 110), (380, 460), (0, contig.length)]) == [
+        masked["1"][90:110].upper(),
+        masked["1"][380:460].upper(),
+        masked["1"].upper(),
+    ]
+
+
+class _LowercaseSubstrate:
+    """Stands in for gtars's store under `ReferenceStore`, returning bases as a soft-masked FASTA spells
+    them. gtars uppercases every sequence it stores (its `digest_sequence`: "the original data
+    (uppercased)"), so no real store returns lowercase today; this checks `fetch`'s own guard, which
+    holds whatever store sits underneath."""
+
+    def __init__(self, sequence: str) -> None:
+        self.sequence = sequence
+
+    def set_quiet(self, quiet: bool) -> None:
+        pass
+
+    def get_substrings(self, digest: str, ranges: list[tuple[int, int]]) -> list[str]:
+        return [self.sequence[start:end] for start, end in ranges]
+
+
+def test_fetch_uppercases_whatever_the_store_underneath_returns() -> None:
+    sequence = "ACGTacgtnnNNACGT"
+    s = ReferenceStore(_LowercaseSubstrate(sequence), None)  # type: ignore[arg-type]
+    contig = Contig(name="1", length=len(sequence), md5="", digest="d")
+    assert s.fetch(contig, [(0, 16), (4, 8), (8, 10)]) == ["ACGTACGTNNNNACGT", "ACGT", "NN"]
 
 
 def test_a_fasta_added_twice_is_one_collection_and_the_store_reopens(tmp_path: Path) -> None:
@@ -587,6 +622,23 @@ def test_too_few_rows_infer_nothing(tmp_path: Path) -> None:
 
 GRCH36_CHR1 = 247_249_719
 """NCBI36/hg18 chr1's length (UCSC hg18.chrom.sizes), a domain constant."""
+
+
+def test_a_collection_serving_contig_1_twice_names_no_assembly(tmp_path: Path) -> None:
+    """`chr1` at GRCh37's length, then `1` at GRCh38's (all N, so the file stays small): which length
+    is contig 1's is not known, so the lengths name no assembly, as `contigs_by_chrom` lists both and
+    a caller reads neither. Before, the later sequence overwrote the earlier one and named GRCh38."""
+    lengths = {"GRCh37": 249_250_621, "GRCh38": 248_956_422}
+    fasta = tmp_path / "two_ones.fa.gz"
+    with gzip.open(fasta, "wb", compresslevel=1) as handle:
+        for name, assembly in (("chr1", "GRCh37"), ("1", "GRCh38")):
+            full, rest = divmod(lengths[assembly], 60)
+            handle.write(f">{name}\n".encode() + (b"N" * 60 + b"\n") * full + b"N" * rest + b"\n")
+        handle.write(f">2\n{SEQ['2']}\n".encode())
+    s = ReferenceStore.in_memory()
+    digest = s.add_fasta(fasta)
+    assert [c.name for c in s.contigs_by_chrom(digest)["1"]] == ["chr1", "1"]
+    assert s.assembly_label(digest) is None
 
 
 def test_a_grch36_reference_is_named_by_its_contig_1_and_cannot_vouch_for_mt(tmp_path: Path) -> None:

@@ -27,10 +27,12 @@ from just_vcf.ancestry import (  # noqa: E402
     WEST_EURASIA,
     build_aadr_panel,
     continental_of,
+    group_label_flag,
     infer_ancestry,
     load_pca_panel,
     region_of,
 )
+from just_vcf.ancestry.aadr import _choose  # noqa: E402
 from just_vcf.ancestry.eigenstrat import geno_layout, read_anno, read_genotypes, read_ind, read_snp  # noqa: E402
 from just_vcf.ancestry.pca import panel_paths  # noqa: E402
 from just_vcf.assembly import ASSEMBLY_LENGTHS  # noqa: E402
@@ -121,8 +123,8 @@ class Fixture:
             ("Sg1.SG", "ISg1", "Alpha", "France", "46.0", "2.0", "Shotgun", "Pass", "0", "not diploid data (HumanOrigins or Shotgun.diploid)"),
             ("Ref1.REF", "IRef1", "Chimp", "..", "..", "..", "Reference Genome", "Pass", "0", "not diploid data (HumanOrigins or Shotgun.diploid)"),
             ("Q1.HO", "IQ1", "Alpha", "France", "46.0", "2.0", "HumanOrigins", "Questionable", "0", "assessment not a pass"),
-            ("Fo1.HO", "IFo1", "Alpha-o", "France", "46.0", "2.0", "HumanOrigins", "Pass", "0", "group label flagged (Ignore_ or a -qualifier)"),
-            ("Ig1.HO", "IIg1", "Ignore_Alpha", "France", "46.0", "2.0", "HumanOrigins", "Pass", "0", "group label flagged (Ignore_ or a -qualifier)"),
+            ("Fo1.HO", "IFo1", "Alpha-o", "France", "46.0", "2.0", "HumanOrigins", "Pass", "0", "group label flagged (Ignore_ or a QC qualifier)"),
+            ("Ig1.HO", "IIg1", "Ignore_Alpha", "France", "46.0", "2.0", "HumanOrigins", "Pass", "0", "group label flagged (Ignore_ or a QC qualifier)"),
             ("Nl1.HO", "INl1", "Alpha", "France", "..", "..", "HumanOrigins", "Pass", "0", "no latitude or longitude"),
             ("Far1.HO", "IFar1", "Delta", "Nigeria", "10.0", "2.0", "HumanOrigins", "Pass", "0", "outside the region box"),
             ("Us1.HO", "IUs1", "Alpha", "USA", "40.0", "-20.0", "HumanOrigins", "Pass", "0", "political entity has no ancestry region"),
@@ -273,6 +275,75 @@ def test_the_three_layouts_build_the_same_panel(built: dict) -> None:
     for layout in ("geno", "text"):
         assert frames[layout][0].equals(first[0]), layout
         assert frames[layout][1].equals(first[1]), layout
+
+
+GROUP_LABELS = {
+    # label: the reason rule 5 gives, None where the label is kept. Shapes from AADR v66.p1's `.ind`.
+    "Kumyk": None,
+    "Kumyk-1": None,
+    "Uzbek-2": None,
+    "Hazara_1-1": None,
+    "Italian_North-1": None,
+    "Kumyk-QCremove": "group label flagged (Ignore_ or a QC qualifier)",
+    "Adygei-Dup": "group label flagged (Ignore_ or a QC qualifier)",
+    "French-Discovery": "group label flagged (Ignore_ or a QC qualifier)",
+    "Abazin-o": "group label flagged (Ignore_ or a QC qualifier)",
+    "Kurdish-oPCA": "group label flagged (Ignore_ or a QC qualifier)",
+    "Adygei-oRelative": "group label flagged (Ignore_ or a QC qualifier)",
+    "Greek-olowEEF": "group label flagged (Ignore_ or a QC qualifier)",
+    "North_N-NotPermittedToPublish": "group label flagged (Ignore_ or a QC qualifier)",
+    "Cave_LPleistocene-DontUseHighlyProblematic": "group label flagged (Ignore_ or a QC qualifier)",
+    "Ulgii-1-Dup": "group label flagged (Ignore_ or a QC qualifier)",
+    "Roman-oAfrica-oLevant": "group label flagged (Ignore_ or a QC qualifier)",
+    "Ignore_Kumyk": "group label flagged (Ignore_ or a QC qualifier)",
+    "Ignore_Zoroastrian_PCA_outlier-oPCA": "group label flagged (Ignore_ or a QC qualifier)",
+    "Roopkund-A": "group label qualifier not recognised",
+    "Jewish-lowEastEU": "group label qualifier not recognised",
+    "Kumyk-": "group label qualifier not recognised",
+}
+
+
+def test_rule_5_keeps_numbered_groups_and_excludes_qc_marks() -> None:
+    """A numbered sub-group (`Kumyk-1`) is a group of its own and stays, under its label as written;
+    `Ignore_` and a QC qualifier anywhere after the name exclude; a qualifier that is neither is
+    counted apart, not taken for either."""
+    labels = list(GROUP_LABELS)
+    ind = pl.DataFrame({"genetic_id": [f"g{i}" for i in range(len(labels))], "sex": "U", "group": labels}).with_row_index("row")
+    anno = pl.DataFrame(
+        {
+            "genetic_id": ind["genetic_id"],
+            "individual_id": [f"i{i}" for i in range(len(labels))],
+            "date_bp": 0.0,
+            "group_id": labels,
+            "political_entity": "Russia",
+            "latitude": 43.0,
+            "longitude": 47.0,
+            "data_type": "HumanOrigins",
+            "assessment": "Pass",
+        }
+    )
+    chosen, excluded, _ = _choose(ind, anno, WEST_EURASIA)
+    kept = [label for label, why in GROUP_LABELS.items() if why is None]
+    assert chosen["group"].to_list() == kept
+    expected = dict.fromkeys(INDIVIDUAL_EXCLUSIONS, 0)
+    for why in GROUP_LABELS.values():
+        if why is not None:
+            expected[why] += 1
+    assert excluded == expected
+    assert {label: group_label_flag(label) for label in GROUP_LABELS} == GROUP_LABELS
+
+
+def test_an_annotation_file_listing_one_genetic_id_twice_is_refused(fixture: Fixture, tmp_path: Path) -> None:
+    """Two `.anno` rows for one Genetic ID would select that person's `.geno` column twice; the build
+    refuses, naming how many Genetic IDs repeat, before reading a genotype."""
+    lines = fixture.anno.read_text().splitlines()
+    first_two = [line for line in lines[1:] if line.split("\t")[0] in ("Alpha1.HO", "Beta1.HO")]
+    anno = tmp_path / "doubled.anno"
+    anno.write_text("\n".join([*lines, *first_two]) + "\n")
+    fixture.write_geno("tgeno", Path(f"{fixture.prefix}.geno"))
+    with pytest.raises(ValueError, match=r"2 Genetic IDs appear more than once"):
+        build_aadr_panel(fixture.prefix, anno, tmp_path / "panel", reference=fixture.store(tmp_path), dim_ref=DIM_REF)
+    assert not (tmp_path / "panel").exists()
 
 
 def test_individuals_are_kept_and_excluded_by_the_stated_rules(fixture: Fixture, built: dict) -> None:

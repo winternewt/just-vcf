@@ -20,7 +20,10 @@ The cache (`cache_dir()`) holds six directories of entries:
 - `stats/<key>/`: one `scan_stats` result (`stats.json`, kind `scan_stats`), the counts a VCF load's
   warnings and facet take from a polars-bio pass over the records, so a load run again skips that
   pass (F26). `<key>` digests what the pass depends on: the bytes polars-bio reads, the source, the
-  request, the part, `STATS_VERSION` and the polars and polars-bio versions (`loaders.vcf.stats_key`).
+  request, the header's shape, the part, the reader's built-in definitions (`READER_DEFINITIONS`),
+  `STATS_VERSION`, the polars and polars-bio versions and a digest of the loader's own code
+  (`_STATS_CODE`) (`loaders.vcf.stats_key`). The last four are the entry's version keys, and the
+  sweep retires an entry whose code digest differs as it does one an older `STATS_VERSION` wrote.
 
 Each entry has two files beside it: `<name>.json`, its manifest (`CacheEntry`: kind, version keys,
 the root source's sha256, the facet it holds and the facet it came from, size, created and last
@@ -447,13 +450,20 @@ def _read_generation(path: Path) -> Generation | None:
         return None
 
 
-def sweep_stale(kind: str, current: dict[str, object]) -> CacheClearReport:
+def sweep_stale(kind: str, current: dict[str, object], *, digests: frozenset[str] = frozenset()) -> CacheClearReport:
     """Remove the entries of `kind` an older version than `current` wrote and nothing has used for the
     grace period, logging the bytes freed and what was kept.
 
     Older means no version key ahead of `current` and at least one behind, compared numerically
     (`_older`). An entry a newer version wrote is never removed: two installs of different versions can
     share the platform user cache, and the older one must not remove the newer one's live spills.
+
+    `digests` names keys of `current` that hold a digest (of code, say) rather than a version number.
+    A digest has no order, so an entry whose digest differs is behind unless a numbered key puts it
+    ahead. That can remove an entry a newer install wrote under the same numbered versions; pass a key
+    here only for a kind no frame reads once its step returned, so the cost is a step computed again.
+    `scan_stats` passes its loader code digest (`loaders.vcf.STATS_DIGESTS`): its entries are read
+    under their lock during a load, and a different digest's entry is never read by this code again.
 
     An older entry is removed only when (a) no writer holds its lock (`being_written` otherwise; a
     writer that starts waiting on the lock while the sweep holds it finds the lock file gone and writes
@@ -478,9 +488,9 @@ def sweep_stale(kind: str, current: dict[str, object]) -> CacheClearReport:
 
     def removable(entry: _Entry) -> bool:
         used = entry.last_used()
-        return _stale(entry, kind, stamped) and (used is None or used < cutoff)
+        return _stale(entry, kind, stamped, digests) and (used is None or used < cutoff)
 
-    chosen = [entry for entry in _entries(cache_dir()) if _stale(entry, kind, stamped)]
+    chosen = [entry for entry in _entries(cache_dir()) if _stale(entry, kind, stamped, digests)]
     report = _remove(chosen, dry_run=False, unknown=[], still=removable)
     if report.removed:
         by_kind = Counter(info.kind or "unindexed" for info in report.removed)
@@ -575,14 +585,16 @@ def _version(value: str) -> tuple[int, ...] | None:
     return tuple(int(part) for part in parts) if all(part.isdigit() for part in parts) else None
 
 
-def _older(versions: dict[str, str], current: dict[str, str]) -> bool:
+def _older(versions: dict[str, str], current: dict[str, str], digests: frozenset[str] = frozenset()) -> bool:
     """Whether an entry's version keys put it behind `current`: none ahead, and at least one behind.
 
     Compared numerically, so `0.0.9` is behind `0.0.11`. A key `current` has and the entry lacks is
     behind: the entry was written before the key existed (`load`'s spills before `SPILL_LAYOUT`). A
     key the entry has and `current` lacks, or a value that is not a number, cannot be ordered, so the
     entry may be a newer version's and is not behind. Two installs of different versions share the
-    platform user cache, and an older one must never remove a newer one's live spills.
+    platform user cache, and an older one must never remove a newer one's live spills. A key in
+    `digests` is compared for equality only: a different value is behind (`sweep_stale` says when a
+    caller may ask for that).
     """
     if set(versions) - set(current):
         return False
@@ -590,6 +602,9 @@ def _older(versions: dict[str, str], current: dict[str, str]) -> bool:
     for key, now in current.items():
         if key not in versions:
             behind = True
+            continue
+        if key in digests:
+            behind = behind or versions[key] != now
             continue
         mine, theirs = _version(versions[key]), _version(now)
         if mine is None or theirs is None:
@@ -602,9 +617,9 @@ def _older(versions: dict[str, str], current: dict[str, str]) -> bool:
     return behind
 
 
-def _stale(entry: _Entry, kind: str, current: dict[str, str]) -> bool:
+def _stale(entry: _Entry, kind: str, current: dict[str, str], digests: frozenset[str] = frozenset()) -> bool:
     if entry.manifest is not None:
-        return entry.manifest.kind == kind and _older(entry.manifest.versions, current)
+        return entry.manifest.kind == kind and _older(entry.manifest.versions, current, digests)
     if entry.unreadable or not entry.path.is_dir():
         return False
     if entry.relative.startswith("vcf/"):

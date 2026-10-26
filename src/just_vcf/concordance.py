@@ -39,8 +39,12 @@ and why. Disagreement is kept as rows, never resolved to a winner. The rules are
    within `refdist` of its own (each widened by its CIPOS/CIEND), of similar size (`pctsize`) and
    overlap (`pctovl`); the best-scoring pair is taken first (key `extent`). Genotypes compare as in 3
    and 4. A one-sided SV reads the silent facet's SVs within `refdist` (`other_alleles`), else its
-   absence rule for the `sv` class, so a facet that called no SVs leaves it `unknown`. Breakends are
-   not compared (`breakend`).
+   absence rule for the `sv` class, so a facet that called no SVs leaves it `unknown`.
+7. **Breakends meet by both ends and the join** (RM282), as truvari bench's `bnd_match` matches them
+   (`SvMatching.bnddist`): one contig and positions within reach, the mate's contig (parsed from ALT)
+   and position within reach, and the same one of the four bracket forms (key `breakend`). The unit
+   is the adjacency: a pair of mates written as two records is one row. A single breakend (`.A`)
+   and an ALT that does not parse are counted apart (`single_breakend`, `breakend_unparsed`).
 
 Coordinates: every position column is 1-based (charter 13); `region` takes 1-based closed intervals.
 """
@@ -58,7 +62,7 @@ from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_
 from just_vcf.intervals import covering, nearest_block
 from just_vcf.loading import Loaded
 from just_vcf.reference import PRIMARY, ReferenceMismatchError, ReferenceStore, _store_for
-from just_vcf.schema import CONTIG_RANK, BlockKind, VariantClass, canonical_chrom, canonical_chrom_expr, enum_dtype
+from just_vcf.schema import CONTIG_ALIASES, CONTIG_RANK, BlockKind, VariantClass, canonical_chrom, canonical_chrom_expr, enum_dtype
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +102,9 @@ class PairKey(str, Enum):
     EXTENT = "extent"
     """Two structural-variant alleles of one type whose extents meet under `SvMatching`'s thresholds
     (truvari's matching), each taken once."""
+    BREAKEND = "breakend"
+    """Two breakend adjacencies that meet under truvari's `bnd_match`: both ends within
+    `SvMatching.bnddist` of each other's, on the same contigs, joined the same way; each taken once."""
 
 
 class AbsenceReading(str, Enum):
@@ -168,10 +175,13 @@ genotypes were written with different numbers of haplotypes, False where with th
 either side has no genotype.
 
 The last seven columns are a structural-variant allele's, null on any other: `sv_kind` is the type it
-was matched by; on a pair met by extent, `b_alt` is `b`'s ALT as written (`<DUP>` beside `a`'s
-`<DUP:TANDEM>`), `size_similarity` and `reciprocal_overlap` are truvari's measures of the two
-extents, and `ci_needed` is True where the two met only once their confidence intervals widened them;
-`a_end_pos` and `b_end_pos` are each stating side's extent."""
+was matched by (`BND` for a breakend); on a pair met by extent or as breakends, `b_alt` is `b`'s ALT
+as written (`<DUP>` beside `a`'s `<DUP:TANDEM>`), `size_similarity` and `reciprocal_overlap` are
+truvari's measures of the two extents (null for breakends, which have none), and `ci_needed` is True
+where the two met only once their confidence intervals widened them; `a_end_pos` and `b_end_pos` are
+each stating side's extent (a breakend's is its own position). A breakend row is one adjacency: where
+a facet wrote it as two mate records, the row shows the record of the pair that met (both on
+`chrom`), else the one at the adjacency's first end in canonical order."""
 
 SUMMARY = pl.Schema(
     {
@@ -188,9 +198,22 @@ SUMMARY = pl.Schema(
 )
 
 EXCLUDED_REASONS: frozenset[str] = frozenset(
-    {"unspecified", "spanning_deletion", "not_a_variant", "breakend", "not_sequence", "ref_unread", "alts_unread", "contig_not_shared"}
+    {
+        "unspecified",
+        "spanning_deletion",
+        "not_a_variant",
+        "single_breakend",
+        "breakend_unparsed",
+        "not_sequence",
+        "ref_unread",
+        "alts_unread",
+        "contig_not_shared",
+    }
 )
-"""Why an allele was left out of the comparison. An open vocabulary."""
+"""Why an allele was left out of the comparison. An open vocabulary. `single_breakend` is a breakend
+with no mate (`.A`, `A.`), which truvari leaves out by default (`no_single_bnd`); `breakend_unparsed`
+an ALT with brackets that is none of VCF's four breakend forms (no `contig:position`, brackets that
+do not pair). `contig_not_shared` covers a breakend whose mate lies on such a contig too."""
 
 _MAX_GENOTYPE_ALLELES = 64
 """The largest allele list whose diploid genotype order the graded comparison enumerates."""
@@ -200,7 +223,8 @@ class SvMatching(BaseModel):
     """How `concordance` matches structural-variant alleles by type and extent (docs/SCHEMA.md,
     "Concordance"). The names and defaults are truvari bench's (truvari 5.5, `VariantParams.DEFAULTS`;
     its `VariantRecord.var_match` is the rule): `refdist` bases between the two extents, `pctsize` the
-    least size similarity, `pctovl` the least reciprocal overlap, `typeignore` to pair across types.
+    least size similarity, `pctovl` the least reciprocal overlap, `typeignore` to pair across types,
+    `bnddist` the reach of a breakend's ends (its `VariantRecord.bnd_match`).
     truvari's `pctseq` has no counterpart: no symbolic allele carries its sequence in the frame, as with
     truvari's `--pctseq 0`."""
 
@@ -210,6 +234,11 @@ class SvMatching(BaseModel):
     pctsize: float = Field(0.7, ge=0.0, le=1.0)
     pctovl: float = Field(0.0, ge=0.0, le=1.0)
     typeignore: bool = False
+    bnddist: int = Field(100, ge=0)
+    """truvari's `--bnddist`, for breakends: each one's position, and its mate's, is widened by this
+    many bases on either side and the two windows must overlap strictly, so two ends meet when they
+    lie less than `2 * bnddist` apart (plus each record's interval). At 0 only an interval can make
+    two meet, as in truvari."""
 
 
 class Concordance(BaseModel):
@@ -271,8 +300,11 @@ def concordance(
     side_a = _alleles(a.calls, shared, region, excluded, "a")
     side_b = _alleles(b.calls, shared, region, excluded, "b")
     is_sv = pl.col("variant_class") == VariantClass.SV.value
-    sv_a, sv_b = side_a.filter(is_sv), side_b.filter(is_sv)
-    side_a, side_b = (side.filter(~is_sv).drop(_SV_INPUTS) for side in (side_a, side_b))
+    is_bnd = is_sv & pl.col("_form").is_not_null()
+    bnd_a, bnd_b = side_a.filter(is_bnd), side_b.filter(is_bnd)
+    sv_a, sv_b = (side.filter(is_sv & ~is_bnd).drop(_BND_INPUTS) for side in (side_a, side_b))
+    side_a, side_b = (side.filter(~is_sv).drop(*_SV_INPUTS, *_BND_INPUTS) for side in (side_a, side_b))
+    params = sv or SvMatching()
 
     pairs = _pair(side_a, side_b, warnings)
     paired_a = pairs.select("_a_row", "_a_k").unique()
@@ -284,7 +316,9 @@ def concordance(
 
     pieces = [_two_sided(pairs, warnings) if pairs.height else None, alone_a, alone_b]
     if sv_a.height or sv_b.height:
-        pieces += _sv_sites(sv_a, sv_b, (a, fa), (b, fb), sv or SvMatching(), warnings)
+        pieces += _sv_sites(sv_a, sv_b, (a, fa), (b, fb), params, warnings)
+    if bnd_a.height or bnd_b.height:
+        pieces += _bnd_sites(bnd_a, bnd_b, (a, fa), (b, fb), params, warnings)
     present = [_conform(piece) for piece in pieces if piece is not None]
     sites = pl.concat(present, how="vertical") if present else pl.DataFrame(schema={**SITES, **_ROWS})
     sites = _ordered(sites).select(SITES.names())
@@ -360,6 +394,7 @@ def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame 
             variant_class_expr(pl.col("_ref"), pl.col("alt")).alias("variant_class"),
         )
         .drop("ref", "source_ref", "vrs_allele_ids")
+        .with_columns(_breakend_parts(pl.col("alt")))
         .collect()
     )
     reason = (
@@ -369,8 +404,10 @@ def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame 
         .then(pl.lit("spanning_deletion"))
         .when(pl.col("alt").is_in(list(NOT_A_VARIANT)))
         .then(pl.lit("not_a_variant"))
-        .when((pl.col("variant_class") == VariantClass.SV.value) & ~pl.col("alt").str.starts_with("<"))
-        .then(pl.lit("breakend"))
+        .when((pl.col("variant_class") == VariantClass.SV.value) & pl.col("alt").str.contains(_SINGLE_BREAKEND))
+        .then(pl.lit("single_breakend"))
+        .when((pl.col("variant_class") == VariantClass.SV.value) & ~pl.col("alt").str.starts_with("<") & pl.col("_form").is_null())
+        .then(pl.lit("breakend_unparsed"))
         .when(pl.col("variant_class") == VariantClass.SV.value)
         .then(None)
         .when(pl.col("_ref").is_null())
@@ -380,8 +417,9 @@ def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame 
     )
     tagged = exploded.with_columns(reason.alias("_excluded"))
     if shared is not None:
+        elsewhere = ~pl.col("chrom").is_in(sorted(shared)) | (pl.col("_mate_chrom").is_not_null() & ~pl.col("_mate_chrom").is_in(sorted(shared)))
         tagged = tagged.with_columns(
-            pl.when(pl.col("_excluded").is_null() & ~pl.col("chrom").is_in(sorted(shared))).then(pl.lit("contig_not_shared")).otherwise(pl.col("_excluded")).alias("_excluded")
+            pl.when(pl.col("_excluded").is_null() & elsewhere).then(pl.lit("contig_not_shared")).otherwise(pl.col("_excluded")).alias("_excluded")
         )
     for reason_name, count in tagged.group_by("_excluded").len().drop_nulls("_excluded").iter_rows():
         excluded[(side, reason_name)] += count
@@ -879,16 +917,24 @@ def _pick_single(candidates: pl.DataFrame) -> pl.DataFrame:
     )
     order = ["_score", "_start", "_end", "_a_row", "_a_k", "_b_row", "_b_k"]
     passing = passing.sort(order, descending=[True, False, False, False, False, False, False])
-    used_a: set[tuple[int, int]] = set()
-    used_b: set[tuple[int, int]] = set()
+    return _take_once(passing, ("_a_row", "_a_k"), ("_b_row", "_b_k")).drop("_score", "_start", "_end")
+
+
+def _take_once(ordered: pl.DataFrame, a_key: tuple[str, ...], b_key: tuple[str, ...]) -> pl.DataFrame:
+    """The rows of `ordered` (best first) taken greedily, each `a_key` and each `b_key` at most once:
+    truvari's `pick_single_matches`."""
+    used_a: set[tuple] = set()
+    used_b: set[tuple] = set()
     keep = []
-    for index, (ar, ak, br, bk) in enumerate(passing.select("_a_row", "_a_k", "_b_row", "_b_k").iter_rows()):
-        if (ar, ak) in used_a or (br, bk) in used_b:
+    width = len(a_key)
+    for index, row in enumerate(ordered.select(*a_key, *b_key).iter_rows()):
+        ka, kb = row[:width], row[width:]
+        if ka in used_a or kb in used_b:
             continue
-        used_a.add((ar, ak))
-        used_b.add((br, bk))
+        used_a.add(ka)
+        used_b.add(kb)
         keep.append(index)
-    return passing[keep].drop("_score", "_start", "_end")
+    return ordered[keep]
 
 
 def _sv_sites(
@@ -900,54 +946,63 @@ def _sv_sites(
     pairs = _pick_single(candidates)
     pieces = []
     if pairs.height:
-        pairs = pairs.with_row_index("_pair")
-        pairs, ra = _read(pairs, "a_gt_alleles", "_a_ref", "a_alt", "a", _another_allele)
-        pairs, rb = _read(pairs, "b_gt_alleles", "_b_ref", "b_alt", "b", _another_allele)
-        graded = _graded(pairs, _another_allele)
         unsized = pairs.filter(pl.col("size_similarity").is_null()).height
         if unsized:
             warnings.append(
                 f"{unsized} SV pairs met without a size: the frame keeps no length for their type (an <INS> has no SVLEN), so size similarity was not checked"
             )
-        pieces.append(
-            pairs.join(graded, on="_pair", how="left").with_columns(
-                pl.col("a_chrom").alias("chrom"),
-                pl.col("a_pos").alias("pos"),
-                pl.col("_a_ref").alias("ref"),
-                pl.col("a_alt").alias("alt"),
-                pl.col("a_variant_class").alias("variant_class"),
-                pl.lit(PairKey.EXTENT.value).alias("key"),
-                _agreement(ra, rb).alias("agreement"),
-                _ploidy_differs(ra, rb).alias("ploidy_differs"),
-                pl.coalesce("basis", pl.lit(ComparisonBasis.HARD.value)).alias("basis"),
-                pl.when((pl.col(ra[1]) == 0) & (pl.col(ra[2]) == 0)).then(pl.col(ra[0])).alias("a_copies"),
-                pl.when((pl.col(rb[1]) == 0) & (pl.col(rb[2]) == 0)).then(pl.col(rb[0])).alias("b_copies"),
-                pl.col("_a_kind").alias("sv_kind"),
-            )
-        )
+        pieces.append(_sv_pair_rows(pairs, PairKey.EXTENT))
     for side, other, own in (("a", b, side_a), ("b", a, side_b)):
         taken = pairs.select(f"_{side}_row", f"_{side}_k")
         rest = own.join(taken, on=[f"_{side}_row", f"_{side}_k"], how="anti")
         if rest.height:
             near = candidates.select(f"_{side}_row", f"_{side}_k").unique()
-            pieces.append(_sv_one_sided(rest, near, other, side, params, warnings))
+            pieces.append(_sv_one_sided(rest, near, other, side, warnings))
     return pieces
 
 
-def _sv_one_sided(rest: pl.DataFrame, near: pl.DataFrame, other: tuple[Loaded, Mapping], side: str, params: SvMatching, warnings: list[str]) -> pl.DataFrame:
+def _sv_pair_rows(pairs: pl.DataFrame, key: PairKey) -> pl.DataFrame:
+    """Two-sided structural-variant pairs (side columns as `_sv_side` names them) with their
+    agreement, copies and graded `p_same`, each side's genotype read for its own ALT."""
+    pairs = pairs.with_row_index("_pair")
+    pairs, ra = _read(pairs, "a_gt_alleles", "_a_ref", "a_alt", "a", _another_allele)
+    pairs, rb = _read(pairs, "b_gt_alleles", "_b_ref", "b_alt", "b", _another_allele)
+    graded = _graded(pairs, _another_allele)
+    return pairs.join(graded, on="_pair", how="left").with_columns(
+        pl.col("a_chrom").alias("chrom"),
+        pl.col("a_pos").alias("pos"),
+        pl.col("_a_ref").alias("ref"),
+        pl.col("a_alt").alias("alt"),
+        pl.col("a_variant_class").alias("variant_class"),
+        pl.lit(key.value).alias("key"),
+        _agreement(ra, rb).alias("agreement"),
+        _ploidy_differs(ra, rb).alias("ploidy_differs"),
+        pl.coalesce("basis", pl.lit(ComparisonBasis.HARD.value)).alias("basis"),
+        pl.when((pl.col(ra[1]) == 0) & (pl.col(ra[2]) == 0)).then(pl.col(ra[0])).alias("a_copies"),
+        pl.when((pl.col(rb[1]) == 0) & (pl.col(rb[2]) == 0)).then(pl.col(rb[0])).alias("b_copies"),
+        pl.col("_a_kind").alias("sv_kind"),
+    )
+
+
+def _sv_one_sided(
+    rest: pl.DataFrame, near: pl.DataFrame, other: tuple[Loaded, Mapping], side: str, warnings: list[str], *, what: str = "SV alleles", mate: str | None = None
+) -> pl.DataFrame:
     """SV alleles of `side` the other facet matched to none of its own, with what its silence means:
-    SVs of its own within `refdist` (`other_alleles`), else its absence rule for the `sv` class
-    (`absence_is_reference`). Its blocks are not read: a block states the bases a small-variant caller
-    saw, and an SV's anchor base lies outside the event."""
+    SVs of its own near it (`near`'s rows: within `refdist` for a symbolic allele, within a breakend's
+    position window for a breakend; `other_alleles`), else its absence rule for the `sv` class
+    (`absence_is_reference`), on a contig it declared (and, for a breakend, the `mate` column's contig
+    too). Its blocks are not read: a block states the bases a small-variant caller saw, and an SV's
+    anchor base lies outside the event."""
     other_loaded, other_facet = other
     other_side = "b" if side == "a" else "a"
-    declared = _declared_contigs(other_loaded, other_facet)
+    declared = sorted(_declared_contigs(other_loaded, other_facet))
     reference = absence_is_reference(other_facet, VariantClass.SV) is True
     marked = rest.join(near.with_columns(pl.lit(True).alias("_near")), on=[f"_{side}_row", f"_{side}_k"], how="left")
+    seen = pl.col(f"{side}_chrom").is_in(declared) & (pl.col(mate).is_in(declared) if mate else pl.lit(True))
     absence = (
         pl.when(pl.col("_near").fill_null(False))
         .then(pl.lit(AbsenceReading.OTHER_ALLELES.value))
-        .when(pl.lit(reference) & pl.col(f"{side}_chrom").is_in(sorted(declared)))
+        .when(pl.lit(reference) & seen)
         .then(pl.lit(AbsenceReading.REFERENCE.value))
         .otherwise(pl.lit(AbsenceReading.UNKNOWN.value))
     )
@@ -955,7 +1010,7 @@ def _sv_one_sided(rest: pl.DataFrame, near: pl.DataFrame, other: tuple[Loaded, M
     unknown = marked.filter(pl.col("absence") == AbsenceReading.UNKNOWN.value).height
     if unknown:
         why = "its absence is read as reference for SVs only on a whole-genome callset that called SVs and was not filtered"
-        warnings.append(f"{unknown} SV alleles of facet {side} meet no SV of facet {other_side} and its silence there is unknown: {why}")
+        warnings.append(f"{unknown} {what} of facet {side} meet no SV of facet {other_side} and its silence there is unknown: {why}")
     marked, own = _read(marked, f"{side}_gt_alleles", f"_{side}_ref", f"{side}_alt", side, _another_allele)
     return marked.with_columns(
         pl.col(f"{side}_chrom").alias("chrom"),
@@ -968,6 +1023,218 @@ def _sv_one_sided(rest: pl.DataFrame, near: pl.DataFrame, other: tuple[Loaded, M
         pl.col(f"_{side}_kind").alias("sv_kind"),
         pl.lit(None, dtype=pl.String).alias("b_alt"),
     )
+
+
+_BND_INPUTS = ("_form", "_mate_chrom", "_mate_pos")
+"""What `_alleles` parses from a breakend's ALT (`_breakend_parts`), null on any other allele."""
+
+BREAKEND_FORMS: tuple[str, ...] = ("t[p[", "t]p]", "]p]t", "[p[t")
+"""VCF 4.2-4.5's four breakend ALT forms (`t` the bases at POS, `p` the mate's `contig:position`), the
+values of `_form`. They are truvari's four `(direction, strand)` pairs (`bnd_direction_strand`):
+`t[p[` left/direct, `[p[t` left/complement, `t]p]` right/direct, `]p]t` right/complement."""
+
+_SINGLE_BREAKEND = r"^\.[A-Za-z]+$|^[A-Za-z]+\.$"
+"""A single breakend (`.A`, `A.`): a join to sequence the file does not place."""
+
+_BASES_FIRST = r"^[A-Za-z]+([\[\]])([^\[\]]+):(\d+)([\[\]])$"
+_BASES_LAST = r"^([\[\]])([^\[\]]+):(\d+)([\[\]])[A-Za-z]+$"
+"""A breakend ALT with its bases before (`t[p[`, `t]p]`) or after (`]p]t`, `[p[t`) the mate. The
+contig runs to the last `:` before the digits, so a name holding `:` (`HLA-A*01:01:01:01`) reads;
+truvari's `[^\\[\\]:]+` would refuse it."""
+
+
+def _breakend_parts(alt: pl.Expr) -> list[pl.Expr]:
+    """`_form`, `_mate_chrom` (canonical) and `_mate_pos` of a breakend ALT, all null where the ALT is
+    none of the four forms: brackets that do not pair, or no `contig:position` between them."""
+    first, last = alt.str.extract_groups(_BASES_FIRST), alt.str.extract_groups(_BASES_LAST)
+    f_open, f_close = first.struct.field("1"), first.struct.field("4")
+    l_open, l_close = last.struct.field("1"), last.struct.field("4")
+    position = pl.coalesce(first.struct.field("3"), last.struct.field("3")).cast(pl.Int64, strict=False)
+    form = (
+        pl.when(position.is_null())
+        .then(None)
+        .when(f_open.is_not_null() & (f_open == f_close))
+        .then(pl.when(f_open == "[").then(pl.lit("t[p[")).otherwise(pl.lit("t]p]")))
+        .when(l_open.is_not_null() & (l_open == l_close))
+        .then(pl.when(l_open == "[").then(pl.lit("[p[t")).otherwise(pl.lit("]p]t")))
+    )
+    contig = pl.coalesce(first.struct.field("2"), last.struct.field("2")).replace(CONTIG_ALIASES)
+    return [form.alias("_form"), pl.when(form.is_not_null()).then(contig).alias("_mate_chrom"), pl.when(form.is_not_null()).then(position).alias("_mate_pos")]
+
+
+def _not_after(left: list[pl.Expr], right: list[pl.Expr]) -> pl.Expr:
+    """Whether the tuple `left` sorts before `right` or equals it, element by element."""
+    result = pl.lit(True)
+    for lhs, rhs in reversed(list(zip(left, right, strict=True))):
+        result = (lhs < rhs) | ((lhs == rhs) & result)
+    return result
+
+
+def _bnd_side(side: pl.DataFrame, name: str, bnddist: int, warnings: list[str]) -> pl.DataFrame:
+    """One facet's breakend records with the adjacency each states, named for side `name` as
+    `_sv_side` names its columns.
+
+    An adjacency is two ends, each a `(contig, position, side)`: the side of the position whose
+    sequence takes part in the join. A record's own end keeps the sequence left of POS in `t[p[` and
+    `t]p]`, right of it in `]p]t` and `[p[t`; its mate's end keeps the sequence right of `p` in `t[p[`
+    and `[p[t`, left of it in the other two. A mate record states the same two ends from the other
+    side (VCF's `t[p[` beside `]p]t`, `t]p]` beside `t]p]`, `[p[t` beside `[p[t`), so records stating
+    one pair of ends are one adjacency (`_adj`), whether or not the file names its mate: the frame
+    keeps no MATEID or EVENT (`dropped_fields`), and neither is needed to find it. Mates whose ends
+    differ by no more than their position intervals are one adjacency too (`_fold_mates`). `_first`
+    marks a record standing at its adjacency's first end in canonical order (contig rank, contig,
+    position, side). An EVENT of several adjacencies (an inversion's two) is several rows.
+
+    The windows are truvari's `bnd_match` `bounds`: `pos +/- bnddist`, widened by `|CIPOS|` for the
+    record's own position and `|CIEND|` for its mate's, both read at index 1 (the upper offset):
+    `bounds` sets `key = 'CI' + key` before `idx = 0 if key == 'POS' else 1`, so the test never
+    holds. No CIEND widens the mate by nothing; truvari does not fall back to CIPOS there."""
+    hi = pl.col("_k").cast(pl.Int64) * 2 + 1
+    ci = pl.col("cipos").list.get(hi, null_on_oob=True).cast(pl.Int64).abs().fill_null(0)
+    ci_mate = pl.col("ciend").list.get(hi, null_on_oob=True).cast(pl.Int64).abs().fill_null(0)
+    rank = {column: pl.col(column).replace_strict(CONTIG_RANK, default=len(CONTIG_RANK), return_dtype=pl.UInt16) for column in ("chrom", "_mate_chrom")}
+    frame = side.with_columns(
+        pl.col("pos").cast(pl.Int64).alias("_p"),
+        pl.col("_mate_pos").alias("_mp"),
+        pl.when(pl.col("_form").is_in(["t[p[", "t]p]"])).then(pl.lit("L")).otherwise(pl.lit("R")).alias("_side"),
+        pl.when(pl.col("_form").is_in(["t[p[", "[p[t"])).then(pl.lit("R")).otherwise(pl.lit("L")).alias("_mate_side"),
+        ci.alias("_ci"),
+        ci_mate.alias("_ci_mate"),
+        pl.lit("BND").alias("_kind"),
+    )
+    own = [rank["chrom"], pl.col("chrom"), pl.col("_p"), pl.col("_side")]
+    mate = [rank["_mate_chrom"], pl.col("_mate_chrom"), pl.col("_mp"), pl.col("_mate_side")]
+    frame = frame.with_columns(
+        _not_after(own, mate).alias("_first"),
+        ((pl.col("chrom") == pl.col("_mate_chrom")) & (pl.col("_p") == pl.col("_mp")) & (pl.col("_side") == pl.col("_mate_side"))).alias("_self"),
+    )
+    ends = {"_e1c": ("chrom", "_mate_chrom"), "_e1p": ("_p", "_mp"), "_e1s": ("_side", "_mate_side")}
+    frame = frame.with_columns(
+        *[pl.when(pl.col("_first")).then(pl.col(mine)).otherwise(pl.col(theirs)).alias(e) for e, (mine, theirs) in ends.items()],
+        *[pl.when(pl.col("_first")).then(pl.col(theirs)).otherwise(pl.col(mine)).alias(e.replace("1", "2")) for e, (mine, theirs) in ends.items()],
+    )
+    keys = ["_e1c", "_e1p", "_e1s", "_e2c", "_e2p", "_e2s"]
+    ids = frame.select(keys).unique().sort(keys).with_row_index("_adj")
+    frame = _fold_mates(frame.join(ids, on=keys, how="left"), name, warnings)
+    frame = frame.sort(["_adj", "_first", "_row", "_k"], descending=[False, True, False, False])
+    frame, read = _read(frame, "gt_alleles", "_ref", "alt", "m", _another_allele)
+    frame = frame.with_columns(
+        (pl.int_range(pl.len()).over("_adj") == 0).alias("_rep"),
+        # Records beyond one per end; an adjacency joining an end to itself (a foldback, `t]p]` at its
+        # own position) has two mates standing at one end. Two foldbacks folded within their
+        # intervals stand at two ends already, hence the floor at 0.
+        pl.max_horizontal(
+            pl.len().over("_adj").cast(pl.Int64)
+            - pl.struct("chrom", "_p", "_side").n_unique().over("_adj").cast(pl.Int64)
+            - (pl.col("_self").all().over("_adj") & (pl.len().over("_adj") > 1)).cast(pl.Int64),
+            pl.lit(0, dtype=pl.Int64),
+        ).alias("_repeats"),
+        (pl.struct(*read).n_unique().over("_adj") > 1).alias("_split"),
+    ).drop(*read)
+    repeats = int(frame.filter(pl.col("_rep"))["_repeats"].sum())
+    if repeats:
+        warnings.append(f"{repeats} breakend records of facet {name} repeat an end of an adjacency another of its records states; each adjacency is counted once")
+    split = frame.filter(pl.col("_rep") & pl.col("_split")).height
+    if split:
+        warnings.append(
+            f"{split} breakend adjacencies of facet {name} whose two mate records state different genotypes; the record that met, else the one at the first end, is read"
+        )
+    frame = frame.drop("_repeats", "_split").with_columns(
+        (pl.col("_p") - bnddist - pl.col("_ci")).alias("_lo"),
+        (pl.col("_p") + bnddist + pl.col("_ci")).alias("_hi"),
+        (pl.col("_mp") - bnddist - pl.col("_ci_mate")).alias("_mlo"),
+        (pl.col("_mp") + bnddist + pl.col("_ci_mate")).alias("_mhi"),
+        pl.concat_str("_mate_chrom", "_form", separator="\t").alias("_join"),
+    )
+    return frame.rename({column: f"_{name}_{column.lstrip('_')}" if column.startswith("_") else f"{name}_{column}" for column in frame.columns})
+
+
+def _fold_mates(frame: pl.DataFrame, name: str, warnings: list[str]) -> pl.DataFrame:
+    """`frame` (`_bnd_side`'s, with `_adj` from the exact ends) with two adjacencies made one where
+    their records are mates stated within each other's position interval: each one's mate contig and
+    side are the other's own, and its mate position lies in the other's `[POS + CIPOS[0], POS +
+    CIPOS[1]]` (widened to hold POS). Manta writes a mate's POS at one end of the junction's
+    microhomology, which CIPOS spans, and the ALT pointing at it from the other record at the other
+    end, so such mates state their ends a few bases apart. Only a one-to-one pairing folds; an
+    adjacency that could be the mate of several stays alone and is counted in a warning."""
+    k2 = pl.col("_k").cast(pl.Int64) * 2
+    lo = pl.col("cipos").list.get(k2, null_on_oob=True).cast(pl.Int64).fill_null(0)
+    hi = pl.col("cipos").list.get(k2 + 1, null_on_oob=True).cast(pl.Int64).fill_null(0)
+    records = frame.select(
+        "_adj",
+        "chrom",
+        "_side",
+        "_mate_chrom",
+        "_mate_side",
+        "_mp",
+        (pl.col("_p") + pl.min_horizontal(lo, pl.lit(0))).alias("_from"),
+        (pl.col("_p") + pl.max_horizontal(hi, pl.lit(0))).alias("_to"),
+    )
+    mates = records.rename({column: f"{column}_m" for column in records.columns})
+    links = (
+        records.join(mates, left_on=["_mate_chrom", "_mate_side", "chrom", "_side"], right_on=["chrom_m", "_side_m", "_mate_chrom_m", "_mate_side_m"])
+        .filter(
+            (pl.col("_adj") < pl.col("_adj_m"))
+            & pl.col("_mp").is_between(pl.col("_from_m"), pl.col("_to_m"))
+            & pl.col("_mp_m").is_between(pl.col("_from"), pl.col("_to"))
+        )
+        .select("_adj", "_adj_m")
+        .unique()
+    )
+    if links.is_empty():
+        return frame
+    degree = pl.concat([links.select(pl.col("_adj").alias("_x")), links.select(pl.col("_adj_m").alias("_x"))]).group_by("_x").len()
+    single = degree.filter(pl.col("len") == 1)["_x"].to_list()
+    several = degree.filter(pl.col("len") > 1).height
+    if several:
+        warnings.append(
+            f"{several} breakend adjacencies of facet {name} could each be the mate of several others within their position intervals; not folded, each counted alone"
+        )
+    folded = links.filter(pl.col("_adj").is_in(single) & pl.col("_adj_m").is_in(single))
+    into = folded.select(pl.col("_adj_m").alias("_adj"), pl.col("_adj").alias("_into"))
+    return frame.join(into, on="_adj", how="left").with_columns(pl.coalesce("_into", "_adj").alias("_adj")).drop("_into")
+
+
+def _bnd_sites(
+    bnd_a: pl.DataFrame, bnd_b: pl.DataFrame, a: tuple[Loaded, Mapping], b: tuple[Loaded, Mapping], params: SvMatching, warnings: list[str]
+) -> list[pl.DataFrame]:
+    """The breakend adjacencies' rows of `sites`: pairs met under truvari's `bnd_match` (truvari 5.5,
+    `truvari/variant_record.py`, `VariantRecord.bnd_match`), then each side's adjacencies left alone.
+
+    Two records meet when they lie on one contig with their position windows overlapping strictly
+    (truvari's `overlaps`: `max(starts) < min(ends)`), their mates on one contig (parsed from ALT,
+    canonical names here where truvari compares them as written) with those windows overlapping too,
+    and their ALTs in the same form (truvari's `bnd_direction_strand`). Two adjacencies meet when any
+    of their records do (truvari compares records; a pair of mates is two of them); the record pair
+    shown is the best by truvari's score, `max(0, 1 - mean(|start|, |end| distance) / (2 * bnddist))`
+    times 100 (0 at `bnddist` 0), then the nearer start and end, as its `MatchResult` orders them.
+    Each adjacency is then taken at most once (`--pick single`), best first, ties to each side's
+    record order."""
+    d = params.bnddist
+    side_a, side_b = _bnd_side(bnd_a, "a", d, warnings), _bnd_side(bnd_b, "b", d, warnings)
+    near = side_a.join_where(side_b, pl.col("a_chrom") == pl.col("b_chrom"), pl.col("_a_lo") < pl.col("_b_hi"), pl.col("_b_lo") < pl.col("_a_hi"))
+    near = near.filter(pl.max_horizontal("_a_lo", "_b_lo") < pl.min_horizontal("_a_hi", "_b_hi"))
+    met = near.filter((pl.col("_a_join") == pl.col("_b_join")) & (pl.max_horizontal("_a_mlo", "_b_mlo") < pl.min_horizontal("_a_mhi", "_b_mhi")))
+    start, end = (pl.col("_a_p") - pl.col("_b_p")).abs(), (pl.col("_a_mp") - pl.col("_b_mp")).abs()
+    score = pl.max_horizontal(pl.lit(0.0), (1 - ((start + end) / 2) / (2 * d)) * 100) if d > 0 else pl.lit(0.0)
+    met = met.with_columns(
+        score.alias("_score"),
+        start.alias("_start"),
+        end.alias("_end"),
+        ((start < 2 * d) & (end < 2 * d)).alias("_stated"),
+    )
+    order = ["_score", "_start", "_end", "_a_first", "_b_first", "_a_row", "_a_k", "_b_row", "_b_k"]
+    met = met.sort(order, descending=[True, False, False, True, True, False, False, False, False])
+    best = met.with_columns(pl.col("_stated").any().over("_a_adj", "_b_adj").alias("_any_stated")).unique(["_a_adj", "_b_adj"], keep="first", maintain_order=True)
+    pairs = _take_once(best, ("_a_adj",), ("_b_adj",)).with_columns((~pl.col("_any_stated")).alias("ci_needed"))
+    pieces = [_sv_pair_rows(pairs, PairKey.BREAKEND)] if pairs.height else []
+    for side, other, own in (("a", b, side_a), ("b", a, side_b)):
+        adj = f"_{side}_adj"
+        rest = own.filter(pl.col(f"_{side}_rep")).join(pairs.select(adj), on=adj, how="anti")
+        if rest.height:
+            close = own.filter(pl.col(f"_{side}_rep")).join(near.select(adj).unique(), on=adj, how="semi").select(f"_{side}_row", f"_{side}_k")
+            pieces.append(_sv_one_sided(rest, close, other, side, warnings, what="breakend adjacencies", mate=f"_{side}_mate_chrom"))
+    return pieces
 
 
 _ROWS = pl.Schema({"_a_row": pl.UInt32, "_b_row": pl.UInt32})

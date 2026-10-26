@@ -207,7 +207,7 @@ Forward/Design alleles (its manifest, HumanOmni2.5-8v1_A, is not on disk); exact
 real data (no PGP-HMS export's chip has its own manifest on disk).
 
 ## RM282 — Structural-variant facets
-Severity: low · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; loading and the `write_vcf` round trip shipped 2026-10-23, merge 04c5db3, schema 0.0.14; `concordance` compares symbolic SV alleles by type and extent under truvari's matching, 2026-10-26, on a builder branch waiting for the lead's merge. Left: breakends in `concordance` (counted as `breakend`; truvari's `bnddist` matching is the reference), buildable now; whether a copy-number allele (`<CN0>`, `<CN3>`) should meet a `<DEL>` or `<DUP>` as a loss or a gain, the person's call (below); a check against a DELLY or Sniffles file waits for one (none on disk, synthetic tests only); minting VRS 2 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` waits on desk #89, meanwhile `sv_no_vrs_model`) · Owner: lead
+Severity: low · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; loading and the `write_vcf` round trip shipped 2026-10-23, merge 04c5db3, schema 0.0.14; `concordance` compares symbolic SV alleles by type and extent under truvari's matching, 2026-10-26, on a builder branch waiting for the lead's merge; breakends in `concordance` by truvari's `bnd_match`, one row per adjacency, 2026-10-26, on a builder branch waiting for the lead's merge. Left: whether a symbolic `<DEL>`/`<DUP>`/`<INV>` should meet the breakends another caller writes for it (truvari's default `decompose`), a judgement not made (below); whether a copy-number allele (`<CN0>`, `<CN3>`) should meet a `<DEL>` or `<DUP>` as a loss or a gain, the person's call (below); a check against a DELLY or Sniffles file waits for one (none on disk, synthetic tests only); minting VRS 2 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` waits on desk #89, meanwhile `sv_no_vrs_model`) · Owner: lead
 
 The person chose load with ids withheld (E11): SV calls load as rows with type and `end_pos`, VRS ids withheld with a reason (VRS 2.x has no SV model; charter: never a non-conforming GA4GH value).
 
@@ -230,8 +230,24 @@ disagreement. The only other public
 SV facet (docs/LIVE_SAMPLES.md) is hu6ABACE's one DRAGEN `.cnv.` file, so no two SV callers of one
 person were available to compare.
 
-**Left:** breakends (above); no DELLY or Sniffles file exists to check against (synthetic tests
-only); whether a copy-number allele should meet a deletion or duplication as a loss or a gain (it
+**Built 2026-10-26, breakends:** `concordance` meets breakends as truvari 5.5's `bnd_match` does
+(`SvMatching.bnddist` 100; both positions, the mate's contig and the bracket form; docs/SCHEMA.md,
+"Breakends", lists where it differs and why). The unit is the adjacency, so a pair of mates is one
+row; mates are found by the ends they state, Manta's within each other's CIPOS (F28), since the frame
+carries no MATEID. Single breakends and ALTs that do not parse are counted apart. Checked on the two
+PGP-HMS Manta files (aggregates): hu416394's 3,350 breakend records are 1,675 adjacencies and
+hu1C1368's 1,228 are 614 (DRAGEN's SV caller, Manta's GenerateSVCandidates 1.5.1, a file this entry
+had missed), every one meeting itself; hu1C1368's against itself with half its records dropped meets
+exactly the 467 adjacencies that kept one. No person has two
+breakend facets, so no two callers were compared. The dogfood ran into F29 (`concordance` against
+hu416394's Manta file with one-sided sequence alleles exhausts memory), which is not RM282's.
+
+**Left:** whether a symbolic `<DEL>`, `<DUP>` or `<INV>` should meet the breakends another caller
+writes for the same junction (truvari's default `decompose` turns the symbolic call into breakends;
+not built, and whether the two are one call is a judgement this entry has not made); whether a
+nearby symbolic SV should make a lone breakend's absence `other_alleles` (it does not now); no
+DELLY, Sniffles or second breakend file exists to check against (synthetic tests only); whether a
+copy-number allele should meet a deletion or duplication as a loss or a gain (it
 needs the expected copy number at the locus, which differs on X and Y, and is the person's call:
 built is the strict reading, type from the ALT's name, reversible by adding a mapping in
 `concordance._sv_side`); whether the frame should keep SVLEN, without which an `<INS>` pair meets by

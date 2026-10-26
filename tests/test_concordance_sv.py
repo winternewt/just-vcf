@@ -275,9 +275,10 @@ def test_sv_rows_join_the_sites_frame_its_summary_and_excluded_counts(tmp_path: 
     assert sites.schema == SITES and result.summary.schema == SUMMARY
     assert result.summary.equals(summarize(sites)) and int(result.summary["alleles"].sum()) == sites.height
     by_kind = dict(result.summary.group_by("sv_kind").agg(pl.col("alleles").sum()).iter_rows())
-    assert by_kind == {"DEL": 1, "INS": 1, None: 1}
-    excluded = {(row["facet"], row["reason"]): row["alleles"] for row in result.excluded.iter_rows(named=True)}
-    assert excluded == {("a", "breakend"): 1}
+    # The breakend is compared too (tests/test_concordance_bnd.py): one adjacency only `a` states.
+    assert by_kind == {"DEL": 1, "INS": 1, "BND": 1, None: 1}
+    assert sites.filter(pl.col("sv_kind") == "BND").select("agreement", "absence").rows() == [("only_a", "unknown")]
+    assert result.excluded.is_empty()
     # Deterministic: the same comparison twice gives identical frames, SV rows in canonical order.
     assert concordance(facet(tmp_path, "a2", a, store), facet(tmp_path, "b2", b, store)).sites.collect().equals(sites)
     assert sites["pos"].to_list() == sorted(sites["pos"].to_list())

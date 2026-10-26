@@ -1771,6 +1771,8 @@ only):
   `caller_asserted_only`, one too few Y probes, and one self-reported man `XX` (two-letter X at 0.91,
   Y masked: vendor and hets agree against the self-report). No AncestryDNA file read against its label.
   Off, every array answers unknown, `x_copies` filled wherever the X is written with two letters.
+  *Corrected 2026-10-26:* the default is per vendor since desk #136: read for AncestryDNA
+  (`ARRAY_Y_VENDORS`), off for every other vendor (the superseded decision below).
 - 23andMe on GRCh36 (250 exports) answered `unsupported_build` (it has a region set since, below);
   FTDNA (103), FTDNA space (2), rsid tables (3) and one Final Report state no build at load and answer `no_build` as loaded. The
   estimate reads the facets frame, not what `load` alone wrote: on `resolve_ref`'s output, which

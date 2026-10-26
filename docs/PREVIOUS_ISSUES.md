@@ -3,6 +3,43 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F30 — `write_vcf`'s contig names do not reach a breakend's mate inside ALT
+
+Severity: low · Found 2026-10-26 dogfooding RM6's breakend lift on hu1C1368's Manta file.
+
+`write_vcf(..., contig_names="chr")` writes CHROM as `chr1` but leaves each breakend ALT's mate as
+the frame holds it, here `2` (both store collections name contigs without `chr`): all 1,216 lifted
+breakend ALTs, and all 1,228 of the loaded facet's, name a mate contig the written header does not
+declare. With the default `stored` names, one lifted ALT of 1,216 names a contig no row stands on,
+which the header leaves out too. A tool reading the mate against the header (or joining by name)
+misses it; `load` and `concordance` read it back, since they canonicalise the mate. Not new with the
+lift: a loaded facet whose source spelled `chr2` inside ALT writes it so under `stored`. Repairs:
+rewrite the mate contig inside a breakend ALT by the same mode as CHROM, and declare every contig an
+ALT names in the header (a writer change, with its own test of the round trip); or have the lift
+write the mate by its canonical name, which only moves the mismatch to the `source` and `chr` modes
+and gives up "named as the target collection names it". Surfaced, not fixed: it is the writer's rule,
+outside the lift's slice.
+
+**Resolved 2026-10-26** by the first repair. The mate's contig inside each of the four bracket forms
+is read canonically (`breakends.breakend_parts`, as `load` reads CHROM) and written through the one
+canonical → written mapping CHROM is written through (`breakends.mate_renamed`), and every contig a
+written ALT names joins the contigs the header declares, rows or none (VCF 4.3 §1.4.7). A mate the
+style has no other name for keeps its canonical name, as such a CHROM does. Single breakends, symbolic
+alleles and brackets that are none of the four forms are written as held. Under `stored` a source's
+`chr2` inside ALT is now written `2`; under `source` a lifted facet's ALTs come back verbatim, its
+`contig_map` holding the target's spellings. Two canonical names the style writes as one get one
+`##contig` line: the lifted hu1C1368 facet stands rows on `chrUn_KI270742v1` (the chain's name) and
+names their mates `KI270742.1` (the FASTA's), both `KI270742.1` under `source`; `vcf_zarr` indexes
+`contig_id` by written name for the same reason. hu1C1368's Manta file written and re-loaded, mates the
+header declares / does not (counts only): loaded facet, `stored` 1,228 / 0 → 1,228 / 0, `chr` 0 / 1,228
+→ 1,228 / 0, `source` 1,228 / 0 → 1,228 / 0; lifted to GRCh38, `stored` 1,215 / 1 → 1,216 / 0, `chr`
+0 / 1,216 → 1,216 / 0, `source` 1,216 / 0 → 1,216 / 0. No version constant: `write_vcf` has none, its
+output is keyed into no cache, and no frame column changes. The bracket search costs 0.1 s on a 4.8
+million-row VCF without breakends; the mate read runs only on a facet that has one. Code:
+`writing._mate_chroms`, `writing._line`, `writing._contig_names`; tests in
+`tests/test_write_breakends.py` and `tests/test_liftover_bnd.py`
+(`test_a_lifted_facet_written_with_chr_names_declares_every_mate`).
+
 ## F29 — Reading blocks over a facet with hundreds of contigs exhausts memory
 
 Severity: medium · Found 2026-10-26 dogfooding RM282's breakends on the PGP-HMS Manta files.

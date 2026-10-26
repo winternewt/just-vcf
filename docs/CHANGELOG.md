@@ -4,6 +4,20 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf` names a breakend's mate inside ALT as it names CHROM, and declares it (F30). The mate's
+  contig in each of the four bracket forms is read canonically and written through the same
+  `contig_names` mapping as CHROM (`breakends.mate_renamed`), and every contig a written ALT names
+  gets a `##contig` line, whether or not a row stands on it (VCF 4.3 §1.4.7). Before, `chr` wrote
+  CHROM `chr1` beside a mate `2` that the header did not declare (all 1,228 of hu1C1368's Manta
+  breakends, all 1,216 of its GRCh38 lift), and `stored` left a lifted mate's contig with no row
+  undeclared (1 of 1,216); now every one is declared under each style. **Bytes change** for a facet
+  with breakends: under `stored` a source's `chr2` inside ALT is written `2`, and the header can
+  gain `##contig` lines. Two canonical names a style writes as one (a lifted scaffold under the
+  chain's name and the FASTA's) share one `##contig` line, and `write_vcf_zarr` indexes `contig_id` by
+  written name for the same reason. `write_vcf_zarr` itself still writes ALTs as held and declares
+  no mate (left open). No version constant changes: the writer has none and its output is cached
+  nowhere.
+
 - `load` reads a Complete Genomics `var` or `masterVarBeta` one locus range at a time
   (`loaders.cgi.locus_ranges`, `range_frames`), so a whole file no longer holds every haplotype in
   memory. The payload is first written as a typed parquet copy of its rows; then each range of whole

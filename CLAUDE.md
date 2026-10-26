@@ -324,6 +324,11 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
   number from any-value of dtype: 'Null'". Read fixed-width pieces with `list.get` and `concat_list`
   instead (`list.get`, `list.head` and `list.gather` at a column argument survive the case; met
   2026-10-26, a contig's one `X,<*>` site in `normalize`).
+- **Polars `explode` beside row-length aggregates in one `select`:** an exploded column's expression
+  that is reused (a struct from `str.extract_groups` read field by field, or a `filter` on it) shares a
+  subexpression polars 1.44's common-subexpression pass evaluates at the rows' length, and raises
+  `ShapeError: can't broadcast Series of length N to length M` (met 2026-10-26, `writing._mate_chroms`).
+  Run such a read in a `select` of its own, or inside each row's list with `list.eval`.
 - **Polars `list.gather` indexed by a column that can be null:** guard it,
   `pl.when(pl.col("gt").is_not_null()).then(alleles.list.gather(pl.col("gt"), null_on_oob=True))`. Over
   index lists that are all null, and over zero rows, polars 1.44 makes a list of a Null inner type

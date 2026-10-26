@@ -62,7 +62,13 @@ What is written, and the rules it follows:
   anything). Blocks and calls are merged one contig at a time, by position, calls first.
 - **Contig names** are written as stored (the canonical `chrom`), with the `chr` prefix (`MT` becomes
   `chrM`), or as the source spelled them (`contig_map`). The header's `##contig` lines follow the same
-  names and the rows' order.
+  names and the rows' order. A breakend ALT's mate (`t[p[` and the other three forms, `p` being
+  `contig:position`) is a contig of the file too: its contig is read canonically, as `load` reads
+  CHROM, and written under the one mapping CHROM is written under, and it gets a `##contig` line
+  whether or not a row stands on it (VCF 4.3 §1.4.7; F30). A mate the style has no other name for
+  keeps its canonical name, as such a CHROM does. Two canonical names written as one name (a lifted
+  scaffold under the chain's name and the FASTA's) get one `##contig` line. Single breakends, symbolic
+  alleles and brackets that are none of the four forms are written as held.
 
 - **A tabix index** (`<path>.tbi`) is written beside BGZF output by default, from the byte offsets
   the writer itself produced (`just_vcf.tabix`), so the file is region-queryable by htslib without a
@@ -90,6 +96,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.bgzf import BgzfWriter
+from just_vcf.breakends import breakend_parts, mate_renamed
 from just_vcf.loaders.vcf import _SV_PATTERN, FORMAT_KEYS, INFO_KEYS, SPLIT_INFO_KEY, V43_RESERVED_TYPES
 from just_vcf.loading import Loaded
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _store_for
@@ -363,7 +370,10 @@ def write_vcf(
     block_count = loaded.blocks.select(pl.len()).collect().item()
     blocks_written = block_count - plan.unreadable if plan is not None else 0
 
-    names = _contig_names(contig_names, facet, sorted({*stats["chroms"], *(plan.chroms if plan is not None else [])}))
+    # A breakend's mate is a contig of the file too (VCF 4.3 §1.4.7): it gets a `##contig` line and the
+    # name CHROM would get, through the one mapping (F30).
+    mates = stats["mate_chroms"] or []
+    names = _contig_names(contig_names, facet, sorted({*stats["chroms"], *mates, *(plan.chroms if plan is not None else [])}))
     warnings: list[str] = []
     if skipped:
         warnings.append(f"{sum(skipped.values())} row(s) not written: " + ", ".join(f"{n} {r}" for r, n in skipped.items()))
@@ -420,7 +430,7 @@ def write_vcf(
     header = _header(facet, sample_name, names, declared, header_stats, alt_lines)
     rows = calls.filter(pl.col("_unwritable").is_null()) if skipped else calls
     lines = rows.select(
-        _line(names.mapping, stats["ploidy"], stats["v45"]).alias("line"),
+        _line(names.mapping, stats["ploidy"], stats["v45"], bool(mates)).alias("line"),
         "chrom",
         "pos",
         *_index_columns(names.mapping),
@@ -668,7 +678,15 @@ def _format_values(ploidy: int, v45: bool = False) -> dict[str, pl.Expr]:
 
 def _scan(calls: pl.LazyFrame) -> dict:
     """One pass for the header and the warnings: which keys occur, the filters, the contigs, the counts."""
-    first = calls.select(pl.col("gt").list.len().max().alias("ploidy"), _has_psl().any().alias("v45")).collect().row(0, named=True)
+    first = (
+        calls.select(
+            pl.col("gt").list.len().max().alias("ploidy"),
+            _has_psl().any().alias("v45"),
+            pl.col("alts").list.eval(_bracketed(pl.element())).list.any().any().alias("brackets"),
+        )
+        .collect()
+        .row(0, named=True)
+    )
     ploidy, v45 = first["ploidy"] or 1, bool(first["v45"])
     values = _format_values(ploidy, v45)
     ref_span_end = pl.col("pos").cast(pl.Int64) + _written_ref().str.len_chars().cast(pl.Int64) - 1
@@ -720,7 +738,24 @@ def _scan(calls: pl.LazyFrame) -> dict:
     )
     row["ploidy"] = ploidy
     row["v45"] = v45
+    row["mate_chroms"] = _mate_chroms(calls) if first["brackets"] else []
     return row
+
+
+def _bracketed(alt: pl.Expr) -> pl.Expr:
+    """True on an ALT holding a bracket: a breakend, or brackets that are none of its forms."""
+    return alt.str.contains("[", literal=True) | alt.str.contains("]", literal=True)
+
+
+def _mate_chroms(calls: pl.LazyFrame) -> list[str]:
+    """The canonical contigs breakend ALTs name as mates, as `breakend_parts` reads them, over every
+    row (as the header is decided). A pass of its own over the bracketed ALTs alone, run only when
+    `_scan`'s first pass found one (on 4.8 million rows without a breakend, the bracket search 0.1 s,
+    this pass 0.2 s; the regex read inside each row's list, 1.9 s). Not an expression in `_scan`'s
+    one select: over `alts` exploded there, polars 1.44's common-subexpression pass mixes the
+    exploded length with the rows' and raises a ShapeError."""
+    alts = calls.select(pl.col("alts").explode(empty_as_null=False).alias("_alt")).filter(_bracketed(pl.col("_alt")))
+    return alts.select(breakend_parts(pl.col("_alt"))[1]).drop_nulls().unique().sort("_mate_chrom").collect()["_mate_chrom"].to_list()
 
 
 @dataclass(frozen=True)
@@ -759,10 +794,16 @@ def _contig_names(style: ContigNames, facet: dict, chroms: list[str]) -> _Names:
     for chrom in chroms:
         declared.setdefault(chrom, {"length": None, "md5": None})
     ordered = sorted(declared, key=lambda chrom: (CONTIG_RANK.get(chrom, len(CONTIG_RANK)), chrom))
-    return _Names(
-        mapping={chrom: written(chrom) for chrom in ordered},
-        contigs=[{"name": written(chrom), **declared[chrom]} for chrom in ordered],
-    )
+    # Two canonical names can be written as one: a lifted row's contig under the chain's name and its
+    # mate's under the target FASTA's (`chrUn_KI270742v1` and `KI270742.1`), both `KI270742.1` under
+    # `source`. That is one contig, so it gets one `##contig` line, its first stated length and md5.
+    contigs: dict[str, dict] = {}
+    for chrom in ordered:
+        line = contigs.setdefault(written(chrom), {"name": written(chrom), "length": None, "md5": None})
+        for key in ("length", "md5"):
+            if line[key] is None:
+                line[key] = declared[chrom][key]
+    return _Names(mapping={chrom: written(chrom) for chrom in ordered}, contigs=list(contigs.values()))
 
 
 def _header(facet: dict, sample: str, names: _Names, declared: list[str], stats: dict, alt_lines: list[str]) -> str:
@@ -809,10 +850,11 @@ def _header(facet: dict, sample: str, names: _Names, declared: list[str], stats:
     return "\n".join(lines) + "\n"
 
 
-def _line(mapping: dict[str, str], ploidy: int, v45: bool = False) -> pl.Expr:
-    """One VCF data line per row."""
+def _line(mapping: dict[str, str], ploidy: int, v45: bool = False, mates: bool = False) -> pl.Expr:
+    """One VCF data line per row. With `mates`, each breakend ALT's mate contig is written through
+    `mapping`, as CHROM is (F30); without, no ALT names one and the ALTs are written as held."""
     ref = _written_ref()
-    alts = pl.col("alts")
+    alts = pl.col("alts").list.eval(mate_renamed(pl.element(), mapping)) if mates else pl.col("alts")
     ref_span_end = pl.col("pos").cast(pl.Int64) + ref.str.len_chars().cast(pl.Int64) - 1
     end = pl.when(pl.col("end_pos").cast(pl.Int64) != ref_span_end).then(pl.concat_str(pl.lit("END="), pl.col("end_pos").cast(pl.String)))
     split = pl.when(pl.col("split_signal").is_not_null()).then(

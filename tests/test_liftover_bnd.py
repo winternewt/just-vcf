@@ -9,6 +9,7 @@ from the source by VCF 4.3 §5.4's four sentences, must be the sequence the lift
 target, read either way along the molecule.
 """
 
+import gzip
 import random
 import re
 from pathlib import Path
@@ -16,8 +17,9 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceStore, liftover, load, resolve_ref, write_vcf
+from just_vcf import ContigNames, ReferenceStore, liftover, load, resolve_ref, write_vcf
 from just_vcf.liftover import UNLIFTED_REASONS
+from just_vcf.schema import canonical_chrom
 
 rng = random.Random(11)
 
@@ -368,10 +370,40 @@ def test_a_lift_and_its_inverse_give_back_every_breakend_both_lifted(tmp_path: P
 def test_a_lifted_breakend_writes_and_reloads(tmp_path: Path, setup) -> None:
     store, source, _, forward, _ = setup
     _, lifted = lift_cases(tmp_path, store, source, forward)
-    path = tmp_path / "lifted.vcf.gz"
-    write_vcf(lifted.loaded, path)
-    again = by_case(load(path).calls.collect())
     calls = by_case(lifted.loaded.calls.collect())
-    assert set(again) == set(calls) and calls
-    for case, r in calls.items():
-        assert (again[case]["chrom"], again[case]["pos"], again[case]["source_ref"], again[case]["alts"]) == (r["chrom"], r["pos"], r["ref"], r["alts"])
+    # Under `source` names the lifted facet's `contig_map` is the target's own spelling, so every ALT
+    # comes back verbatim; under `stored` the mate is named as CHROM is, canonically (F30).
+    for style in (ContigNames.SOURCE, ContigNames.STORED):
+        path = tmp_path / f"lifted-{style.value}.vcf.gz"
+        write_vcf(lifted.loaded, path, contig_names=style)
+        again = by_case(load(path).calls.collect())
+        assert set(again) == set(calls) and calls
+        for case, r in calls.items():
+            alts = r["alts"] if style is ContigNames.SOURCE else [canonical_alt(alt) for alt in r["alts"]]
+            assert (again[case]["chrom"], again[case]["pos"], again[case]["source_ref"], again[case]["alts"]) == (r["chrom"], r["pos"], r["ref"], alts)
+
+
+def canonical_alt(alt: str) -> str:
+    """A lifted ALT with its mate contig canonical (`chr2` is `2`), as `stored` names write it."""
+    _, contig, _, _ = parse(alt)
+    return alt if contig is None else alt.replace(f"{contig}:", f"{canonical_chrom(contig)}:")
+
+
+def test_a_lifted_facet_written_with_chr_names_declares_every_mate(tmp_path: Path, setup) -> None:
+    store, source, _, forward, _ = setup
+    _, lifted = lift_cases(tmp_path, store, source, forward)
+    calls = lifted.loaded.calls.collect()
+    path = write_vcf(lifted.loaded, tmp_path / "lifted.vcf.gz", contig_names=ContigNames.CHR).path
+    text = gzip.decompress(path.read_bytes()).decode()
+    declared = {line.split("ID=")[1].split(",")[0].rstrip(">") for line in text.splitlines() if line.startswith("##contig=")}
+    rows = [line.split("\t") for line in text.splitlines() if not line.startswith("#")]
+
+    # The chr style names 1, 2, 3 as chr1, chr2, chr3: the lifted mates, read canonically, then named so.
+    lifted_mates = {canonical_chrom(parse(alt)[1]) for alts in calls["alts"] for alt in alts if parse(alt)[1] is not None}
+    written_mates = {parse(alt)[1] for row in rows for alt in row[4].split(",") if parse(alt)[1] is not None}
+    assert lifted_mates == {"1", "2", "3"}, "the fixture's mates land on all three target contigs"
+    assert written_mates == {f"chr{chrom}" for chrom in lifted_mates}
+    assert written_mates <= declared, "every contig a written ALT names has a ##contig line"
+    # chr3 is declared although no row stands on it: only the pm_* mates point there.
+    assert "3" not in set(calls["chrom"]) and "chr3" in declared
+    assert {row[0] for row in rows} == {f"chr{chrom}" for chrom in set(calls["chrom"])}

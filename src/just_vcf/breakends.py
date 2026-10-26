@@ -10,7 +10,8 @@ joined before t" (right, left); `[p[t` "reverse comp piece extending right of p 
 (right, right). A single breakend has the record's side only: `t.` left, `.t` right.
 
 `concordance` reads the form and the mate to meet breakends (truvari's `bnd_match`); `liftover` turns
-the form when an end lands on a minus-strand chain block (`turned`).
+the form when an end lands on a minus-strand chain block (`turned`); `write_vcf` names the mate as it
+names CHROM (`mate_renamed`, F30).
 """
 
 import re
@@ -43,9 +44,9 @@ truvari's `[^\\[\\]:]+` would refuse it."""
 _COMPLEMENT = str.maketrans("ACGTNacgtn", "TGCANtgcan")
 
 
-def breakend_parts(alt: pl.Expr) -> list[pl.Expr]:
-    """`_form`, `_mate_chrom` (canonical) and `_mate_pos` of a breakend ALT, all null where the ALT is
-    none of the four forms: brackets that do not pair, or no `contig:position` between them."""
+def _read(alt: pl.Expr) -> tuple[pl.Expr, pl.Expr, pl.Expr, pl.Expr]:
+    """A breakend ALT's groups, both layouts (`_BASES_FIRST`, `_BASES_LAST`), its form (null where it
+    is none of the four) and the mate's position."""
     first, last = alt.str.extract_groups(_BASES_FIRST), alt.str.extract_groups(_BASES_LAST)
     f_open, f_close = first.struct.field("2"), first.struct.field("5")
     l_open, l_close = last.struct.field("1"), last.struct.field("4")
@@ -58,8 +59,34 @@ def breakend_parts(alt: pl.Expr) -> list[pl.Expr]:
         .when(l_open.is_not_null() & (l_open == l_close))
         .then(pl.when(l_open == "[").then(pl.lit("[p[t")).otherwise(pl.lit("]p]t")))
     )
+    return first, last, form, position
+
+
+def breakend_parts(alt: pl.Expr) -> list[pl.Expr]:
+    """`_form`, `_mate_chrom` (canonical) and `_mate_pos` of a breakend ALT, all null where the ALT is
+    none of the four forms: brackets that do not pair, or no `contig:position` between them."""
+    _, _, form, position = _read(alt)
     contig = mate_contig(alt).replace(CONTIG_ALIASES)
     return [form.alias("_form"), pl.when(form.is_not_null()).then(contig).alias("_mate_chrom"), pl.when(form.is_not_null()).then(position).alias("_mate_pos")]
+
+
+def mate_renamed(alt: pl.Expr, mapping: dict[str, str]) -> pl.Expr:
+    """`alt` with its mate's contig read canonically (as `breakend_parts`'s `_mate_chrom`) and renamed
+    by `mapping` (canonical name → the name to write), on each of the four forms. A mate `mapping`
+    does not name keeps its canonical name. Every other allele, a single breakend or brackets that are
+    none of the four forms included, comes back as it is. The bases, brackets and position text stay
+    as written."""
+    first, last, form, _ = _read(alt)
+    name = mate_contig(alt).replace(CONTIG_ALIASES).replace(mapping)
+    bases_first = pl.concat_str(first.struct.field("1"), first.struct.field("2"), name, pl.lit(":"), first.struct.field("4"), first.struct.field("5"))
+    bases_last = pl.concat_str(last.struct.field("1"), name, pl.lit(":"), last.struct.field("3"), last.struct.field("4"), last.struct.field("5"))
+    return (
+        pl.when(form.is_in(["t[p[", "t]p]"]))
+        .then(bases_first)
+        .when(form.is_in(["]p]t", "[p[t"]))
+        .then(bases_last)
+        .otherwise(alt)
+    )
 
 
 def mate_contig(alt: pl.Expr) -> pl.Expr:

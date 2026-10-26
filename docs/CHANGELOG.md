@@ -4,6 +4,24 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref` reads the anchor base of an insertion point and REF over a Genos row's span (RM3,
+  `RESOLVE_VERSION` 10). An insertion point (CGI `var` and `masterVarBeta` loci of zero length, a
+  CASAVA indel table's `-/T`, whose facet states no build and is still refused, a Genos
+  `BEGIN == END` row) sits at the base before it; that base, read
+  from the reference, is now `ref` and is written before every allele (`["", "GG"]` becomes
+  `["G", "GGG"]`), `end_pos = pos`, `ref_check` null (the file wrote no REF base). Before a contig's
+  first base, VCF's rule: the base after, appended, at POS 1. A point where nothing was called stays
+  unread, counted. A Genos row gets REF over its stated span whatever its length, and its alleles
+  derived against it as an array row's (`AT/GC`, `T/-`); before, only its single-base rows were read,
+  and a one-base insertion `A/A` was read as an SNV at the anchor. `normalize` aligns the anchored
+  rows (`NORMALIZE_VERSION` 9), and anchors a deletion at a contig's first base on the base after
+  its span, where it left it unanchored. `genotype_evidence` names an anchored point's alleles with
+  `ref`. **Breaking for a reader of a resolved CGI or CASAVA facet**: an insertion point's `alts`,
+  `gt_alleles` and `source_alleles` change spelling, and `ref_check` goes from `not_run` to null
+  (docs/SCHEMA.md, "How RM3 fills these slots" and "Changes since sign-off"). On PGP-HMS hu1B2689's
+  `var`, 263,689 of 263,690 anchored insertions with an ALT equal CGI's own vcfBeta record at the same
+  POS, REF and ALT set alike (RM3 in docs/ROADMAP.md).
+
 - `write_vcf_zarr` writes `cipos`, `ciend` and `alt_copy_numbers` (RM276), which it counted as not
   written: `variant_CIPOS` and `variant_CIEND` (`<i4`, two offsets per ALT, on `CIPOS_dim` and
   `CIEND_dim`) and `variant_CN` (`<f4` on `alt_alleles`), each where any row has one, read back by

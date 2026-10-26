@@ -305,7 +305,7 @@ def _casava_indel_table(data: bytes, spec: FormatSpec) -> SiteTable:
     `pos`. So the dashes are dropped: `source_ref` is the span's bases at `pos`, the ALT the called
     bases, and either can be the empty allele `""` (SCHEMA Decision 2): a deletion's ALT, or an
     insertion's REF. An insertion point sits at the base before it, `pos - 1`, with `end_pos` null,
-    as Genos and CGI insertion points do; the alleles stay unanchored until `normalize` reads the
+    as Genos and CGI insertion points do; the alleles stay unanchored until `resolve_ref` reads the
     anchor base from the reference. `ref_upstream` states that base too, but REF only comes from the
     sequence (charter 10), so the flanks are not read.
 
@@ -355,7 +355,7 @@ def _casava_indel_table(data: bytes, spec: FormatSpec) -> SiteTable:
     if sites:
         table.warnings.append(
             f'{sites} insertion point(s) placed at the base before them with end_pos null; the alleles stay unanchored (REF "") '
-            "until normalize reads the anchor base from the reference"
+            "until resolve_ref reads the anchor base from the reference"
         )
     table.calls = _select(frame)
     return table

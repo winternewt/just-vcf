@@ -23,7 +23,7 @@ import polars as pl
 from just_vcf.callset import absence_is_reference
 from just_vcf.coverage import Coverage, callable_sites
 from just_vcf.loading import Loaded
-from just_vcf.schema import CONTIG_RANK, BlockKind, EvidenceBasis, GlSource, VariantClass, enum_dtype
+from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, BlockKind, EvidenceBasis, GlSource, VariantClass, enum_dtype
 
 __all__ = [
     "GENOTYPE_EVIDENCE",
@@ -266,7 +266,10 @@ def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, facets: pl.LazyF
     # The ploidy a vector is indexed at: what GT says, else diploid, as the spec says to assume.
     ploidy = pl.coalesce(gt.list.len(), gt_alleles.list.len(), pl.lit(2, dtype=pl.UInt32)).cast(pl.Int64)
     vector_genotypes = _genotype_count(pl.col("source_alleles").list.len(), ploidy)
-    called_alleles = pl.concat_list(pl.coalesce(pl.col("source_ref"), pl.col("ref")), pl.col("alts"))
+    # What `gt` indexes: the source's REF, or `ref` where it wrote none, or wrote an empty one that
+    # `resolve_ref` anchored (an insertion point: the anchor base then starts every allele).
+    written_ref = pl.when(pl.col("source_ref") != EMPTY_ALLELE).then(pl.col("source_ref"))
+    called_alleles = pl.concat_list(pl.coalesce(written_ref, pl.col("ref"), pl.col("source_ref")), pl.col("alts"))
     called_genotypes = _genotype_count(called_alleles.list.len(), gt.list.len().cast(pl.Int64))
     gq_applies = pl.col("gq").is_not_null() & fully_called & (pl.lit(True) if gq_on_reference else carries_alt)
     # One score per GT slot, none missing. Unlike GQ it grades a reference genotype as well: each

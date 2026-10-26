@@ -132,10 +132,36 @@ same calls. A facet already read is refused rather than read again.
   2026-10-23). Every other chip (`23andme_v3` and `23andme_v4` at 76%, with the same sites hom-alt in
   every export, and on v3 hom-ref in the same person's CGI genome; `23andme_v1_v2` on 6 rows; an `illumina:` Final Report, a platform family or an unknown
   chip, never measured) has its code rows left as loaded, counted `id_orientation_unverified`.
+- **An insertion point** (a row over no reference base: `source_ref = ""` in CGI's native files and a
+  CASAVA indel table; a Genos row with `end_pos` null) gets VCF's anchor base. Every loader places the
+  point at the base before it (1-based `pos = begin` of a zero-length 0-based locus), so the anchor is
+  the reference base at `pos`: `ref` is that base, it is written before every allele in `gt_alleles`,
+  `alts` and `source_alleles`, in place (`gt` and the vectors stay indexed; a partly called `?A` becomes
+  `G?A` and stays partial), and `end_pos = pos`. A point before a contig's first base (`pos` 0, a
+  zero-length locus at `begin` 0) has no base before it: VCF's rule takes the base after, appended to
+  every allele, at `pos` 1, the one case where `resolve_ref` writes `pos` (0 was the loader's
+  placement of a zero-length locus there, not a position read from the file). The source wrote no REF
+  base, so a CGI or CASAVA point's `ref_check` becomes null, never `match`; `source_ref` stays `""`,
+  what the file wrote, and the alleles as written are the anchored ones less their first (last, at
+  POS 1) base. A Genos point is then a spanned row (below). A point where no haplotype was called
+  (`gt_alleles` all null: CGI's zero-length no-calls, 346,474 in one PGP-HMS masterVarBeta) is left
+  as loaded, counted: it has no allele to anchor, and REF with no ALT would state a no-call at the
+  anchor base. Anchoring places the insertion where the file did; `normalize` left-aligns it.
+  Measured on a PGP-HMS assembly's `var` against CGI's own vcfBeta of it (2026-10-26, GRCh37):
+  263,689 of the 263,690 anchored points carrying an ALT have a vcfBeta record at the same POS with
+  the same REF and the same ALT set; the one other has none there. Shifted one base either way, at
+  most 18 agree, so `pos = begin` is the anchor.
+- **A Genos row** (`reference.SPANNED_GENOTYPES`): Genos states each row's span (0-based half-open
+  BEGIN/END) and spells its alleles on the plus strand, `-` the empty allele, and writes no REF. `ref`
+  is read over `pos`..`end_pos`, whatever its length; `alts` are the called alleles other than REF,
+  sorted by string, and `gt` indexes `[ref] + alts`, as for an array row. So `AT/GC` over a two-base
+  span reads REF and gets an MNV, `T/-` a deletion with the empty ALT that `normalize` anchors, and an
+  insertion site `-/A`, anchored above, `G/GA`. `ref_check` stays null.
 - Left unread, each reason counted once: I/D codes no manifest probe resolves (above), whole
   no-calls (the probe's REF span is unknown), genotypes that could not be split, spans past the
-  contig's end or at POS 0, and every row of a contig that could not be matched with the reference
-  (below).
+  contig's end or at POS 0, insertion points where nothing was called or past their contig's end, and
+  every row of a contig that could not be matched with the reference (below), which includes the
+  insertion points and Genos rows on it, left unanchored.
 
 **Matching the reference to the facet.** Per contig the calls use, read through `canonical_chrom` on
 both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X). A GRCh37 or GRCh38 scaffold
@@ -251,16 +277,20 @@ How the awkward cases land under C:
   base, and REF only comes from the sequence. So an allele can be the empty string: a deletion of the
   whole span is `""` (`source_ref = "T"`, `alts = [""]` at `pos = begin + 1`). A locus of zero length
   (an insertion point) has `source_ref = ""`, sits at the base before it (`pos = begin`, where VCF puts
-  the anchor) and has `end_pos` null until RM3 reads that base, as Genos insertion sites do. An empty
-  string in `source_ref`, `alts`, `source_alleles` or `gt_alleles` occurs only in such unanchored rows,
-  which is how RM3 finds the rows it has to pad. An insertion point CGI could not call stays a row with
-  every haplotype null: it covers no base, so it cannot be a block.
+  the anchor) and has `end_pos` null until `resolve_ref` reads that base and writes it into every allele
+  ("How RM3 fills these slots", above), as for Genos insertion sites. An empty
+  string in `alts`, `source_alleles` or `gt_alleles` occurs only in such unanchored rows, and in
+  `source_ref` on every insertion point, which keeps what the file wrote once anchored (its `ref` then
+  holds the anchor); that is how RM3 finds the rows it has to pad. An insertion point CGI could not
+  call stays a row with every haplotype null: it covers no base, so it cannot be a block, and it has
+  no allele to anchor.
 - **The empty allele has one spelling: `""`** (`schema.EMPTY_ALLELE`), VRS's zero-length literal, in
   every loader: CGI's unpadded indels above, an upload's ALT `-` (below), and Genos's `-` (an insertion
   site's empty REF allele, or a deletion's ALT; `source_gt` keeps the `-/A` the file wrote). Every reader
   takes `""` as a sequence allele of length zero: it is an `indel` in `variant_classes`, a site in RM4's
-  count, the deletion `normalize` anchors, and the allele `mint_vrs_ids` justifies (a resolved `CT>""` at
-  31 gets the id of `GCT>G` at 30). `write_vcf` refuses it, REF or ALT, until it is anchored (VCF has
+  count, the insertion point `resolve_ref` anchors, the deletion `normalize` anchors, and the allele
+  `mint_vrs_ids` justifies (a resolved `CT>""` at 31 gets the id of `GCT>G` at 30). `write_vcf` refuses
+  it, REF or ALT, until it is anchored (VCF has
   no empty allele), and `liftover` leaves it unlifted (`allele_not_sequence`): run `normalize` first.
   A `-` that a format uses for a no-call (FTDNA's `-A`, a Final Report's `-`) is no allele and stays
   a null haplotype.
@@ -904,9 +934,10 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    relation read every row's REF from that collection (`liftover_to`: REF is read from the target over
    the lifted span, and a row is kept only where it equals one of its alleles; its `ref_check` is null
    because the check it would record compared the source's REF on the source assembly), or, in a
-   facet read from a file (no `derived_from`), a row with `ref` set and no `source_ref`: `resolve_ref`
-   is the only writer of `ref` there, and it read that REF with nothing from the source to compare it
-   with (an array row, a Living DNA genotype split against the reference; F4). Drop a common last
+   facet read from a file (no `derived_from`), a row with `ref` set and no `source_ref`, or an empty
+   one, and `ref_check` null: `resolve_ref` is the only writer of `ref` there, and it read that REF
+   with nothing from the source to compare it with (an array row, a Genos row, a Living DNA genotype
+   split against the reference, F4; an insertion point's anchor, RM3). Drop a common last
    base, and when an allele runs empty, prepend the reference base before both and step `pos` back;
    repeat; then drop common first bases while both alleles keep one. At position 1 an allele keeps
    its last base. On a row this changed, `ref` is the new REF (read from the reference), `gt_alleles`
@@ -915,9 +946,13 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    the representation the source wrote, at the position it wrote it. A `ref_check = match` here would be
    bases read from the sequence compared with that same sequence. Rows whose REF was not shown to
    match pass through, counted, and so do rows whose ALT is no VCF allele. A deletion written without
-   its anchor base, ALT the empty allele (an upload's `-`, F12; CGI's native deletions), is anchored on
-   the base before when matched (`CT>""` at 30 becomes `GCT>G` at 29) and then aligned like any
-   deletion. At a contig's first base there is no base before, and the row stays as written, counted.
+   its anchor base, ALT the empty allele (an upload's `-`, F12; CGI's native deletions; Genos's `-`), is
+   anchored on the base before when its REF was read (`CT>""` at 30 becomes `GCT>G` at 29) and then
+   aligned like any deletion. At a contig's first base there is no base before, and VCF's rule anchors
+   it on the base after its REF span (`CT>""` at 1 becomes `CTA>A` at 1), counted; only a deletion of
+   the whole contig, with no base after either, stays as written, counted. An insertion point
+   `resolve_ref` anchored (`source_ref = ""`, `ref_check` null, `ref` the anchor) is aligned as a row
+   whose REF was read with nothing from the source to check (NORMALIZE_VERSION 9).
 3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
    except the ones a move clears (`source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids`,
    `vrs_errors`, `cipos`, `ciend`), which say how the source wrote a row, not what it states. So one indel written twice
@@ -1856,7 +1891,7 @@ reading) into every cache spill and need a version bump each time they move.
 | `grade_basis` | which quantity the value rests on (below). Never null |
 | `gl_source` | on a row graded `gl`, the facet's `gl_source`: `gl`, `pl`, or `gl_over_pl` where the header declares both (the row took its GL, else its PL, and the frame does not keep which). Null on every row of another basis, which rests on neither key |
 | `confidence_kind` | `quantified` (a number), `asserted` (a genotype stated without a quantity) or `unknown` (none stated). It follows from the basis, and is a column so that a null `confidence` is never read as a low one |
-| `genotype_alleles` | the alleles `genotype_probabilities` and `genotype_index` index: `source_alleles` for a vector (Decision 2: never reordered; for a VCF row that is `[source_ref] + alts`), `[source_ref or ref] + alts` for a genotype, which is what `gt` indexes, and `[null, "<*>"]` for a block, whose REF base the frame does not keep |
+| `genotype_alleles` | the alleles `genotype_probabilities` and `genotype_index` index: `source_alleles` for a vector (Decision 2: never reordered; for a VCF row that is `[source_ref] + alts`), `[source_ref or ref] + alts` for a genotype, which is what `gt` indexes (`ref` where `source_ref` is the empty REF of an insertion point `resolve_ref` anchored, whose alleles then start with the anchor), and `[null, "<*>"]` for a block, whose REF base the frame does not keep |
 | `genotype_probabilities` | `list[f64]`, one probability per genotype in VCF genotype order at the row's ploidy; null where the source supports no vector |
 | `prior` | how the vector was made: `source` (GP as given, under whatever prior the source used), `flat` (GL/PL normalized with every genotype equally likely beforehand, just-vcf's choice), `even_remainder` (GQ alone, below) |
 | `genotype_index` | the genotype `confidence` speaks for: the top one of a vector (the first on a tie), or the called one (`gt`, haploid or diploid). 0 for reference asserted by a block or by absence |
@@ -2535,6 +2570,18 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-26, RM3's insertion points and Genos spans): no column's shape
+  changes. `resolve_ref` reads an insertion point's anchor base (CGI's native files, a CASAVA indel
+  table, Genos) and REF over a Genos row's stated span ("How RM3 fills these slots" above;
+  `RESOLVE_VERSION` 10); `normalize` aligns the anchored rows and anchors a deletion at a contig's
+  first base on the base after (`NORMALIZE_VERSION` 9). Rows that stayed unread now get `ref`,
+  `alts`, `gt` and `end_pos`. **Not additive for a reader of a resolved CGI or CASAVA facet's alleles**:
+  an insertion point's `alts`, `gt_alleles` and `source_alleles` are now spelled with the anchor base
+  (`["", "GG"]` read `["G", "GGG"]`), its `ref_check` goes from `not_run` to null, and one before a
+  contig's first base moves from `pos` 0 to 1. The loaded frame is unchanged. Allowed before 1.0 and
+  said so in the changelog; rejected: leaving the alleles unanchored beside `ref` = the anchor, which
+  every reader of `[ref] + alts` (VRS, `write_vcf`, concordance) would read as an SNV.
 
 - **Two enum members, outside the three frames** (2026-10-26, RM274's first-degree split):
   `RelationBand.PARENT_CHILD` (`parent_child`) and `RelationBand.FULL_SIBLINGS` (`full_siblings`),

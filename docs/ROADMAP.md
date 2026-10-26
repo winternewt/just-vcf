@@ -1482,7 +1482,7 @@ aggregates only; every expected id computed by vrs-python at test time:
   directly for `refused` in the synthetic suite.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22. Shipped: half 1 as the `source` detector's caller, version and `ploidy_statements` (RM2, merge bd5c02e, 2026-10-22); the evidence layer, X copies and an XY/XXY estimate per WGS facet, merge 7384428, 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet, merge dd11011 (RM278), 2026-10-23; XXX, XYY, XXYY and XXXY from a coverage facet's copy counts, and arrays' X from their hets with Y behind `array_y`, merge 5ccbffc, 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, with tables that state no build estimated on `resolve_ref`'s output, merge e73b320, 2026-10-25, checked on 109 PGP-HMS tables; GRCh36's region set, its arrays estimated and its genomes measured only, merge 3a80fc0, 2026-10-25, checked on 250 PGP-HMS 23andMe exports and 69 resolved tables. Waiting on the person: desk #135 (whether a VCF alone may name XY and XXY), desk #136 (`array_y` on for AncestryDNA by default); the lead's calls listed for veto in docs/LAYERS.md, layer 4 (`OTHER_KARYOTYPE`, the 3/4 array two-X expectation against PLINK's shape, `x_copy_count`/`y_copy_count`, GRCh36 genomes left `uncalibrated_build`). Buildable now: liftovers of one callset weighed as one piece of evidence, with `facets_disagree`, at the person level now that `Person` exists (RM273); an answer to the critique's somalier question. Open, no desk number: whether GRCh37's last X-degenerate interval reaches about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md). Exomes answer unknown) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22. Shipped: half 1 as the `source` detector's caller, version and `ploidy_statements` (RM2, merge bd5c02e, 2026-10-22); the evidence layer, X copies and an XY/XXY estimate per WGS facet, merge 7384428, 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet, merge dd11011 (RM278), 2026-10-23; XXX, XYY, XXYY and XXXY from a coverage facet's copy counts, and arrays' X from their hets with Y behind `array_y`, merge 5ccbffc, 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, with tables that state no build estimated on `resolve_ref`'s output, merge e73b320, 2026-10-25, checked on 109 PGP-HMS tables; GRCh36's region set, its arrays estimated and its genomes measured only, merge 3a80fc0, 2026-10-25, checked on 250 PGP-HMS 23andMe exports and 69 resolved tables; an array's Y read by default per vendor, on for AncestryDNA alone (`ARRAY_Y_VENDORS`, desk #136 answered by the person, 2026-10-26). Waiting on the person: desk #135 (whether a VCF alone may name XY and XXY); the lead's calls listed for veto in docs/LAYERS.md, layer 4 (`OTHER_KARYOTYPE`, the 3/4 array two-X expectation against PLINK's shape, `x_copy_count`/`y_copy_count`, GRCh36 genomes left `uncalibrated_build`). Buildable now: liftovers of one callset weighed as one piece of evidence, with `facets_disagree`, at the person level now that `Person` exists (RM273); an answer to the critique's somalier question. Open, no desk number: whether GRCh37's last X-degenerate interval reaches about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md). Exomes answer unknown) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -1787,6 +1787,22 @@ Decisions, each with what was rejected:
 - The Y line behind an argument, default off, for every vendor. Rejected: reading it by default
   (23andMe's is a mask), and a per-vendor list of trusted vendors (one measured property of
   PGP-HMS exports, which a vendor's next release can change silently).
+  *Superseded 2026-10-26:* the person chose the per-vendor default on desk #136 ("yes, per-vendor
+  decision"). `array_y` became `bool | None`, default None: read by default for a vendor in
+  `just_vcf.karyotype.ARRAY_Y_VENDORS` (AncestryDNA alone, the one vendor checked and found to call
+  what it measures), off for 23andMe, for every other vendor and for a facet whose `vendor` is null;
+  `True` and `False` apply to every array facet as before, so an explicit caller keeps its meaning.
+  Off, `y_reason` stays `vendor_asserted` and the detail says whether the default or the caller turned
+  it off; no reason value was added, since explicit `array_y=False` callers already read
+  `vendor_asserted`. The risk the rejection named stands: a vendor release can change the property
+  silently, and `array_y=False` is the override. Run 2026-10-26 under the default through `load` and
+  `sex_chromosome_evidence` on every PGP-HMS upload that sniffs as AncestryDNA or 23andMe (Krypton
+  copy; aggregates only): the 41 AncestryDNA exports answer 15 `XX`, 23 `XY` and 3 unknown with the Y
+  in the band (`intermediate`), which fits the table above (8 women and 7 unlabelled two-letter X
+  exports give the 15 `XX`; 17 men and 9 unlabelled one-X exports give 23 `XY` and the 3 in the band,
+  one of them the man at 0.746); the 480 23andMe exports (230 GRCh37, 250 GRCh36) read no Y: 474
+  `vendor_asserted` (164 of them two-letter X, `x_copies = two_or_more`; 310 one-letter X,
+  `caller_asserted_only`) and 6 too few sites. None failed to load.
 - An array's absent site is unknown (charter 11); only probes the export writes count, and a probe
   it writes as a no-call counts as not called. So the Y share needs an export that writes its
   no-calls: one with no no-call row on the autosomes (a VCF made from an array, a table that drops
@@ -1876,9 +1892,9 @@ Checked 2026-10-25 on PGP-HMS through the library (`load`, for tables `resolve_r
   of them the rsid table, whose Y calls 0.94 of its probes.
 
 **Left:** whether a VCF alone may name `XY`/`XXY` when it cannot count the Y, or must answer unknown
-until a coverage facet counts it, is the person's decision. Whether `array_y` should be on for
-AncestryDNA by default, and the array two-X expectation (3/4 or PLINK's shape), are the person's
-too, and so is whether GRCh36 genomes stay `uncalibrated_build`. Exomes answer unknown. Liftovers of one callset are not yet weighed as one
+until a coverage facet counts it, is the person's decision. The array two-X expectation (3/4 or
+PLINK's shape) is the person's too (the AncestryDNA `array_y` default was answered on desk #136,
+2026-10-26: per vendor, above), and so is whether GRCh36 genomes stay `uncalibrated_build`. Exomes answer unknown. Liftovers of one callset are not yet weighed as one
 piece of evidence (`facets_disagree` belongs to the person-level layer). GRCh37's last X-degenerate
 interval may reach about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md); the GRCh36 lift corroborates
 it, since that stretch lifts inside NCBI36's PAR2, where hg18's X and Y are identical. The somalier

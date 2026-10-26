@@ -1956,7 +1956,7 @@ and the answer is the calls' alone. So is a coverage facet whose chr20 depth is 
 genome (`coverage_uneven`: under 75% of its bases within half to twice the median, an exome's or a
 panel's shape). The field defaults to null, so nothing changes without coverage.
 
-**At the person level**, `person_sex_chromosome_evidence(person, pairs=None, array_y=False)` answers
+**At the person level**, `person_sex_chromosome_evidence(person, pairs=None, array_y=None)` answers
 for each facet of a `Person` (RM273) with one of the person's coverage facets paired to it, and the
 result's `coverage_pairing` (`just_vcf.karyotype.CoveragePairing`: `coverage_facet_id`, `basis`,
 `candidates`, `detail`; null from the facet-level function) says which and why. Each answer is
@@ -1983,10 +1983,16 @@ most 0.1875, two or more from 0.5625, the central half of the gap between 0 (one
 only) and 3/4 (two X, the neutral expectation of X diversity against an autosome's). An X written
 with one letter on most called rows is the vendor's decision (23andMe), counted, never read
 (`caller_asserted_only`). Y comes from the X-degenerate Y probes' called share over the autosomes'
-(`y_call_ratio`): absent at most 0.25, present from 0.75. It is read only with
-`sex_chromosome_evidence(…, array_y=True)`: a vendor that no-calls Y for the samples it calls female
-makes the line its own sex call, and the file cannot tell that mask from a chip that saw no Y.
-Without it `y_reason` is `vendor_asserted` and the karyotype unknown. An export with no no-call row
+(`y_call_ratio`): absent at most 0.25, present from 0.75. Whether it is read is decided per facet by
+its `vendor`: a vendor that no-calls Y for the samples it calls female makes the line its own sex
+call, and the file cannot tell that mask from a chip that saw no Y. By default
+(`sex_chromosome_evidence(…, array_y=None)`) the line is read for a vendor in
+`just_vcf.karyotype.ARRAY_Y_VENDORS`, AncestryDNA alone, whose PGP-HMS exports call what the chip
+measured (its women call 0.8–9.9% of the Y probes, 23andMe's none), and for no other vendor nor a facet
+whose `vendor` is null (the person's decision, desk #136, 2026-10-26). `array_y=True` reads it for
+every array facet, `array_y=False` for none; a person with an AncestryDNA and a 23andMe facet gets the
+first's Y read and not the second's under the default. Not read, `y_reason` is `vendor_asserted`, the
+`detail` says whether the vendor's default or the caller turned it off, and the karyotype is unknown. An export with no no-call row
 on the autosomes drops its no-calls, so its rows are not its probes and its Y share says nothing:
 `y_call_ratio` is null and `y_reason` `no_calls_not_written`. A no-call row is one written so (`--`,
 a letter null, `autosome_no_calls`); a row whose genotype could not be read (`gt_alleles` null, a

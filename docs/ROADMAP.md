@@ -12,7 +12,7 @@ Severity: medium · Status: in progress (shipped 2026-10-23: KING-robust related
 The person chose both (E6): somalier (MIT) as an optional subprocess, skipped cleanly when absent, and just-vcf's own relatedness on the frames (IBS/KING-style over a validated site panel, so arrays work too). Pedigrees as supplied GA4GH Pedigree data. Feeds RM273's check.
 
 ## RM276 — A durable per-person store
-Severity: medium · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; `Store` and `write_vcf_zarr` shipped 2026-10-23, merge 6830fb7; `call_HQ` in the Zarr export 2026-10-24, merge fbcb3a9. Left, buildable now, no decision: a migration between schema versions, where `store.py` `_check_version` refuses a store of another version with "No migration exists yet"; `cipos`, `ciend` and `alt_copy_numbers` in `vcf_zarr.py`, which counts them as not written) · Owner: lead
+Severity: medium · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; `Store` and `write_vcf_zarr` shipped 2026-10-23, merge 6830fb7; `call_HQ` in the Zarr export 2026-10-24, merge fbcb3a9; `variant_CIPOS`, `variant_CIEND` and `variant_CN` in the Zarr export 2026-10-26, an interval holding -1 or -2, the spec's integer sentinels, written missing and counted. Left, buildable now, no decision: a migration between schema versions, where `store.py` `_check_version` refuses a store of another version with "No migration exists yet") · Owner: lead
 
 The person chose both (E13): a directory per person holding parquet per facet, the links frame and a manifest, read lazily; and a VCF Zarr export (its spec has no gVCF blocks, so blocks stay parquet-only). Facets accumulate; nothing is overwritten (invariant 5).
 
@@ -21,6 +21,8 @@ manifest, a lock, lazy reads into `Loaded` and `Person`; and `write_vcf_zarr`, o
 VCF Zarr 0.4, blocks counted and left in the store. **Left:** a migration between schema versions (a
 store of another version is refused, not migrated); `cipos`, `ciend` and `alt_copy_numbers` in the
 Zarr export; whether `Person` should carry the links (`store.loaded().links` has them).
+*Corrected 2026-10-26:* `cipos`, `ciend` and `alt_copy_numbers` are written (docs/SCHEMA.md, "VCF
+Zarr export").
 *Corrected 2026-10-26:* `Person` carries `links` (merge b8bef07, 2026-10-23, "Person and the CLI keep
 links"), and `Store.person()` builds it from `loaded()`, so its links are the store's; that question is
 closed.
@@ -803,7 +805,7 @@ target's `assembly_label`, so lifting first is the path; the ancestry functions 
 `assembly_mismatch` for a facet on another assembly and do not lift it themselves. Not tested end to end.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Left, buildable now: `blocks` and symbolic SVs in a lift (`liftover` leaves both behind, counted as `allele_not_sequence` for SVs); anchoring across a small gap of one chain; SVLEN in `write_vcf`, which writes END only; strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable) · Owner: lead
+Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f), INFO SVLEN in `write_vcf` as `end_pos - pos` per length-type SV allele (2026-10-26; the frame keeps no SVLEN of its own, so an `<INS>` length is not written; whether to keep one is the person's call, docs/SCHEMA.md "Structural variants"). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Left, buildable now: `blocks` and symbolic SVs in a lift (`liftover` leaves both behind, counted as `allele_not_sequence` for SVs); anchoring across a small gap of one chain; strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -1075,7 +1077,8 @@ in a liftover, left-aligning lifted indels (`normalize` skips rows with no `ref_
 symbolic SVs, anchoring across a small gap of one chain, and T2T (UCSC hs1 chains).
 *Corrected 2026-10-26:* three of these shipped, and the SVLEN item's reason is gone. The loader reads
 END and SVLEN for symbolic SVs (merge ec95596, 2026-10-22), and SV rows round-trip through `write_vcf`
-with their `end_pos` (RM282, merge 04c5db3), though the writer still writes END only, no SVLEN. PSL sets are read and written back under
+with their `end_pos` (RM282, merge 04c5db3); the writer writes SVLEN beside END since 2026-10-26, as
+`end_pos - pos` (docs/SCHEMA.md, "Structural variants"). PSL sets are read and written back under
 VCF 4.5 (RM284, merge 8b72a46, 2026-10-23). `normalize` re-aligns a `liftover_to` facet's rows (merge
 6ce13b0, 2026-10-23; the liftover decisions above say so). The hs1 chains lift T2T-CHM13 to GRCh38
 (RM286, merge 795874f, tested in `tests/test_chm13.py`). Still open: strand, blocks and symbolic SVs in

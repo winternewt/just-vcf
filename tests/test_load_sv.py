@@ -3,6 +3,7 @@ alleles, copy-number segments kept out of `blocks`, the VRS reason, and the roun
 `write_vcf`. Synthetic records in the shapes of Manta, DRAGEN's CNV caller, Canvas, DELLY and the
 VCF 4.5 examples; the PGP-HMS files these shapes come from are counted in docs/SCHEMA.md."""
 
+import gzip
 from pathlib import Path
 
 import polars as pl
@@ -165,6 +166,98 @@ def test_sv_rows_round_trip_through_write_vcf(tmp_path: Path, compress: bool) ->
         assert "##INFO=<ID=SVTYPE,Number=1,Type=String" in text
         assert "##FORMAT=<ID=CN,Number=1,Type=Integer" in text
         assert "SVTYPE=LOH;CIPOS=-20,30,-20,30" in text
+
+
+def info_of(text: str) -> dict[str, dict[str, str]]:
+    """Each written record's INFO as key → value, by its ID."""
+    out = {}
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        info = {} if fields[7] == "." else dict(item.split("=", 1) if "=" in item else (item, "") for item in fields[7].split(";"))
+        out[fields[2]] = info
+    return out
+
+
+# Records whose ALTs mix length-type SV alleles, beside RECORDS: one length-type ALT beside an <INS>,
+# two whose own lengths the frame cannot tell apart, and two that VCF 4.5 says share one (FORMAT CN).
+MIXED = [
+    "1\t14000\tdelins\tT\t<DEL>,<INS>\t.\tPASS\tSVTYPE=DEL;END=14100;SVLEN=-100,40\tGT\t1/2",
+    "1\t15000\tdeldup\tT\t<DEL>,<DUP>\t.\tPASS\tEND=15200;SVLEN=-150,200\tGT\t1/2",
+    "1\t16000\tdeldupcn\tT\t<DEL>,<DUP>\t.\tPASS\tEND=16300\tGT:CN\t1/2:2",
+]
+
+
+def test_svlen_is_written_as_vcf_43_states_it(tmp_path: Path) -> None:
+    """SVLEN on each length-type SV allele, `end_pos - pos`, negative for a deletion (VCF 4.3's
+    examples), `.` on any other ALT. Where the source wrote SVLEN for a one-SV-allele record, the
+    value written is the source's; an <INS>'s inserted length is not in the frame and is not made up."""
+    no_block = [r for r in RECORDS if "12000" not in r]
+    first = load(sv_vcf(tmp_path, [*no_block, *MIXED]))
+    written = write_vcf(first, tmp_path / "out.vcf", compress=False)
+    text = written.path.read_text()
+    assert '##INFO=<ID=SVLEN,Number=.,Type=Integer,' in text
+    svlen = {key: info.get("SVLEN") for key, info in info_of(text).items() if key != "."}
+    assert svlen == {
+        # As the source wrote it (Manta's del1 and dup1), else END - POS from the source's END.
+        "del1": "-300", "dup1": "100", "inv1": "500", "cnv1": "-999", "bad": "-50",
+        # Copy-number alleles share the segment's length (VCF 4.5); a copy-neutral segment has no ALT.
+        "canvas1": "999,999", "canvas3": "999", "canvas2": None,
+        # An <INS> and a breakend have no length in the frame.
+        "ins1": None, "bnd1": None, "bnd2": None,
+        "delins": "-100,.",
+        # <DEL>,<DUP> lengths are not kept apart in the frame: left out, counted.
+        "deldup": None,
+        # ... unless FORMAT CN says they share one (VCF 4.5).
+        "deldupcn": "-300,300",
+    }  # fmt: skip
+    assert any(w.startswith("1 row(s) with SV alleles whose own lengths the frame does not keep apart") for w in written.warnings), written.warnings
+
+    back = load(written.path)
+    assert back.calls.collect().select(SV_COLUMNS).equals(first.calls.collect().select(SV_COLUMNS))
+    # END and the SVLEN written beside it agree, so the reload counts no disagreement.
+    assert not any("disagrees with POS + |SVLEN|" in w for w in back.warnings), back.warnings
+
+
+def test_htslib_reads_the_written_svlen(tmp_path: Path) -> None:
+    """Opt-in external validation: htslib (pysam, the `[reference]` extra) parses every SVLEN as written."""
+    pysam = pytest.importorskip("pysam")
+    no_block = [r for r in RECORDS if "12000" not in r]
+    written = write_vcf(load(sv_vcf(tmp_path, [*no_block, *MIXED])), tmp_path / "out.vcf.gz")
+    text = gzip.decompress(written.path.read_bytes()).decode()
+    expected = {
+        key: tuple(None if value == "." else int(value) for value in info["SVLEN"].split(",")) if "SVLEN" in info else None
+        for key, info in info_of(text).items()
+    }
+    with pysam.VariantFile(str(written.path)) as reader:
+        got = {record.id or ".": record.info.get("SVLEN") for record in reader}
+    assert got == expected and any(value is not None for value in got.values())
+
+
+def test_svlen_is_written_unsigned_per_alt_under_vcf_45(tmp_path: Path) -> None:
+    """A facet holding a PSL set is written as VCF 4.5, where SVLEN is `Number=A` and never negative."""
+    meta = (
+        '##INFO=<ID=SVLEN,Number=A,Type=Integer,Description="Length of structural variant">',
+        '##INFO=<ID=CN,Number=A,Type=Float,Description="Copy number of allele">',
+        '##FORMAT=<ID=CN,Number=1,Type=Float,Description="Copy number">',
+        '##FORMAT=<ID=PSL,Number=P,Type=String,Description="Phase set list">',
+    )
+    records = [
+        "1\t5\tsnv\tT\tG\t.\tPASS\t.\tGT:PSL\t0|1:.,1*5*1",
+        "1\t100\tcnv\tT\t<CNV>,<CNV>\t.\t.\tSVLEN=30,30;CN=1,2\tGT:CN\t1/2:3",
+        "1\t200\tdel\tT\t<DEL>\t.\t.\tSVLEN=300\tGT\t0/1",
+        "1\t600\tins\tT\t<INS>\t.\t.\tSVLEN=40\tGT\t0/1",
+    ]
+    first = load(write(tmp_path, vcf_text(records, version="VCFv4.5", extra_meta=meta), "v45.vcf"))
+    written = write_vcf(first, tmp_path / "out.vcf", compress=False)
+    text = written.path.read_text()
+    assert "##fileformat=VCFv4.5\n" in text
+    assert '##INFO=<ID=SVLEN,Number=A,Type=Integer,' in text
+    svlen = {key: info.get("SVLEN") for key, info in info_of(text).items()}
+    assert svlen == {"snv": None, "cnv": "30,30", "del": "300", "ins": None}
+    back = load(written.path)
+    assert back.calls.collect().select(SV_COLUMNS).equals(first.calls.collect().select(SV_COLUMNS))
 
 
 def test_a_vcf_43_copy_number_declared_float_is_not_carried(tmp_path: Path) -> None:

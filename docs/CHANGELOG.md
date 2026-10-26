@@ -4,6 +4,23 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `write_vcf_zarr` writes `cipos`, `ciend` and `alt_copy_numbers` (RM276), which it counted as not
+  written: `variant_CIPOS` and `variant_CIEND` (`<i4`, two offsets per ALT, on `CIPOS_dim` and
+  `CIEND_dim`) and `variant_CN` (`<f4` on `alt_alleles`), each where any row has one, read back by
+  polars-bio's `scan_vcf_zarr`. The warning "fields VCF Zarr export does not write" is gone. An
+  interval holding an offset of -1 or -2, VCF Zarr's integer missing and fill values, is written
+  missing on that row with a warning, since a reader would take the value for no value
+  (docs/SCHEMA.md, "VCF Zarr export").
+
+- `write_vcf` writes INFO `SVLEN` beside END on a length-type SV allele (`<DEL>`, `<DUP>`, `<INV>`,
+  `<CNV>`, `<CNn>`; RM6), which VCF 4.5 requires and tools that read SVLEN rather than END need. The
+  frame keeps no SVLEN, so the value is `end_pos - pos`, END restated: `.` on an `<INS>`, a breakend or
+  a sequence ALT; VCF 4.3's `Number=.`, negative for a deletion; 4.5's `Number=A`, unsigned (a facet
+  with a PSL set). A record with several length-type ALTs gets it only where VCF 4.5 says they share
+  one length (copy-number alleles, or `<DEL>`/`<DUP>`/`<CNV>` beside FORMAT CN); elsewhere it is left
+  out with a warning. A written file's reload reads the same `end_pos` (docs/SCHEMA.md, "Structural
+  variants").
+
 - **Breaking, pre-1.0:** relatedness splits the first degree into `parent_child` and `full_siblings`
   by IBS0 (RM274), two new `RelationBand` members. A parent and child are never homozygous for
   opposite alleles absent genotyping error; full siblings can be, over the quarter of the genome they

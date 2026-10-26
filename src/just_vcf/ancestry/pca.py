@@ -9,7 +9,8 @@ directory, named as just-prs names them, so a panel just-prs built works here un
 - `ancestry_refpcs_<panel>_<assembly>.parquet`: the reference samples, `iid, superpop, population,
   v0..v{dim_online-1}` (the sample eigenvectors).
 - `ancestry_model_<panel>_<assembly>_meta.json`: `build` (the assembly label), `s` (singular values),
-  `dim_ref`, `dim_stu`, `dim_online`, `knn_k`, `loo_accuracy` and counts.
+  `dim_ref`, `dim_stu`, `dim_online`, `knn_k`, `loo_accuracy` and counts, plus whatever a builder
+  adds (`build_aadr_panel` records its source files and selection rules); readers ignore extra keys.
 
 Which panels exist: just-prs builds them offline, with plink2 for QC and LD pruning, from the PGS
 Catalog's 1000 Genomes and HGDP+1kGP reference panels (`pgsc_1000G_v1`, `pgsc_HGDP+1kGP_v1`, GRCh38),
@@ -108,6 +109,7 @@ def build_pca_panel(
     panel_dir: Path,
     dim_ref: int = DEFAULT_DIM_REF,
     knn_k: int = DEFAULT_KNN_K,
+    extra_meta: dict | None = None,
 ) -> PanelBuild:
     """Build a reference-PCA panel and write its three files under `panel_dir`.
 
@@ -115,6 +117,8 @@ def build_pca_panel(
     follow `sites` (`chrom, pos, ref, alt`, `ref` the assembly's reference allele) and its columns
     follow `labels` (`iid, superpop, population`). `assembly` is the label of the assembly the
     positions are on (`GRCh37`, `GRCh38`, `T2T-CHM13`), the same vocabulary as `facets.assembly_label`.
+    `extra_meta` adds keys to the meta file (a builder's record of its source and rules); it may not
+    replace one this function writes.
     """
     if genotypes.shape[0] != sites.height:
         raise ValueError(f"genotypes has {genotypes.shape[0]} rows, sites {sites.height}")
@@ -158,6 +162,10 @@ def build_pca_panel(
         "n_variants": sites.height,
         "superpopulations": sorted({str(x) for x in superpops.tolist()}),
     }
+    clash = sorted(set(meta) & set(extra_meta or {}))
+    if clash:
+        raise ValueError(f"extra_meta would replace {clash}")
+    meta.update(extra_meta or {})
     paths["meta"].write_text(json.dumps(meta, indent=2))
     logger.info("panel %s on %s: %d sites, %d reference samples, LOO accuracy %.4f", panel, assembly, sites.height, labels.height, loo)
     return PanelBuild(

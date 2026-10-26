@@ -290,6 +290,14 @@ class ReferenceStore:
         """Labels a caller asserted for the collection with `add_fasta(…, assembly_label=…)`."""
         return sorted(alias for namespace, alias in self.store.get_aliases_for_collection(digest) if namespace == ASSEMBLY_NAMESPACE)
 
+    def collection_for(self, assembly: str) -> str:
+        """The digest of the one collection in the store whose assembly is `assembly`; none or two
+        are refused, since which one to read would be a guess."""
+        found = [digest for digest in self.collections() if self.assembly_label(digest) == assembly]
+        if len(found) != 1:
+            raise ValueError(f"the store at {self.path} holds {len(found)} collections of {assembly}; need exactly one")
+        return found[0]
+
     def fetch(self, contig: Contig, ranges: list[tuple[int, int]]) -> list[str]:
         """The bases over 0-based half-open `ranges` of `contig`, in order. Uppercase."""
         if not ranges:

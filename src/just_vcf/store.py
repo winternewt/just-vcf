@@ -7,7 +7,7 @@ everything in it back, lazily. The layout (docs/SCHEMA.md, "The durable store"):
     <path>/manifest.json                 store layout, schema version, subject, created; per facet its
                                          added time and the warnings its load gave, redacted
     <path>/facets/<facet_id>/facets.parquet, calls.parquet, blocks.parquet, links.parquet
-    <path>/.lock                         the OS file lock every add holds
+    <path>/.lock                         the OS file lock every add and migration holds
 
 The rules, each from the charter or the item:
 
@@ -20,8 +20,12 @@ The rules, each from the charter or the item:
   another one is refused with `SubjectError`, naming facet ids, never the subject.
 - **One schema version.** The store records the `SCHEMA_VERSION` it was created under. A `Loaded` of
   another version is refused, and so is reading a store of another version, with `StoreVersionError`:
-  frames of two versions are never mixed, and there is no migration yet (reload the sources into a
-  new store).
+  frames of two versions are never mixed, and nothing is migrated on read. `migrate_store(path)`
+  rewrites an older store to this version, by the steps in `just_vcf.store_migration`: every facet's
+  files are written anew beside the old ones, checked against them, and swapped in under the lock,
+  the manifest committing the swap; the old version's files go once it is committed. A store of a
+  later version is refused (no downgrade), and so is one of a version no store was written under.
+  This is the one rewrite of a facet's files: the facets and their rows stay what they were.
 - **Atomic per facet, safe under concurrent adds.** An add holds the store's lock from its check of
   what is present to its last manifest write. Each facet is sunk into a staging directory, synced, and
   renamed to `facets/<facet_id>/`; the manifest written after the rename is the commit. A staging
@@ -37,6 +41,7 @@ them (`query.FacetRedactor`: the facets' sample, source path and member, and any
 path), so the one plain-text file of a store quotes no name.
 """
 
+import json
 import logging
 import os
 import shutil
@@ -52,6 +57,14 @@ from just_vcf.loading import SPILL_ROW_GROUP, Loaded
 from just_vcf.person import Person, SameSubjectCheck, SubjectError
 from just_vcf.query import FacetRedactor
 from just_vcf.schema import BLOCKS, CALLS, FACETS, LINKS, SCHEMA_VERSION, empty
+from just_vcf.store_migration import (
+    STORE_FIRST_VERSION,
+    FilledUnknown,
+    MigrationStep,
+    StoreMigration,
+    is_newer,
+    migration_chain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +78,10 @@ _MANIFEST = "manifest.json"
 _LOCK = ".lock"
 _FACETS_DIR = "facets"
 _STAGING = ".staging-"
+_MIGRATING = ".migrating-"
+_PREVIOUS = ".previous-"
+_READY = "READY"
+_SCHEMAS = dict(zip(FRAMES, (FACETS, CALLS, BLOCKS, LINKS)))
 
 
 class StoreError(ValueError):
@@ -99,6 +116,8 @@ class StoreManifest(BaseModel):
     created: datetime
     facets: tuple[StoredFacet, ...] = ()
     """In `facet_id` order."""
+    migrations: tuple[StoreMigration, ...] = ()
+    """Every migration the store went through, oldest first, with what each filled unknown."""
 
 
 class StoreAdded(BaseModel):
@@ -130,7 +149,7 @@ class Store:
         into a directory holding other files. Opening an existing store with `subject` given checks
         it is the store's (`SubjectError` otherwise, naming no subject). A store of a later layout is
         refused (`StoreVersionError`); one of another schema version opens, so it can be inspected,
-        but its frames cannot be read or added to.
+        but its frames cannot be read or added to until `migrate_store` brings it to this version.
         """
         where = Path(path)
         manifest_path = where / _MANIFEST
@@ -156,6 +175,20 @@ class Store:
                 "that did not finish, whose leftovers the next add removes: %s",
                 len(orphans),
                 ", ".join(orphans),
+            )
+        migrating = sorted(child.name for child in where.glob(f"{_MIGRATING}*"))
+        if migrating:
+            logger.warning(
+                "store: a migration in progress, or one that did not finish (%s): migrate_store finishes or "
+                "removes it, and the store reads as the version its manifest names until then",
+                ", ".join(migrating),
+            )
+        previous = sorted(child.name for child in where.glob(f"{_PREVIOUS}*"))
+        if previous:
+            logger.warning(
+                "store: the files of a version a migration replaced are kept (%s); nothing reads them, and "
+                "removing them is the caller's choice",
+                ", ".join(previous),
             )
         return store
 
@@ -226,7 +259,9 @@ class Store:
     def loaded(self) -> Loaded:
         """Every facet in the store as one `Loaded`: lazy scans of its files, in `facet_id` order, and
         the links of all of them, each link once (Decision 12's order). `warnings` are the facets'
-        own, in facet order, each line once. An empty store gives empty frames."""
+        own, in facet order, each line once, then one line for each set of values a migration of the
+        store filled unknown (`StoreMigration.filled_unknown`), so a null a migration left is not read
+        as one a load wrote. An empty store gives empty frames."""
         manifest = self.manifest
         _check_version(manifest.schema_version, SCHEMA_VERSION, "this just-vcf")
         directories = [self.path / _FACETS_DIR / entry.facet_id for entry in manifest.facets]
@@ -237,6 +272,7 @@ class Store:
             for name, schema in zip(FRAMES, (FACETS, CALLS, BLOCKS, LINKS))
         }
         warnings = list(dict.fromkeys(line for entry in manifest.facets for line in entry.warnings))
+        warnings += [_filled_warning(migration, filled) for migration in manifest.migrations for filled in migration.filled_unknown]
         return Loaded(
             facets=frames["facets"],
             calls=frames["calls"],
@@ -260,17 +296,15 @@ class Store:
         stage.mkdir()
         try:
             mine = pl.col("facet_id") == facet_id
-            pl.collect_all(
-                [
-                    loaded.facets.filter(mine).sink_parquet(stage / "facets.parquet", lazy=True),
-                    loaded.calls.filter(mine).sink_parquet(stage / "calls.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
-                    loaded.blocks.filter(mine).sink_parquet(stage / "blocks.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
-                    links.lazy().sink_parquet(stage / "links.parquet", lazy=True),
-                ]
+            _sink_facet(
+                stage,
+                {
+                    "facets": loaded.facets.filter(mine),
+                    "calls": loaded.calls.filter(mine),
+                    "blocks": loaded.blocks.filter(mine),
+                    "links": links.lazy(),
+                },
             )
-            for name in FRAMES:
-                _fsync(stage / f"{name}.parquet")
-            _fsync_dir(stage)
             target = self.path / _FACETS_DIR / facet_id
             target.parent.mkdir(exist_ok=True)
             os.rename(stage, target)
@@ -302,12 +336,205 @@ def _links_of(links: pl.DataFrame, facet_id: str) -> pl.DataFrame:
     return canonical_links(links.lazy().filter(pl.col("to_facet_id").is_in(sorted(reached)))).collect()
 
 
+def _sink_facet(directory: Path, frames: dict[str, pl.LazyFrame]) -> None:
+    """Sink one facet's four frames into `directory` and sync them: an add and a migration write a
+    facet's files the same way."""
+    pl.collect_all(
+        [
+            frames["facets"].sink_parquet(directory / "facets.parquet", lazy=True),
+            frames["calls"].sink_parquet(directory / "calls.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
+            frames["blocks"].sink_parquet(directory / "blocks.parquet", row_group_size=SPILL_ROW_GROUP, lazy=True),
+            frames["links"].sink_parquet(directory / "links.parquet", lazy=True),
+        ]
+    )
+    for name in FRAMES:
+        _fsync(directory / f"{name}.parquet")
+    _fsync_dir(directory)
+
+
 def _check_version(store_version: str, other: str, what: str) -> None:
-    if store_version != other:
-        raise StoreVersionError(
-            f"the store holds schema version {store_version} and {what} is {other}; versions are never mixed. "
-            "No migration exists yet: load the sources again into a new store"
+    if store_version == other:
+        return
+    if other == SCHEMA_VERSION:
+        raise StoreVersionError(_version_refusal(store_version, what))
+    raise StoreVersionError(f"the store holds schema version {store_version} and {what} is {other}; versions are never mixed")
+
+
+def _version_refusal(store_version: str, what: str) -> str:
+    """Why a store of `store_version` is neither read nor added to by this just-vcf, and what to do."""
+    head = (
+        f"the store holds schema version {store_version} and {what} is {SCHEMA_VERSION}; versions are never "
+        "mixed, and nothing is migrated on read"
+    )
+    if is_newer(store_version):
+        return f"{head}. A later just-vcf wrote the store, and this one does not downgrade it: upgrade just-vcf"
+    if migration_chain(store_version) is None:
+        return (
+            f"{head}. There is no migration from {store_version}: no store was written under it (the store "
+            f"shipped under {STORE_FIRST_VERSION}). Load the sources again into a new store"
         )
+    return f"{head}. Migrate the store to {SCHEMA_VERSION} first, with just_vcf.migrate_store(path)"
+
+
+def _filled_warning(migration: StoreMigration, filled: FilledUnknown) -> str:
+    return (
+        f"store migrated from schema {migration.from_version} to {migration.to_version}: at the step to "
+        f"{filled.version}, {filled.frame} {', '.join(filled.columns)} on {len(filled.facet_ids)} facet(s) "
+        f"({', '.join(filled.facet_ids)}): {filled.reason}"
+    )
+
+
+def migrate_store(path: Path | str, keep_previous: bool = False) -> StoreMigration:
+    """Rewrite the store at `path`, written under an older schema version, to this one.
+
+    The steps of `just_vcf.store_migration` are applied in order from the store's version to
+    `SCHEMA_VERSION`, to every facet's four frames. Under the store's lock, each facet is written anew
+    into a `.migrating-*` directory beside the old files and checked against them (this version's
+    shape, the same rows, the old columns' values unchanged); only when every facet passes is the
+    migration marked ready and swapped in: the old `facets/` and manifest move to `.previous-<version>`,
+    the new ones move in, and the new manifest, written last, commits it. The old files are then
+    removed, or kept with `keep_previous=True`. A migration cut off before it was ready leaves the store
+    as it was, and the next call removes what it wrote; one cut off after finishes on the next call. A
+    reader meanwhile is refused, by the version its manifest names, as before.
+
+    Returns what was done, also recorded in the manifest's `migrations`: the steps, the facets, and
+    every value filled unknown (`FilledUnknown`), which `Store.loaded()` repeats as warnings. A store
+    already at this version is left as it is (nothing applied). Refused with `StoreVersionError`: a
+    store of a later version (no downgrade), or of one no store was written under.
+    """
+    where = Path(path)
+    _read_manifest(where)
+    with _locked(where):
+        finished = _finish_migration(where)
+        manifest = _read_manifest(where)
+        if manifest.schema_version == SCHEMA_VERSION:
+            return finished or StoreMigration(from_version=SCHEMA_VERSION, to_version=SCHEMA_VERSION)
+        chain = migration_chain(manifest.schema_version)
+        if chain is None:
+            raise StoreVersionError(_version_refusal(manifest.schema_version, "this just-vcf"))
+        stage = where / f"{_MIGRATING}{os.getpid()}-{os.urandom(4).hex()}"
+        (stage / _FACETS_DIR).mkdir(parents=True)
+        try:
+            filled = _migrate_facets(where, stage, manifest, chain)
+            record = StoreMigration(
+                from_version=manifest.schema_version,
+                to_version=SCHEMA_VERSION,
+                migrated=_now(),
+                steps=tuple(step.applied() for step in chain),
+                facets=tuple(entry.facet_id for entry in manifest.facets),
+                filled_unknown=filled,
+            )
+            _fsync_dir(stage / _FACETS_DIR)
+            _write_manifest(
+                stage,
+                manifest.model_copy(update={"schema_version": SCHEMA_VERSION, "migrations": (*manifest.migrations, record)}),
+            )
+            marker = stage / _READY
+            marker.write_text(json.dumps({"from_version": manifest.schema_version, "keep_previous": keep_previous}) + "\n")
+            _fsync(marker)
+            _fsync_dir(stage)
+        except BaseException:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
+        _finish_migration(where)
+    logger.info("store: migrated %d facet(s) from schema %s to %s", len(record.facets), record.from_version, record.to_version)
+    return record
+
+
+def _migrate_facets(where: Path, stage: Path, manifest: StoreManifest, chain: tuple[MigrationStep, ...]) -> tuple[FilledUnknown, ...]:
+    """Write every facet of the store, migrated by `chain`, under `stage`, each checked against its old
+    files. Returns what the steps filled unknown, step by step, on the facets each applies to."""
+    applies: dict[tuple[int, int], list[str]] = {}
+    for entry in manifest.facets:
+        old = {name: pl.scan_parquet(where / _FACETS_DIR / entry.facet_id / f"{name}.parquet") for name in FRAMES}
+        frames = dict(old)
+        for at, step in enumerate(chain):
+            # A caveat reads the facet row as the step finds it.
+            for which, caveat in enumerate(step.caveats):
+                if frames["facets"].filter(caveat.applies).select(pl.len()).collect().item():
+                    applies.setdefault((at, which), []).append(entry.facet_id)
+            frames = {name: step.apply(name, frame) for name, frame in frames.items()}
+        target = stage / _FACETS_DIR / entry.facet_id
+        target.mkdir()
+        _sink_facet(target, frames)
+        _verify_migrated(entry.facet_id, old, target)
+    return tuple(
+        FilledUnknown(
+            version=step.to_version,
+            frame=caveat.frame,
+            columns=caveat.columns,
+            facet_ids=tuple(sorted(applies[(at, which)])),
+            reason=caveat.reason,
+        )
+        for at, step in enumerate(chain)
+        for which, caveat in enumerate(step.caveats)
+        if (at, which) in applies
+    )
+
+
+def _verify_migrated(facet_id: str, old: dict[str, pl.LazyFrame], target: Path) -> None:
+    """Each migrated file has this version's shape, the old file's row count, and the old columns'
+    values unchanged (a digest of every row, the new columns cast back to the old dtypes)."""
+    for name in FRAMES:
+        new = pl.scan_parquet(target / f"{name}.parquet")
+        if new.collect_schema() != _SCHEMAS[name]:
+            raise StoreError(f"migrating facet {facet_id}: its {name} frame does not have schema {SCHEMA_VERSION}'s shape")
+        before = old[name].collect_schema()
+        kept = before.names()
+        was, now = pl.collect_all([_digest(old[name], kept), _digest(new.select(pl.col(c).cast(before[c]) for c in kept), kept)])
+        if was["rows"].item() != now["rows"].item():
+            raise StoreError(
+                f"migrating facet {facet_id}: its {name} frame has {now['rows'].item()} rows after, {was['rows'].item()} before"
+            )
+        if was["digest"].item() != now["digest"].item():
+            raise StoreError(f"migrating facet {facet_id}: values of its {name} frame changed")
+
+
+def _digest(frame: pl.LazyFrame, columns: list[str]) -> pl.LazyFrame:
+    """Row count and an order-free digest of `columns` (each row's hash, its top 32 bits summed, so the
+    sum cannot overflow below four billion rows)."""
+    return frame.select(pl.len().alias("rows"), (pl.struct(columns).hash(seed=0) // (1 << 32)).sum().alias("digest"))
+
+
+def _finish_migration(where: Path) -> StoreMigration | None:
+    """Under the store's lock: finish a migration whose files were all written and checked (its `READY`
+    marker), and remove one that was cut off before. Returns the migration this call committed.
+
+    Each move is skipped when it is already done, so a call cut off anywhere finishes on the next. The
+    order: the old manifest copied to `.previous-<version>`, the old `facets/` moved there, the new
+    `facets/` moved in, the new manifest moved over the old (the commit), then the old files removed
+    unless kept, and the migration's directory last, so its marker outlives every step.
+    """
+    finished: StoreMigration | None = None
+    for stage in sorted(where.glob(f"{_MIGRATING}*")):
+        marker = stage / _READY
+        if not marker.is_file():
+            logger.info("store: removing %s, a migration cut off before it was ready", stage.name)
+            shutil.rmtree(stage, ignore_errors=True)
+            continue
+        ready = json.loads(marker.read_text())
+        previous = where / f"{_PREVIOUS}{ready['from_version']}"
+        staged_manifest = stage / _MANIFEST
+        if staged_manifest.is_file():
+            previous.mkdir(exist_ok=True)
+            if not (previous / _MANIFEST).is_file():
+                shutil.copy2(where / _MANIFEST, previous / _MANIFEST)
+                _fsync(previous / _MANIFEST)
+            staged_facets = stage / _FACETS_DIR
+            if staged_facets.is_dir():
+                live = where / _FACETS_DIR
+                if live.is_dir():
+                    os.rename(live, previous / _FACETS_DIR)
+                    _fsync_dir(previous)
+                os.rename(staged_facets, live)
+                _fsync_dir(where)
+            finished = _read_manifest(stage).migrations[-1]
+            os.replace(staged_manifest, where / _MANIFEST)
+            _fsync_dir(where)
+        if not ready["keep_previous"]:
+            shutil.rmtree(previous, ignore_errors=True)
+        shutil.rmtree(stage, ignore_errors=True)
+    return finished
 
 
 class _locked:

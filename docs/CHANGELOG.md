@@ -4,6 +4,20 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A store written under an older schema version can be migrated (RM276): `migrate_store(path)`
+  rewrites it to this version by one step per schema bump since the store shipped under 0.0.14
+  (`just_vcf.store_migration.MIGRATIONS`, five steps to 0.0.19), and returns a `StoreMigration`
+  naming the steps, the facets, and every value it filled unknown (`FilledUnknown`, with the facet
+  ids and the reason: a migrated VCF facet's `method_steps` and `gl_source` are null for not read,
+  a CGI facet's `hq` and hapLink phase likewise; load the source again to read them). Each facet is
+  written beside the old files and checked against them before a marked swap under the store's lock;
+  a migration cut off before the mark leaves the store as it was, one cut off after finishes on the
+  next call. The old version's files are removed once the new manifest is committed, or kept with
+  `keep_previous=True`. Nothing migrates on read: `loaded()` and `add` on an older store are still
+  refused, now naming `migrate_store`; a store from a later just-vcf is refused with "upgrade
+  just-vcf". The manifest gains `migrations` (default empty, `store_layout` unchanged), and
+  `loaded()` repeats each filled-unknown set as a warning (docs/SCHEMA.md, "Store migration").
+
 - `write_vcf_zarr` writes `cipos`, `ciend` and `alt_copy_numbers` (RM276), which it counted as not
   written: `variant_CIPOS` and `variant_CIEND` (`<i4`, two offsets per ALT, on `CIPOS_dim` and
   `CIEND_dim`) and `variant_CN` (`<f4` on `alt_alleles`), each where any row has one, read back by

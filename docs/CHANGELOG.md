@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `absence_support(facet, variant_class, force=False)` answers what `absence_is_reference` answers,
+  with the gate that decided it (`AbsenceReason`): why a whole genome's silence reads as reference
+  (`whole_genome_silence`, `omitted_called_reference`, `content_filter_forced`), or why an absence says
+  nothing (`outside_blocks`, `array`, `targeted`, `imputed`, `callset_type_unknown`,
+  `class_not_counted`, `class_not_called`, `content_filter_held`, `class_cut_by_filter`).
+  `absence_is_reference` now returns its `reads_reference`; its answers do not change
+  (docs/SCHEMA.md Decision 4).
+
 - `concordance` compares structural-variant calls across two facets (RM282). A symbolic allele
   (`<DEL>`, `<DUP:TANDEM>`, `<INV>`, `<INS>`, `<CNV>`, `<CNn>`) pairs with at most one of the other
   facet's by type and extent, under truvari bench's matching and defaults (`SvMatching`: `refdist`

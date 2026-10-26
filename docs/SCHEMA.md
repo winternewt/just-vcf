@@ -606,6 +606,16 @@ for consumers that restore hom-ref themselves (just-prs, just-dna-lite). A posit
 hom-ref restoration from absence that just-vcf grows must ask it, and refuse a facet with a
 `content_filter` unless called with `force=True`.
 
+`absence_support(facet_row, variant_class, force=False)` gives the same answer with the gate that
+decided it (`AbsenceReason`, just-vcf's own vocabulary), so a refusal says why. It reads as reference
+under `whole_genome_silence` (`weak_reference`), `omitted_called_reference` (`reference`) and
+`content_filter_forced` (either, on a filtered genome, for the kept class, with `force=True`). It is
+unknown under `outside_blocks` (`blocks`); under `array`, `targeted` (an exome or a panel), `imputed`
+or `callset_type_unknown`, from the facet's `callset_type`, when `absence_means` is `unknown`; and
+under `class_not_counted`, `class_not_called`, `content_filter_held` (the kept class, without
+`force`) and `class_cut_by_filter`. `absence_is_reference` is its `reads_reference`, so the two
+cannot drift.
+
 **On an array, an absence has a cause (RM281).** An array's absence stays `unknown`, but
 `chip_absence(loaded, sites)` says why, per asked site (`chrom` canonical, `pos` 1-based), from the
 probe set of the facet's `chip` on its `assembly_label` (`just_vcf.probes.probe_set`):

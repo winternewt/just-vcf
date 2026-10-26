@@ -4,7 +4,7 @@ from importlib.metadata import version
 
 from just_vcf.atlas import RegionSet, giab_stratifications, method_atlas, pair_counts, pool_counts
 from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
-from just_vcf.callset import absence_is_reference
+from just_vcf.callset import AbsenceReason, AbsenceSupport, absence_is_reference, absence_support
 from just_vcf.coverage import (
     Callability,
     Coverage,
@@ -113,6 +113,8 @@ __all__ = [
     "VCF_ZARR_VERSION",
     "AbsenceMeans",
     "AbsenceReading",
+    "AbsenceReason",
+    "AbsenceSupport",
     "Agreement",
     "AlleleFrequencyPrior",
     "AssemblyLabelBasis",
@@ -202,6 +204,7 @@ __all__ = [
     "XCopies",
     "__version__",
     "absence_is_reference",
+    "absence_support",
     "chip_absence",
     "cis_phased_blocks",
     "alignment_coverage",

@@ -6,12 +6,13 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ContentFilter, ContentFilterBasis, VariantClass, absence_is_reference, load
+from just_vcf import AbsenceReason, ContentFilter, ContentFilterBasis, VariantClass, absence_is_reference, absence_support, load
 from just_vcf.callset import (
     MAX_FILTER_RESIDUE,
     MIN_FILTER_ALLELES,
     MIN_UNFILTERED_RESIDUE,
     MIN_WGS_SITES,
+    READS_REFERENCE,
     infer_content_filter,
     named_content_filter,
     rows_content_filter,
@@ -248,6 +249,42 @@ def test_absence_is_reference_is_true_or_unknown(row: dict, asked: str, force: b
 def test_absence_is_reference_refuses_an_unknown_class() -> None:
     with pytest.raises(ValueError):
         absence_is_reference(WGS_FULL, "snp")
+    with pytest.raises(ValueError):
+        absence_support(WGS_FULL, "snp")
+
+
+def typed(absence: str, callset_type: str | None) -> dict:
+    return {**facet(absence, [("snv", 10)]), "callset_type": callset_type}
+
+
+@pytest.mark.parametrize(
+    ("row", "asked", "force", "reason"),
+    [
+        (WGS_FULL, "snv", False, AbsenceReason.WHOLE_GENOME_SILENCE),
+        (WGS_FULL, "sv", False, AbsenceReason.CLASS_NOT_CALLED),
+        (WGS_SNP_HALF, "snv", False, AbsenceReason.CONTENT_FILTER_HELD),
+        (WGS_SNP_HALF, "snv", True, AbsenceReason.CONTENT_FILTER_FORCED),
+        (WGS_SNP_HALF, "indel", False, AbsenceReason.CLASS_CUT_BY_FILTER),
+        (WGS_SNP_HALF, "indel", True, AbsenceReason.CLASS_CUT_BY_FILTER),
+        (facet("reference", [("snv", 3_000_000), ("indel", 400_000)]), "indel", False, AbsenceReason.OMITTED_CALLED_REFERENCE),
+        (facet("reference", [("snv", 3_000_000), ("indel", 12)], "snv_only"), "snv", True, AbsenceReason.CONTENT_FILTER_FORCED),
+        (facet("blocks", [("snv", 10)]), "snv", True, AbsenceReason.OUTSIDE_BLOCKS),
+        (typed("unknown", "array"), "snv", True, AbsenceReason.ARRAY),
+        (typed("unknown", "wes"), "snv", True, AbsenceReason.TARGETED),
+        (typed("unknown", "panel"), "snv", True, AbsenceReason.TARGETED),
+        (typed("unknown", "imputed"), "snv", True, AbsenceReason.IMPUTED),
+        (typed("unknown", None), "snv", True, AbsenceReason.CALLSET_TYPE_UNKNOWN),
+        (facet("weak_reference", None), "snv", True, AbsenceReason.CLASS_NOT_COUNTED),
+        ({"absence_means": "weak_reference"}, "snv", True, AbsenceReason.CLASS_NOT_COUNTED),
+    ],
+)
+def test_absence_support_gives_the_gate_that_decided(row: dict, asked: str, force: bool, reason: AbsenceReason) -> None:
+    """Each gate of `absence_is_reference` answers with its own reason, and the answer is the same one."""
+    support = absence_support(row, asked, force=force)
+    assert support.reason is reason
+    assert support.reads_reference is absence_is_reference(row, asked, force=force)
+    assert support.reads_reference is (True if reason in READS_REFERENCE else None)
+    assert bool(support) is (support.reads_reference is True)
 
 
 # --- at load ----------------------------------------------------------------------------------
@@ -344,3 +381,4 @@ def test_a_genotype_table_counts_no_classes(tmp_path: Path) -> None:
     assert row["absence_means"] == "unknown"
     assert (row["variant_classes"], row["content_filter"], row["content_filter_basis"]) == (None, None, None)
     assert absence_is_reference(row, "snv", force=True) is None
+    assert absence_support(row, "snv", force=True).reason is AbsenceReason.ARRAY

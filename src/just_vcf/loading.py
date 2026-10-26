@@ -580,16 +580,24 @@ def canonical_batches(counts: dict[str, int]) -> list[list[str]]:
     contigs, consecutive in canonical contig order, up to `SPILL_PART_ROWS` rows per group unless one
     contig alone has more. `canonical_parts` writes `load`'s and `rejoin_split`'s spills by it, and
     `resolve_ref`, `normalize` and `liftover` read and write theirs a group at a time by it (F24)."""
-    batches: list[list[str]] = []
+    ordered = sorted(counts, key=lambda c: (CONTIG_RANK.get(c, len(CONTIG_RANK)), c))
+    return [[ordered[i] for i in group] for group in bounded_groups([counts[chrom] for chrom in ordered])]
+
+
+def bounded_groups(sizes: list[int]) -> list[list[int]]:
+    """The indices of `sizes` cut into groups of consecutive items, each up to `SPILL_PART_ROWS` rows
+    unless one item alone has more: the rule `canonical_batches` groups contigs by. `mint_vrs_ids`
+    groups its input's runs of one contig by it, in row order (F24)."""
+    groups: list[list[int]] = []
     held = 0
-    for chrom in sorted(counts, key=lambda c: (CONTIG_RANK.get(c, len(CONTIG_RANK)), c)):
-        if batches and held + counts[chrom] <= SPILL_PART_ROWS:
-            batches[-1].append(chrom)
-            held += counts[chrom]
+    for index, size in enumerate(sizes):
+        if groups and held + size <= SPILL_PART_ROWS:
+            groups[-1].append(index)
+            held += size
         else:
-            batches.append([chrom])
-            held = counts[chrom]
-    return batches
+            groups.append([index])
+            held = size
+    return groups
 
 
 def canonical_parts(staged: Path, name: str) -> list[Path]:

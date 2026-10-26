@@ -1438,7 +1438,9 @@ with the alternative rejected:
 - **Rows walked as runs of one contig** (`rle` over the spilled input), reading only the columns
   minting needs; the ids go to their own files and sit beside the spilled rows by position. Rejected:
   a filtered scan per contig with a re-sort (resolve_ref's shape), one scan of the file per contig (170
-  on the GRCh38 genome).
+  on the GRCh38 genome). *Amended 2026-10-26:* the runs are minted a group at a time, consecutive runs
+  up to `SPILL_PART_ROWS` rows (`loading.bounded_groups`), one slice, one pass and one ids part per
+  group, since a pass per run was a fixed cost per contig (F24, docs/PREVIOUS_ISSUES.md).
 - **The oracle is `scripts/vrs_oracle.py`**: a vrs-python data proxy over the same gtars store, so
   both sides read the same sequence; vrs-python is a dev dependency.
 
@@ -1457,6 +1459,12 @@ store:
   s wall with the cache under `data/interim/` on the NTFS disk, which `dd` measured at 2.5 MB/s during
   the runs (other sessions were writing to it; the workspace note says about 350 MB/s). Peak RSS of the
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
+- *Measured 2026-10-26* (F24's amendment, library only, VRS spill fresh after a cached `load` and
+  `resolve_ref`, every output hashing the same before and after): hu416394's bcftools gVCF, 9,651,143
+  calls on 2,057 contigs, minted in 97.5–108.8 s a pass per contig, 70.5–75.0 s in 12 groups, at a
+  sampled peak of 4.7 GB either way; its Manta file, 9,373 rows on 942 contigs, 18.6–18.8 s → 11.4 s. What
+  remains is per allele (24.4 million gtars digest calls, the indels' justification) and 25 whole-contig
+  fetches; docs/PREVIOUS_ISSUES.md, F24.
 
 **Measured 2026-10-26**, the opt-in tests in `tests/test_vrs.py` on the store at
 `/data/just-dna-cache/reference/store` (GRCh37 and GRCh38) and PGP-HMS uploads from the Krypton copy,

@@ -2390,7 +2390,11 @@ frame stops working when its files go.
   report in parts of whole source contigs, in the parent's order within each). Each of these steps
   names its layout in its versions (`FRAMES_LAYOUT`, `REJOIN_LAYOUT`, `RESOLVE_LAYOUT`,
   `NORMALIZE_LAYOUT`, `LIFT_LAYOUT`), so a generation an older version wrote with a file per contig is
-  never read, and the sweep retires its entry. `liftover`'s generation holds five groups,
+  never read, and the sweep retires its entry. `mint_vrs_ids`'s generation holds its staged input
+  (`calls`) as it came and the `ids` beside it by position, one part per group of consecutive runs of
+  one contig in row order, by the same bound (`loading.bounded_groups`); `VRS_LAYOUT` names that layout,
+  so a generation written a pass per run, its id parts cut every million rows, is not read (it would
+  read the same, but is written once more under the key). `liftover`'s generation holds five groups,
   the lifted `calls`, the `report`, the lifted `blocks`, the `block_report` and the `mate_contigs`
   lifted breakends name; its key is the bytes of
   the staged parent `calls` and `blocks` (the blocks since `LIFT_VERSION` 8, when they began to be

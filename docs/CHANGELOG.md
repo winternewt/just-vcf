@@ -4,6 +4,22 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `mint_vrs_ids` mints a group of whole runs of one contig at a time (F24, amended), where it made a
+  slice-`collect` and a pass of about twenty `collect`s per run, so a header full of decoys paid a fixed
+  pass per contig. The groups are consecutive in row order, up to `SPILL_PART_ROWS` rows unless one run
+  alone has more (`loading.bounded_groups`, which `canonical_batches` now groups by too); one slice, one
+  pass and one ids part per group, where the parts were cut every million rows (`_IDS_PER_PART`,
+  gone). Each contig's indels are justified together and its sequence read once per group, where it
+  was once per run. Same ids, `vrs_errors`, withheld reasons, warnings and row order: on the two
+  hu416394 files every output hashes the same before and after. On its Manta file (942 contigs)
+  18.6–18.8 s → 11.4 s, 942 passes → 1; on its bcftools gVCF (9.65M calls on 2,057 contigs) 97.5–108.8
+  s → 70.5–75.0 s, 2,057 passes → 12, 8 ids parts → 12, peak RSS 4.7 GB before and after
+  (docs/PREVIOUS_ISSUES.md, F24). The spill's manifest and
+  generation key carry `VRS_LAYOUT` (1), so the first run of this version mints a facet once more; the
+  sweep retires the older entry once unused past the grace period. `MINT_VERSION` stays 3. What is
+  left is per allele or per fetched contig, not per pass: a whole contig fetched for its first indel
+  (on the Manta file, 24 fetches are most of the remaining time) and a gtars digest call per location
+  and allele; both recorded in docs/PREVIOUS_ISSUES.md, F24.
 - `ReferenceStore.add_fasta(…, assembly_label=…)` refuses the asserted label when any sequence whose
   canonical name is `1` has a length that names another assembly. It compared only the label the
   lengths give, which the entry below made unknown for a FASTA serving contig 1 twice, so GRCh37's

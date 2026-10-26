@@ -1,6 +1,8 @@
 """F24: `resolve_ref`, `normalize` and `liftover` read their input and write their spill a group of whole
 contigs at a time (`loading.canonical_batches`), so a header full of decoys costs a few parts, where it
-cost a filtered scan, a pass and a file per contig with rows.
+cost a filtered scan, a pass and a file per contig with rows. `mint_vrs_ids` reads its input a group of
+whole runs of one contig at a time, in row order, by the same bound (`loading.bounded_groups`), one
+slice, one pass and one part per group, where it was a slice and a pass per run.
 
 The oracle is each step run with a part bound of one row: every contig is then a group of its own,
 read in its own scan, passed through its own pass and written to its own file, which is the shape every
@@ -26,12 +28,15 @@ from test_cache import aged, write_entry
 from test_rerun import generations, manifests
 from test_spill_order import DECOYS
 
-from just_vcf import ReferenceStore, cache, liftover, load, normalize, resolve_ref
+from just_vcf import Loaded, ReferenceStore, cache, liftover, load, mint_vrs_ids, normalize, resolve_ref, vrs_withheld
 from just_vcf import loading as loading_module
+from just_vcf import vrs as vrs_module
 from just_vcf.liftover import LIFT_LAYOUT, LIFT_VERSION
+from just_vcf.loading import canonical_batches
 from just_vcf.normalize import NORMALIZE_LAYOUT, NORMALIZE_VERSION
-from just_vcf.reference import RESOLVE_LAYOUT, RESOLVE_VERSION
+from just_vcf.reference import RESOLVE_LAYOUT, RESOLVE_VERSION, Contig
 from just_vcf.schema import SCHEMA_VERSION, canonical_order
+from just_vcf.vrs import MINT_VERSION, VRS_LAYOUT
 
 
 def _sequences(seed: int) -> dict[str, str]:
@@ -189,10 +194,26 @@ def run(inputs: tuple[Path, Path, Path], upto: str = "all") -> dict[str, object]
             "lifted_warnings": lifted.loaded.warnings,
             "lifted_facets": lifted.loaded.facets.collect(),
         }
+    if upto in ("all", "mint"):
+        minted = mint_vrs_ids(resolved, store)
+        out |= {
+            "minted": minted.calls.collect(),
+            "minted_withheld": vrs_withheld(minted.calls).select("vrs_withheld").collect(),
+            "minted_warnings": minted.warnings,
+        }
     if upto == "all":
         again = normalize(lifted.loaded, store)
         out |= {"normalized_lift": again.calls.collect(), "normalized_lift_warnings": again.warnings}
+        # The same rows by position alone: every contig in many runs, so a group holds runs of one contig
+        # apart from each other, and the rows of each stored contig are minted on its sequence together.
+        shuffled = mint_vrs_ids(interleaved(resolved), store)
+        out |= {"minted_interleaved": shuffled.calls.collect(), "minted_interleaved_warnings": shuffled.warnings}
     return out
+
+
+def interleaved(loaded: Loaded) -> Loaded:
+    """`loaded` with its calls ordered by position alone, the contigs' rows interleaved."""
+    return loaded.model_copy(update={"calls": loaded.calls.sort("pos", maintain_order=True)})
 
 
 def same(got: dict[str, object], expected: dict[str, object]) -> None:
@@ -243,6 +264,19 @@ def test_the_fixture_exercises_what_it_claims(inputs: tuple[Path, Path, Path], t
     # The same position, REF and ALT on two contigs: a conflict counted per contig must not join them.
     calls = out["normalized"]
     assert calls.group_by("pos", "ref", "alts").agg(pl.col("chrom").n_unique().alias("contigs"))["contigs"].max() > 1
+    # Ids minted on every stored contig, indels among them, and the decoys' alleles withheld.
+    minted = resolved.with_columns(out["minted"]["vrs_allele_ids"], out["minted_withheld"]["vrs_withheld"])
+    with_ids = minted.filter(pl.col("vrs_allele_ids").list.drop_nulls().list.len() > 0)
+    assert set(with_ids["chrom"]) == set(SOURCE)
+    assert with_ids.filter(pl.col("ref").str.len_chars() > 1).height > 0
+    decoys = minted.filter(pl.col("chrom").is_in(UNSTORED))
+    assert decoys["vrs_allele_ids"].null_count() == decoys.height
+    assert set(decoys["vrs_withheld"].explode(empty_as_null=False)) == {"ref_unchecked", "sv_no_vrs_model"}
+    # By position alone, contigs come back in many runs; each row keeps the ids it has in canonical order.
+    order = resolved.with_row_index("i").sort("pos", maintain_order=True)
+    runs = order.with_columns(pl.col("chrom").rle_id().alias("run")).group_by("chrom").agg(pl.col("run").n_unique())
+    assert runs.filter(pl.col("chrom").is_in(list(SOURCE)))["run"].min() > 1
+    assert out["minted_interleaved"]["vrs_allele_ids"].equals(out["minted"]["vrs_allele_ids"].gather(order["i"]))
 
 
 def _parts(kind: str) -> dict[str, list[Path]]:
@@ -268,6 +302,98 @@ def test_each_step_writes_a_few_parts_its_frames_read_in_one_scan(inputs: tuple[
     assert {group: len(paths) for group, paths in _parts(cache.NORMALIZE_SPILL).items()} == {"calls": 1}
     lift = {group: len(paths) for group, paths in _parts(cache.LIFT_SPILL).items()}
     assert lift == {"calls": 1, "report": 1, "blocks": 1, "block_report": 1, "mate_contigs": 1}
+
+
+def counted_passes(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """The contigs of every pass `mint_vrs_ids` makes, recorded as it makes them."""
+    passes: list[list[str]] = []
+    real = vrs_module._mint_rows
+
+    def spying(rows: pl.DataFrame, *args: object) -> pl.DataFrame:
+        passes.append(rows["chrom"].unique(maintain_order=True).to_list())
+        return real(rows, *args)
+
+    monkeypatch.setattr(vrs_module, "_mint_rows", spying)
+    return passes
+
+
+def test_minting_makes_one_pass_and_one_part_per_group(inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    """At the default bound the 68 contigs are one pass and one ids part; at a bound of 7 rows the passes
+    are `canonical_batches`' groups (the resolved frame is in canonical order), each part holds whole
+    contigs, and the parts follow one another in row order. Before, a pass per contig."""
+    vcf, store_dir, _ = inputs
+    store = ReferenceStore.open(store_dir)
+    resolved = resolve_ref(load(vcf), store)
+    counts = dict(resolved.calls.group_by("chrom").len().collect().iter_rows())
+    passes = counted_passes(monkeypatch)
+    mint_vrs_ids(resolved, store)
+    assert len(passes) == 1 and set(passes[0]) == set(counts)
+    assert {group: len(paths) for group, paths in _parts(cache.VRS_SPILL).items()} == {"calls": 1, "ids": 1}
+
+    monkeypatch.setenv("JUST_VCF_CACHE_DIR", str(cache.cache_dir() / "bound-7"))
+    monkeypatch.setattr(loading_module, "SPILL_PART_ROWS", 7)
+    passes.clear()
+    minted = mint_vrs_ids(resolved, store)
+    assert passes == canonical_batches(counts)
+    ids = _parts(cache.VRS_SPILL)["ids"]
+    assert len(ids) == len(passes) > 1
+    rows = [pl.read_parquet(path, columns=["_row"])["_row"] for path in ids]
+    assert pl.concat(rows).to_list() == list(range(sum(counts.values())))
+    chroms = resolved.calls.select("chrom").collect()["chrom"]
+    for part, group in zip(rows, passes):
+        assert set(chroms.gather(part)) == set(group)
+        assert part.len() <= 7 or len(group) == 1
+    assert minted.calls.collect().height == sum(counts.values())
+
+
+def test_interleaved_contigs_are_read_once_per_group(inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rows ordered by position alone, every contig in many runs: one pass, and each stored contig's
+    sequence read once, where a pass per run read it once per run."""
+    vcf, store_dir, _ = inputs
+    store = ReferenceStore.open(store_dir)
+    resolved = interleaved(resolve_ref(load(vcf), store))
+    passes = counted_passes(monkeypatch)
+    fetched: list[str] = []
+    real_fetch = ReferenceStore.fetch
+
+    def fetch(self: ReferenceStore, contig: Contig, ranges: list[tuple[int, int]]) -> list[str]:
+        fetched.append(contig.digest)
+        return real_fetch(self, contig, ranges)
+
+    monkeypatch.setattr(ReferenceStore, "fetch", fetch)
+    mint_vrs_ids(resolved, store)
+    assert len(passes) == 1
+    assert len(fetched) == len(set(fetched)) > 1
+
+
+def test_a_contig_with_no_sequence_is_withheld_beside_contigs_with_one(
+    inputs: tuple[Path, Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contig 10's rows, REF read, renamed to a contig the collection lacks: in one group with the stored
+    contigs, every allele of theirs that could be minted is withheld as `no_contig`, every other row
+    keeps the ids it has, and the result is the per-run oracle's at every bound."""
+    vcf, store_dir, _ = inputs
+    store = ReferenceStore.open(store_dir)
+    resolved = resolve_ref(load(vcf), store)
+    expected = mint_vrs_ids(resolved, store).calls.collect()
+    moved = resolved.model_copy(update={"calls": resolved.calls.with_columns(pl.col("chrom").replace("10", "chrUn_nowhere"))})
+    got = {}
+    for bound in (1, 7, None):
+        with monkeypatch.context() as patch:
+            patch.setenv("JUST_VCF_CACHE_DIR", str(tmp_path / f"bound-{bound}"))
+            if bound is not None:
+                patch.setattr(loading_module, "SPILL_PART_ROWS", bound)
+            minted = mint_vrs_ids(moved, store)
+            got[bound] = (minted.calls.collect(), vrs_withheld(minted.calls).select("vrs_withheld").collect(), minted.warnings)
+    calls, withheld, _ = got[None]
+    for bound in (1, 7):
+        assert got[bound][0].equals(calls) and got[bound][1].equals(withheld) and got[bound][2] == got[None][2], bound
+    on_10 = expected["chrom"] == "10"
+    assert expected.filter(on_10)["vrs_allele_ids"].null_count() < on_10.sum()
+    assert calls.filter(on_10)["vrs_allele_ids"].null_count() == on_10.sum()
+    assert "no_contig" in set(withheld.filter(on_10)["vrs_withheld"].explode(empty_as_null=False))
+    assert calls.filter(~on_10)["vrs_allele_ids"].equals(expected.filter(~on_10)["vrs_allele_ids"])
+    assert any("(no_contig)" in line for line in got[None][2])
 
 
 def test_parts_hold_whole_contigs_up_to_the_bound(inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,8 +431,9 @@ STEPS = {
     "resolve": (cache.RESOLVE_SPILL, "RESOLVE_VERSION", "RESOLVE_LAYOUT", RESOLVE_LAYOUT),
     "normalize": (cache.NORMALIZE_SPILL, "NORMALIZE_VERSION", "NORMALIZE_LAYOUT", NORMALIZE_LAYOUT),
     "lift": (cache.LIFT_SPILL, "LIFT_VERSION", "LIFT_LAYOUT", LIFT_LAYOUT),
+    "mint": (cache.VRS_SPILL, "MINT_VERSION", "VRS_LAYOUT", VRS_LAYOUT),
 }
-OUTPUTS = {"resolve": ("resolved",), "normalize": ("normalized",), "lift": ("lifted", "lifted_blocks", "report")}
+OUTPUTS = {"resolve": ("resolved",), "normalize": ("normalized",), "lift": ("lifted", "lifted_blocks", "report"), "mint": ("minted", "minted_withheld")}
 
 
 @pytest.fixture
@@ -373,10 +500,10 @@ def test_a_step_sweeps_a_spill_in_the_per_contig_layout(step: str, inputs: tuple
     """A spill whose manifest lacks the step's layout key, unused past the grace period, is removed; one
     a newer layout wrote stays."""
     kind, version_key, layout_key, layout = STEPS[step]
-    version = {"resolve": RESOLVE_VERSION, "normalize": NORMALIZE_VERSION, "lift": LIFT_VERSION}[step]
+    version = {"resolve": RESOLVE_VERSION, "normalize": NORMALIZE_VERSION, "lift": LIFT_VERSION, "mint": MINT_VERSION}[step]
     current = {"SCHEMA_VERSION": SCHEMA_VERSION, version_key: version, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
-    suffix = f"-ref-SQ_ab-c-{RESOLVE_VERSION}" if step == "resolve" else ""
+    suffix = {"resolve": f"-ref-SQ_ab-c-{RESOLVE_VERSION}", "mint": f"-vrs-SQ_ab-c-{MINT_VERSION}"}.get(step, "")
     before = aged(write_entry("frames", f"{'c' * 32}-{SCHEMA_VERSION}{suffix}", kind, current))
     newer = aged(write_entry("frames", f"{'d' * 32}-{SCHEMA_VERSION}{suffix}", kind, {**current, layout_key: layout + 1}))
-    run(inputs, upto="lift" if step == "lift" else "normalize")
+    run(inputs, upto={"lift": "lift", "mint": "mint"}.get(step, "normalize"))
     assert not before.exists() and newer.exists()

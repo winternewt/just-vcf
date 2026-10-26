@@ -221,9 +221,10 @@ def _rss() -> int:
     for line in Path("/proc/self/status").read_text().splitlines():
         if line.startswith("VmRSS:"):
             return int(line.split()[1]) * 1024
-    return 0
+    raise AssertionError("/proc/self/status carries no VmRSS line, so the peak cannot be measured")
 
 
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="the peak is read from /proc/self/status (Linux)")
 def test_a_real_whole_var_loads_within_a_bounded_peak(pgp_participants: Path) -> None:
     """Counts only. The smallest PGP-HMS `var` loaded whole stays within 6 GB above the process's
     memory before the load. Measured 2026-10-26 on a 233 MB `var` (18.9M rows): 17.5 GB peak read in

@@ -6,28 +6,13 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
-## RM272 — CLI
-Severity: high · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
-
-Typer, registered in `[project.scripts]`, loading `.env` with python-dotenv (CLAUDE.md §4): `just-vcf sniff`, `load` (a summary of the facets), `convert` (to VCF/gVCF via `write_vcf`, optionally through `resolve_ref`, `normalize`, `liftover`, `mint_vrs_ids`) and `check`. Output is counts and aggregates only, never rows: the CLI is a privacy boundary like E12.
-
-## RM273 — A person (subject) in the schema
-Severity: high · Status: in progress (subject and Person shipped 2026-10-23; the default check is RM274's `same_person`) · Owner: lead
-
-The person chose "Both: supplied, checked" (E1): the caller supplies a subject id when loading; nothing is inferred and facets are never regrouped by the library. The library checks the claim with relatedness (RM274) and warns on a mismatch. Most of the extended shape sits on this: RM275, RM276, RM277, RM280.
-
 ## RM274 — Relatedness and families
-Severity: medium · Status: in progress (KING-robust relatedness, `same_person` as RM273's default check, the somalier wrapper and GA4GH Pedigree reading shipped 2026-10-23; a pedigree checked against measured bands (`expected_kinship`, `check_pedigree`, `people(..., pedigree=...)`) built 2026-10-23, awaiting merge; the Genos exome's offset settled as site selection (`variant_sites_only`); left: somalier run for real once docs/TRUST.md has its row, a first-degree split by IBS0, a pedigree measured on real relatives) · Owner: lead
+Severity: medium · Status: in progress (shipped 2026-10-23: KING-robust relatedness, `same_person` as RM273's default check, the somalier wrapper and GA4GH Pedigree reading, merge 6dd3591; a pedigree checked against measured bands (`expected_kinship`, `check_pedigree`, `people(..., pedigree=...)`) and the Genos exome's offset settled as site selection (`variant_sites_only`), merge f43768e. Left: running somalier for real waits on desk #88 (no docs/TRUST.md row for its binary); a first-degree split, parent-child against full siblings, by IBS0 is buildable now: `relatedness.py` already counts `n_ibs0` and `ibs0` per pair, but `band_of` bands by kinship alone and `RelationBand` has one `first_degree`; a pedigree measured on real relatives waits for data, since docs/LIVE_SAMPLES.md names no related people) · Owner: lead
 
 The person chose both (E6): somalier (MIT) as an optional subprocess, skipped cleanly when absent, and just-vcf's own relatedness on the frames (IBS/KING-style over a validated site panel, so arrays work too). Pedigrees as supplied GA4GH Pedigree data. Feeds RM273's check.
 
-## RM275 — The facet graph as a links frame
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
-
-The person chose a small links frame (E4): (from, to, relation, provenance), so a facet can have several parents (a merge, a consensus). `derived_from` and `relation` stay on `facets` for the one-parent case. Relations verbatim from GA4GH where it has them (`liftover_to`), just-vcf's own otherwise, documented.
-
 ## RM276 — A durable per-person store
-Severity: medium · Status: built 2026-10-23, awaiting merge (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: medium · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; `Store` and `write_vcf_zarr` shipped 2026-10-23, merge 6830fb7; `call_HQ` in the Zarr export 2026-10-24, merge fbcb3a9. Left, buildable now, no decision: a migration between schema versions, where `store.py` `_check_version` refuses a store of another version with "No migration exists yet"; `cipos`, `ciend` and `alt_copy_numbers` in `vcf_zarr.py`, which counts them as not written) · Owner: lead
 
 The person chose both (E13): a directory per person holding parquet per facet, the links frame and a manifest, read lazily; and a VCF Zarr export (its spec has no gVCF blocks, so blocks stay parquet-only). Facets accumulate; nothing is overwritten (invariant 5).
 
@@ -36,16 +21,16 @@ manifest, a lock, lazy reads into `Loaded` and `Person`; and `write_vcf_zarr`, o
 VCF Zarr 0.4, blocks counted and left in the store. **Left:** a migration between schema versions (a
 store of another version is refused, not migrated); `cipos`, `ciend` and `alt_copy_numbers` in the
 Zarr export; whether `Person` should carry the links (`store.loaded().links` has them).
-
-## RM277 — Concordance between facets
-Severity: medium · Status: open (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
-
-The person chose graded where possible (E2): GL/GP compared where both facets carry them, hard genotypes otherwise, and every row says which. Kept as data, never resolved to a winner (invariant 8). Needs RM273 and VRS ids (RM271).
+*Corrected 2026-10-26:* `Person` carries `links` (merge b8bef07, 2026-10-23, "Person and the CLI keep
+links"), and `Store.person()` builds it from `loaded()`, so its links are the store's; that question is
+closed.
 
 ## RM278 — Coverage as a facet
-Severity: medium · Status: in progress (built 2026-10-23: readers, BAM depth, callable) · Owner: lead
+Severity: medium · Status: in progress (shipped 2026-10-23: the readers, BAM depth and callable, with XX and XO from coverage depth for RM269, merge dd11011; per-base depth mode 583409a, the BED3 refusal d23a484. The substrate findings below are P17–P20 in docs/POLARS_BIO_PENDING_FIXES.md, all not filed, the upstream-liaison seat's. Left, all buildable now in `coverage.py`, no decision: a cache spill of `alignment_coverage`'s windows keyed by `facet_id` (RM268's pattern; the module uses no cache today), so a BAM is read once; a quantized output from the same depth pass; mosdepth's thresholds file, which `read_coverage` refuses with `UnsupportedCoverageError`; a person-level pairing of a coverage facet with callsets, where `sex_chromosome_evidence(coverage=...)` is paired by the caller today and `Person` holds no coverage) · Owner: lead
 
 The person chose summaries and BAM depth (E3): mosdepth/samtools summaries, and polars-bio's `depth()` over a BAM the person has (scope note of 2026-09-28). Absence with a cause. RM269's XX and XO labels wait for this (the person chose to wait, 2026-10-23).
+*Corrected 2026-10-26:* they no longer wait. XX and XO from a coverage facet shipped with this item
+(merge dd11011, 2026-10-23), and copy counts past two followed (RM269, merge 5ccbffc, 2026-10-25).
 
 **Built 2026-10-23** (`just_vcf.coverage`; docs/SCHEMA.md "Coverage facets"): `read_coverage` for
 mosdepth's four outputs and `samtools depth`/`coverage`, told by content; `alignment_coverage` over a
@@ -104,17 +89,17 @@ quantized output from one depth pass; mosdepth's thresholds file; a person-level
 coverage facet with callsets.
 
 ## RM279 — A method-error atlas
-Severity: medium · Status: in progress (`method_atlas` and a first atlas over eight pairs shipped 2026-10-23, docs/METHOD_ATLAS.md; the PGP CGI pairs are done: REF read, minted, met by VRS id, with complex rows read by the allele's change (F21) and X's haploid calls matched to homozygotes (F22); left: more pairs per method so a row pools more than one genome, and the six private pairs rebuilt with minting) · Owner: lead
+Severity: medium · Status: in progress (`method_atlas` and a first atlas over eight pairs shipped 2026-10-23, merge 4047968, docs/METHOD_ATLAS.md; the PGP CGI pairs rebuilt with REF read, minted and met by VRS id, merge 93dd5f0, with complex rows read by the allele's change (F21) and X's haploid calls matched to homozygotes (F22), merge c6da26c; counts per confidence band, merge 86daede, 2026-10-24; CGI `var` pairs banded by `calls.hq`, merge 8334138, 2026-10-24. Left: the six private pairs rebuilt with minting through `scripts/method_atlas.py`, buildable now (they met by position and were not rebuilt); more pairs per method so a row pools more than one genome: building pairs from PGP-HMS people with several facets (docs/LIVE_SAMPLES.md) is buildable now, but pooling them into one row waits on desk #101 (one caller version's bands differ between people, and a person's `var` and vcfBeta pairs collide under one key), the private folders on desk #72 (who is who in felis, ksuhaster and newton), and every CGI rate on desk #102 (CGI's sample-level VQLOW)) · Owner: lead
 
 The person chose GIAB stratifications as regions (E8): error and discordance rates by caller and region from multi-facet PGP-HMS people (docs/LIVE_SAMPLES.md). Needs RM277.
 
 ## RM280 — A consensus posterior
-Severity: low · Status: in progress (`consensus` and `method_error_rates` shipped 2026-10-23, docs/SCHEMA.md "A consensus posterior", checked on PGP-HMS in docs/CONSENSUS.md; left: rates by the facet's own confidence (the check is underconfident above 10 phred); the person's calls on per-method attribution, GP reading and the default rate; a population prior) · Owner: lead
+Severity: low · Status: in progress (`consensus` and `method_error_rates` shipped 2026-10-23, merge c1b0e1f, docs/SCHEMA.md "A consensus posterior", checked on PGP-HMS in docs/CONSENSUS.md; rates by the facet's own confidence band, merge 86daede, 2026-10-24, with the 60+ band traced to borrowed bands (9bf578e) and CGI `var` rows banded by `calls.hq` (8334138); desk #94–#96 built as options with every default unchanged, merge 960b6c6 (`BlockGrade`, GQ on reference, `AlleleFrequencyPrior`). Nothing buildable is left; what is left is the person's: desk #94 (block grading default), #95 (GQ as reference confidence by default), #96 (which frequency catalogue for the prior, and whether 0 or 1 is allowed), #100 (which GIAB classes weigh an allele), #101 (bands across people), #102 (CGI's VQLOW); whether to borrow bands across caller versions (docs/CONSENSUS.md, three options, no desk number); and the lead's calls listed for veto in docs/LAYERS.md (per-method attribution, GP read as its call, the default rate, band calibration)) · Owner: lead
 
 The person chose after the atlas (E7): a per-site posterior across one person's facets as a derived facet, with RM279's rates as priors; never before them.
 
 ## RM281 — Chip manifests
-Severity: medium · Status: in progress (2026-10-23: I/D codes resolved against Illumina's indel probes, a mixed-strand array's withheld rows read by their probe's allele pair, absence with a cause from manifest or learned probe sets; left: WGS-learned I/D orientation, F17, the Forward/Design-only Final Report) · Owner: lead
+Severity: medium · Status: in progress (shipped 2026-10-23: I/D codes resolved against Illumina's indel probes, a mixed-strand array's withheld rows read by their probe's allele pair, absence with a cause from manifest or learned probe sets, merge 5b6ec3b; I/D codes only on chips whose calibration passed (`probes.ID_CALIBRATION`) and a written no-call as `no_call`, merge 9641c70. Left: WGS-learned I/D orientation for 23andMe v4's internal ids and the v3/v4 hom-alt question, buildable now from PGP people with a 23andMe export and a CGI `var` (slow: one `var` load from Krypton took about 25 minutes), ending in new `ID_CALIBRATION` entries or a per-probe flip; F17 waits for a source of the Sirius chip's site alleles (docs/LAYERS.md, layer 1: no public manifest); the Final Report with only Forward/Design alleles waits for its manifest, HumanOmni2.5-8v1_A, not on disk; exact-manifest absence on real data waits for an export whose chip's own manifest is on disk) · Owner: lead
 
 The person chose both sources (E9): public vendor manifests (Illumina GSA/OmniExpress are on disk) and probe sets learned from PGP people with an array and a WGS. Resolves I/D codes, strand per probe, and which sites a chip has (absence with a cause). Closes F17.
 
@@ -217,7 +202,7 @@ Forward/Design alleles (its manifest, HumanOmni2.5-8v1_A, is not on disk); exact
 real data (no PGP-HMS export's chip has its own manifest on disk).
 
 ## RM282 — Structural-variant facets
-Severity: low · Status: loading built 2026-10-23, awaiting merge (decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
+Severity: low · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; loading and the `write_vcf` round trip shipped 2026-10-23, merge 04c5db3, schema 0.0.14. Left: comparing SV calls across facets, buildable now (`concordance` leaves an SV allele out, counted as `symbolic`, since it pairs by VRS id or spelling; truvari's matching by extent is the reference, docs/LANDSCAPE.md); a check against a DELLY or Sniffles file waits for one (none on disk, synthetic tests only); minting VRS 2 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` waits on desk #89, meanwhile `sv_no_vrs_model`) · Owner: lead
 
 The person chose load with ids withheld (E11): SV calls load as rows with type and `end_pos`, VRS ids withheld with a reason (VRS 2.x has no SV model; charter: never a non-conforming GA4GH value).
 
@@ -228,13 +213,8 @@ comparing SV calls across facets (truvari, LANDSCAPE); no DELLY or Sniffles file
 against (synthetic tests only); and the question whether VRS 2's `CopyNumberCount`/`CopyNumberChange`
 and `Adjacency` should be minted for CNVs and breakends, which the reason's name presumes away.
 
-## RM283 — An aggregate-only query helper
-Severity: medium · Status: built on a builder branch 2026-10-23 (`just_vcf.query`), waiting for the lead's merge; decided by the person in the Part 2 interview, 2026-10-23 · Owner: lead
-
-The person chose a helper beside `load` (E12): an API that answers counts, shares and presence questions and never returns rows, for agents and apps; `load` stays for code that may read rows.
-
 ## RM284 — Phasing as CisPhasedBlock
-Severity: low · Status: built 2026-10-23 on a builder branch, awaiting the lead's merge · Owner: lead
+Severity: low · Status: in progress (`cis_phased_blocks` shipped 2026-10-23, merge 4129dc7; PSL, PSO and PSQ read and written back under VCF 4.5, with withheld blocks naming the allele that withheld them, merge 8b72a46, schema 0.0.15. Nothing buildable is left. Waiting: blocks per window or per run of sequence alleles, so one symbolic allele does not withhold a chromosome's block, on desk #90; a 4.4+ slot-0 block's phase on polars-bio keeping the leading phase indicator (P4 in docs/POLARS_BIO_PENDING_FIXES.md, not filed, the upstream-liaison seat's); the reading of a 4.4+ slot 0 that a PSL names as phased is listed for the person's veto in docs/LAYERS.md, layer 8) · Owner: lead
 
 The person chose columns with an export on demand (E5): phase sets stay columns; VRS CisPhasedBlock objects are minted only when asked.
 
@@ -248,13 +228,8 @@ an implicit set is a chromosome, so one symbolic ALT withholds the haplotype's b
 for Good upload: 45 of 46 withheld `symbolic`); whether a block per window or per contiguous run of
 sequence alleles is wanted is the person's call.
 
-## RM285 — The format registry as a spec
-Severity: low · Status: built 2026-10-23 (docs/FORMAT_REGISTRY.md, generated by scripts/format_registry.py; moves to ROADMAP_HISTORY.md on merge) · Owner: lead
-
-The person chose this repo (E14): the declared formats and the broken shapes (F1–F17) documented as a readable spec in docs/ with synthetic examples; no genome data.
-
 ## RM286 — T2T-CHM13
-Severity: low · Status: built 2026-10-23 except the karyotype calibration (below) · Owner: lead
+Severity: low · Status: in progress (shipped 2026-10-23, merge 795874f, with the UCSC scaffold aliases it met as F19, merge cec1831. Left: calibrating the karyotype thresholds on T2T callsets of known karyotype carrying FORMAT DP, which waits for data (GIAB's HG002 benchmark has no DP), and then `ESTIMATE_BUILDS` takes T2T-CHM13; making store-chm13 the default test store or adding CHM13 to `store` is the lead's own call, no desk) · Owner: lead
 
 The person chose after GRCh37/38 (E10): CHM13 in the reference store, the assembly table, liftover chains and the sex-chromosome regions.
 
@@ -320,7 +295,7 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (on 2026-10-23, 32 of the 39 declared formats load: the earlier 25, plus the CASAVA SNP and indel tables, SOAPsnp, FTDNA Big Y, Color's variant set, GET-Evidence GFF and Nirvana JSON; `oxford_gen` waits for a decision (docs/LAYERS.md), Geno 2.0 and Final Reports without positions wait for chip manifests, `promethease_tab_genotype` has no positions, `cgi_summary` and `decodeme_info` are not facets) · Owner: lead
+Severity: high · Status: in progress (32 of the 39 declared formats load since 2026-10-23: the array side, merge 53600af, and the VCF side, merge bd5c02e, 2026-10-22; CGI `var`/masterVarBeta and PGP's key=value table, merge aa095fd; the CGI leftovers, merge 01fca0b; the CASAVA SNP and indel tables, SOAPsnp, FTDNA Big Y, Color's variant set, GET-Evidence GFF and Nirvana JSON, merge 98a476e. Waiting on the person: `oxford_gen`'s chromosome, desk #93; Deflate64 zips, desk #83 (refused meanwhile); a build CASAVA, SOAPsnp, Big Y and Nirvana do not state, desk #92 (they load, but get no REF check or VRS ids). Waiting for data: Geno 2.0 and the headerless Final Report need chip manifests not on disk (HumanOmni2.5-8v1_A for the one PGP Final Report). Not loadable by nature: `promethease_tab_genotype` (no positions), `cgi_summary` and `decodeme_info` (not facets). Buildable now: a whole CGI `var` peaks at 8.9 GB in `loaders/cgi.py`'s haplotype sort; GET-Evidence copies named `<assembly>.tsv.bz2` are unchecked) · Owner: lead
 
 **Shipped 2026-10-23: the site tables** (`loaders/site_tables.py`): CASAVA SNP and indel tables,
 SOAPsnp, Big Y, Color's variant set and GET-Evidence GFFs; then Nirvana JSON (`loaders/nirvana.py`),
@@ -347,6 +322,9 @@ contract gaps listed at the end of docs/FORMATS.md (versioned columns, section h
 conversion, half-calls, chromosome outside the row) and from polars-bio pending fixes P1/P2. Port from
 just-prs `arrays.py`, `io_utils.py` and `vcf.py`; leave out the observed-allele-as-REF encoding (charter
 invariant 3). Living DNA writes indels as run-together alleles (`CCA`); Color positions are 0-based.
+*Corrected 2026-10-26:* this "Next" is done. The per-format loaders shipped 2026-10-22 and 2026-10-23
+(the merges in the status line), and the sections above and below record each; what does not load yet
+is in the status line and docs/FORMATS.md ("Not loadable yet").
 
 The multi-facet participants in docs/PGP_HMS.md are the convergence tests: one person's facets, loaded
 independently, must agree where they overlap.
@@ -508,7 +486,7 @@ Header evidence found while declaring the VCF formats:
 Not identifiable from the header: 23andMe's exome VCF, the Dante- and Nebula-named uploads (generic GATK).
 
 ## RM3 — REF lookup and padding
-Severity: high · Status: in progress (2026-10-22: the FASTA tier shipped as `resolve_ref` on a gtars refget store, for VCF and array rows, an array without a stated build inferred from its rows (F9); indel anchor bases and reference-supported positions are left) · Owner: lead
+Severity: high · Status: in progress (the FASTA tier shipped 2026-10-22 as `resolve_ref` on a gtars refget store, for VCF and array rows, merge db67f83; an array without a stated build inferred from its rows and GRCh36 in the store (F9), merge 2ff9b00; UCSC scaffold names met through NCBI's assembly reports (F19), merge cec1831; a facet refused only on an autosome mismatch (F20), merge eeaf293; the 2026-10-23 reading of I/D codes is RM281's. Left, buildable now: the anchor base of a CGI or Genos insertion point, and REF for Genos's multi-base rows, so `normalize` can reach them (`reference.py`, `normalize.py`); emitting reference-supported positions, a function materialising hom-ref from `blocks` and absence under `callset.absence_is_reference`'s gates, which does not exist yet. Waiting: Living DNA's run-together indels past the 4 of 83 resolved need the Sirius chip's alleles (F17, no source); a facet whose file states no build gets no REF check until desk #92) · Owner: lead
 
 Port just-prs `reference_allele.py` (reference-panel tier, FASTA tier, FASTA build check). New work:
 ALT derivation from genotype against REF, indel anchor bases, chr-prefixed FASTA support, emitting
@@ -568,6 +546,11 @@ Ensembl's accessions since 2026-10-23, through NCBI's assembly reports rather th
 the name (F19, docs/PREVIOUS_ISSUES.md). A VCF with neither
 `##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array
 without a stated build has it inferred from its rows (F9, below).
+*Corrected 2026-10-26:* the opt-in test against a real assembly exists. `resolve_ref` runs on the store
+`JUST_VCF_TEST_REFERENCE_DIR` names (GRCh37 and GRCh38) in `tests/test_normalize.py`
+(`test_real_upload_agrees_with_bcftools_on_one_contig`, since 7c18ec8, 2026-10-22),
+`tests/test_concordance.py`, `tests/test_phasing.py` and, on T2T-CHM13, `tests/test_chm13.py`; none of
+them is in `tests/test_reference.py`.
 
 **Shipped 2026-10-22: an array's build from its own rows (F9).** `resolve_ref` scores a facet that
 states neither a label nor contig lengths against every collection it considers
@@ -622,7 +605,7 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-Severity: medium · Status: in progress (2026-10-22: a VCF facet gets `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null) and the `absence_means` that follows, and `assembly_label` from its contig lengths; an array without a stated build gets one from its rows in `resolve_ref` (F9, RM3); a facet says which variant classes it carries and whether it was cut to one (`content_filter`); chip from the header or, for 23andMe, the rows (`facets.chip`), and for FTDNA, MyHeritage and unstated Final Reports by marker overlap with Illumina's manifests; left: gVCF `END` expansion) · Owner: lead
+Severity: medium · Status: in progress (a VCF facet's `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null), the `absence_means` that follows, and `assembly_label` from its contig lengths, merge ee4d5d1, 2026-10-22; an array's build from its rows in `resolve_ref` (F9, RM3), merge 2ff9b00; chip from the header or, for 23andMe, the rows, with F13, merge 9d18bcb; variant classes and `content_filter`, merge 3dfeaad; chip by marker overlap for FTDNA, MyHeritage and unstated Final Reports, merge 7451089, 2026-10-23; RefSeq and GenBank accessions as contig names, merge cec1831. Left, buildable now: gVCF `END` expansion; GRCh36 in `assembly.ASSEMBLY_LENGTHS`, which holds GRCh37, GRCh38 and T2T-CHM13 only, so a build-36 VCF's `##contig` lengths name no assembly; counting a genotype table's variant classes; pairing an FTDNA X-only export with the same person's autosomal one, which a caller-supplied subject (RM273) can now group but nothing reads across. Waiting for data: more manifests (other OmniExpress and GSA versions, an Affymetrix one for the 2010 FTDNA layout). Open, no desk number: whether an indel-only genome half should read as `wgs`) · Owner: lead
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
@@ -767,6 +750,9 @@ person's autosomal export, but nothing links the two files yet; GRCh36 in
 contig 1 since F9; the header side reads those lengths as matching no assembly); contigs named by RefSeq accession (`NC_000001.11`), which the label
 inference does not read yet; gVCF `END` expansion. Unmarked imputation output with read-evidence keys
 would read as `wgs`.
+*Corrected 2026-10-26:* contigs named by RefSeq or GenBank accession are read. GRCh37's and GRCh38's
+primary accessions map to canonical `chrom` (`contig_names.PRIMARY_ACCESSIONS` in
+`schema.CONTIG_ALIASES`, 33b44d9, merge cec1831, 2026-10-23), so `infer_assembly` reads their lengths.
 
 **Answered 2026-10-22: an SNV-only or indel-only split of a genome.** The person: "it can [be
 treated as WGS], but with a caveat that ref restoration is additionally gated (needs force)". It
@@ -801,7 +787,7 @@ should read as `wgs` (and so be gated by its filter instead) is open. A genotype
 not counted.
 
 ## RM5 — Population inference
-Severity: medium · Status: in progress (2026-10-22: PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped as `just_vcf.ancestry`; panels in docs/ANCESTRY_PANELS.md) · Owner: lead
+Severity: medium · Status: in progress (PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped 2026-10-22 as `just_vcf.ancestry`, merge 4c6c9c1; panels in docs/ANCESTRY_PANELS.md. Left, buildable now: the AADR Human Origins builder (just-prs `aadr.py`, `eigenstrat.py`; the AADR files are on Krypton); an uncertainty for the PCA path beyond the vote and its margin; a consensus that does not multiply one panel's methods as if independent. Waiting for data: a real reference-PCA panel (a just-prs `1000g`/`hgdp_1kg` build), none on this machine. Waiting on the person: desk #73, whether Privé's files may be a fixture) · Owner: lead
 
 Port the just-prs `ancestry/` package (PCA projection, KNN, proportions, consensus) behind the
 `[ancestry]` extra, without the `PRSCatalog` wrappers or the Hugging Face pull.
@@ -812,9 +798,12 @@ Human Origins builder (just-prs `aadr.py`, `eigenstrat.py`) is not ported; there
 the PCA path beyond the vote and its margin (a site bootstrap does not apply to OADP as it does to
 Privé's sums); the consensus multiplies methods from one panel as if independent; a facet on
 another assembly waits for RM6's liftover.
+*Corrected 2026-10-26:* `liftover` shipped 2026-10-22 (merge 047f0f2). A lifted facet carries its
+target's `assembly_label`, so lifting first is the path; the ancestry functions still answer
+`assembly_mismatch` for a facet on another assembly and do not lift it themselves. Not tested end to end.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (2026-10-22: the VCF writer shipped, `write_vcf`, with a tabix index and gVCF blocks, normalization, `normalize`: split, left-align, trim, dedup, sort, and liftover, `liftover`: SNVs, MNVs and indels through a chain, run GRCh38 to GRCh37 (a GRCh36 chain reads, untested on data); left: strand, blocks in a lift, chromosome-name normalization of input, quality filters) · Owner: lead
+Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Left, buildable now: `blocks` and symbolic SVs in a lift (`liftover` leaves both behind, counted as `allele_not_sequence` for SVs); anchoring across a small gap of one chain; SVLEN in `write_vcf`, which writes END only; strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -1084,10 +1073,17 @@ SVs (the writer writes END, which the loader does not read for symbolic SVs yet,
 does not survive a reload); PSL phase sets (dropped and counted; 4.3 has no PSL, and no loader reads PSL yet, so no frame holds a `psl` set to write: reading it comes first); strand resolution;
 in a liftover, left-aligning lifted indels (`normalize` skips rows with no `ref_check`), blocks,
 symbolic SVs, anchoring across a small gap of one chain, and T2T (UCSC hs1 chains).
+*Corrected 2026-10-26:* three of these shipped, and the SVLEN item's reason is gone. The loader reads
+END and SVLEN for symbolic SVs (merge ec95596, 2026-10-22), and SV rows round-trip through `write_vcf`
+with their `end_pos` (RM282, merge 04c5db3), though the writer still writes END only, no SVLEN. PSL sets are read and written back under
+VCF 4.5 (RM284, merge 8b72a46, 2026-10-23). `normalize` re-aligns a `liftover_to` facet's rows (merge
+6ce13b0, 2026-10-23; the liftover decisions above say so). The hs1 chains lift T2T-CHM13 to GRCh38
+(RM286, merge 795874f, tested in `tests/test_chm13.py`). Still open: strand, blocks and symbolic SVs in
+a lift, and anchoring across a small gap.
 
 
 ## RM271 — VRS allele ids
-Severity: high · Status: in progress (2026-10-22: `mint_vrs_ids` and `vrs_withheld` shipped for VCF and array rows, equal to vrs-python on 19,000 real alleles; left: the gtars RLE gap filed upstream, an opt-in test on a real assembly) · Owner: lead
+Severity: high · Status: in progress (`mint_vrs_ids` and `vrs_withheld` shipped 2026-10-22 for VCF and array rows, merge b41bda5, equal to vrs-python on 19,000 real alleles. Left, buildable now: an opt-in test in `tests/test_vrs.py` minting on the real store `JUST_VCF_TEST_REFERENCE_DIR` names against vrs-python (`scripts/vrs_oracle.py`); today only `tests/test_phasing.py`'s Genes for Good test (39506f4, 2026-10-23) checks minted alleles on a real assembly, through CisPhasedBlock ids, on 1,500 rows. Waiting on the person: filing the gtars gap, G1 in docs/GTARS_PENDING_FIXES.md, not filed, needs the person's go per batch, the upstream-liaison seat's) · Owner: lead
 
 Charter invariant 4: a call's identity is the VRS Allele id of its fully justified allele on a
 refget-addressed sequence, and that id is the join key between facets on the same assembly. Today
@@ -1143,7 +1139,7 @@ store:
   minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22; the evidence layer, X copies and an XY/XXY estimate per WGS facet built 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet built 2026-10-23 (RM278); XXX, XYY, XXYY and XXXY from a coverage facet's copy counts built 2026-10-25; arrays' X from their hets and Y behind `array_y` built 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, and tables with no stated build estimated on `resolve_ref`'s output, 2026-10-25, checked on 109 PGP-HMS tables; GRCh36's region set 2026-10-25, its arrays estimated and its genomes measured only, checked on 250 PGP-HMS 23andMe exports and 69 resolved tables) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22. Shipped: half 1 as the `source` detector's caller, version and `ploidy_statements` (RM2, merge bd5c02e, 2026-10-22); the evidence layer, X copies and an XY/XXY estimate per WGS facet, merge 7384428, 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet, merge dd11011 (RM278), 2026-10-23; XXX, XYY, XXYY and XXXY from a coverage facet's copy counts, and arrays' X from their hets with Y behind `array_y`, merge 5ccbffc, 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, with tables that state no build estimated on `resolve_ref`'s output, merge e73b320, 2026-10-25, checked on 109 PGP-HMS tables; GRCh36's region set, its arrays estimated and its genomes measured only, merge 3a80fc0, 2026-10-25, checked on 250 PGP-HMS 23andMe exports and 69 resolved tables. Waiting on the person: desk #135 (whether a VCF alone may name XY and XXY), desk #136 (`array_y` on for AncestryDNA by default); the lead's calls listed for veto in docs/LAYERS.md, layer 4 (`OTHER_KARYOTYPE`, the 3/4 array two-X expectation against PLINK's shape, `x_copy_count`/`y_copy_count`, GRCh36 genomes left `uncalibrated_build`). Buildable now: liftovers of one callset weighed as one piece of evidence, with `facets_disagree`, at the person level now that `Person` exists (RM273); an answer to the critique's somalier question. Open, no desk number: whether GRCh37's last X-degenerate interval reaches about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md). Exomes answer unknown) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -1151,6 +1147,8 @@ convention for male X and Y and rarely record it: a caller with a diploid-everyw
 differently, and arrays split by vendor (23andMe one letter; AncestryDNA the same letter twice, per the
 `ancestrydna` format notes; that format has no loader yet, RM2). A consumer reading `gt_alleles`
 cannot tell one copy from two.
+*Corrected 2026-10-26:* AncestryDNA loads since 2026-10-22 (`loaders/table.py`, RM2's array side,
+merge 53600af).
 
 Reproduced 2026-10-18 against the code, on a synthetic VCF: `##DeepVariant_version=1.1.0` in the
 header still leaves `facets.caller` and `caller_version` null, and a male-X `1` loads as one allele
@@ -1171,6 +1169,10 @@ Two halves:
    DeepVariant files carry only `##DeepVariant_version`, so their model is unknown from the header.
    The 2 CrossMap/Picard liftovers and 7 files with a bare `##source` say nothing. PGP-HMS files
    (freeBayes, VarScan2) are not on disk now and are unchecked.
+   *Corrected 2026-10-26:* `caller` and `caller_version` are filled since 2026-10-22 by RM2's `source`
+   detector (b3caebc, merge bd5c02e), which also reads `##bcftools_callVersion`; the ploidy model became
+   `facets.ploidy_statements`, the header's lines kept verbatim with no vocabulary, as the critique below
+   recommends.
 2. **A person-level karyotype finding with its own provenance.** Evidence without depth: the non-PAR X
    heterozygous fraction and the presence of PASS Y calls, which separate XX, XY, XXY and X0 on a WGS
    facet. XYY needs depth, so it waits for a coverage facet. Weak or contradictory evidence gives

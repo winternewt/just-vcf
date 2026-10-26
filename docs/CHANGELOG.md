@@ -4,6 +4,22 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **Breaking, pre-1.0:** relatedness splits the first degree into `parent_child` and `full_siblings`
+  by IBS0 (RM274), two new `RelationBand` members. A parent and child are never homozygous for
+  opposite alleles absent genotyping error; full siblings can be, over the quarter of the genome they
+  share nothing of by descent. The
+  rule is KING's (Manichaikul et al. 2010, section 2.3) and the cutoffs KING 2.3.2's fixed defaults
+  (IBS0 at most 0.005 parent and offspring, above 0.008 full siblings); a band is named only when the
+  IBS0 share's Wilson interval (two SEs) lies wholly on one side, so KING's grey zone and too few
+  sites stay `first_degree`, which now means the kind is not told. A consumer selecting
+  `band == "first_degree"` gets fewer rows: the value narrowed, it was not added beside (docs/SCHEMA.md,
+  "Changes since sign-off"). somalier's pairs are split the same way. `expected_kinship` expects
+  `parent_child` for a listed parent link and `full_siblings` for two shared listed parents or a stated
+  sibling term, and `check_pedigree` reads a parent link measured as siblings (or the reverse) as
+  `disagrees`, where it read `agrees`. `same_person` is unchanged. KING's cutoffs assume array-grade
+  genotypes: a parent and child read from facets as noisy as PGP's merges can read `full_siblings`
+  (docs/RELATEDNESS.md, Limits).
+
 - A VCF 4.3+ key its version reserves and the loader never carries (FORMAT MQ, NQ, INFO DP, AN, and
   the rest of the reader's table) is skipped unread in the retry whatever its values, declared in the
   file or not: the structural copy left its line out, polars-bio's reader parsed it under the

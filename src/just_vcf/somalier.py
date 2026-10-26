@@ -15,7 +15,8 @@ homozygous reference, as `just_vcf.site_genotypes` does; any other facet's silen
 somalier's `relatedness` column is `2 (shared_hets - 2 ibs0) / het_ab`: on the scale where one person is
 1, twice KING's kinship. The frame keeps it verbatim (`somalier_relatedness`) and puts half of it in
 `kinship`, banded by `relatedness.band_of`; somalier reports no standard error, so the band is the
-point estimate's.
+point estimate's. A first-degree band is split by somalier's own IBS0 count over its `n` sites, as
+just-vcf's estimate is (`relatedness.first_degree_kind`).
 
 **Not run on this machine yet**: `docs/TRUST.md` has no row for somalier's binary, and a source it does
 not list is not run here until the person adds its row. The parser is tested on a `pairs.tsv` in the
@@ -39,6 +40,7 @@ from just_vcf.relatedness import (
     RelationBand,
     SitePanel,
     band_of,
+    split_first_degree,
 )
 from just_vcf.schema import AbsenceMeans
 from just_vcf.site_genotypes import facets_of
@@ -104,7 +106,7 @@ def read_somalier_pairs(path: Path, names: dict[str, str] | None = None, *, min_
                 "facet_a": names.get(row["sample_a"], row["sample_a"]),
                 "facet_b": names.get(row["sample_b"], row["sample_b"]),
                 "method": SOMALIER_METHOD,
-                "band": band_of(value / 2).value if known else RelationBand.UNKNOWN.value,
+                "band": split_first_degree(band_of(value / 2), counts["n_ibs0"], n).value if known else RelationBand.UNKNOWN.value,
                 "reason": None if known else TOO_FEW_SITES,
                 "kinship": value / 2 if known else None,
                 "ibs0": counts["n_ibs0"] / n if known and n else None,

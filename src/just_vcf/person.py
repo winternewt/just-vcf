@@ -29,6 +29,8 @@ from just_vcf.relatedness import (
     RelationBand,
     SitePanel,
     band_of,
+    finest_bands,
+    first_degree_kind,
     pairwise_relatedness,
     same_person,
 )
@@ -152,7 +154,8 @@ class PedigreeAgreement(str, Enum):
     AGREES = "agrees"
     """Every band the measured interval reaches is one the pedigree allows."""
     DISAGREES = "disagrees"
-    """No band the measured interval reaches is one the pedigree allows."""
+    """No band the measured interval reaches is one the pedigree allows. A first-degree kind is a band
+    of its own here: a stated parent who reads `full_siblings` disagrees."""
     CANNOT_TELL = "cannot_tell"
     """The interval reaches both kinds, or one side is unknown; `reason` says which."""
 
@@ -180,12 +183,16 @@ the relative's), the measured `relatedness` (`band`, `kinship`, `kinship_se`, `i
 its `reason` as `relatedness_reason`), and the `agreement`, with `reason` when it is `cannot_tell`."""
 
 
-def _measured_bands(kinship: float, se: float | None) -> set[RelationBand]:
-    """The bands `kinship ± INTERVAL_SES·se` reaches (just the kinship's band without an SE)."""
+def _measured_bands(kinship: float, se: float | None, n_ibs0: int | None, n_sites: int | None) -> set[RelationBand]:
+    """The finest bands `kinship ± INTERVAL_SES·se` reaches (just the kinship's band without an SE),
+    the first degree as the kind its IBS0 count tells, or both kinds where it does not."""
     if se is None:
-        return {band_of(kinship)}
-    low, high = BAND_ORDER.index(band_of(kinship - INTERVAL_SES * se)), BAND_ORDER.index(band_of(kinship + INTERVAL_SES * se))
-    return set(BAND_ORDER[low : high + 1])
+        ladder = [band_of(kinship)]
+    else:
+        low, high = BAND_ORDER.index(band_of(kinship - INTERVAL_SES * se)), BAND_ORDER.index(band_of(kinship + INTERVAL_SES * se))
+        ladder = list(BAND_ORDER[low : high + 1])
+    kind = first_degree_kind(n_ibs0, n_sites)
+    return set().union(*(finest_bands(kind if band is RelationBand.FIRST_DEGREE else band) for band in ladder))
 
 
 def _agreement(expected: dict, measured: dict) -> tuple[PedigreeAgreement, str | None]:
@@ -194,8 +201,8 @@ def _agreement(expected: dict, measured: dict) -> tuple[PedigreeAgreement, str |
     # A kinship kept beside a reason other than its interval's (`variant_sites_only`) names no band.
     if measured["kinship"] is None or measured["reason"] not in (None, BETWEEN_BANDS):
         return PedigreeAgreement.CANNOT_TELL, measured["reason"]
-    allowed = {RelationBand(value) for value in expected["expected_bands"]}
-    reached = _measured_bands(measured["kinship"], measured["kinship_se"])
+    allowed = set().union(*(finest_bands(RelationBand(value)) for value in expected["expected_bands"]))
+    reached = _measured_bands(measured["kinship"], measured["kinship_se"], measured["n_ibs0"], measured["n_sites"])
     if reached <= allowed:
         return PedigreeAgreement.AGREES, None
     if not reached & allowed:

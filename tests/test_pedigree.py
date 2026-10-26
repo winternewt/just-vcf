@@ -100,7 +100,7 @@ def test_the_trio_expects_two_parent_child_pairs_and_unrelated_founders() -> Non
     rows = _expected(pedigree_from_dict(TRIO))
     for parent in ("MOTHER", "FATHER"):
         row = rows[frozenset((parent, "CHILD"))]
-        assert (row["expected_kinship"], row["expected_bands"], row["basis"]) == (0.25, ["first_degree"], "derived")
+        assert (row["expected_kinship"], row["expected_bands"], row["basis"]) == (0.25, ["parent_child"], "derived")
         assert row["relation_id"] in ("KIN:027", "KIN:028")
     founders = rows[frozenset(("MOTHER", "FATHER"))]
     assert (founders["expected_kinship"], founders["expected_bands"], founders["basis"], founders["relation_id"]) == (
@@ -126,10 +126,10 @@ FAMILY = _pedigree(
 @pytest.mark.parametrize(
     ("pair", "kinship", "band"),
     [
-        ("ac", 0.25, "first_degree"),  # parent and child
-        ("hc", 0.25, "first_degree"),  # KIN:032 read the other way
-        ("cs", 0.25, "first_degree"),  # full siblings
-        ("gh", 0.25, "first_degree"),
+        ("ac", 0.25, "parent_child"),  # parent and child
+        ("hc", 0.25, "parent_child"),  # KIN:032 read the other way
+        ("cs", 0.25, "full_siblings"),  # full siblings: the same two parents listed for both
+        ("gh", 0.25, "full_siblings"),
         ("cj", 0.125, "second_degree"),  # half siblings
         ("ag", 0.125, "second_degree"),  # grandparent
         ("sg", 0.125, "second_degree"),  # aunt or uncle
@@ -160,13 +160,34 @@ def test_stated_degrees_hold_and_carry_to_relatives() -> None:
     )
     rows = _expected(pedigree)
     siblings = rows[frozenset("ab")]
-    assert (siblings["expected_kinship"], siblings["basis"], siblings["relation_id"]) == (0.25, "stated", "KIN:008")
+    assert (siblings["expected_kinship"], siblings["expected_bands"], siblings["basis"], siblings["relation_id"]) == (
+        0.25,
+        ["full_siblings"],
+        "stated",
+        "KIN:008",
+    )
     assert (rows[frozenset("bc")]["expected_kinship"], rows[frozenset("bc")]["basis"]) == (0.125, "derived")
     cousins = rows[frozenset("ad")]
     assert (cousins["expected_kinship"], cousins["expected_bands"]) == (None, ["unrelated", "third_degree"])
     assert rows[frozenset("cd")]["expected_bands"] == ["unrelated"]  # 1/32 or 1/64: below the third-degree floor
     assert (rows[frozenset("mn")]["expected_kinship"], rows[frozenset("mn")]["expected_bands"]) == (0.5, ["same_person"])
-    assert rows[frozenset("pq")]["expected_bands"] == ["second_degree", "first_degree"]
+    assert rows[frozenset("pq")]["expected_bands"] == ["second_degree", "full_siblings"]
+
+
+def test_a_first_degree_kinship_by_another_path_names_no_kind() -> None:
+    """A twin's child is a quarter related to the other twin, by neither a parent link nor two shared
+    parents: the pedigree says first degree and not which kind, so either measured kind agrees."""
+    rows = _expected(_pedigree("abc", [("a", "KIN:010", "b"), ("b", "KIN:003", "c")]))
+    assert (rows[frozenset("bc")]["expected_bands"], rows[frozenset("ac")]["expected_kinship"]) == (["parent_child"], 0.25)
+    assert (rows[frozenset("ac")]["expected_bands"], rows[frozenset("ac")]["basis"]) == (["first_degree"], "derived")
+
+
+def test_a_half_sibling_is_not_a_full_sibling() -> None:
+    """One shared parent is half siblings (second degree); two are full siblings."""
+    links = [("a", "KIN:027", "c"), ("b", "KIN:028", "c"), ("a", "KIN:027", "d"), ("b", "KIN:028", "d"), ("a", "KIN:027", "e")]
+    rows = _expected(_pedigree("abcde", links))
+    assert rows[frozenset("cd")]["expected_bands"] == ["full_siblings"]
+    assert rows[frozenset("ce")]["expected_bands"] == ["second_degree"]
 
 
 def test_a_child_of_full_siblings_is_closer_to_each_parent() -> None:

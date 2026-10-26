@@ -41,6 +41,14 @@ On KING's scale, one person 1/2, the kinship coefficient of the pair:
   computation rests on. Such a pair expects `unrelated`, basis `assumed`, so the pedigree's silence is
   visible as an assumption.
 
+*First degree, by kind.* A pair whose allowed kinship falls in the first degree is expected as one of
+`relatedness`'s two first-degree bands where the pedigree says which: `parent_child` where one is a
+listed biological parent of the other (a parent and child share an allele at every site, inbred or
+not); `full_siblings` where both have the same two listed parents, or a stated term allows the pair a
+kinship of 1/4 (every such term is a sibling term: KIN:007, 008, 009, 011). A stated term takes
+precedence here too. A first-degree kinship reached any other way (a twin's child and the other twin)
+is `first_degree`, either kind. just-vcf's own reading, as the rest of this list is.
+
 A child listed with more than two biological parents makes every pair reached through it unknown
 (`more_than_two_parents`); two statements about one pair that share no value make it
 `statements_conflict`. A pedigree whose parent links loop is refused (`PedigreeError`).
@@ -56,7 +64,7 @@ from pathlib import Path
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
-from just_vcf.relatedness import RelationBand, band_of
+from just_vcf.relatedness import RelationBand, band_of, finest_bands
 
 PEDIGREE_INDIVIDUALS = pl.Schema({"pedigree_id": pl.String, "individual_id": pl.String, "sex": pl.String})
 """One row per individual: the `subject.id` and `subject.sex` as written."""
@@ -191,7 +199,13 @@ BAND_ORDER: tuple[RelationBand, ...] = (
     RelationBand.FIRST_DEGREE,
     RelationBand.SAME_PERSON,
 )
-"""The named bands from least to most related."""
+"""The named bands of the kinship ladder, from least to most related. `parent_child` and
+`full_siblings` stand at `first_degree`'s rung (`relatedness.finest_bands`)."""
+
+
+def _rung(band: RelationBand) -> int:
+    """`band`'s place on `BAND_ORDER`, a first-degree kind at the first degree's."""
+    return BAND_ORDER.index(RelationBand.FIRST_DEGREE if band in finest_bands(RelationBand.FIRST_DEGREE) else band)
 
 
 class ExpectedBasis(str, Enum):
@@ -325,6 +339,16 @@ def expected_kinship(pedigree: Pedigree) -> pl.DataFrame:
     ).iter_rows():
         first_statement.setdefault(frozenset((individual, relative)), (relation, label))
 
+    def first_degree_kind(x: str, y: str, key: frozenset[str]) -> RelationBand:
+        """Which first-degree band the pedigree expects of the pair, or `first_degree` when it does not say."""
+        if key in stated:
+            return RelationBand.FULL_SIBLINGS  # every term allowing 1/4 is a sibling term
+        if x in parents[y] or y in parents[x]:
+            return RelationBand.PARENT_CHILD
+        if len(parents[x]) == 2 and set(parents[x]) == set(parents[y]):
+            return RelationBand.FULL_SIBLINGS
+        return RelationBand.FIRST_DEGREE
+
     rows = []
     for individual, relative in combinations(pedigree.individuals["individual_id"].to_list(), 2):
         key = frozenset((individual, relative))
@@ -337,7 +361,9 @@ def expected_kinship(pedigree: Pedigree) -> pl.DataFrame:
             basis = ExpectedBasis.STATED if key in stated else ExpectedBasis.ASSUMED if value == _ZERO else ExpectedBasis.DERIVED
             kinship = float(next(iter(value))) if len(value) == 1 else None
             found = {band_of(float(v)) for v in value}
-            bands = [band.value for band in BAND_ORDER if band in found]
+            if RelationBand.FIRST_DEGREE in found:
+                found = (found - {RelationBand.FIRST_DEGREE}) | {first_degree_kind(individual, relative, key)}
+            bands = [band.value for band in sorted(found, key=_rung)]
         rows.append(
             {
                 "pedigree_id": pedigree.pedigree_id,

@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `normalize` no longer fails on a contig whose one multi-allelic site to split is an ALT beside `<*>`
+  (`2 60 . A C,<*> 0/1`), which DeepVariant writes on every variant record, so a contig with one variant
+  met it: the split's pieces were a frame of one row, where polars 1.44's `list.slice` at a column
+  offset inside `when/then` raised `ComputeError` ("could not extract number from any-value of dtype:
+  'Null'") on the `cipos`/`ciend` slice. Those two values are read with `list.get` now. The output of
+  every input that normalized before is unchanged (`NORMALIZE_VERSION` stays 8).
+
 - A VCF 4.3+ key its version reserves and the loader never carries (FORMAT MQ, NQ, INFO DP, AN, and
   the rest of the reader's table) is skipped unread in the retry whatever its values, declared in the
   file or not: the structural copy left its line out, polars-bio's reader parsed it under the

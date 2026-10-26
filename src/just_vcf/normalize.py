@@ -291,7 +291,15 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
         pair("vrs_errors").alias("vrs_errors"),
         pl.when(pl.col("_indexable")).then(pair("ad")).alias("ad"),
         # The SV columns that are per ALT follow their ALT: two interval values each, one copy number.
-        *[pl.when(pl.col(name).list.len() == 2 * n).then(pl.col(name).list.slice(2 * (k - 1), 2)).alias(name) for name in ("cipos", "ciend")],
+        # Read with `list.get`, never `list.slice` at a column offset: inside `when/then` on a frame of
+        # one row (a contig's one `X,<*>` site), polars 1.44 takes that offset for a scalar after the
+        # false predicate has nulled it, and raises "could not extract number from any-value of dtype: 'Null'".
+        *[
+            pl.when(pl.col(name).list.len() == 2 * n)
+            .then(pl.concat_list(pl.col(name).list.get(2 * (k - 1)), pl.col(name).list.get(2 * k - 1)))
+            .alias(name)
+            for name in ("cipos", "ciend")
+        ],
         pl.when(pl.col("alt_copy_numbers").list.len() == n).then(pl.concat_list(pl.col("alt_copy_numbers").list.get(k - 1))).alias("alt_copy_numbers"),
         sliced_gl.alias("gl"),
         pl.lit(None, dtype=CALLS["gp"]).alias("gp"),

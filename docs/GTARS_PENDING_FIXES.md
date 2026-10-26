@@ -17,6 +17,7 @@ Nothing watches upstream, for the reasons the polars-bio ledger gives; the seat'
 | Item | Verdict | File at |
 |---|---|---|
 | G1 VRS ids differ from vrs-python on deletions, repeat insertions and reference alleles | normalization never returns a `ReferenceLengthExpression`; the Python API digests literal states only | databio/gtars |
+| G2 `add_sequence` into an Encoded store reads back wrong bases (2026-10-26) | a record's ASCII bytes are kept as if already bit-packed, any case; fixed upstream after 0.10.0 (`03656182`, in the `gtars-python-v0.11.0` tag, not on PyPI yet) | nothing to file; re-check at the 0.11 bump |
 
 ## G1 — VRS ids differ from vrs-python on deletions, repeat insertions and reference alleles
 
@@ -46,3 +47,31 @@ fast writer (`gtars-vrs/src/vcf.rs:149-154`; `digest.rs:37-41` says it does not 
 state). gtars main after 0.10.0 changes none of these files. **File at databio/gtars:** a VRS 2.x
 normalization result (the RLE state where the spec ends in one), in `normalize_ref`, the Python API and
 the VCF batch path; cite vrs-python's steps and the repro.
+
+## G2 — `add_sequence` into an Encoded store reads back wrong bases
+
+Found by a just-vcf builder (the lead's relay, commit `00f442f` on its branch) as lowercase: a
+`SequenceRecord` whose `sequence` was set by hand to `acgtacga` reads back as `CATCCATG` from a store in
+`StorageMode.Encoded`, the mode `RefgetStore.in_memory()` starts in. Case is not the cause. Reproduced on
+gtars 0.10.0 with synthetic sequences only: `ACGTACGA` reads back `CTTCCTTG` too, and so does the record
+`digest_sequence(b"ACGTACGA")` makes, untouched, which is the usage `add_sequence`'s own docstring shows.
+In `StorageMode.Raw` every case reads back as given (lowercase stays lowercase). The DNA lookup tables
+map lowercase to the right codes (`gtars-refget/src/digest/alphabet.rs:129-141`, `:157-175`); the defect
+is that 0.10.0's `add_sequence_record` stores a full record's bytes as they are
+(`gtars-refget/src/store/readonly.rs:835-880`), while an Encoded store decodes what it holds as packed
+bits. Its debug-only assert allows ASCII bytes in either mode, so nothing refuses them in a release
+build. A store built from a FASTA is not affected: that import packs the bases itself.
+
+Mitigation: none needed. just-vcf adds sequences only through `add_fasta` (the FASTA import); `src/`
+never calls `add_sequence`, and the one test that does (`tests/test_reference.py`, from `00f442f`) sets
+the store to Raw first. `ReferenceStore.fetch` still uppercases a sequence the store holds no FASTA
+record for.
+
+*Upstream (2026-10-26).* Not reported on gtars' tracker (searched live: "add_sequence", "encoded mode",
+"SequenceRecord encoded"), and **already fixed on trunk**: `03656182` (2026-09-16, "Fix encoded sequence
+ingestion and add byte reads") packs a record whose bytes look like ASCII before storing it in an
+Encoded store (`pack_raw_ascii_for_encoded_mode`), and is in the `gtars-python-v0.11.0` tag; PyPI's
+newest is still 0.10.0. Nothing to file. Read, not run: the new check takes bytes as ASCII only when
+their length differs from the packed size, which for the 2- and 3-bit DNA alphabets is false at length 1,
+so a one-base hand-added sequence would still be stored unpacked. Too small to file on a reading; check it
+when `uv.lock` moves to 0.11 and file then if it reproduces.

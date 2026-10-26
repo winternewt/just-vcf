@@ -20,7 +20,7 @@ from enum import Enum
 
 import polars as pl
 
-from just_vcf.callset import absence_is_reference
+from just_vcf.callset import AbsenceReason, absence_is_reference, absence_support
 from just_vcf.coverage import Coverage, callable_sites
 from just_vcf.loading import Loaded
 from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, BlockKind, EvidenceBasis, GlSource, VariantClass, enum_dtype
@@ -28,12 +28,17 @@ from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, BlockKind, EvidenceBasis,
 __all__ = [
     "GENOTYPE_EVIDENCE",
     "GENOTYPE_EVIDENCE_AT",
+    "REFERENCE_SUPPORT",
+    "REFERENCE_SUPPORT_REASON",
     "BlockGrade",
     "ConfidenceKind",
     "GradeBasis",
+    "RecordReason",
+    "SupportKind",
     "VectorPrior",
     "genotype_evidence",
     "genotype_evidence_at",
+    "reference_support",
 ]
 
 _LN10 = math.log(10.0)
@@ -427,11 +432,49 @@ def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False, block_gr
     return frame.sort([pl.col("facet_id"), rank, pl.col("chrom"), pl.col("pos"), origin, pl.col("end_pos")], nulls_last=True, maintain_order=True)
 
 
-def _one_facet(loaded: Loaded) -> Mapping[str, object]:
+def _one_facet(loaded: Loaded, caller: str) -> Mapping[str, object]:
     facets = loaded.facets.collect()
     if facets.height != 1:
-        raise ValueError(f"genotype_evidence_at takes one facet; this Loaded has {facets.height}")
+        raise ValueError(f"{caller} takes one facet; this Loaded has {facets.height}")
     return facets.row(0, named=True)
+
+
+def _covering(loaded: Loaded, asked: pl.DataFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
+    """The `calls` rows and the `blocks` rows covering each of `asked` (`chrom`, `pos`, `_site`), lazily,
+    each tagged with its site's `_site`: a call from its `pos` to its `end_pos` (its `pos` alone where the
+    span is unknown), a block over its span, both ends inclusive.
+
+    The records are matched first and only the matched rows graded, so a genome's millions of rows
+    are never graded to answer a panel, and every join is pre-filtered to the asked contigs. A call
+    starting at the site is an equality join, and only calls spanning more than their first base go
+    through the range join. A facet's blocks do not overlap one another (a gVCF's and CGI's tile the
+    genome), so the block over a site is the last one starting at or before it, found by an as-of join.
+    """
+    contigs = asked["chrom"].unique().to_list()
+    ask = asked.lazy().select("_site", pl.col("chrom").alias("_site_chrom"), pl.col("pos").alias("_site_pos"))
+    calls = loaded.calls.filter(pl.col("chrom").is_in(contigs)).with_columns(
+        pl.col("pos").cast(pl.Int64).alias("_start"),
+        pl.coalesce(pl.col("end_pos"), pl.col("pos")).cast(pl.Int64).alias("_end"),
+    )
+    at_start = calls.join(ask, left_on=["chrom", "_start"], right_on=["_site_chrom", "_site_pos"], how="inner")
+    # One range join per contig: with two inequalities and no equality, polars runs it as an IEJoin; an
+    # equality on `chrom` beside them makes it a filtered cross join (38 GB on a CGI genome's panel).
+    spanning = calls.filter(pl.col("_end") > pl.col("_start"))
+    inside = [
+        spanning.filter(pl.col("chrom") == contig)
+        .join_where(ask.filter(pl.col("_site_chrom") == contig), pl.col("_site_pos") > pl.col("_start"), pl.col("_site_pos") <= pl.col("_end"))
+        .drop("_site_chrom", "_site_pos")
+        for contig in sorted(contigs)
+    ]  # fmt: skip
+    hit_calls = pl.concat([at_start, *inside], how="vertical_relaxed")
+    blocks = loaded.blocks.filter(pl.col("chrom").is_in(contigs)).with_columns(pl.col("pos").cast(pl.Int64).alias("_start")).sort("chrom", "_start")
+    hit_blocks = (
+        ask.rename({"_site_chrom": "chrom"}).sort("chrom", "_site_pos")
+        .join_asof(blocks, left_on="_site_pos", right_on="_start", by="chrom", strategy="backward", check_sortedness=False)
+        .filter(pl.col("facet_id").is_not_null() & (pl.col("_site_pos") <= pl.col("end_pos").cast(pl.Int64)))
+        .drop("_site_pos", "_start")
+    )  # fmt: skip
+    return hit_calls, hit_blocks
 
 
 def genotype_evidence_at(
@@ -465,7 +508,7 @@ def genotype_evidence_at(
     belongs to which callset is the caller's claim. Sites come back in the order given, a duplicate
     once.
     """
-    facet = _one_facet(loaded)
+    facet = _one_facet(loaded, "genotype_evidence_at")
     asked_class = VariantClass(variant_class)
     block_grade = BlockGrade(block_grade)
     if coverage is not None and min_depth is None:
@@ -474,35 +517,7 @@ def genotype_evidence_at(
         sites.lazy().select(pl.col("chrom").cast(pl.String), pl.col("pos").cast(pl.Int64)).unique(maintain_order=True).collect()
         .with_columns(pl.int_range(pl.len(), dtype=pl.UInt32).alias("_site"))
     )  # fmt: skip
-    contigs = asked["chrom"].unique().to_list()
-    # The records are matched first and only the matched rows graded, so a genome's millions of rows
-    # are never graded to answer a panel. A call starting at the site is an equality join, and only
-    # calls spanning more than their first base go through the range join. A facet's blocks do not
-    # overlap one another (a gVCF's and CGI's tile the genome), so the block over a site is the last
-    # one starting at or before it, found by an as-of join.
-    ask = asked.lazy().select("_site", pl.col("chrom").alias("_site_chrom"), pl.col("pos").alias("_site_pos"))
-    calls = loaded.calls.filter(pl.col("chrom").is_in(contigs)).with_columns(
-        pl.col("pos").cast(pl.Int64).alias("_start"),
-        pl.coalesce(pl.col("end_pos"), pl.col("pos")).cast(pl.Int64).alias("_end"),
-    )
-    at_start = calls.join(ask, left_on=["chrom", "_start"], right_on=["_site_chrom", "_site_pos"], how="inner")
-    # One range join per contig: with two inequalities and no equality, polars runs it as an IEJoin; an
-    # equality on `chrom` beside them makes it a filtered cross join (38 GB on a CGI genome's panel).
-    spanning = calls.filter(pl.col("_end") > pl.col("_start"))
-    inside = [
-        spanning.filter(pl.col("chrom") == contig)
-        .join_where(ask.filter(pl.col("_site_chrom") == contig), pl.col("_site_pos") > pl.col("_start"), pl.col("_site_pos") <= pl.col("_end"))
-        .drop("_site_chrom", "_site_pos")
-        for contig in sorted(contigs)
-    ]  # fmt: skip
-    hit_calls = pl.concat([at_start, *inside], how="vertical_relaxed")
-    blocks = loaded.blocks.filter(pl.col("chrom").is_in(contigs)).with_columns(pl.col("pos").cast(pl.Int64).alias("_start")).sort("chrom", "_start")
-    hit_blocks = (
-        ask.rename({"_site_chrom": "chrom"}).sort("chrom", "_site_pos")
-        .join_asof(blocks, left_on="_site_pos", right_on="_start", by="chrom", strategy="backward", check_sortedness=False)
-        .filter(pl.col("facet_id").is_not_null() & (pl.col("_site_pos") <= pl.col("end_pos").cast(pl.Int64)))
-        .drop("_site_pos", "_start")
-    )  # fmt: skip
+    hit_calls, hit_blocks = _covering(loaded, asked)
     graded = pl.concat([
         _calls_evidence(hit_calls, gq_on_reference, loaded.facets, keep=("_site",)),
         _blocks_evidence(hit_blocks, gq_on_reference, loaded.facets, keep=("_site",), block_grade=block_grade),
@@ -532,3 +547,146 @@ def genotype_evidence_at(
         depth = callable_sites(coverage, asked.select("chrom", "pos"), min_depth=min_depth).with_columns(pl.int_range(pl.len(), dtype=pl.UInt32).alias("_site"))
         answer = answer.join(depth.drop("chrom", "pos"), on="_site", how="left", maintain_order="left")
     return answer.drop("_site").collect()
+
+
+class SupportKind(str, Enum):
+    """What a facet's answer about the reference allele at a position rests on (`reference_support`).
+    just-vcf's own vocabulary (charter 2)."""
+
+    CALL = "call"
+    """A `calls` row covers the position: its genotype, graded as `genotype_evidence` grades it."""
+    BLOCK = "block"
+    """A `blocks` row covers the position: a `ref` block states reference over it, graded by the block
+    rule; a `no_call` block states that the caller looked and called nothing."""
+    ABSENCE = "absence"
+    """Nothing covers the position, and the facet's silence reads as reference (`absence_support`)."""
+    NONE = "none"
+    """Nothing covers the position, and the facet's silence says nothing there; `reason` says why."""
+
+
+class RecordReason(str, Enum):
+    """Which record answers for a covered position (`reference_support`); an uncovered one is answered by
+    an `AbsenceReason`."""
+
+    CALL_AT_POSITION = "call_at_position"
+    """A call starting at the position."""
+    CALL_SPANS_POSITION = "call_spans_position"
+    """A call starting before the position and spanning it (a deletion, an MNV, a CGI locus)."""
+    REF_BLOCK = "ref_block"
+    """A `ref` block covering the position."""
+    NO_CALL_BLOCK = "no_call_block"
+    """A `no_call` block covering the position."""
+
+
+REFERENCE_SUPPORT_REASON = pl.Enum([*(m.value for m in RecordReason), *(m.value for m in AbsenceReason)])
+"""The `reason` dtype of `reference_support`: a `RecordReason` on a covered position, an
+`AbsenceReason` on an uncovered one."""
+
+REFERENCE_SUPPORT = pl.Schema(
+    {
+        "chrom": pl.String,
+        "pos": pl.Int64,
+        "facet_id": pl.String,
+        "support": enum_dtype(SupportKind),
+        "reason": REFERENCE_SUPPORT_REASON,
+        "records": pl.UInt32,
+        "record_pos": pl.UInt32,
+        "record_end_pos": pl.UInt32,
+        **{name: dtype for name, dtype in GENOTYPE_EVIDENCE.items() if name not in ("facet_id", "chrom", "pos", "end_pos", "evidence_basis", "block_kind")},
+        "absence_means": pl.String,
+    }
+)
+"""What `reference_support` returns: one row per asked position."""
+
+
+def reference_support(
+    loaded: Loaded,
+    sites: pl.DataFrame | pl.LazyFrame,
+    *,
+    variant_class: VariantClass | str,
+    gq_on_reference: bool = False,
+    block_grade: BlockGrade | str = BlockGrade.LIKELIHOODS,
+    force: bool = False,
+) -> pl.LazyFrame:
+    """What a one-facet `loaded` says about the reference allele at each of `sites` (`chrom` canonical,
+    `pos` 1-based): one row per distinct position (`REFERENCE_SUPPORT`), graded, never a bare called or
+    not called. It materialises reference-supported positions (RM3) from all three sources at once:
+
+    - `call`: a `calls` row covers the position, graded as `genotype_evidence` grades it.
+      `genotype_index` 0 states hom-ref; any other states an ALT on at least one haplotype; null, none.
+    - `block`: a `blocks` row covers it. A `ref` block is reference (`genotype_index` 0) graded by
+      `block_grade` (`BlockGrade`); a `no_call` block is graded by its likelihoods, or is `no_call`.
+    - `absence`: nothing covers it and `absence_support(facet, variant_class, force=force)` reads the
+      silence as reference: `grade_basis = absent_reference`, asserted, `genotype_index` 0 and no
+      number (Decision 3 makes up none for an unquantified statement). `absence_means` tells a
+      producer's reference call (`reference`) from a caller's silence (`weak_reference`), and `reason`
+      says `content_filter_forced` where `force` lifted a filtered genome's hold.
+    - `none`: nothing covers it and the silence says nothing (`absent_unknown`): an array, an exome
+      or panel off target, imputed content, a callset of unknown type, a gVCF outside its blocks, a
+      class the facet never wrote, a filtered genome without `force` or a class it cut. `reason` is
+      the `AbsenceReason`. Never reference.
+
+    Where several records cover a position, one answers, and `records` says how many there were: a
+    call starting at the position, else the call starting nearest before it, else the block; among
+    calls of one span, one stating an ALT before one stating nothing before one stating hom-ref, then
+    the least confidence, so a reference statement never hides a variant stated at the same site.
+    `variant_class` is the class the question is about; a facet's silence speaks only for the classes
+    it called. `gq_on_reference` and `block_grade` are `genotype_evidence`'s. Rows come out in
+    canonical order (contig rank, then position), whatever order `sites` came in.
+
+    Lazy over the facet's frames: only the asked positions and the facet row are read up front, every
+    join is pre-filtered to the asked contigs, and only the covering records are graded.
+    """
+    facet = _one_facet(loaded, "reference_support")
+    silence = absence_support(facet, variant_class, force=force)
+    block_grade = BlockGrade(block_grade)
+    rank = pl.col("chrom").replace_strict(CONTIG_RANK, default=len(CONTIG_RANK), return_dtype=pl.UInt16)
+    asked = (
+        sites.lazy().select(pl.col("chrom").cast(pl.String), pl.col("pos").cast(pl.Int64)).unique()
+        .sort(rank, pl.col("chrom"), pl.col("pos")).collect()
+        .with_columns(pl.int_range(pl.len(), dtype=pl.UInt32).alias("_site"))
+    )  # fmt: skip
+    hit_calls, hit_blocks = _covering(loaded, asked)
+    graded = pl.concat([
+        _calls_evidence(hit_calls, gq_on_reference, loaded.facets, keep=("_site",)),
+        _blocks_evidence(hit_blocks, gq_on_reference, loaded.facets, keep=("_site",), block_grade=block_grade),
+    ])  # fmt: skip
+    is_block = pl.col("evidence_basis") == EvidenceBasis.REF_BLOCK.value
+    at_position = pl.col("record_pos").cast(pl.Int64) == pl.col("pos")
+    index = pl.col("genotype_index")
+    covered = (
+        graded.rename({"pos": "record_pos", "end_pos": "record_end_pos"}).drop("chrom")
+        .join(asked.lazy(), on="_site", how="inner")
+        .with_columns(
+            pl.when(is_block).then(2).when(at_position).then(0).otherwise(1).alias("_precedence"),
+            pl.when(index > 0).then(0).when(index.is_null()).then(1).otherwise(2).alias("_states"),
+            pl.len().over("_site").cast(pl.UInt32).alias("records"),
+        )
+        .sort(["_site", "_precedence", "record_pos", "record_end_pos", "_states", "confidence"],
+              descending=[False, False, True, False, False, False], nulls_last=True, maintain_order=True)
+        .unique("_site", keep="first", maintain_order=True)
+        .with_columns(
+            pl.when(is_block).then(pl.lit(SupportKind.BLOCK.value)).otherwise(pl.lit(SupportKind.CALL.value)).alias("support"),
+            pl.when(is_block & (pl.col("block_kind") == BlockKind.REF.value)).then(pl.lit(RecordReason.REF_BLOCK.value))
+            .when(is_block).then(pl.lit(RecordReason.NO_CALL_BLOCK.value))
+            .when(at_position).then(pl.lit(RecordReason.CALL_AT_POSITION.value))
+            .otherwise(pl.lit(RecordReason.CALL_SPANS_POSITION.value)).alias("reason"),
+        )
+    )  # fmt: skip
+    reads_reference = silence.reads_reference is True
+    uncovered = asked.lazy().join(covered.select("_site"), on="_site", how="anti").with_columns(
+        pl.lit(facet["facet_id"], dtype=pl.String).alias("facet_id"),
+        pl.lit((SupportKind.ABSENCE if reads_reference else SupportKind.NONE).value).alias("support"),
+        pl.lit(silence.reason.value).alias("reason"),
+        pl.lit(0, dtype=pl.UInt32).alias("records"),
+        pl.lit((GradeBasis.ABSENT_REFERENCE if reads_reference else GradeBasis.ABSENT_UNKNOWN).value).alias("grade_basis"),
+        pl.lit((ConfidenceKind.ASSERTED if reads_reference else ConfidenceKind.UNKNOWN).value).alias("confidence_kind"),
+        pl.lit(0 if reads_reference else None, dtype=pl.UInt32).alias("genotype_index"),
+    )  # fmt: skip
+    columns = [pl.col(name).cast(dtype) for name, dtype in REFERENCE_SUPPORT.items() if name != "absence_means"]
+    return (
+        pl.concat([covered.with_columns(pl.col("grade_basis").cast(pl.String), pl.col("confidence_kind").cast(pl.String)), uncovered],
+                  how="diagonal_relaxed")
+        .sort("_site")
+        .select(*columns, pl.lit(facet["absence_means"], dtype=pl.String).alias("absence_means"))
+    )  # fmt: skip

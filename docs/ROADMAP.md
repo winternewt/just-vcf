@@ -512,7 +512,7 @@ Header evidence found while declaring the VCF formats:
 Not identifiable from the header: 23andMe's exome VCF, the Dante- and Nebula-named uploads (generic GATK).
 
 ## RM3 — REF lookup and padding
-Severity: high · Status: in progress (the FASTA tier shipped 2026-10-22 as `resolve_ref` on a gtars refget store, for VCF and array rows, merge db67f83; an array without a stated build inferred from its rows and GRCh36 in the store (F9), merge 2ff9b00; UCSC scaffold names met through NCBI's assembly reports (F19), merge cec1831; a facet refused only on an autosome mismatch (F20), merge eeaf293; the 2026-10-23 reading of I/D codes is RM281's; the anchor base of a CGI, CASAVA or Genos insertion point and REF over a Genos row's span, with a deletion at a contig's first base anchored on the base after, 2026-10-26 (below). Left, buildable now: emitting reference-supported positions, a function materialising hom-ref from `blocks` and absence under `callset.absence_is_reference`'s gates, which does not exist yet. Waiting: Living DNA's run-together indels past the 4 of 83 resolved need the Sirius chip's alleles (F17, no source); a facet whose file states no build gets no REF check until desk #92) · Owner: lead
+Severity: high · Status: in progress (the FASTA tier shipped 2026-10-22 as `resolve_ref` on a gtars refget store, for VCF and array rows, merge db67f83; an array without a stated build inferred from its rows and GRCh36 in the store (F9), merge 2ff9b00; UCSC scaffold names met through NCBI's assembly reports (F19), merge cec1831; a facet refused only on an autosome mismatch (F20), merge eeaf293; the 2026-10-23 reading of I/D codes is RM281's; the anchor base of a CGI, CASAVA or Genos insertion point and REF over a Genos row's span, with a deletion at a contig's first base anchored on the base after, 2026-10-26 (below); reference-supported positions, `reference_support`, 2026-10-26 (below). Waiting: Living DNA's run-together indels past the 4 of 83 resolved need the Sirius chip's alleles (F17, no source); a facet whose file states no build gets no REF check until desk #92) · Owner: lead
 
 Port just-prs `reference_allele.py` (reference-panel tier, FASTA tier, FASTA build check). New work:
 ALT derivation from genotype against REF, indel anchor bases, chr-prefixed FASTA support, emitting
@@ -594,7 +594,28 @@ writes them. A CASAVA indel table's points take the same rule, but such a facet 
 has no SNV rows to infer one from (F9), so `resolve_ref` refuses it before reading a row; that gap is
 not this item's.
 
-Left: emitting reference-supported positions. UCSC's scaffold names meet
+**Shipped 2026-10-26: reference-supported positions** (`reference_support`, `just_vcf.evidence`;
+docs/SCHEMA.md, "Graded genotype evidence"). Per asked position, one row: `support` `call`, `block`,
+`absence` or `none`, the grade `genotype_evidence` gives a covering record, `records`, and a `reason`;
+an absence reads as reference only where `absence_support` (new, the reason-bearing form of
+`absence_is_reference`, Decision 4) says so, `force` included. Choices, each with the alternative
+rejected:
+
+- **One row per position, a call before the block and a variant before a reference**, not one row
+  per covering record (`genotype_evidence_at` gives that): a consumer restoring hom-ref should not have
+  to pick, each by its own rule. `records` keeps the overlap visible.
+- **No number for an absence.** It is `absent_reference`, asserted, with `absence_means` beside it to
+  tell `reference` from `weak_reference`. Rejected: a fixed phred for a whole genome's silence (a
+  caller's sensitivity times a heterozygosity prior), which is the made-up number Decision 3 refuses
+  and would read the same in a mappable exon and a segmental duplication. The person may want one;
+  where it would come from is RM279's per-method, per-region false-negative rate.
+- **A filtered genome without `force` answers `none`** (`content_filter_held`), not an error: the
+  answer is unknown per position with its reason, as `genotype_evidence_at` answers.
+- **Lazy, sorted canonically.** The matching is `genotype_evidence_at`'s, factored out and shared.
+
+Not measured on real data yet: no PGP-HMS facet was asked in this change.
+
+UCSC's scaffold names meet
 Ensembl's accessions since 2026-10-23, through NCBI's assembly reports rather than the accession inside
 the name (F19, docs/PREVIOUS_ISSUES.md). A VCF with neither
 `##contig` lengths nor a build hint is refused: nothing can show which assembly it is on. An array

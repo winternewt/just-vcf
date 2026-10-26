@@ -615,6 +615,9 @@ or `callset_type_unknown`, from the facet's `callset_type`, when `absence_means`
 under `class_not_counted`, `class_not_called`, `content_filter_held` (the kept class, without
 `force`) and `class_cut_by_filter`, which a class the filter cut gets even where the facet wrote none
 of it (the cut is why). `absence_is_reference` is its `reads_reference`, so the two cannot drift.
+`reference_support` ("Graded genotype evidence", below) is the hom-ref restoration just-vcf grows: per
+asked position it answers from a call, a block or this rule, and never reads an absence as reference
+where `absence_support` does not.
 
 **On an array, an absence has a cause (RM281).** An array's absence stays `unknown`, but
 `chip_absence(loaded, sites)` says why, per asked site (`chrom` canonical, `pos` 1-based), from the
@@ -2107,6 +2110,38 @@ its likelihoods put another genotype first they state less confidence in hom-ref
 phred. A block lacking what its rule reads is `block`, reference asserted with the number withheld,
 never graded by another rule's quantity (CLAUDE.md, no silent fallback).
 
+**Reference-supported positions (RM3).** `reference_support(loaded, sites, variant_class=…)`
+materialises what a one-facet `loaded` says about the reference allele at each asked position
+(`chrom` canonical, `pos` 1-based), from calls, blocks and absence at once: one row per distinct
+position (`REFERENCE_SUPPORT`), in canonical order (contig rank, then position) whatever order the
+sites came in, as a lazy frame. It takes `gq_on_reference`, `block_grade` and `force` as
+`genotype_evidence_at` does, and grades a covering record exactly as `genotype_evidence` does: the
+grade columns are that frame's (`grade_basis`, `gl_source`, `confidence_kind`, `genotype_alleles`,
+`genotype_probabilities`, `prior`, `genotype_index`, `confidence`). What it adds is the one answer per
+position, what that answer rests on, and why:
+
+| `support` | When | Grade | `reason` |
+|---|---|---|---|
+| `call` | a `calls` row covers the position (from `pos` to `end_pos`, both inclusive) | as `genotype_evidence`: `genotype_index` 0 states hom-ref, any other an ALT on some haplotype, null none | `call_at_position`, `call_spans_position` |
+| `block` | a `blocks` row covers it (both ends inclusive) | a `ref` block by `block_grade`, `genotype_index` 0; a `no_call` block by its likelihoods, else `no_call` | `ref_block`, `no_call_block` |
+| `absence` | nothing covers it, and `absence_support` reads the silence as reference | `absent_reference`, asserted, `genotype_index` 0, no number | `whole_genome_silence`, `omitted_called_reference`, `content_filter_forced` |
+| `none` | nothing covers it, and the silence says nothing | `absent_unknown`, unknown, no genotype | the `AbsenceReason` (Decision 4): `outside_blocks`, `array`, `targeted`, `imputed`, `callset_type_unknown`, `class_not_counted`, `class_not_called`, `content_filter_held`, `class_cut_by_filter` |
+
+`absence_means` comes along on every row, so a producer's reference call by omission (`reference`) and
+a caller's silence (`weak_reference`) stay apart on an `absence` row. That is the absence's own grade,
+below every record's: Decision 3 makes up no number for an unquantified statement, and a silence is
+one. A number would have to come from the method's own false-negative rate per region (RM279's atlas),
+not from a constant; until the person asks for one, none is given. `records` counts the records
+covering the position (0 for `absence` and `none`). Where several do, one answers: a call starting at
+the position, else the call starting nearest before it, else the block (a facet's blocks do not
+overlap one another, so there is at most one); among calls of one span, one stating an ALT before one
+stating nothing before one stating hom-ref, then the least `confidence`. A GATK gVCF does start a
+`ref` block inside a deletion's span, and a reference statement must not hide a variant stated at the
+same base. Rejected: one row per covering record, as `genotype_evidence_at` gives, which leaves every
+consumer restoring hom-ref to pick among them, each by its own rule. The asked positions and the facet
+row are read up front; every join over `calls` and `blocks` is pre-filtered to the asked contigs, and
+only the covering records are graded (`genotype_evidence_at`'s matching, shared).
+
 ## The cache under the lazy frames (RM268)
 
 The frames `load` and the derived steps return are lazy scans over files in `cache_dir()`
@@ -2845,6 +2880,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-26, RM3's reference-supported positions): no column of `facets`,
+  `calls` or `blocks` changes. `reference_support` and `absence_support` are computed on demand, as
+  `genotype_evidence_at` is ("Graded genotype evidence"; Decision 4), and `REFERENCE_SUPPORT` is
+  their answer's shape, outside the three frames. `absence_is_reference` answers as before. Additive:
+  minor.
 
 - **No version change** (2026-10-26, F9's row sample): no column changes. The rows `resolve_ref`
   scores to infer an array's build and check its strand leave out rows not over one base, so a Genos

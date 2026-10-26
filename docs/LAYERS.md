@@ -172,7 +172,11 @@ meanwhile. The desk carries the ones filed there.
   VCF twice through polars-bio (warning counts, and the staged spill whose bytes key the generation): 88 s of
   hu416394's, 804 s of the Isaac gVCF's. The generation stays keyed by the staged bytes; the warning counts are to be
   cached by the copy's digest, which saves the first pass. Rejected: keying the generation on its inputs (source
-  digest, options, a loader version), where one forgotten bump serves rows an older loader wrote.
+  digest, options, a loader version), where one forgotten bump serves rows an older loader wrote. *Built
+  2026-10-26:* a cached load of hu416394's gVCF 86 s to 48 s. The stats key carries a digest of the loader
+  modules' source as well as `STATS_VERSION`, so a forgotten bump costs one pass, never stale counts (accepted
+  cost: any edit to `loaders/vcf.py` or `loaders/text.py` re-counts each file once); a second session waits on the
+  entry's lock rather than counting twice.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

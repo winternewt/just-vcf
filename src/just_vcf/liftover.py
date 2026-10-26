@@ -35,12 +35,23 @@ short:
    over the gap. A piece on a minus-strand block or another contig lifts like a row does (a block has
    no allele to complement). The frame keeps no block REF: an export reads it from the target
    (`write_vcf(..., blocks=True)` reads `ref_seqcol_digest`, which is the target's).
-5. **Withheld in this slice**, each counted: a minus-strand indel whose lifted span starts at the
-   target contig's first base (no base before it to anchor on), symbolic alleles and `*`, and rows
+5. **Symbolic SVs** (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`, `<CNn>`, `<INS>`, subtypes included, every
+   ALT of the row one of them) and copy-number segments (no ALT, an `end_pos` past REF): POS and
+   `end_pos` are lifted as two points, independently, and the row is kept only where both land, on
+   one target contig and strand, in their order, with a length (`end_pos - pos`) within
+   `SV_LENGTH_TOLERANCE` of the source's (liftoverSV's rule). On a minus-strand block the event's
+   image is reversed: a padded SV's new POS is the target's base before the image of END, a segment's
+   the image of END itself. REF (one base) is read from the target there, and on a plus-strand block
+   must equal the source's. The ALTs stay as written; `cipos` and `ciend` carry, mirrored and swapped
+   on a minus-strand block. Breakends are left behind (`breakend_not_lifted`): their mate position
+   is on any contig and its bracket orientation flips with each end's strand.
+6. **Withheld in this slice**, each counted: a minus-strand indel or SV whose new anchor would be
+   before the target contig's first base, breakends, other symbolic alleles and `*`, and rows
    flagged as one record of a pre-split site.
 
-A lifted row's `source_ref`, `ref_check`, `source_gt`, VRS ids, `cipos` and `ciend` are null: they described the
-source's representation on the source assembly. `gl`, `gp` and `ad` stay indexed over
+A lifted row's `source_ref`, `ref_check`, `source_gt` and VRS ids are null, and so are a sequence row's
+`cipos` and `ciend`: they described the source's representation on the source assembly (an SV's
+intervals are about its two ends, which step 5 places, so they carry). `gl`, `gp` and `ad` stay indexed over
 `source_alleles`, never reordered (SCHEMA.md Decision 2); a swapped row's `dosage` is withheld, since it
 counted the other allele, and so are its `alt_copy_numbers` (INFO CN, one per ALT): the swapped ALT's
 slot now holds the old REF, whose copy number the source did not state. Re-mint ids on the target with `mint_vrs_ids`.
@@ -62,18 +73,19 @@ from pydantic import BaseModel, ConfigDict
 
 from just_vcf import cache
 from just_vcf.links import LIFTOVER_TO, derived_links
+from just_vcf.loaders.vcf import _SV_LENGTH_TYPES
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
 from just_vcf.reference import PRIMARY, Contig, ReferenceMismatchError, ReferenceStore, _derive_array_alleles, _span, _store_for
 from just_vcf.schema import BLOCKS, CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, AbsenceMeans, AssemblyLabelBasis, RefCheck, canonical_chrom, canonical_order, empty
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 8
+LIFT_VERSION = 9
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
 row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
 `phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
 6: the lifted facet's `reference` is null, since it named the source's file; 7: schema 0.0.19's `hq` carried;
-8: the `blocks` frame lifted)."""
+8: the `blocks` frame lifted; 9: symbolic SVs and copy-number segments lifted by both ends)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -95,6 +107,12 @@ UNLIFTED_REASONS: frozenset[str] = frozenset(
         # What the target says about its alleles.
         "indel_minus_strand",
         "ref_mismatch_after_lift",
+        # Symbolic SVs (step 5).
+        "breakend_not_lifted",
+        "sv_end_unlifted",
+        "sv_ends_apart",
+        "sv_ends_reversed",
+        "sv_length_changed",
     }
 )
 """Why a parent row is not in the lifted facet; the report's `lift_reason`. An open vocabulary (str)."""
@@ -102,7 +120,10 @@ UNLIFTED_REASONS: frozenset[str] = frozenset(
 REASON_TEXT: dict[str, str] = {
     "ref_unread": "REF was not read from the source assembly (resolve_ref left it unread)",
     "source_ref_mismatch": "the source REF disagrees with the source assembly (ref_check mismatch)",
-    "allele_not_sequence": "an allele that is not a base sequence (symbolic, `*`, `<*>`, a breakend); SV extents are not lifted",
+    "allele_not_sequence": (
+        "an allele that is not a base sequence and no symbolic SV the lift reads (`*`, `<*>`, `<TRA>`, a symbolic SV beside a sequence ALT), "
+        "or an SV or segment whose REF is longer than its one padding base"
+    ),
     "split_flagged": "flagged as one record of a pre-split site (RM270); run rejoin_split first",
     "contig_not_in_chain": "a contig the chain does not cover",
     "chain_contig_mismatch": "a contig whose size in the chain differs from the source assembly's",
@@ -110,9 +131,21 @@ REASON_TEXT: dict[str, str] = {
     "split_across_blocks": "its REF span crosses the edge of a chain block",
     "multiple_targets": "it lies in more than one chain block (overlapping chains), so its target is ambiguous",
     "target_contig_unmatched": "the chain's target contig is not in the target collection, or its size differs",
-    "indel_minus_strand": "an indel on a minus-strand block lifted to the target contig's first base, with no base before it to anchor on",
-    "ref_mismatch_after_lift": "the target's REF equals none of the row's alleles",
+    "indel_minus_strand": "an indel or SV on a minus-strand block lifted to the target contig's first base, with no base before it to anchor on",
+    "ref_mismatch_after_lift": "the target's REF equals none of the row's alleles (an SV's: its padding base differs)",
+    "breakend_not_lifted": "a breakend: its mate position and bracket orientation are not lifted",
+    "sv_end_unlifted": "an SV whose end_pos has no single chain target (no block, several, or a target contig the collection lacks)",
+    "sv_ends_apart": "an SV whose POS and end_pos land on different target contigs or strands",
+    "sv_ends_reversed": "an SV whose POS and end_pos land in reversed order on the target",
+    "sv_length_changed": "an SV whose lifted length differs from the source's by more than SV_LENGTH_TOLERANCE",
 }
+
+SV_LENGTH_TOLERANCE = 0.05
+"""How far a lifted SV's length (`end_pos - pos`) may differ from the source's, as a fraction of the
+source's: kept where `|lifted - source| <= SV_LENGTH_TOLERANCE * source`. liftoverSV's rule and default
+(`-p/--percent 0.05`, "difference max between both SVLENs < 5%"); Picard LiftoverVcf has none (the
+whole POS..END interval must lift, `LIFTOVER_MIN_MATCH` 1.0), CrossMap rewrites END from the REF span.
+A point SV (`<INS>`, length 0) must stay a point, which lifting one position always gives."""
 
 PARENT_COLUMNS_KEPT = ("ids", "phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "gl", "gp", "dosage", "evidence_basis", "gq", "hq", "dp", "ad", "qual", "filters", "sample_filters", "split_signal")
 """`calls` columns a lifted row carries from its parent as they were (phase sets and dosage aside, below)."""
@@ -134,6 +167,11 @@ BLOCK_REPORT = pl.Schema({"lift_reason": pl.String, "pieces": pl.UInt64, "bases"
 """What a lift left behind of the `blocks` frame: per reason, the pieces and the bases in them."""
 
 _SEQUENCE = r"^[ACGTN]+$"
+_SV_ALLELE = rf"^<({'|'.join((*_SV_LENGTH_TYPES, 'INS'))})(:[^>]*)?>$"
+"""A symbolic SV allele the lift reads: the loader's length types (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`,
+`<CNn>`, subtypes included), whose extent is `end_pos`, and `<INS>`, a point at its anchor."""
+_BREAKEND = r"[\[\]]|^\.[ACGTN]+$|^[ACGTN]+\.$"
+"""A breakend allele (`N[2:123[`, `]2:123]N`) or a single breakend (`.N`, `N.`)."""
 _COMPLEMENT = (["A", "C", "G", "T"], ["T", "G", "C", "A"])
 _FAR = 1 << 40
 """An end past every contig, closing the last gap segment of a chain's source contig."""
@@ -636,12 +674,19 @@ def _lift_contig(
     counts["rows"] += rows.height
     alts = pl.col("alts").fill_null(pl.lit([], dtype=CALLS["alts"]))
     not_sequence = alts.list.eval(~pl.element().str.to_uppercase().str.contains(_SEQUENCE)).list.any()
+    breakend = alts.list.eval(pl.element().str.to_uppercase().str.contains(_BREAKEND)).list.any()
+    ref_length = pl.col("ref").str.len_chars().cast(pl.Int64)
+    symbolic_sv = (alts.list.len() > 0) & alts.list.eval(pl.element().str.contains(_SV_ALLELE)).list.all()
+    segment = (alts.list.len() == 0) & (pl.col("end_pos").cast(pl.Int64) > pl.col("pos").cast(pl.Int64) + ref_length - 1)
+    extent = (symbolic_sv | segment).fill_null(False)
     reason = (
         pl.when(pl.col("ref").is_null())
         .then(pl.lit("ref_unread"))
         .when((pl.col("ref_check") == RefCheck.MISMATCH.value).fill_null(False))
         .then(pl.lit("source_ref_mismatch"))
-        .when(not_sequence)
+        .when(breakend)
+        .then(pl.lit("breakend_not_lifted"))
+        .when((not_sequence & ~symbolic_sv) | (extent & (ref_length != 1)))
         .then(pl.lit("allele_not_sequence"))
         .when(pl.col("split_signal").is_not_null())
         .then(pl.lit("split_flagged"))
@@ -651,14 +696,17 @@ def _lift_contig(
     elif not contig_ok:
         reason = reason.otherwise(pl.lit("chain_contig_mismatch"))
     start, end = _span(pl.col("pos"), pl.col("ref").str.len_chars())
-    work = rows.with_row_index("_row").with_columns(reason.alias("lift_reason"), start.alias("_s0"), end.alias("_e0"))
+    work = rows.with_row_index("_row").with_columns(reason.alias("lift_reason"), start.alias("_s0"), end.alias("_e0"), extent.alias("_sv"))
 
     blocks = chain.blocks.filter(pl.col("t_chrom") == chrom)
     candidates = work.filter(pl.col("lift_reason").is_null())
+    placed_columns = ["_row", "_reason2", "_q_chrom", "_q0", "_minus", "_reanchor", "_t_ref", "_swap", "_new_end"]
     if candidates.height and blocks.height:
-        candidates = _place(candidates, blocks, targets)
-        candidates = _read_target(candidates, store, targets)
-        work = work.join(candidates.select("_row", "_reason2", "_q_chrom", "_q0", "_minus", "_reanchor", "_t_ref", "_swap"), on="_row", how="left", maintain_order="left")
+        sequence = candidates.filter(~pl.col("_sv"))
+        sequence = _read_target(_place(sequence, blocks, targets), store, targets).with_columns(pl.lit(None, dtype=pl.Int64).alias("_new_end"))
+        svs = _place_sv(candidates.filter(pl.col("_sv")), blocks, store, targets)
+        placed = pl.concat([sequence.select(placed_columns), svs.select(placed_columns)], how="vertical")
+        work = work.join(placed, on="_row", how="left", maintain_order="left")
         work = work.with_columns(pl.coalesce("lift_reason", "_reason2").alias("lift_reason"))
     else:
         work = work.with_columns(
@@ -668,6 +716,7 @@ def _lift_contig(
             pl.lit(None, dtype=pl.Boolean).alias("_reanchor"),
             pl.lit(None, dtype=pl.String).alias("_t_ref"),
             pl.lit(None, dtype=pl.Boolean).alias("_swap"),
+            pl.lit(None, dtype=pl.Int64).alias("_new_end"),
         )
         if candidates.height:
             work = work.with_columns(pl.col("lift_reason").fill_null(pl.lit("no_chain_block")))
@@ -683,8 +732,135 @@ def _lift_contig(
         pl.when(ok).then(pl.col("_swap")).alias("lift_swapped"),
         pl.col("lift_reason"),
     )
-    lifted = _lifted_rows(work.filter(ok), facet_id, chrom, counts)
+    lifted = pl.concat(
+        [_lifted_rows(work.filter(ok & ~pl.col("_sv")), facet_id, chrom, counts), _lifted_sv_rows(work.filter(ok & pl.col("_sv")), facet_id, chrom, counts)],
+        how="vertical",
+    )
     return report, lifted
+
+
+def _place_sv(rows: pl.DataFrame, blocks: pl.DataFrame, store: ReferenceStore, targets: dict[str, Contig]) -> pl.DataFrame:
+    """Each SV row's target from its two ends, lifted as points, or why it has none (`_reason2`); the
+    new 0-based start (`_q0`), the new 1-based `end_pos` (`_new_end`) and the target's REF base.
+
+    A padded SV (a symbolic ALT: POS is the base before the event `[POS+1, END]`) on a minus-strand
+    block has its event's image at `[image(END), image(POS) - 1]`, so its new POS is the base before
+    that, `image(END) - 1`, and its new END `image(POS) - 1`: the length is kept, and the anchor is the
+    target's base before the event, as a re-anchored indel's is. A segment (no ALT, `[POS, END]`
+    inclusive, as a block) maps to `[image(END), image(POS)]`.
+    """
+    if rows.is_empty():
+        return rows.with_columns(
+            pl.lit(None, dtype=pl.String).alias("_reason2"),
+            pl.lit(None, dtype=pl.String).alias("_q_chrom"),
+            pl.lit(None, dtype=pl.Int64).alias("_q0"),
+            pl.lit(None, dtype=pl.Boolean).alias("_minus"),
+            pl.lit(False).alias("_reanchor"),
+            pl.lit(None, dtype=pl.String).alias("_t_ref"),
+            pl.lit(False).alias("_swap"),
+            pl.lit(None, dtype=pl.Int64).alias("_new_end"),
+        )
+    start_s0, start_e0 = _span(pl.col("pos"), pl.lit(1))
+    end_s0, end_e0 = _span(pl.col("end_pos"), pl.lit(1))
+    at_pos = _place(rows.select("_row", start_s0.alias("_s0"), start_e0.alias("_e0")), blocks, targets)
+    at_end = _place(rows.select("_row", end_s0.alias("_s0"), end_e0.alias("_e0")), blocks, targets).select(
+        "_row", pl.col("_reason2").alias("_end_reason"), pl.col("_q_chrom").alias("_end_chrom"), pl.col("_q0").alias("_end_q0"), pl.col("_minus").alias("_end_minus")
+    )
+    rows = rows.join(at_pos.select("_row", "_reason2", "_q_chrom", pl.col("_q0").alias("_pos_q0"), "_minus"), on="_row", how="left", maintain_order="left")
+    rows = rows.join(at_end, on="_row", how="left", maintain_order="left")
+    padded = pl.col("alts").list.len() > 0
+    minus = pl.col("_minus")
+    # 0-based images of POS and END: a, b. New 0-based start and 1-based end per the docstring.
+    a, b = pl.col("_pos_q0"), pl.col("_end_q0")
+    q0 = pl.when(~minus).then(a).when(padded).then(b - 1).otherwise(b)
+    new_end = pl.when(~minus).then(b + 1).when(padded).then(a).otherwise(a + 1)
+    source_length = pl.col("end_pos").cast(pl.Int64) - pl.col("pos").cast(pl.Int64)
+    lifted_length = new_end - (q0 + 1)
+    reason = (
+        pl.when(pl.col("_reason2").is_not_null())
+        .then(pl.col("_reason2"))
+        .when(pl.col("_end_reason").is_not_null())
+        .then(pl.lit("sv_end_unlifted"))
+        .when((pl.col("_end_chrom") != pl.col("_q_chrom")) | (pl.col("_end_minus") != minus))
+        .then(pl.lit("sv_ends_apart"))
+        .when(pl.when(minus).then(b > a).otherwise(b < a))
+        .then(pl.lit("sv_ends_reversed"))
+        .when((lifted_length - source_length).abs() > SV_LENGTH_TOLERANCE * source_length)
+        .then(pl.lit("sv_length_changed"))
+        .when(q0 < 0)
+        .then(pl.lit("indel_minus_strand"))
+    )
+    rows = rows.with_columns(reason.alias("_reason2"), q0.alias("_q0"), new_end.alias("_new_end"), pl.lit(False).alias("_reanchor"), pl.lit(False).alias("_swap"))
+    rows = rows.with_columns(
+        pl.when(pl.col("_reason2").is_null()).then(pl.col(name)).alias(name) for name in ("_q_chrom", "_q0", "_new_end")
+    )
+    readable = rows.filter(pl.col("_reason2").is_null())
+    bases: list[pl.DataFrame] = []
+    for chrom in sorted(readable["_q_chrom"].unique().to_list()):
+        part = readable.filter(pl.col("_q_chrom") == chrom)
+        starts = part["_q0"].to_list()
+        read = store.fetch(targets[chrom], [(start, start + 1) for start in starts])
+        bases.append(part.select("_row", pl.Series("_t_ref", [base.upper() for base in read], dtype=pl.String)))
+    read_frame = pl.concat(bases) if bases else pl.DataFrame(schema={"_row": rows.schema["_row"], "_t_ref": pl.String})
+    rows = rows.join(read_frame, on="_row", how="left", maintain_order="left")
+    # On a plus-strand block the anchor is the source's own base, so the target's must equal it; on a
+    # minus-strand block it is another base (the one before the event's image), read, never compared.
+    mismatch = pl.col("_reason2").is_null() & ~minus & (pl.col("_t_ref") != pl.col("ref").str.to_uppercase())
+    return rows.with_columns(pl.when(mismatch).then(pl.lit("ref_mismatch_after_lift")).otherwise(pl.col("_reason2")).alias("_reason2"))
+
+
+def _mirrored(values: list[int | None] | None) -> list[int | None] | None:
+    """Confidence-interval pairs (two offsets per ALT) about a position whose image runs the other way:
+    each `[lo, hi]` becomes `[-hi, -lo]`."""
+    if values is None:
+        return None
+    out: list[int | None] = []
+    for index in range(0, len(values) - 1, 2):
+        low, high = values[index], values[index + 1]
+        out += [None if high is None else -high, None if low is None else -low]
+    return out
+
+
+def _lifted_sv_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: Counter[str]) -> pl.DataFrame:
+    """The lifted `calls` rows of SVs and segments: placed by both ends, REF read at the new POS, the
+    ALTs as written. Few rows, so the per-row lists are rebuilt in plain Python."""
+    if work.is_empty():
+        return pl.DataFrame(schema=CALLS)
+    moved_contig = pl.col("_q_chrom") != source_chrom
+    counts["lifted"] += work.height
+    counts["sv_lifted"] += work.height
+    counts["sv_minus"] += int(work["_minus"].sum())
+    counts["other_contig"] += int(work.select(moved_contig.sum()).item())
+    counts["phase_cleared"] += int(work.select((moved_contig & pl.col("phased").is_not_null()).sum()).item())
+    columns: dict[str, list] = {name: [] for name in ("gt_alleles", "source_alleles", "cipos", "ciend")}
+    for old, new, minus, gt_alleles, source_alleles, cipos, ciend in work.select(
+        pl.col("ref").str.to_uppercase(), "_t_ref", "_minus", "gt_alleles", "source_alleles", "cipos", "ciend"
+    ).iter_rows():
+        # Every allele that is not one of the ALTs is the padding base REF, now the target's.
+        for name, alleles in (("gt_alleles", gt_alleles), ("source_alleles", source_alleles)):
+            columns[name].append(None if alleles is None else [new if allele is not None and allele.upper() == old else allele for allele in alleles])
+        if minus:
+            # The new POS is the image of the old END and the reverse: a missing CIEND is CIPOS (VCF 4.5).
+            columns["cipos"].append(_mirrored(ciend if ciend is not None else cipos))
+            columns["ciend"].append(_mirrored(cipos))
+        else:
+            columns["cipos"].append(cipos)
+            columns["ciend"].append(ciend)
+    out = work.with_columns(
+        pl.lit(facet_id).alias("facet_id"),
+        pl.col("_q_chrom").alias("chrom"),
+        _to_pos(pl.col("_q0")).alias("pos"),
+        pl.col("_new_end").cast(pl.UInt32).alias("end_pos"),
+        pl.col("_t_ref").alias("ref"),
+        *[pl.Series(name, values, dtype=CALLS[name]) for name, values in columns.items()],
+        pl.lit(None, dtype=CALLS["source_ref"]).alias("source_ref"),
+        pl.lit(None, dtype=CALLS["ref_check"]).alias("ref_check"),
+        pl.lit(None, dtype=CALLS["source_gt"]).alias("source_gt"),
+        pl.lit(None, dtype=CALLS["vrs_allele_ids"]).alias("vrs_allele_ids"),
+        pl.lit(None, dtype=CALLS["vrs_errors"]).alias("vrs_errors"),
+        *[pl.when(moved_contig).then(None).otherwise(pl.col(name)).alias(name) for name in ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities")],
+    )
+    return out.select(CALLS.names())
 
 
 def _place(rows: pl.DataFrame, blocks: pl.DataFrame, targets: dict[str, Contig]) -> pl.DataFrame:
@@ -893,6 +1069,11 @@ def _warnings(
         lines.append(f"{counts['swapped']} lifted row(s) had the target's REF as an ALT: REF and that ALT swapped, the genotype re-indexed")
     if counts["minus"]:
         lines.append(f"{counts['minus']} lifted row(s) on minus-strand chain blocks: alleles reverse-complemented")
+    if counts["sv_lifted"]:
+        lines.append(
+            f"{counts['sv_lifted']} lifted row(s) were symbolic SVs or copy-number segments, placed by both ends (length within "
+            f"{SV_LENGTH_TOLERANCE:.0%}), {counts['sv_minus']} of them on minus-strand blocks (cipos and ciend mirrored and swapped)"
+        )
     if counts["reanchored"]:
         lines.append(
             f"{counts['reanchored']} of them indels re-anchored on the target's base before the lifted span (one base left); "

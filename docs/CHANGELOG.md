@@ -4,6 +4,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `liftover` lifts symbolic SVs (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`, `<CNn>`, `<INS>`) and copy-number
+  segments by both ends (RM6). POS and `end_pos` are lifted as two points; the row is kept where both
+  land on one contig and strand, in order, with a length within 5% of the source's
+  (`liftover.SV_LENGTH_TOLERANCE`, liftoverSV's rule), and otherwise left behind under the new reasons
+  `sv_end_unlifted`, `sv_ends_apart`, `sv_ends_reversed` and `sv_length_changed`. REF is read from the
+  target at the new POS; on a minus strand the SV is anchored on the target's base before the event's
+  image and `cipos`/`ciend` swap and mirror. Breakends stay behind as `breakend_not_lifted`, where they
+  were `allele_not_sequence`. **Fixed**: a copy-number segment (`ALT .` with END and CN) lifted with
+  its `end_pos` cut to its one-base REF span. **Values change**: lifted facets get a new `facet_id`
+  (`LIFT_VERSION` 9). Additive otherwise: minor (docs/SCHEMA.md, "Lifting symbolic SVs").
+
 - `liftover` lifts the `blocks` frame (RM6). A gVCF reference or no-call block is cut wherever the
   chain's mapping changes: the pieces inside one chain block with one target lift, with `kind`, `gq`,
   `dp_min` and `gl` unchanged, and the rest stays behind, counted in bases per reason in the new

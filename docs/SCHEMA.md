@@ -1022,9 +1022,10 @@ holding that collection and the target.
    and lifts complemented in place like an MNV. A re-anchored indel is not left-aligned on the target
    by `liftover`: the shift that was leftmost on the source is rightmost on the target. Run
    `normalize` on the lifted facet to left-align it there ("Normalizing", step 2).
-4. **What a lifted row carries.** `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids`,
-   `vrs_errors`, `cipos` and `ciend` are null: they described the source's representation on the
-   source assembly (the intervals are offsets a minus-strand block would reverse). `gt`
+4. **What a lifted row carries.** `source_ref`, `ref_check`, `source_gt`, `vrs_allele_ids` and
+   `vrs_errors` are null, and on a sequence row `cipos` and `ciend` too: they described the source's
+   representation on the source assembly (the intervals are offsets a minus-strand block would
+   reverse). A symbolic SV keeps them, mirrored on a minus strand ("Lifting symbolic SVs" below). `gt`
    indexes `[ref] + alts`. `gl`, `gp`, `ad` and the order of `source_alleles` are the parent's (Decision
    2: never reordered). A swapped row's `dosage` is null, since it counted the other allele, and so
    are its `alt_copy_numbers`: the swapped ALT's slot holds the old REF, whose copy number the source
@@ -1044,11 +1045,59 @@ holding that collection and the target.
    below).
 
 Not lifted, each counted in the warnings and named in the report's `lift_reason` (an open vocabulary,
-`UNLIFTED_REASONS`): `ref_unread`, `source_ref_mismatch`, `allele_not_sequence` (the empty allele of an unanchored deletion, which `normalize` anchors first; symbolic alleles, `*`,
-`<*>`, breakends: an SV's extent is not lifted), `split_flagged` (run `rejoin_split` first),
-`contig_not_in_chain`, `chain_contig_mismatch`, `no_chain_block`, `split_across_blocks`,
-`multiple_targets`, `target_contig_unmatched`, `indel_minus_strand` (a minus-strand indel lifted to
-the target contig's first base, with no base before it to re-anchor on) and `ref_mismatch_after_lift`.
+`UNLIFTED_REASONS`): `ref_unread`, `source_ref_mismatch`, `allele_not_sequence` (the empty allele of
+an unanchored deletion, which `normalize` anchors first; `*`, `<*>` and symbolic alleles the SV rule
+below does not read, such as Delly's `<TRA>` or a symbolic SV beside a sequence ALT; an SV or segment
+whose REF is longer than its padding base), `breakend_not_lifted`, `split_flagged` (run
+`rejoin_split` first), `contig_not_in_chain`, `chain_contig_mismatch`, `no_chain_block`,
+`split_across_blocks`, `multiple_targets`, `target_contig_unmatched`, `indel_minus_strand` (a
+minus-strand indel or SV lifted to the target contig's first base, with no base before it to
+re-anchor on), `ref_mismatch_after_lift`, and for SVs `sv_end_unlifted`, `sv_ends_apart`,
+`sv_ends_reversed` and `sv_length_changed`.
+
+**Lifting symbolic SVs** (2026-10-26, `LIFT_VERSION` 9). A row whose every ALT is a symbolic SV the
+loader gives an extent (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`, `<CNn>`, subtypes included) or `<INS>`, and
+a copy-number segment (no ALT, `end_pos` past REF: Canvas's copy-neutral records), is lifted by its two
+ends rather than its REF span, with one base of REF:
+
+1. POS and `end_pos` are lifted as two single positions, each by step 2's rule (one block, one
+   target). POS's failure is the row's reason as for any row; `end_pos`'s is `sv_end_unlifted`.
+2. Both must land on one target contig and one strand (`sv_ends_apart`), in their order
+   (`sv_ends_reversed`), and the lifted length `end_pos - pos` may differ from the source's by at most
+   `SV_LENGTH_TOLERANCE` (5%) of it (`sv_length_changed`). This is liftoverSV's rule and default
+   (`-p/--percent 0.05`: dropped on positions on different chromosomes, reversed order between the
+   lifted positions, or a length change above 5% of SVLEN). Rejected: Picard LiftoverVcf's, which
+   lifts the whole POS..END interval with `LIFTOVER_MIN_MATCH` 1.0, so one base of chain gap inside a
+   200 kb deletion drops it; CrossMap's, which rewrites END from the lifted REF span and never lifts it
+   (an SV comes out one base long); and bcftools +liftover's `--lift-end`, which lifts END under the
+   same contig, strand and order checks but on failure keeps the record with END missing, an SV with
+   no extent. A point (`<INS>`, length 0) stays a point.
+3. On a plus-strand block the row lands at `image(POS)`..`image(END)`. On a minus-strand block the
+   event's image runs the other way. A padded SV (a symbolic ALT, whose event is `[POS+1, END]`) lands
+   with POS at `image(END) - 1`, the target's base before the event's image, and `end_pos` at
+   `image(POS) - 1`: the length is kept, and the anchor is the target's base, as for a re-anchored
+   indel (step 3); one that would be anchored before the contig's first base is `indel_minus_strand`.
+   A segment (`[POS, END]` inclusive, as a block) lands at `image(END)`..`image(POS)`.
+4. REF, one base, is read from the target at the new POS (charter 10). On a plus-strand block it is
+   the source's anchor carried over, so it must equal the source's REF (`ref_mismatch_after_lift`
+   otherwise, as liftoverSV and Picard drop a changed REF); on a minus-strand block the anchor is
+   another base and nothing is compared, as a re-anchored indel's old padding base is not. The ALTs
+   stay as written (Picard and bcftools leave a symbolic allele as it is on either strand);
+   `gt_alleles` and `source_alleles` take the new REF where they held the old; `gt`, `sv_type`,
+   `copy_number`, `alt_copy_numbers` and `dosage` carry. Nothing swaps.
+5. `cipos` and `ciend` carry on a plus-strand block. On a minus-strand block the new POS is the old
+   END's image and the new END the old POS's, so each pair `[lo, hi]` mirrors to `[-hi, -lo]` and the
+   two swap; where the source wrote no CIEND, VCF 4.5's rule (assume CIPOS) supplies the old END's
+   interval, so both are set.
+6. Breakends (`N[2:123[`, `]2:123]N`, `.N`) are left behind as `breakend_not_lifted`. Lifting one
+   needs its mate position lifted through the chain on whatever contig it names, the mate's contig
+   name rewritten inside the ALT, and the brackets turned for each end that lands on a minus strand,
+   with the mate record kept consistent; that is a slice of its own.
+
+Tested on the synthetic chain against the construction (each reason, both strands, a segment, the
+5% boundary, `cipos`/`ciend` on both strands, a write and reload), and opt-in against pyliftover's
+placing of both ends of 550 `<DEL>`s of 50 bases to 200 kb over the GRCh37 autosomes through
+`hg19ToHg38` (`tests/test_liftover_chain.py`).
 
 **Lifting blocks** (2026-10-26, `LIFT_VERSION` 8). A `blocks` row's span (`pos` to `end_pos`) is cut
 on the axis step 2 judges a row's span on: the chain's blocks, cut wherever the set of targets
@@ -1142,7 +1191,8 @@ event goes to five columns, each just-vcf's own shape (VRS has no Allele for the
 
 Each of these is null on a row that is no SV. `normalize` leaves symbolic sites as written; on a
 sequence site it splits, each row keeps its own ALT's pair and copy number, and a row it moves loses
-`cipos` and `ciend` (offsets from the POS the source wrote), as a lifted row does. Comparing SV calls
+`cipos` and `ciend` (offsets from the POS the source wrote), as a lifted sequence row does. `liftover`
+lifts a symbolic site by both ends and keeps its intervals ("Lifting symbolic SVs"). Comparing SV calls
 across facets (truvari, docs/LANDSCAPE.md) is not built.
 
 Measured 2026-10-23 on the PGP-HMS SV and CNV files (aggregates): a Manta `.sv.` file, 9,373 calls
@@ -2688,6 +2738,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-10-26, RM6: symbolic SVs lifted): no column changes. `liftover` lifts
+  symbolic SVs and copy-number segments by both ends ("Lifting symbolic SVs" above), where it left
+  the SVs behind as `allele_not_sequence` and lifted a segment with its `end_pos` cut to its REF span.
+  `UNLIFTED_REASONS` gains `breakend_not_lifted`, `sv_end_unlifted`, `sv_ends_apart`,
+  `sv_ends_reversed` and `sv_length_changed` (an open vocabulary). Lifted facets get a new `facet_id`
+  (`LIFT_VERSION` 9). **Values change**: a lifted segment's `end_pos`, and breakends' reason.
 
 - **No version change** (2026-10-26, RM6: blocks lifted): no column changes. `liftover` lifts the
   `blocks` frame ("Lifting blocks" above), where the lifted facet had none; `Lifted` gains

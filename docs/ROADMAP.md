@@ -835,7 +835,7 @@ target's `assembly_label`, so lifting first is the path; the ancestry functions 
 `assembly_mismatch` for a facet on another assembly and do not lift it themselves. Not tested end to end.
 
 ## RM6 — Normalization and VCF writing
-Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f), INFO SVLEN in `write_vcf` as `end_pos - pos` per length-type SV allele (2026-10-26; the frame keeps no SVLEN of its own, so an `<INS>` length is not written; whether to keep one is the person's call, docs/SCHEMA.md "Structural variants"), `blocks` in a lift, cut at every chain gap and edge, `LIFT_VERSION` 8 (2026-10-26, docs/SCHEMA.md "Lifting blocks"). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Left, buildable now: symbolic SVs in a lift (`liftover` leaves them behind, counted as `allele_not_sequence`); anchoring across a small gap of one chain; strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable) · Owner: lead
+Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f), INFO SVLEN in `write_vcf` as `end_pos - pos` per length-type SV allele (2026-10-26; the frame keeps no SVLEN of its own, so an `<INS>` length is not written; whether to keep one is the person's call, docs/SCHEMA.md "Structural variants"), `blocks` in a lift, cut at every chain gap and edge, `LIFT_VERSION` 8, and symbolic SVs in a lift by both ends, `LIFT_VERSION` 9 (2026-10-26, docs/SCHEMA.md "Lifting blocks", "Lifting symbolic SVs"). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Left, buildable now: breakends in a lift (left behind as `breakend_not_lifted`: the mate position, its contig name inside ALT and the bracket orientation per strand); anchoring across a small gap of one chain; strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable) · Owner: lead
 
 Reimplement chromosome naming and quality filters (just-dna-lite's versions are AGPL and not the user's,
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
@@ -1133,6 +1133,32 @@ real gVCF yet. Decisions, each with what was rejected:
   earlier rule. Reversible: one line in `liftover`, and the facet's id would change with it.
 - Overlapping lifted blocks (two source regions sent to one target) are kept and counted. Rejected:
   dropping one, which picks a winner the data does not choose (charter 8).
+
+**Shipped 2026-10-26: symbolic SVs in a lift** (rules in docs/SCHEMA.md, "Lifting symbolic SVs";
+`LIFT_VERSION` 9). POS and `end_pos` lifted as two points; kept on one contig and strand, in order,
+length within 5%. Copy-number segments (`ALT .` with END and CN) take the same path; they had lifted
+with `end_pos` cut to their REF span. Tested on the synthetic chain (every reason, both strands, the
+5% boundary, intervals mirrored, a write and reload) and opt-in against pyliftover on 550 synthetic
+`<DEL>`s through `hg19ToHg38` (510 lifted, 39 POS in no chain block, 1 with its ends on two contigs or
+strands). Not run on a real SV file yet (the PGP-HMS Manta, Canvas and DRAGEN files in SCHEMA's
+"Structural variants" are the candidates). Decisions, each with what was rejected:
+
+- The tolerance is liftoverSV's, 5% of the source length, a constant. Rejected: Picard's whole-interval
+  lift at `LIFTOVER_MIN_MATCH` 1.0, which drops a large SV over any gap; CrossMap's, which never lifts
+  END; bcftools' `--lift-end`, which keeps an SV whose END failed, with END missing; and a keyword
+  argument, which the `facet_id` would then have to digest (an easy addition if a caller needs one).
+- A plus-strand SV whose padding base differs on the target stays behind (`ref_mismatch_after_lift`),
+  as liftoverSV and Picard drop it and as a sequence row does. Rejected: keeping it with the target's
+  base, which is defensible for an SV (gate 2 already catches a wrong mapping, and the anchor base is
+  not the event), but would make SVs the one row kind whose REF change passes silently. The person's
+  call if SV yield matters more; one line in `_place_sv`.
+- On a minus strand `cipos`/`ciend` are mirrored and swapped, a missing CIEND read as CIPOS (VCF 4.5).
+  Rejected: carrying them unchanged, which would put the old END's interval on the new POS reversed;
+  and withholding them, which drops what the caller said about precision.
+- Breakends stay behind, counted under their own reason. Rejected for this slice: lifting them, which
+  needs the mate lifted on any contig, its name rewritten inside ALT (the frame stores canonical names,
+  the ALT the source's spelling) and the brackets turned per strand, with both mate records agreeing.
+- `<INS>` lifts as a point at its anchor. The frame keeps no inserted length, so nothing else moves.
 
 
 ## RM271 — VRS allele ids

@@ -4,9 +4,11 @@ Built 2026-10-23 with `scripts/method_atlas.py` over eight same-person facet pai
 stratifications. The two PGP-HMS pairs were rebuilt the same day once `resolve_ref` read CGI's REF
 (F20), with VRS ids minted on both sides, and again once `concordance` read complex rows by the
 allele's change (F21) and a haploid call against the same allele's homozygote as a match (F22). The
+six private pairs were rebuilt the same way on 2026-10-26: REF read, VRS ids minted on both sides,
+alleles met by VRS id, with both rules and the band cells. The
 full table (768 rows: every region class, variant class and scope) is `data/output/method_atlas.parquet`
 and `.tsv`, git-ignored, with `method_atlas.pairs.tsv` listing each pair's methods and checks; the
-last CGI build is `data/output/method_atlas_cgi.*` beside it (192 pooled rows; rebuilt 2026-10-24 with the cells of both sides' confidence bands beside them, 10,552 rows, the pooled ones unchanged). Everything here is an aggregate over a whole genome: no position, sample
+last CGI build is `data/output/method_atlas_cgi.*` beside it (192 pooled rows; rebuilt 2026-10-24 with the cells of both sides' confidence bands beside them, 10,552 rows, the pooled ones unchanged), all git-ignored. The private pairs' rebuild (17,896 rows with the band cells) was written to `data/output/method_atlas_private.*` on the builder's branch and not kept; the counts here are taken from it. The full table's private rows are the first build's, by position. Everything here is an aggregate over a whole genome: no position, sample
 name or file is named, and the private pairs are described by their methods only. Columns and rules
 are in docs/SCHEMA.md ("A method-error atlas").
 
@@ -14,8 +16,8 @@ are in docs/SCHEMA.md ("A method-error atlas").
 
 | Set | Pairs | Assembly | What differs |
 |---|---|---|---|
-| A same-person set on the same reads (one GRCh38 alignment with alts, each output normalized by `bcftools norm -m -both`) | 3: DeepVariant 1.9.0, GATK HaplotypeCaller 4.6.2.0 (DRAGEN mode), Clair3 1.0.10, each against each | GRCh38, REF read | the caller only |
-| One person called by three DeepVariant releases | 3: 1.1.0, 1.3.0, 1.8.0, each against each | GRCh38, REF read, not normalized | the release; the alignment behind 1.3.0 and 1.8.0 is not stated |
+| A same-person set on the same reads (one GRCh38 alignment with alts, each output normalized by `bcftools norm -m -both`) | 3: DeepVariant 1.9.0, GATK HaplotypeCaller 4.6.2.0 (DRAGEN mode), Clair3 1.0.10, each against each | GRCh38, REF read, both sides minted, alleles paired by VRS id | the caller only |
+| One person called by three DeepVariant releases | 3: 1.1.0, 1.3.0, 1.8.0, each against each | GRCh38, REF read, not normalized, both sides minted, alleles paired by VRS id | the release; the alignment behind 1.3.0 and 1.8.0 is not stated |
 | Two PGP-HMS participants (public) | 2: Complete Genomics vcfBeta (CGA 2.5.0.24, 2.5.0.44) against freeBayes 0.9.15 / 0.9.20 on Illumina reads | GRCh37, REF read (CGI's chrY left unread, F20), both sides minted, alleles paired by VRS id | the sequencing technology and the caller |
 
 `same_person` (KING-robust, RM274) answered True for all eight, so none was skipped. The
@@ -23,12 +25,11 @@ DeepVariant 1.3.0 / 1.8.0 pair has almost no one-sided allele (below 0.01% of SN
 reading in docs/LIVE_SAMPLES.md that those two are re-calls of one alignment; its discordance is then
 the release's own.
 
-How alleles met differs by set. The six private pairs were built before minting was in the script:
-their alleles met by position and spelling, which holds where both files spell an allele alike (the
-same-reads set went through one `bcftools norm`; the DeepVariant releases, though not normalized,
-share a caller's spelling). Their counts stand from that build, and `method_atlas.pairs.tsv` leaves
-their `pairing` empty. The PGP pairs met by VRS id (`pairing = vrs`), which CGI against freeBayes
-needs: the two spell indels and complex alleles differently.
+All eight pairs now meet allele by allele through VRS ids (`assembly_check = content`,
+`pairing = vrs`). The six private pairs were first built before minting was in the script, their
+alleles meeting by position and spelling; they were rebuilt with minting on 2026-10-26, and what that
+changed is in "The private pairs met by VRS id" below. The PGP pairs need it most: CGI and freeBayes
+spell indels and complex alleles differently.
 
 ## Headline rates
 
@@ -37,33 +38,32 @@ unfiltered. Discordant is `mismatch` over the alleles both sides called (`match 
 haploid call against the same allele's diploid homozygote is a match, its ploidy counted apart in
 `ploidy_differs` (F22). One-sided is over all carried alleles. The 95% Wilson intervals are within
 ±0.1 percentage point for every `all` and `easy` cell of the private pairs and are in the full table.
-The private pairs have no allele whose two genotypes differ in ploidy (`ploidy_differs` is 0 in every
-row of their build), so the F22 rule leaves their rates as they are; they met by position, and the
-F21 reading changes only an allele whose genotype holds another ALT of one row that carries its
-change, which a caller writing one allele per site barely has. They were not rebuilt. The PGP pairs
-have their own tables below.
+The private pairs' rates below are the 2026-10-26 rebuild (REF read, alleles met by VRS id, F21 and
+F22). Their pairs have no allele whose two genotypes differ in ploidy (`ploidy_differs` is 0 in every
+row, before and after), so the F22 rule leaves them as they are. The PGP pairs have their own tables
+below.
 
 **SNV genotype discordance, %** (private pairs)
 
 | Methods (a / b) | all | easy | difficult | low mappability | segdups | homopolymer 7–11 | homopolymer ≥12 | TR 51–200 bp | TR 201–10k bp | GC <25 or >65 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Clair3 1.0.10 / DeepVariant 1.9.0 | 0.52 | 0.05 | 2.08 | 3.42 | 2.19 | 0.86 | 4.05 | 3.49 | 4.93 | 1.12 |
-| Clair3 1.0.10 / GATK HC 4.6.2.0 | 2.67 | 0.40 | 9.71 | 19.11 | 12.76 | 2.94 | 8.81 | 9.19 | 14.16 | 4.64 |
-| DeepVariant 1.9.0 / GATK HC 4.6.2.0 | 2.25 | 0.32 | 8.68 | 18.95 | 11.19 | 2.47 | 7.50 | 7.67 | 12.14 | 3.90 |
-| DeepVariant 1.1.0 / 1.3.0 | 0.48 | 0.02 | 1.95 | 3.04 | 2.40 | 1.18 | 7.58 | 3.86 | 2.92 | 0.92 |
-| DeepVariant 1.1.0 / 1.8.0 | 0.52 | 0.02 | 2.13 | 2.66 | 2.02 | 1.90 | 8.19 | 5.56 | 3.39 | 1.09 |
-| DeepVariant 1.3.0 / 1.8.0 | 0.37 | 0.02 | 1.48 | 2.15 | 1.67 | 1.21 | 4.10 | 3.27 | 2.32 | 0.71 |
+| Clair3 1.0.10 / DeepVariant 1.9.0 | 0.52 | 0.05 | 2.08 | 3.42 | 2.19 | 0.86 | 4.04 | 3.49 | 4.93 | 1.12 |
+| Clair3 1.0.10 / GATK HC 4.6.2.0 | 2.67 | 0.40 | 9.70 | 19.11 | 12.76 | 2.94 | 8.79 | 9.19 | 14.16 | 4.64 |
+| DeepVariant 1.9.0 / GATK HC 4.6.2.0 | 2.25 | 0.32 | 8.68 | 18.95 | 11.19 | 2.46 | 7.49 | 7.67 | 12.14 | 3.90 |
+| DeepVariant 1.1.0 / 1.3.0 | 0.48 | 0.02 | 1.93 | 3.04 | 2.40 | 1.16 | 7.41 | 3.77 | 2.92 | 0.92 |
+| DeepVariant 1.1.0 / 1.8.0 | 0.52 | 0.02 | 2.11 | 2.66 | 2.02 | 1.88 | 8.01 | 5.48 | 3.39 | 1.09 |
+| DeepVariant 1.3.0 / 1.8.0 | 0.38 | 0.02 | 1.48 | 2.15 | 1.67 | 1.21 | 4.10 | 3.28 | 2.33 | 0.71 |
 
 **Indel genotype discordance, %** (private pairs)
 
 | Methods (a / b) | all | easy | difficult | low mappability | segdups | homopolymer 7–11 | homopolymer ≥12 | TR 51–200 bp | TR 201–10k bp | GC <25 or >65 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Clair3 1.0.10 / DeepVariant 1.9.0 | 3.58 | 0.67 | 4.29 | 8.09 | 6.74 | 1.42 | 5.64 | 5.73 | 8.69 | 4.91 |
-| Clair3 1.0.10 / GATK HC 4.6.2.0 | 7.84 | 2.03 | 9.25 | 20.98 | 16.62 | 4.45 | 10.67 | 12.12 | 19.64 | 12.28 |
-| DeepVariant 1.9.0 / GATK HC 4.6.2.0 | 7.13 | 1.44 | 8.51 | 21.07 | 16.00 | 4.13 | 10.35 | 9.89 | 16.55 | 10.92 |
-| DeepVariant 1.1.0 / 1.3.0 | 7.13 | 0.28 | 8.86 | 10.24 | 9.41 | 2.42 | 14.65 | 8.99 | 7.70 | 7.63 |
-| DeepVariant 1.1.0 / 1.8.0 | 7.95 | 0.53 | 9.82 | 10.51 | 9.82 | 3.29 | 14.39 | 13.25 | 10.21 | 9.03 |
-| DeepVariant 1.3.0 / 1.8.0 | 3.68 | 0.31 | 4.48 | 5.87 | 5.44 | 1.75 | 6.06 | 6.62 | 5.61 | 4.29 |
+| Clair3 1.0.10 / DeepVariant 1.9.0 | 3.56 | 0.67 | 4.26 | 8.03 | 6.72 | 1.39 | 5.60 | 5.69 | 8.63 | 4.86 |
+| Clair3 1.0.10 / GATK HC 4.6.2.0 | 7.82 | 2.03 | 9.22 | 20.93 | 16.58 | 4.43 | 10.63 | 12.07 | 19.58 | 12.23 |
+| DeepVariant 1.9.0 / GATK HC 4.6.2.0 | 7.12 | 1.44 | 8.50 | 21.07 | 16.00 | 4.13 | 10.35 | 9.88 | 16.55 | 10.92 |
+| DeepVariant 1.1.0 / 1.3.0 | 7.96 | 0.31 | 9.85 | 11.30 | 10.55 | 2.53 | 16.45 | 9.43 | 7.84 | 8.24 |
+| DeepVariant 1.1.0 / 1.8.0 | 8.69 | 0.57 | 10.69 | 11.50 | 10.81 | 3.38 | 15.95 | 13.66 | 10.40 | 9.59 |
+| DeepVariant 1.3.0 / 1.8.0 | 3.78 | 0.31 | 4.60 | 6.17 | 5.76 | 1.77 | 6.27 | 6.69 | 5.66 | 4.36 |
 
 **One-sided SNVs, % of carried** (private pairs)
 
@@ -72,13 +72,14 @@ have their own tables below.
 | Clair3 1.0.10 / DeepVariant 1.9.0 | 2.38 | 0.27 | 8.71 | 14.60 | 9.04 | 20.90 |
 | Clair3 1.0.10 / GATK HC 4.6.2.0 | 6.77 | 0.68 | 21.68 | 30.37 | 25.89 | 51.32 |
 | DeepVariant 1.9.0 / GATK HC 4.6.2.0 | 2.05 | 0.19 | 7.77 | 11.78 | 5.71 | 28.48 |
-| DeepVariant 1.1.0 / 1.3.0 | 1.33 | 0.03 | 5.26 | 12.05 | 4.25 | 6.10 |
-| DeepVariant 1.1.0 / 1.8.0 | 1.23 | 0.03 | 4.93 | 11.03 | 4.10 | 7.15 |
-| DeepVariant 1.3.0 / 1.8.0 | 0.00 | 0.00 | 0.01 | 0.01 | 0.01 | 0.03 |
+| DeepVariant 1.1.0 / 1.3.0 | 1.32 | 0.03 | 5.22 | 12.04 | 4.24 | 6.07 |
+| DeepVariant 1.1.0 / 1.8.0 | 1.22 | 0.03 | 4.88 | 11.02 | 4.09 | 7.10 |
+| DeepVariant 1.3.0 / 1.8.0 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.01 |
 
 Mean `p_same` over the graded SNVs (`gl_flat_prior`, `all`): 0.985 for DeepVariant 1.9.0 / GATK,
 0.980 to 0.984 for the DeepVariant releases, 0.985 and 0.990 for the PGP pairs. Clair3's rows carry
-no likelihood vector the comparison could use, so its pairs have no graded allele.
+no likelihood vector the comparison could use, so its pairs have no graded allele (its rows still
+state a GQ, so they are banded below).
 
 ## Reading it
 
@@ -87,15 +88,98 @@ no likelihood vector the comparison could use, so its pairs have no graded allel
   segmental duplications, long tandem repeats and homopolymers of 12 or more bases carry most of
   every pair's disagreement, at several to over a hundred times the easy rate.
 - **GATK is the odd one out on the same reads.** DeepVariant and Clair3 agree far better with each
-  other (0.52% SNV, 3.58% indel) than either does with GATK in DRAGEN mode (2.25 to 2.67%, 7.1 to
+  other (0.52% SNV, 3.56% indel) than either does with GATK in DRAGEN mode (2.25 to 2.67%, 7.1 to
   7.8%), and GATK's disagreement concentrates in low mappability (19%). Every GATK row here is
   unfiltered as written (its FILTER is `.` everywhere), so `carried_pass` keeps all of them while it
   drops DeepVariant's `RefCall` rows.
-- **DeepVariant 1.1.0 indels differ from the later releases** (7.1 to 8.0% against 3.7% between 1.3.0
-  and 1.8.0), mostly in homopolymers of 12 or more bases (14.5%).
+- **DeepVariant 1.1.0 indels differ from the later releases** (8.0 to 8.7% against 3.8% between 1.3.0
+  and 1.8.0), mostly in homopolymers of 12 or more bases (16.0 to 16.5%). Part of it was hidden by
+  spelling until the alleles met by VRS id (below).
 - **One pair per row.** Every row pools one pair (`pairs` = 1). The interval is sampling error over
   the alleles compared, not the spread between people or runs; it says nothing about how a method
   behaves on another genome.
+
+## The private pairs met by VRS id (2026-10-26)
+
+The six private pairs were rebuilt with `scripts/method_atlas.py` as the PGP pairs were: each facet's
+REF read by `resolve_ref` from the store's GRCh38 collection, VRS ids minted on both sides, alleles met
+by VRS id, with the F21 and F22 rules and the band cells. All six facets had their REF read on every
+row, and every source REF matched the store's (no mismatch on any facet, no contig left unread).
+`mint_vrs_ids` minted every allele, except GATK's 18,248 spanning-deletion `*` alleles, which name an
+allele called at another record and have no id of their own. `same_person` answered True for all six
+again, and every pair is `assembly_check = content`, `pairing = vrs`.
+
+**Before and after, region `all`, scope `carried_pass`.** "By position" is the first build (REF read,
+alleles met by position and spelling, before F21 and F22); "by VRS id" is the rebuild.
+
+| Methods (a / b) | Class | Carried, by position → by VRS id | Called both | Discordance % | One-sided % | `unreadable` (new) |
+|---|---|---|---|---|---|---|
+| Clair3 1.0.10 / DeepVariant 1.9.0 | SNV | 3,789,408 → 3,789,408 | 3,699,288 → 3,699,277 | 0.52 → 0.52 | 2.38 → 2.38 | 11 |
+| Clair3 1.0.10 / GATK HC 4.6.2.0 | SNV | 4,023,711 → 4,023,711 | 3,751,266 → 3,751,251 | 2.67 → 2.67 | 6.77 → 6.77 | 15 |
+| DeepVariant 1.9.0 / GATK HC 4.6.2.0 | SNV | 3,757,154 → 3,757,154 | 3,680,178 → 3,680,169 | 2.25 → 2.25 | 2.05 → 2.05 | 9 |
+| DeepVariant 1.1.0 / 1.3.0 | SNV | 3,828,921 → 3,828,588 | 3,777,971 → 3,777,862 | 0.48 → 0.48 | 1.33 → 1.32 | 198 |
+| DeepVariant 1.1.0 / 1.8.0 | SNV | 3,808,266 → 3,807,925 | 3,761,355 → 3,761,243 | 0.52 → 0.52 | 1.23 → 1.22 | 214 |
+| DeepVariant 1.3.0 / 1.8.0 | SNV | 3,788,298 → 3,788,257 | 3,788,161 → 3,788,191 | 0.37 → 0.38 | 0.00 → 0.00 | 32 |
+| Clair3 1.0.10 / DeepVariant 1.9.0 | indel | 968,605 → 968,507 | 920,446 → 920,318 | 3.58 → 3.56 | 4.97 → 4.97 | 49 |
+| Clair3 1.0.10 / GATK HC 4.6.2.0 | indel | 1,040,463 → 1,040,344 | 924,455 → 924,335 | 7.84 → 7.82 | 11.15 → 11.15 | 36 |
+| DeepVariant 1.9.0 / GATK HC 4.6.2.0 | indel | 989,611 → 989,609 | 924,240 → 924,214 | 7.13 → 7.12 | 6.61 → 6.61 | 26 |
+| DeepVariant 1.1.0 / 1.3.0 | indel | 993,577 → 979,597 | 905,877 → 920,421 | 7.13 → 7.96 | 8.83 → 6.01 | 292 |
+| DeepVariant 1.1.0 / 1.8.0 | indel | 1,005,119 → 991,042 | 912,934 → 928,041 | 7.95 → 8.69 | 9.17 → 6.33 | 299 |
+| DeepVariant 1.3.0 / 1.8.0 | indel | 949,609 → 947,519 | 943,696 → 945,550 | 3.68 → 3.78 | 0.62 → 0.20 | 37 |
+
+The 95% Wilson intervals of the rebuilt `all` and `easy` cells are within ±0.07 percentage point for
+discordance and ±0.1 for one-sided.
+
+- **The same-reads set barely moves.** One `bcftools norm` had already spelled the three callers'
+  alleles alike, so VRS ids pair no allele that position missed: carried SNVs are the same to the
+  allele, carried indels fall by 2 to 119. What changes is F21: 9 to 49 alleles per class meet a
+  genotype holding another allele of its row over a different span and are now `unreadable`, outside
+  `called_both`. Every such SNV was a mismatch before (SNV mismatches fall by exactly that count);
+  indel mismatches fall by 26 to 261. No rate moves by more than 0.02 point.
+- **DeepVariant 1.1.0 spells about 14,000 indels unlike the later releases.** The releases are not
+  normalized, and by position each such indel counted twice, once one-sided on each side. Met by VRS
+  id, 1.1.0's one-sided indels against 1.3.0 fall from 42,803 to 28,817 and 1.3.0's from 44,897 to
+  30,067 (against 1.8.0 alike), carried indels fall by 13,980 and 14,077, and `called_both` rises by
+  14,544 and 15,107. Those newly met indels disagree more often than the rest: mismatches rise by
+  8,636 and 8,045, so indel discordance rises from 7.1 to 8.0% (1.3.0) and from 8.0 to 8.7% (1.8.0),
+  while one-sided falls from 8.8 to 6.0% and 9.2 to 6.3%. In homopolymers of 12 or more bases
+  discordance rises from 14.65 to 16.45% and 14.39 to 15.95%. Part of what the first build counted as
+  1.1.0 missing an indel is 1.1.0 writing it elsewhere, and often with another genotype.
+- **DeepVariant 1.3.0 and 1.8.0 differ in spelling too, at a smaller scale.** One-sided indels fall
+  from 2,843 and 3,070 to 866 and 1,066 (0.62 to 0.20% of carried); the alleles both call rise by
+  1,854, and discordance from 3.68 to 3.78%. The pair's SNVs hardly change (one-sided 137 to 34).
+- **SNVs of the release pairs**: against 1.1.0, carried falls by 333 and 341, one-sided SNVs by 422
+  and 443, and 198 and 214 SNVs are now `unreadable`; the rates do not move.
+
+**By confidence band.** SNV discordance, region `all`, scope `carried_pass`, by one side's band with
+the other side's bands summed (% of the alleles both called in that band; a cell is left empty where
+the band holds under 0.1% of the pair's alleles both called, and no SNV of these pairs states no
+confidence):
+
+| Pair | Side | 0–10 | 10–20 | 20–30 | 30–40 | 40–60 | 60–100 | 100+ |
+|---|---|---|---|---|---|---|---|---|
+| Clair3 1.0.10 / DeepVariant 1.9.0 | Clair3 | 19.76 | 3.48 | 0.12 | 0.01 | 0.00 | 0.01 | |
+| Clair3 1.0.10 / DeepVariant 1.9.0 | DeepVariant | 14.74 | 3.36 | 0.24 | 0.01 | 0.00 | | |
+| Clair3 1.0.10 / GATK HC 4.6.2.0 | Clair3 | 40.11 | 24.39 | 0.64 | 0.07 | 0.03 | 0.01 | |
+| Clair3 1.0.10 / GATK HC 4.6.2.0 | GATK | 47.85 | 36.41 | 13.40 | 1.09 | 0.15 | 0.19 | 0.85 |
+| DeepVariant 1.9.0 / GATK HC 4.6.2.0 | DeepVariant | 46.36 | 26.57 | 2.48 | 0.05 | 0.01 | | |
+| DeepVariant 1.9.0 / GATK HC 4.6.2.0 | GATK | 49.10 | 35.93 | 12.90 | 1.11 | 0.13 | 0.11 | 0.64 |
+| DeepVariant 1.1.0 / 1.3.0 | 1.1.0 | 15.65 | 4.12 | 1.38 | 0.32 | 0.01 | 0.00 | |
+| DeepVariant 1.1.0 / 1.3.0 | 1.3.0 | 11.28 | 1.64 | 0.17 | 0.05 | 0.01 | 0.01 | |
+| DeepVariant 1.1.0 / 1.8.0 | 1.1.0 | 18.61 | 5.02 | 1.52 | 0.30 | 0.01 | 0.00 | |
+| DeepVariant 1.1.0 / 1.8.0 | 1.8.0 | 10.60 | 2.36 | 0.25 | 0.10 | 0.20 | | |
+| DeepVariant 1.3.0 / 1.8.0 | 1.3.0 | 9.61 | 1.09 | 0.07 | 0.01 | 0.00 | 0.00 | |
+| DeepVariant 1.3.0 / 1.8.0 | 1.8.0 | 7.73 | 1.49 | 0.17 | 0.05 | 0.07 | | |
+
+- **Below 20 phred the callers disagree on 1 to 49% of their SNVs; from 30 phred up on 1.1% or less,
+  mostly under 0.1%.** Every caller here writes a GQ, so every pair is banded, Clair3's included.
+- **GATK's top band is not its surest.** GATK in DRAGEN mode puts 9% of its SNVs both called at 100
+  phred or more, where it disagrees with DeepVariant on 0.64% and with Clair3 on 0.85% (2,147 of
+  333,936 and 2,847 of 334,753), against 0.11 to 0.19% at 60–100 and 0.13 to 0.15% at 40–60. The rise
+  is measured here, not diagnosed.
+- **The DeepVariant releases use their bands differently**: of the SNVs both called, 1.1.0 puts 69%
+  at 40–60 and 19% at 60–100, 1.3.0 puts 42% at 40–60 and 0.2% above, and 1.8.0 puts 73% at 20–40,
+  21% at 40–60 and almost none above 60. A band is one release's scale, not one across releases.
 
 ## The PGP pairs: CGI against freeBayes
 

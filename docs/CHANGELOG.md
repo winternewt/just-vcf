@@ -37,6 +37,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   samples it calls female, a mask the file cannot tell from absence (RM269). Not read, `y_reason` is
   still `vendor_asserted`; the detail now says whether the vendor's default or `array_y=False` turned
   it off. No reason value added, no frame column changed.
+- The method-error atlas's six private pairs (RM279) were rebuilt with `scripts/method_atlas.py` as the
+  PGP pairs were: REF read by `resolve_ref` from the store's GRCh38 collection, VRS ids minted on both
+  sides, alleles met by VRS id, with F21, F22 and the band cells (docs/METHOD_ATLAS.md, "The private
+  pairs met by VRS id"). Every source REF matched; every allele was minted but GATK's spanning deletions.
+  The same-reads pairs' rates move by at most 0.02 point. DeepVariant 1.1.0 spells about 14,000 indels
+  unlike the later releases: met by id, its indel discordance rises from 7.1 to 8.0% (against 1.3.0)
+  and 8.0 to 8.7% (against 1.8.0), and its one-sided indels fall from 8.8 to 6.0% and 9.2 to 6.3%. Data
+  only; no code changed.
 - A VCF load run again reads its records through polars-bio once, to spill them (F26). The first pass,
   `scan_stats`, which counts what the warnings and the facet need, is stored in the cache as
   `stats/<key>/stats.json` (a new entry kind, `scan_stats`, with its manifest), and a load whose key is

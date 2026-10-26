@@ -50,7 +50,11 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   from the reference, is now `ref` and is written before every allele (`["", "GG"]` becomes
   `["G", "GGG"]`), `end_pos = pos`, `ref_check` null (the file wrote no REF base). Before a contig's
   first base, VCF's rule: the base after, appended, at POS 1. A point where nothing was called stays
-  unread, counted. A Genos row gets REF over its stated span whatever its length, and its alleles
+  unread, counted, and so does one whose every called haplotype is the empty allele (CGI `""/""` and
+  `""/?`, Genos `-/-`; `RESOLVE_VERSION` 11): it says no insertion is there, and anchoring it wrote
+  `REF=X ALT=. 0/0`, a hom-ref call at the base before that the source never made, beside the
+  source's own call there. It keeps its loaded `["", ""]`, counted under its own warning; Genos's is
+  no longer counted among the array rows too. A Genos row gets REF over its stated span whatever its length, and its alleles
   derived against it as an array row's (`AT/GC`, `T/-`); before, only its single-base rows were read,
   and a one-base insertion site was read as a call at the anchor base: `G/G` inserted after a `G`
   read hom-ref there (checked on the old code), another base an SNV. `normalize` aligns the anchored

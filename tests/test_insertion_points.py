@@ -237,3 +237,65 @@ def test_genos_rows_get_ref_over_their_span_and_insertion_sites_their_anchor(tmp
     assert (out["rs5"]["pos"], out["rs5"]["ref"], out["rs5"]["alts"]) == (p_ins, a, [a + "A"])
     assert (out["rs9"]["pos"], out["rs9"]["ref"], out["rs9"]["alts"]) == (1, base("2", 1, 2), [base("2", 2)])
     assert all("" not in r["alts"] for r in out.values() if r["alts"] is not None)
+
+
+# --- "No insertion here" ----------------------------------------------------------------------------
+
+
+def vcf_records(path: Path) -> list[list[str]]:
+    return [line.split("\t") for line in path.read_text().splitlines() if not line.startswith("#")]
+
+
+def test_a_point_that_says_no_insertion_gets_no_genotype_at_the_base_before(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """A point whose every called haplotype is the empty allele (CGI `""/""` or `""/?`, Genos `-/-`)
+    says nothing is inserted between two bases. Anchored, it became `REF=X, ALT=.`, `0/0`: a hom-ref
+    call at the base before, which the source never made, written beside a real SNV call at that base.
+    No frame can carry a statement about a gap without a genotype at a base (a `calls` row at `pos` is
+    one; a block spans bases), so such a point is left as loaded, counted under its own reason. A point
+    with an inserted allele on one haplotype keeps its anchor: its `0` is the haplotype without it."""
+    s, h = 200, 300
+    b = base("1", s)
+    loci = [
+        Locus("chr1", s - 1, s, haps=((Seg(s - 1, s, "snp", b, other(b)),), (Seg(s - 1, s, "snp", b, other(b)),))),
+        cgi_point("chr1", s, "", ""),
+        Locus("chr1", h, h, haps=((Seg(h, h, "ref", "", ""),), (Seg(h, h, "no-call", "", "?"),))),
+        cgi_point("chr1", P_HET, "", "GG"),
+    ]
+    resolved = resolve_ref(load(write_cgi(tmp_path, var_text(loci), "var-GS000000001-ASM.tsv.bz2")), grch37_store)
+    _, calls = frames(resolved)
+    points = calls.filter(pl.col("source_ref") == "")
+    fields = ("pos", "ref", "alts", "gt", "gt_alleles", "end_pos", "ref_check")
+    got = {row["pos"]: tuple(row[name] for name in fields) for row in points.iter_rows(named=True)}
+    assert got[s] == (s, None, [], [0, 0], ["", ""], None, "not_run")
+    assert got[h] == (h, None, [], [0, None], ["", None], None, "not_run")
+    x = base("1", P_HET)
+    assert got[P_HET] == (P_HET, x, [x + "GG"], [0, 1], [x, x + "GG"], P_HET, None)
+    warnings = "\n".join(resolved.warnings)
+    assert "1 insertion point(s) given their anchor base" in warnings, warnings
+    assert "2 insertion point(s) where every called haplotype is the empty allele" in warnings, warnings
+    assert "no haplotype called" not in warnings, warnings
+
+    written = write_vcf(normalize(resolved, grch37_store), tmp_path / "points.vcf", compress=False, resolved_only=True)
+    records = vcf_records(written.path)
+    at = [(r[3], r[4], r[9].split(":")[0]) for r in records if int(r[1]) == s]
+    assert at == [(b, other(b), "1/1")], "only the SNV is written at the base before the point"
+    assert not [r for r in records if r[4] == "."], "no record states a hom-ref call the source never made"
+    minted = mint_vrs_ids(resolved, grch37_store).calls.filter((pl.col("source_ref") == "") & (pl.col("pos") == s)).collect()
+    assert minted["vrs_allele_ids"].to_list() == [None]
+
+
+def test_a_genos_insertion_site_that_says_no_insertion_gets_no_genotype(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """Genos `-/-` at an insertion site, beside a hom-alt SNV at the base before: the SNV is read, the
+    site is left as loaded, counted once and not as an array row, and nothing reads hom-ref at that base."""
+    b = base("1", 500)
+    body = f"chr1\t499\t500\trsA\t{other(b)}/{other(b)}\nchr1\t500\t500\trsB\t-/-\n"
+    resolved = resolve_ref(genos(tmp_path, body), grch37_store)
+    got = {r["ids"][0]: r for r in resolved.calls.collect().iter_rows(named=True)}
+    assert (got["rsA"]["ref"], got["rsA"]["alts"], got["rsA"]["gt"]) == (b, [other(b)], [1, 1])
+    fields = ("pos", "end_pos", "ref", "alts", "gt", "gt_alleles")
+    assert tuple(got["rsB"][name] for name in fields) == (500, None, None, None, None, ["", ""])
+    warnings = "\n".join(resolved.warnings)
+    assert "1 insertion point(s) where every called haplotype is the empty allele" in warnings, warnings
+    assert "for 1 of 1 array row(s)" in warnings, warnings
+    written = write_vcf(normalize(resolved, grch37_store), tmp_path / "genos.vcf", compress=False, resolved_only=True)
+    assert [(r[2], r[3], r[4], r[9]) for r in vcf_records(written.path)] == [("rsA", b, other(b), "1/1")]

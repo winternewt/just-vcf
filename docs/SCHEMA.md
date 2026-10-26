@@ -2077,7 +2077,9 @@ gVCF's and CGI's blocks tile the genome (none of 10.8M CGI `var` blocks or 14.6M
 overlaps its predecessor), so the block over a site is the last one starting at or before it, an
 as-of join; a lifted facet's do not (two source regions a chain sends to one place give overlapping
 blocks, "Lifting blocks"), and a block that reaches its successor goes through a range join instead
-(`intervals.covering`). Only the matched records are graded, so a panel's answer does not grade a
+(`intervals.covering`). A site's rows come by record start, origin and end, then by what each states
+(block kind, basis, confidence, alleles, genotype), so records over one span come out in one order
+whatever the file's. Only the matched records are graded, so a panel's answer does not grade a
 genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:
 `absent_reference` (asserted, no number, `genotype_index` 0) where `absence_is_reference(facet,
 variant_class, force=force)` is True, else `absent_unknown`; `force` lifts a content filter's hold for

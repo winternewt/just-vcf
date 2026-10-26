@@ -219,6 +219,29 @@ def test_every_overlapping_block_of_a_lifted_facet_covers_its_positions(tmp_path
     assert sorted(rows) == [(60, 1, 100, "ref_block"), (60, 51, 70, "ref_block"), (80, 1, 100, "ref_block"), (101, None, None, "absence")]
 
 
+def test_blocks_over_one_span_come_out_in_one_order_whatever_the_file_order(tmp_path: Path) -> None:
+    """Two source regions a chain sends to one identical target span give blocks with the same start and
+    end. `genotype_evidence_at` returns each, ordered past the span by kind and grade, so the answer does
+    not depend on the order the file or a join gave them; `reference_support` picks the same one."""
+    blocks = [
+        "1\t100\t.\tG\t<NON_REF>\t.\t.\tEND=113\tGT:GQ:PL:GP\t0/0:60:0,60,900:.",
+        "1\t100\t.\tG\t<NON_REF>\t.\t.\tEND=113\tGT:GQ:PL:GP\t./.:.:.:.",
+        "1\t100\t.\tG\t<NON_REF>\t.\t.\tEND=113\tGT:GQ:PL:GP\t0/0:30:0,30,300:.",
+    ]
+    sites = pl.DataFrame({"chrom": ["1"], "pos": [105]})
+    answers = []
+    for name, order in (("forward.vcf", blocks), ("backward.vcf", blocks[::-1])):
+        loaded = _vcf(tmp_path, order, name=name)
+        rows = genotype_evidence_at(loaded, sites, variant_class="snv").drop("facet_id")
+        support = reference_support(loaded, sites, variant_class="snv").collect().drop("facet_id")
+        answers.append((rows, support))
+    (forward, forward_support), (backward, backward_support) = answers
+    assert forward.equals(backward) and forward_support.equals(backward_support)
+    assert forward["block_kind"].cast(pl.String).to_list() == ["no_call", "ref", "ref"]
+    assert forward["confidence"].to_list()[1:] == sorted(forward["confidence"].to_list()[1:]), "the least confidence first"
+    assert (forward_support["reason"].item(), forward_support["records"].item()) == (RecordReason.NO_CALL_BLOCK.value, 3)
+
+
 def test_positions_come_out_in_canonical_order_once(tmp_path: Path) -> None:
     loaded = _vcf(tmp_path, GVCF)
     sites = pl.DataFrame({"chrom": ["2", "1", "1", "2", "1"], "pos": [5, 900, 100, 5, 113]})

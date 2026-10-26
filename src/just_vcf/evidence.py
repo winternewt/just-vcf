@@ -534,10 +534,19 @@ def genotype_evidence_at(
         pl.lit(0 if reads_reference else None, dtype=pl.UInt32).alias("genotype_index"),
     )  # fmt: skip
     origin = pl.col("evidence_basis").cast(pl.String)
+    # Past the span, by what each record states: records over one span (a lifted facet's blocks that two
+    # source regions sent to one place) come out in one order, whatever order the file or a join gave.
+    stated = [
+        pl.col("block_kind").cast(pl.String),
+        pl.col("grade_basis").cast(pl.String),
+        pl.col("confidence"),
+        pl.col("genotype_alleles").list.eval(pl.element().fill_null(".")).list.join(","),
+        pl.col("genotype_index"),
+    ]
     answer = (
         pl.concat([covered.lazy(), absence.lazy()], how="diagonal_relaxed")
         .with_columns(pl.lit(facet["absence_means"], dtype=pl.String).alias("absence_means"))
-        .sort("_site", "record_pos", origin, "record_end_pos", nulls_last=True, maintain_order=True)
+        .sort(["_site", "record_pos", origin, "record_end_pos", *stated], nulls_last=True, maintain_order=True)
     )
     answer = answer.select("_site", *[pl.col(name).cast(dtype) for name, dtype in GENOTYPE_EVIDENCE_AT.items()])
     if coverage is not None:

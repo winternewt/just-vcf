@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `genotype_evidence_at` orders a site's records over one span by what they state (block kind, basis,
+  confidence, alleles, genotype) after start, origin and end, so blocks two source regions sent to one
+  identical target span come out in one order whatever the file's. Before, their order was the file's.
+
 - docs/ROADMAP.md, RM6: a dated correction under the blocks-in-a-lift entry, whose "Not run on a real
   gVCF yet" the same day's dogfood on two PGP-HMS gVCFs had made untrue. No code changes.
 

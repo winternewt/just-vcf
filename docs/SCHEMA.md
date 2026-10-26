@@ -2075,9 +2075,10 @@ its span), graded as above, with the record's span as `record_pos`, `record_end_
 called deletion is not absent. Every block over a site is found, overlapping ones included: a
 gVCF's and CGI's blocks tile the genome (none of 10.8M CGI `var` blocks or 14.6M DeepVariant blocks
 overlaps its predecessor), so the block over a site is the last one starting at or before it, an
-as-of join; a lifted facet's do not (two source regions a chain sends to one place give overlapping
-blocks, "Lifting blocks"), and a block that reaches its successor goes through a range join instead
-(`intervals.covering`). A site's rows come by record start, origin and end, then by what each states
+as-of join; not every gVCF's quite do (927 of the 9.24M blocks on the primary contigs of PGP-HMS
+hu416394's bcftools gVCF reach the next block's start, measured 2026-10-26), and a lifted facet's
+do not (two source regions a chain sends to one place give overlapping blocks, "Lifting blocks"),
+and a block that reaches its successor goes through a range join instead (`intervals.covering`). A site's rows come by record start, origin and end, then by what each states
 (block kind, basis, confidence, alleles, genotype), so records over one span come out in one order
 whatever the file's. Only the matched records are graded, so a panel's answer does not grade a
 genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:

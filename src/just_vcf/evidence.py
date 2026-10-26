@@ -441,22 +441,28 @@ def _one_facet(loaded: Loaded, caller: str) -> Mapping[str, object]:
 
 
 def _covering(loaded: Loaded, asked: pl.DataFrame) -> tuple[pl.LazyFrame, pl.LazyFrame]:
-    """The `calls` rows and the `blocks` rows covering each of `asked` (`chrom`, `pos`, `_site`), lazily,
-    each tagged with its site's `_site`: a call from its `pos` to its `end_pos` (its `pos` alone where the
+    """The `calls` rows and the `blocks` rows covering each of `asked` (`chrom`, `pos`, `_site`), each
+    tagged with its site's `_site`: a call from its `pos` to its `end_pos` (its `pos` alone where the
     span is unknown), a block over its span, both ends inclusive.
 
     The records are matched first and only the matched rows graded, so a genome's millions of rows
-    are never graded to answer a panel, and every join is pre-filtered to the asked contigs. A call
-    starting at the site is an equality join, and only calls spanning more than their first base go
-    through the range join. Every block over a site is found (`intervals.covering`): a gVCF's and CGI's
-    tile the genome and cost an as-of join, and a lifted facet's overlapping blocks are all found too.
+    are never graded to answer a panel. Each frame is read once, filtered to the asked contigs, and only
+    what can cover a site is held: the calls starting at an asked position or spanning more than their
+    first base, and the blocks `intervals.covering` finds. A call starting at the site is then an
+    equality join and a spanning call a range join, both in memory. Every block over a site is found: a
+    gVCF's and CGI's tile the genome and cost an as-of join, and a lifted facet's overlapping blocks are
+    all found too. Joining the lazy frames themselves held every asked contig's rows at once (more than
+    30 GB for 1,000 sites on a 9.6-million-call gVCF, F27).
     """
     contigs = asked["chrom"].unique().to_list()
-    ask = asked.lazy().select("_site", pl.col("chrom").alias("_site_chrom"), pl.col("pos").alias("_site_pos"))
-    calls = loaded.calls.filter(pl.col("chrom").is_in(contigs)).with_columns(
-        pl.col("pos").cast(pl.Int64).alias("_start"),
-        pl.coalesce(pl.col("end_pos"), pl.col("pos")).cast(pl.Int64).alias("_end"),
-    )
+    ask = asked.select("_site", pl.col("chrom").alias("_site_chrom"), pl.col("pos").alias("_site_pos"))
+    pos = pl.col("pos").cast(pl.Int64)
+    # Filtered on the frame's own columns, so the filter reaches the parquet scan beneath the contig sort.
+    calls = (
+        loaded.calls.filter(pl.col("chrom").is_in(contigs) & (pos.is_in(asked["pos"].unique().implode()) | (pl.col("end_pos").cast(pl.Int64) > pos)))
+        .with_columns(pos.alias("_start"), pl.coalesce(pl.col("end_pos"), pl.col("pos")).cast(pl.Int64).alias("_end"))
+        .collect()
+    )  # fmt: skip
     at_start = calls.join(ask, left_on=["chrom", "_start"], right_on=["_site_chrom", "_site_pos"], how="inner")
     # One range join per contig: with two inequalities and no equality, polars runs it as an IEJoin; an
     # equality on `chrom` beside them makes it a filtered cross join (38 GB on a CGI genome's panel).
@@ -471,7 +477,7 @@ def _covering(loaded: Loaded, asked: pl.DataFrame) -> tuple[pl.LazyFrame, pl.Laz
     blocks = loaded.blocks.with_columns(pl.col("pos").cast(pl.Int64).alias("_start"), pl.col("end_pos").cast(pl.Int64).alias("_end"))
     probes = ask.select("_site", pl.col("_site_chrom").alias("chrom"), "_site_pos")
     hit_blocks = covering(probes, blocks, contigs, at="_site_pos", start="_start", end="_end").drop("_site_pos", "_start", "_end")
-    return hit_calls, hit_blocks
+    return hit_calls.lazy(), hit_blocks.lazy()
 
 
 def genotype_evidence_at(
@@ -645,8 +651,9 @@ def reference_support(
     it called. `gq_on_reference` and `block_grade` are `genotype_evidence`'s. Rows come out in
     canonical order (contig rank, then position), whatever order `sites` came in.
 
-    Lazy over the facet's frames: only the asked positions and the facet row are read up front, every
-    join is pre-filtered to the asked contigs, and only the covering records are graded.
+    Only the asked positions, the facet row and the records that can cover them are read up front, one
+    pass over each frame filtered to the asked contigs; the grading and the answer stay lazy, and only
+    the covering records are graded.
     """
     facet = _one_facet(loaded, "reference_support")
     silence = absence_support(facet, variant_class, force=force)

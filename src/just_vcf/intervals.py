@@ -17,16 +17,24 @@ from just_vcf.schema import BlockKind
 _REACHES = "_reaches_next"
 
 
-def covering(probes: pl.LazyFrame, intervals: pl.LazyFrame, contigs: Iterable[str], *, at: str, start: str, end: str) -> pl.LazyFrame:
+def covering(probes: pl.LazyFrame | pl.DataFrame, intervals: pl.LazyFrame, contigs: Iterable[str], *, at: str, start: str, end: str) -> pl.DataFrame:
     """Every pair of a `probes` row and an `intervals` row on the same contig (`chrom`) whose closed span
     `start..end` holds the probe's `at` (all three Int64): the probe's columns, then the interval's
-    without its `chrom`. A probe nothing covers is left out; only `contigs` are searched.
+    without its `chrom`. A probe nothing covers is left out; only `contigs` are searched. Read now;
+    past the read only the covering pairs and the overlapping intervals are kept.
 
     Per contig in start order, an interval that reaches its successor's start is one a later interval
     may lie inside or cross; only those go through a range join (an IEJoin per contig). The others
-    cannot overlap one another (each ends before the next one starts), so at most one of them covers a
-    position, the last of them starting at or before it, which an as-of join finds. A tiled frame has
-    no interval of the first kind, so it costs the as-of join alone.
+    cannot overlap any interval (each ends before the next one starts), so one of them covers a
+    position only as the last interval starting at or before it, which an as-of join over all of them
+    finds; a match on a reaching interval is left to the range join. A tiled frame has no interval of
+    the first kind, so it costs the as-of join alone.
+
+    One pass over `intervals`: the as-of join and the reaching intervals are collected together, so
+    polars reads and sorts the frame once for both. The range joins then run in memory against the
+    reaching intervals. A lazy range join per contig over the frame itself re-read the frame per contig
+    (a facet loaded with one scan per source contig, F27), and in parallel held more than 45 GB on a
+    9.5-million-block gVCF where the as-of join alone holds 6 GB.
     """
     contigs = sorted(set(contigs))
     ordered = (
@@ -34,13 +42,14 @@ def covering(probes: pl.LazyFrame, intervals: pl.LazyFrame, contigs: Iterable[st
         .sort("chrom", start, end)
         .with_columns((pl.col(end) >= pl.col(start).shift(-1).over("chrom")).fill_null(False).alias(_REACHES))
     )
-    apart = ordered.filter(~pl.col(_REACHES)).drop(_REACHES)
-    reaching = ordered.filter(pl.col(_REACHES)).drop(_REACHES)
     tiled = (
-        probes.sort("chrom", at)
-        .join_asof(apart, left_on=at, right_on=start, by="chrom", strategy="backward", check_sortedness=False)
-        .filter(pl.col(start).is_not_null() & (pl.col(at) <= pl.col(end)))
-    )
+        probes.lazy().sort("chrom", at)
+        .join_asof(ordered, left_on=at, right_on=start, by="chrom", strategy="backward", check_sortedness=False)
+        .filter(pl.col(start).is_not_null() & ~pl.col(_REACHES) & (pl.col(at) <= pl.col(end)))
+        .drop(_REACHES)
+    )  # fmt: skip
+    tiled, reaching = pl.collect_all([tiled, ordered.filter(pl.col(_REACHES)).drop(_REACHES)])
+    probes = probes.lazy().collect()
     # One range join per contig: two inequalities and no equality run as an IEJoin, where an equality on
     # `chrom` beside them would make it a filtered cross join.
     inside = [

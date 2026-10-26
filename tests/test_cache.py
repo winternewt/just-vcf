@@ -63,7 +63,7 @@ def default_store(tmp_path: Path) -> ReferenceStore:
 def manifests(kind: str | None = None) -> dict[str, cache.CacheEntry]:
     root = cache.cache_dir()
     found = {}
-    for directory in ("vcf", "keyvalue", "cgi", "frames"):
+    for directory in ("vcf", "keyvalue", "cgi", "frames", "stats"):
         for path in sorted((root / directory).glob("*.json")) if (root / directory).is_dir() else []:
             manifest = cache.CacheEntry.model_validate_json(path.read_bytes())
             if kind is None or manifest.kind == kind:
@@ -321,7 +321,8 @@ def test_clear_by_source_removes_its_derived_spills_and_keeps_the_rest(tmp_path:
     reference_before = tree(root / "reference")
     mine_entries = {name for name, m in manifests().items() if m.source_sha256 == sha256(mine)}
     theirs_entries = {name for name, m in manifests().items() if m.source_sha256 == sha256(theirs)}
-    assert len(mine_entries) == len(theirs_entries) == 5
+    # The copy, the cached scan_stats, the load, rejoin, resolve and normalize spills.
+    assert len(mine_entries) == len(theirs_entries) == 6
 
     planned = clear_cache(mine, dry_run=True)
     assert {e.path for e in planned.removed} == mine_entries
@@ -350,9 +351,9 @@ def test_clear_names_a_deleted_source_by_digest_or_by_path(tmp_path: Path) -> No
     second.unlink()
 
     by_digest = clear_cache(digest)
-    assert {e.source_sha256 for e in by_digest.removed} == {digest} and len(by_digest.removed) == 2
+    assert {e.source_sha256 for e in by_digest.removed} == {digest} and len(by_digest.removed) == 3
     by_path = clear_cache(second)
-    assert {e.source_sha256 for e in by_path.removed} == {second_digest} and len(by_path.removed) == 2
+    assert {e.source_sha256 for e in by_path.removed} == {second_digest} and len(by_path.removed) == 3
     assert manifests() == {}
 
 

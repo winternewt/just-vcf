@@ -19,12 +19,15 @@ PSL name says it is phased (`_phase_sets`).
 
 import hashlib
 import io
+import json
 import logging
+import os
 import re
 import shutil
 import struct
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from importlib.metadata import version
 from pathlib import Path
 from threading import Lock
 from typing import BinaryIO
@@ -36,6 +39,7 @@ from polars_bio.sql import SQL
 from just_vcf import cache as cache_index
 from just_vcf.bgzf import BgzfWriter
 from just_vcf.links import CALLER_SPLIT  # noqa: F401 (kept importable here; defined in just_vcf.links)
+from just_vcf.loaders import text as text_loader
 from just_vcf.loaders.text import PAST_ALTS_WARNING, PAST_GT_WARNING, past_alts, past_gt
 from just_vcf.schema import BLOCKS, CALLS, EMPTY_ALLELE, BlockKind, EvidenceBasis, GlSource, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
 
@@ -1098,17 +1102,24 @@ def scan(path: Path, info_fields: list[str], format_fields: list[str], sample: s
                 info_fields=info_fields,
                 format_fields=format_fields,
                 samples=[sample] if sample is not None else None,
-                genotype_output="string",
-                chunk_size=8,
-                concurrent_fetches=1,
-                allow_anonymous=True,
-                max_retries=5,
-                timeout=300,
-                enable_request_payer=False,
-                compression_type="auto",
+                **SCAN_OPTIONS,
             )
             _REGISTERED.add(name)
     return pb.sql(f'SELECT * FROM "{name}"').with_columns((pl.col("start") + 1).alias("start"))
+
+
+SCAN_OPTIONS: dict[str, object] = {
+    "genotype_output": "string",
+    "chunk_size": 8,
+    "concurrent_fetches": 1,
+    "allow_anonymous": True,
+    "max_retries": 5,
+    "timeout": 300,
+    "enable_request_payer": False,
+    "compression_type": "auto",
+}
+"""The options `scan` registers every VCF with, beside the path, the fields and the sample. Part of the
+cached stats' key (`stats_key`)."""
 
 
 def _collect(plan: pl.LazyFrame) -> pl.DataFrame:
@@ -1152,6 +1163,17 @@ def _register(**kwargs) -> None:
         raise
 
 
+def _request(header: Header, sample: str, extra_info: tuple[str, ...]) -> tuple[list[str], list[str], str | None]:
+    """What `read_records` asks polars-bio for: the INFO keys (the carried ones the header declares and
+    the copy keeps, the split markers, `extra_info`), the FORMAT keys, and the sample column, named only
+    when the file has several."""
+    left_out = left_out_of_copy(header)
+    info = [key for key in INFO_KEYS if key in header.info and f"INFO/{key}" not in left_out]
+    info += sorted(header.split_markers) + list(extra_info)
+    fmt = [key for key in FORMAT_KEYS if key in header.format and f"FORMAT/{key}" not in left_out]
+    return info, fmt, sample if len(header.samples) > 1 else None
+
+
 def read_records(
     path: Path, header: Header, sample: str, first_record: bytes | None, extra_info: tuple[str, ...] = ()
 ) -> pl.LazyFrame:
@@ -1162,11 +1184,8 @@ def read_records(
     keys read for selecting rows (`SF`), as lists of strings.
     """
     left_out = left_out_of_copy(header)
-    info = [key for key in INFO_KEYS if key in header.info and f"INFO/{key}" not in left_out]
-    info += sorted(header.split_markers) + list(extra_info)
-    fmt = [key for key in FORMAT_KEYS if key in header.format and f"FORMAT/{key}" not in left_out]
-    multi = len(header.samples) > 1
-    frame = scan(path, info, fmt, sample if multi else None)
+    info, fmt, scanned_sample = _request(header, sample, extra_info)
+    frame = scan(path, info, fmt, scanned_sample)
     if first_record is not None:
         fields = first_record.decode("utf-8", errors="replace").split("\t")
         got = _collect(frame.select("chrom", "start").head(1)).row(0)
@@ -1398,6 +1417,134 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
         row = {**found.row(0, named=True), "unsourced": left_out.item()}
     row["chroms"] = sorted(row["chroms"] or [])
     return row
+
+
+STATS_VERSION = 1
+"""Bumped whenever `scan_stats` could return something else for the same file under the same request:
+its own expressions and helpers (`_hq_slots`, `_end_stats`, `_psl_stats`, `_fits`, `_alts_expr`,
+`past_alts`, `past_gt`…), how `read_records` shapes the records before the pass sees them
+(`_whole_numbers`, `_negative_ps`, the list reshaping, the PS withheld column), and how a `Part` selects
+them. A key in the cached stats' manifest and in their key (`stats_key`), so a result an older version
+computed is never read, and the sweep retires its entry. The source of this module and of
+`loaders/text.py` is in the key as well (`_STATS_CODE`): an edit that forgets the bump costs a pass,
+never a stale count."""
+
+POLARS_BIO_VERSION = version("polars-bio")
+"""The polars-bio that read the records the cached stats count: in their key and their manifest."""
+
+_STATS_CODE = hashlib.sha256(Path(__file__).read_bytes() + Path(text_loader.__file__).read_bytes()).hexdigest()
+"""A digest of this module's source and `loaders/text.py`'s, which hold `scan_stats`, `read_records`
+and every helper they call: in the cached stats' key, so an edit to either that does not bump
+`STATS_VERSION` still never reads a count an older edit computed."""
+
+STATS_FILE = "stats.json"
+"""The file in a `stats/<key>/` cache entry holding one `scan_stats` result and the key it answers."""
+
+
+def stats_versions() -> dict[str, object]:
+    """The version keys of a cached `scan_stats` result, in its manifest and its key."""
+    return {"STATS_VERSION": STATS_VERSION, "POLARS_BIO_VERSION": POLARS_BIO_VERSION, "POLARS_VERSION": pl.__version__}
+
+
+def stats_key(path: Path, read_sha256: str, header: Header, part: Part, origin: cache_index.Origin) -> str:
+    """Everything `scan_stats` over one part's records depends on, hashed (sha256, hex).
+
+    - the bytes polars-bio reads (`read_sha256`: the copy's digest, or the source's when it is read as
+      it is) and the file's name, which polars-bio's `compression_type="auto"` may read. The bytes fix
+      what a rewritten copy holds: its header lines, the keys a structural copy leaves out and declares
+      (`skipped_declarations`, `READER_DEFINITIONS`), the records at POS 0 it drops;
+    - the source's digest and member, which fix the `Header` the loader parsed from it (and `declare`d
+      from its first records), whatever the copy kept of it;
+    - what `read_records` asks for (`_request`: INFO and FORMAT keys, the sample column) and the
+      registration options (`SCAN_OPTIONS`); the header's VCF version, the keys left out of the copy
+      (`left_out_of_copy`) and whether PS is declared, which shape the records past the scan; the keys
+      the retry left out (`Header.unparsed`); and the part (`Part.select`, `Part.unsourced`);
+    - `READER_DEFINITIONS`, `STATS_VERSION`, polars-bio's and polars' versions, and `_STATS_CODE`.
+
+    Not inputs: the first record, which `read_records` only checks against the scan (it raises, it
+    changes no row); and the table name `scan` registers, which names a table and changes no row. The
+    sample name enters only this hash, never a file in plain text.
+    """
+    info, fmt, scanned_sample = _request(header, part.sample, part.info)
+    inputs = {
+        "read": {"sha256": read_sha256, "name": path.name},
+        "source": {"sha256": origin.source_sha256, "member": origin.member},
+        "request": {"info": info, "format": fmt, "sample": scanned_sample, "options": SCAN_OPTIONS},
+        "header": {
+            "version": header.version_tuple,
+            "left_out": sorted(left_out_of_copy(header)),
+            "unparsed": sorted(header.unparsed),
+            "ps_declared": "PS" in header.format,
+        },
+        "part": {
+            "sample": part.sample,
+            "options": part.options,
+            "sf": part.sf,
+            "sf_alone": part.sf_alone,
+            "merge_indices": list(part.merge_indices),
+        },
+        "reader_definitions": {f"{major}.{minor}": definitions for (major, minor), definitions in READER_DEFINITIONS.items()},
+        "versions": stats_versions(),
+        "code": _STATS_CODE,
+    }
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def cached_stats(key: str, origin: cache_index.Origin, compute: Callable[[], dict]) -> dict:
+    """`compute()` (a `scan_stats` pass), or the result an earlier pass with the same `key` stored.
+
+    The result is a `stats/<key>/` cache entry (kind `scan_stats`), written and read under the entry's
+    lock, so a second session loading the same file waits for the first one's pass and reads its
+    result; the file is written under a temporary name and moved into place, so no reader sees half of
+    it. A file that cannot be read whole, or answers another key, is ignored and written again. Only a
+    pass that succeeded is stored: a refusal (`HeaderRefused`) or a damaged block propagates, and the
+    next load runs the pass again. The value returned is the stored one, read back through JSON, so a
+    fresh load and a cached one hand the loader the same values.
+    """
+    entry = cache_index.cache_dir() / "stats" / key[:32]
+    target = entry / STATS_FILE
+    with cache_index.writing(entry, cache_index.SCAN_STATS, stats_versions(), origin):
+        found = _read_stats(target, key)
+        if found is not None:
+            return found
+        text = json.dumps({"key": key, "stats": compute()})
+        entry.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f"{STATS_FILE}.tmp-{os.getpid()}")
+        temporary.write_text(text)
+        os.replace(temporary, target)
+        return json.loads(text)["stats"]
+
+
+def _read_stats(path: Path, key: str) -> dict | None:
+    """The stats stored at `path` for `key`; None when there are none, or they cannot be read whole."""
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_bytes())
+    except ValueError:
+        # Truncated, or not JSON at all (UnicodeDecodeError is a ValueError too): the pass runs again.
+        logger.warning("cache: stats/%s cannot be read; counted again", path.parent.name)
+        return None
+    if not isinstance(record, dict) or record.get("key") != key or not isinstance(record.get("stats"), dict):
+        logger.warning("cache: stats/%s does not answer this key; counted again", path.parent.name)
+        return None
+    return record["stats"]
+
+
+def read_part(
+    path: Path, header: Header, part: Part, first: bytes | None, read_sha256: str, origin: cache_index.Origin
+) -> tuple[pl.LazyFrame, dict]:
+    """One part's records (`read_records`, `Part.select`) and their `scan_stats`, read from the cache
+    when a pass over the same bytes under the same request already ran (`stats_key`, `cached_stats`).
+
+    `read_sha256` is the digest of the bytes at `path`; `origin` names the source and the facet, for
+    the entry's manifest. A cached result skips the pass where a value polars-bio cannot parse would
+    have been met first (P7): it is stored only after a pass over the same bytes, under the same
+    request and the same polars-bio, succeeded, so the spill reads what that pass read."""
+    raw = read_records(path, header, part.sample, first, extra_info=part.info)
+    records = part.select(raw)
+    key = stats_key(path, read_sha256, header, part, origin)
+    return records, cached_stats(key, origin, lambda: scan_stats(records, part.unsourced(raw)))
 
 
 def _fits(vector: pl.Expr, key: str, alts: pl.Expr) -> pl.Expr:

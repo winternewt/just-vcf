@@ -4,6 +4,26 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A VCF load run again reads its records through polars-bio once, to spill them (F26). The first pass,
+  `scan_stats`, which counts what the warnings and the facet need, is stored in the cache as
+  `stats/<key>/stats.json` (a new entry kind, `scan_stats`, with its manifest), and a load whose key is
+  there reads it instead. The key is a sha256 of everything the pass depends on
+  (`loaders.vcf.stats_key`): the bytes polars-bio reads (the copy's, hashed on every load, 0.3 s for
+  hu416394's 490 MB copy, or the source's when no copy is made) and the file's name; the source's
+  digest and member; the keys and sample column asked for and the registration options
+  (`loaders.vcf.SCAN_OPTIONS`); the header's VCF version, the keys left out of the copy and those the
+  retry left out; the part; `READER_DEFINITIONS`; a new `STATS_VERSION` (1), bumped whenever the pass
+  or the records it reads change; the polars and polars-bio versions; and a digest of the source of
+  `loaders/vcf.py` and `loaders/text.py`, so an edit that forgets the bump costs a pass, never a stale
+  count. Written and read under the entry's lock (a second session waits for the first one's pass) and
+  moved into place whole; a file that does not read whole is counted again and rewritten; a refused
+  read is never stored. `load` sweeps older `STATS_VERSION`, polars and polars-bio entries like its
+  other kinds, and `clear_cache(source)` removes a source's stats with its copies. The load's
+  generation stays keyed by its staged bytes. hu416394's bcftools gVCF (9,651,143 calls, 9,473,303
+  blocks), frames cached, library only, under a 40 GB cap: 85.0 / 86.7 s → 47.4 / 48.4 s, peak 2.0 GiB
+  both; the first load on this version still counts (88.9 s); warnings, facet row and row counts the
+  same (hashed). Nothing changes in the frames.
+
 - `resolve_ref`, `normalize` and `liftover` work and spill a group of whole contigs at a time (F24),
   where each contig with rows cost a filtered scan, a pass and a parquet file. The groups are the ones
   `load`'s spill is written in, consecutive contigs in canonical order up to `SPILL_PART_ROWS` rows

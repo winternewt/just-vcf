@@ -149,6 +149,13 @@ meanwhile. The desk carries the ones filed there.
   of mates is one row. Single breakends are counted as `single_breakend`, as truvari's default leaves them out.
   The `breakend` exclusion reason is gone (pre-1.0 break, in the changelog). Left for the person: whether a
   symbolic `<DEL>`/`<DUP>`/`<INV>` should meet the breakends another caller writes for it (truvari's `decompose`).
+- **Layer 3, the lead's calls on breakends in a lift (built, listed for veto):** the mate lifts through the chain and
+  the brackets turn by each end's own strand per VCF 4.3 §5.4 (liftoverSV lifts the mate but drops the strand, so
+  never turns a bracket; Picard, CrossMap and bcftools +liftover lift no mate). The mate is named as the target
+  collection names it. `cipos`/`ciend` mirror without the SV lift's swap, since a breakend's POS stays its own.
+  `breakend_not_lifted` narrowed to ALTs the lift cannot read (pre-1.0 break); new `breakend_*` reasons for the rest.
+  Left: F30 (`write_vcf`'s `contig_names` does not reach a mate inside ALT); an imprecise breakend landing on a minus
+  strand is not moved to the left of its CIPOS interval.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

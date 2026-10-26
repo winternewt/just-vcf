@@ -56,9 +56,9 @@ import polars as pl
 from just_vcf import cache
 from just_vcf.liftover import RELATION as LIFT_RELATION
 from just_vcf.links import NORMALIZED, derived_links
-from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
+from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_batches
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore
-from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, RefCheck, SplitSignal, canonical_order, empty
+from just_vcf.schema import CALLS, EMPTY_ALLELE, SCHEMA_VERSION, RefCheck, SplitSignal, canonical_order, empty
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,15 @@ NORMALIZE_VERSION = 9
 per-ALT SV columns split with their ALT, the intervals of a moved row cleared; 7: F19's scaffold aliases;
 8: a split row's `hq` null on each GT slot it writes `.`; 9: RM3's anchored insertion points aligned, and
 a deletion at a contig's first base anchored on the base after)."""
+
+NORMALIZE_LAYOUT = 1
+"""How a normalize spill's files hold the rows, a key in its manifest and in its generation's key: 1 is
+the rows in canonical order in parts of whole contigs, grouped up to `loading.SPILL_PART_ROWS` rows
+(`loading.canonical_batches`), so contigs with a few rows share a file (F24). A spill without the key
+held one file per contig with rows. Its generation key lacks the key, so no run of this version finds
+it, and the sweep retires such an entry once it is unused past the grace period. Not a
+`NORMALIZE_VERSION` bump: the rows are the same, and that version is part of the derived `facet_id`.
+Not `cache.SPILL_LAYOUT` either, which every other step's spill carries too."""
 
 RELATION = NORMALIZED
 """The derived facet's `relation`."""
@@ -96,7 +105,7 @@ def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = 
     the collection the facet names in `ref_seqcol_digest`. The input is not changed. What could not
     be normalized is left as written, each reason counted once in the warnings.
     """
-    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "NORMALIZE_VERSION": NORMALIZE_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+    versions = {"SCHEMA_VERSION": SCHEMA_VERSION, "NORMALIZE_VERSION": NORMALIZE_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT, "NORMALIZE_LAYOUT": NORMALIZE_LAYOUT}
     cache.sweep_stale(cache.NORMALIZE_SPILL, versions)
     parent = loaded.facets.collect()
     if parent.height != 1:
@@ -113,8 +122,8 @@ def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = 
     facet_id = _derived_id(facet["facet_id"], digest)
     entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
     with cache.spilling(entry, cache.NORMALIZE_SPILL, versions, cache.derived_origin(facet, facet_id), ("calls",)) as spill:
-        # Streamed to parquet once, so each contig below is a filtered scan, not a replay of the input's
-        # plan; its bytes key the result, so a run on the same input reuses what an earlier one wrote.
+        # Streamed to parquet once, so each group of contigs below is a filtered scan, not a replay of the
+        # input's plan; its bytes key the result, so a run on the same input reuses what an earlier one wrote.
         staged = spill.stage / "input.parquet"
         loaded.calls.sink_parquet(staged, row_group_size=SPILL_ROW_GROUP)
         key = spill.key([staged], facet)
@@ -123,14 +132,21 @@ def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = 
             counts: Counter[str] = Counter()
             parts: list[Path] = []
             source = pl.scan_parquet(staged)
-            chroms = source.select(pl.col("chrom").unique()).collect()["chrom"].to_list()
             rereads = facet["relation"] in REREADS_REF
             from_file = facet["derived_from"] is None
-            for index, chrom in enumerate(sorted(chroms, key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))):
-                rows = source.filter(pl.col("chrom") == chrom).collect()
-                normalized = _normalize_contig(rows.with_columns(pl.lit(facet_id).alias("facet_id")), store, contigs.get(chrom), counts, rereads, from_file)
+            # A part per group of whole contigs (`canonical_batches`), read in one scan and written as one
+            # file (F24). A contig the collection holds is aligned on its own, against its one sequence;
+            # the rows on every other contig of the group are split, deduplicated and sorted together,
+            # since nothing is read for them.
+            sizes = dict(source.group_by("chrom").len().drop_nulls("chrom").collect().iter_rows())
+            for index, batch in enumerate(canonical_batches(sizes)):
+                rows = source.filter(pl.col("chrom").is_in(batch)).collect().with_columns(pl.lit(facet_id).alias("facet_id"))
+                held = [chrom for chrom in batch if chrom in contigs]
+                pieces = [_normalize_contig(rows.filter(~pl.col("chrom").is_in(held)), store, None, counts, rereads, from_file)]
+                pieces += [_normalize_contig(rows.filter(pl.col("chrom") == chrom), store, contigs[chrom], counts, rereads, from_file) for chrom in held]
+                del rows
                 part = spill.stage / f"calls-{index:05d}.parquet"
-                normalized.write_parquet(part, row_group_size=SPILL_ROW_GROUP)
+                canonical_order(pl.concat(pieces, how="vertical").lazy()).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
                 parts.append(part)
             staged.unlink()
             done = spill.commit(key, {"calls": parts}, _warnings(counts))
@@ -170,7 +186,9 @@ def _contigs_by_chrom(store: ReferenceStore, digest: str) -> dict[str, Contig]:
 def _normalize_contig(
     rows: pl.DataFrame, store: ReferenceStore, contig: Contig | None, counts: Counter[str], rereads: bool = False, from_file: bool = False
 ) -> pl.DataFrame:
-    """One contig's rows split, aligned, deduplicated and sorted. `rereads`: the facet's relation read
+    """One contig's rows split, aligned against `contig`, deduplicated and sorted; with `contig` None,
+    the rows of any number of contigs the collection does not hold, which are split, deduplicated and
+    sorted alike and not aligned (`_align` counts them). `rereads`: the facet's relation read
     every row's REF from its collection (`REREADS_REF`). `from_file`: the facet was read from a file
     (no `derived_from`), so a row's `ref` was written by `resolve_ref` alone."""
     if rows.is_empty():
@@ -187,7 +205,7 @@ def _normalize_contig(
     counts["duplicates"] += ordered.height - unique.height
     written_ref = pl.coalesce(pl.col("ref"), pl.col("source_ref"))
     conflicts = (
-        unique.group_by(pl.col("pos"), written_ref.alias("_ref"), pl.col("alts"))
+        unique.group_by(pl.col("chrom"), pl.col("pos"), written_ref.alias("_ref"), pl.col("alts"))
         .agg(pl.len().alias("rows"))
         .filter(pl.col("rows") > 1)
     )

@@ -571,6 +571,23 @@ def _spill_files(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origi
     return done.files("calls"), done.files("blocks")
 
 
+def canonical_batches(counts: dict[str, int]) -> list[list[str]]:
+    """The contigs of a frame grouped as a spill's parts hold them, given each contig's row count: whole
+    contigs, consecutive in canonical contig order, up to `SPILL_PART_ROWS` rows per group unless one
+    contig alone has more. `canonical_parts` writes `load`'s and `rejoin_split`'s spills by it, and
+    `resolve_ref`, `normalize` and `liftover` read and write theirs a group at a time by it (F24)."""
+    batches: list[list[str]] = []
+    held = 0
+    for chrom in sorted(counts, key=lambda c: (CONTIG_RANK.get(c, len(CONTIG_RANK)), c)):
+        if batches and held + counts[chrom] <= SPILL_PART_ROWS:
+            batches[-1].append(chrom)
+            held += counts[chrom]
+        else:
+            batches.append([chrom])
+            held = counts[chrom]
+    return batches
+
+
 def canonical_parts(staged: Path, name: str) -> list[Path]:
     """The rows of one unsorted spilled frame, written beside it as `<name>-<n>.parquet` parts in
     canonical order (`canonical_order`): whole contigs per part, consecutive in canonical contig order,
@@ -582,16 +599,7 @@ def canonical_parts(staged: Path, name: str) -> list[Path]:
     `rejoin_split`'s are written through it.
     """
     scan = pl.scan_parquet(staged)
-    counts = dict(scan.group_by("chrom").len().drop_nulls("chrom").collect().iter_rows())
-    batches: list[list[str]] = []
-    held = 0
-    for chrom in sorted(counts, key=lambda c: (CONTIG_RANK.get(c, len(CONTIG_RANK)), c)):
-        if batches and held + counts[chrom] <= SPILL_PART_ROWS:
-            batches[-1].append(chrom)
-            held += counts[chrom]
-        else:
-            batches.append([chrom])
-            held = counts[chrom]
+    batches = canonical_batches(dict(scan.group_by("chrom").len().drop_nulls("chrom").collect().iter_rows()))
     if not batches:
         part = staged.with_name(f"{name}-00000.parquet")
         scan.clear().collect().write_parquet(part)

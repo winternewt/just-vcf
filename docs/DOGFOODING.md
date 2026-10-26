@@ -88,30 +88,6 @@ target's base with `ref`, the base read from the source assembly, not with `sour
 
 Blocks: lifting any CNV facet (every one in hand); also any QC that reads `ref_check` on them.
 
-## F24 — Every source contig costs a fixed pass, so a header full of decoys is slow and heavy
-
-Severity: low · Found 2026-10-26 dogfooding RM6's SV lift on hu416394's Manta file (Sequencing.com,
-GRCh38, a 2,581-contig hs38DH-style header).
-
-`resolve_ref` and `liftover` work contig by contig, each contig a filtered scan, a few `collect`s and a
-parquet file in the spill. The file has 9,373 rows on 942 contigs, 918 of them decoys and scaffolds
-with a handful of rows each (1,228 rows on decoys, which no assembly holds and which stay unread, as
-they should). Profiled on a fresh cache: `resolve_ref` 13.4 s (943 parquet sinks), `liftover` 27.2 s
-(942 `_lift_contig` passes, 13,217 `collect`s, 997 sinks, `_segments` rebuilt 72 times). The same
-rows cut to the 25 primary contigs resolve in 0.4 s at a 1,774 MB peak; all of them take 14.3 s and
-3,757 MB. For scale, hu1C1368's GRCh37 Manta file (7,246 rows on 24 contigs) resolves in 0.5 s and
-lifts in 2.7 s under 430 MB. Nothing is wrong in the output; the cost is per contig, not per row.
-Repairs, each a change to the spill design: batch the small contigs into one pass; send rows on a
-contig the store or the chain does not hold straight to their reason without a pass of their own.
-Neither is free: the per-contig parts are what keep a WGS gVCF within memory, and their layout is a
-cache key (`SPILL_LAYOUT`).
-
-*Updated 2026-10-26:* the first repair is in for `load`'s own spill (F27, PREVIOUS_ISSUES.md): it is
-written in parts of whole contigs, consecutive in canonical order, up to `SPILL_PART_ROWS` rows, so
-contigs with a few rows share a file (`loading.canonical_parts`). hu416394's bcftools gVCF, rows on
-2,179 contigs, is 12 call parts and 11 block parts. `resolve_ref` and `liftover` still make a pass and
-write a file per source contig, which is what this finding measured; it stays open for them.
-
 ## F25 — UCSC scaffold names written without `chr` are not matched to the store
 
 Severity: low · Found 2026-10-26 dogfooding RM6's SV lift on hu416394's Manta file.

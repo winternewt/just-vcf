@@ -9,6 +9,14 @@ each reset.
    building. Turn of parallelism until Oct 31"). No second builder or audit runs beside another; the two
    already running when this was said (audit 12, the private-pair atlas rebuild) finish. From 2026-11-01 the
    desk #103 default (one or two at a time) applies again.
+0. **Merge audits run on two outside model families** (the person, 2026-10-26: "For audit runs, switch
+   pasing to using grok4.7 via cursor + sol6.1 via codex subagents"), from audit 13 on (audit 12 was already
+   running on Opus): Grok 4.7 through Cursor's CLI (the `cursor-grok` agent, `--mode ask`) and GPT-6.1 Sol
+   through Codex (`codex exec -m gpt-6.1-sol -s read-only -p secrets-denied`), each on a `git archive HEAD`
+   copy of the tracked files after the kit's `repo-prep`, never the working tree. The lead checks every
+   finding against the code before a fix builder gets it. Both runs together count as the one item at a time.
+0. **Queued next** (one at a time): loosen `test_pca_panels_place_their_own_reference_samples` for regions on a
+   cline (the person chose option 1 for the AADR panel's own-sample failure, 2026-10-26).
 1. **The data cache holds whole private genomes** (RM268, shipped 731d38c): stale versions are swept on each
    step, and `clear_cache(source=...)` removes every copy of a deleted genome. Entries written before the
    index (REWRITE_VERSION 7) are swept as stale.

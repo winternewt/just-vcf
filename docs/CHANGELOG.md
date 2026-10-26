@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A consensus facet records its parents' REF states (`facets.resolve_inputs`, schema 0.0.21). Its
+  `facet_id` digests its parents' ids, which `resolve_ref` keeps, and its `resolve_version` is null
+  wherever the parents differ, so two builds over parents read by other `RESOLVE_VERSION`s had the same
+  id and the same null, and `Store.add` reported the second `present` and kept the first's rows.
+  `resolve_inputs` is now a digest of each parent's `facet_id`, `ref_seqcol_digest`, `resolve_version`
+  and `resolve_inputs`, and the store refuses the other build with `StoreConflictError`. The id is
+  unchanged. `migrate_store` names a 0.0.20 store's consensus facets as not recorded.
+
 - A facet records the chip manifests that read its rows, and the store tells the states apart (schema
   0.0.21). `resolve_ref` reads an array's `I`/`D` codes, and a mixed strand's withheld rows, with the
   manifests `JUST_VCF_MANIFESTS_DIR` holds, which neither the `facet_id` nor `resolve_version` records:

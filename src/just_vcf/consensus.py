@@ -1253,6 +1253,15 @@ def _calls(done: pl.DataFrame, facet_id: str) -> pl.DataFrame:
     return frame.select([pl.col(name).cast(dtype) if name in frame.columns else pl.lit(None, dtype=dtype).alias(name) for name, dtype in CALLS.items()])
 
 
+def parents_ref_states(rows: list[dict]) -> str:
+    """A consensus facet's `resolve_inputs`: one digest of every parent's REF state (`store.REF_STATE`,
+    with its `facet_id`), in `facet_id` order. The consensus's REF and rows come from its parents', and
+    neither its `facet_id` (the parents' ids, which `resolve_ref` keeps) nor `resolve_version` (null
+    where the parents differ) tells two builds over parents in other states apart; this does."""
+    states = sorted([row["facet_id"], row["ref_seqcol_digest"], row["resolve_version"], row["resolve_inputs"]] for row in rows)
+    return hashlib.sha256(json.dumps(states).encode()).hexdigest()[:16]
+
+
 def _facet_row(facet_id: str, rows: list[dict], label: str | None, digest: str | None, calls: pl.DataFrame, rates_digest: str,
                prior_input: dict | None = None) -> pl.DataFrame:  # fmt: skip
     """The consensus facet's `facets` row."""
@@ -1275,6 +1284,7 @@ def _facet_row(facet_id: str, rows: list[dict], label: str | None, digest: str |
         assembly_label_basis=shared("assembly_label_basis") if label is not None else None,
         ref_seqcol_digest=digest,
         resolve_version=shared("resolve_version"),
+        resolve_inputs=parents_ref_states(rows),
         callset_type=shared("callset_type"),
         absence_means=AbsenceMeans.UNKNOWN.value,
         variant_classes=classes,

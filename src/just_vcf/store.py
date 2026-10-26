@@ -363,7 +363,7 @@ def _ref_state(row: dict) -> str:
     if row["ref_seqcol_digest"] is None:
         return "REF not read"
     version = "an unrecorded RESOLVE_VERSION" if row["resolve_version"] is None else f"RESOLVE_VERSION {row['resolve_version']}"
-    inputs = "no manifest recorded" if row["resolve_inputs"] is None else f"inputs {row['resolve_inputs']}"
+    inputs = "no resolve_inputs recorded" if row["resolve_inputs"] is None else f"resolve_inputs {row['resolve_inputs']}"
     return f"REF read from {row['ref_seqcol_digest']} by {version} with {inputs}"
 
 

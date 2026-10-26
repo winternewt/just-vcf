@@ -700,7 +700,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
 | `resolve_version` | the `RESOLVE_VERSION` of the `resolve_ref` that read REF (u32). Null until REF is read, and on a facet a store migrated from before 0.0.20 whose REF was read (not recorded). A derived facet keeps its parent's; a consensus its parents' where they share one, else null. `resolve_ref` keeps the `facet_id`, so this column and `ref_seqcol_digest` are what tell two REF states of one facet apart (the durable store refuses an add that meets a held facet in another). just-vcf's own shape |
-| `resolve_inputs` | what else `resolve_ref` read rows with: a 16-hex digest over the chip manifests whose indel probes read an array's `I`/`D` codes and whose SNV allele pairs read a mixed strand's withheld rows (`probes.catalog_digest` of each, so the manifests' bytes and `PROBES_VERSION`). Null until REF is read, where no manifest read a row (a VCF, an array with no code row and no strand withheld, or none configured), and on an array facet a store migrated from before 0.0.21 whose REF was read (not recorded). A derived facet keeps its parent's. With `ref_seqcol_digest` and `resolve_version` it is the facet's REF state (`store.REF_STATE`). just-vcf's own shape |
+| `resolve_inputs` | what else `resolve_ref` read rows with: a 16-hex digest over the chip manifests whose indel probes read an array's `I`/`D` codes and whose SNV allele pairs read a mixed strand's withheld rows (`probes.catalog_digest` of each, so the manifests' bytes and `PROBES_VERSION`). Null until REF is read, where no manifest read a row (a VCF, an array with no code row and no strand withheld, or none configured), and on an array or consensus facet a store migrated from before 0.0.21 whose REF was read (not recorded). A derived facet keeps its parent's. A consensus has a digest of its parents' REF states instead (each parent's `facet_id`, `ref_seqcol_digest`, `resolve_version` and `resolve_inputs`), always set, since its `resolve_version` is null wherever they differ. With `ref_seqcol_digest` and `resolve_version` it is the facet's REF state (`store.REF_STATE`). just-vcf's own shape |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
 | `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele; null = not counted (a genotype table, which writes no REF or ALT). just-vcf's own shape |
@@ -2311,7 +2311,7 @@ a step fails it.
 | 0.0.17 → 0.0.18 | facets | adds `gl_source` (null) after `split_marker` | VCF facets: null means not recorded, not "no likelihoods" |
 | 0.0.18 → 0.0.19 | calls | adds `hq` (null) after `gq` | CGI native facets, and facets whose `dropped_fields` list FORMAT `HQ`: `hq` null for not read, so their rows grade `gt_only` |
 | 0.0.19 → 0.0.20 | facets | adds `resolve_version` (null) after `ref_seqcol_digest` | facets whose REF was read (`ref_seqcol_digest` set): null means not recorded, not "REF not read", so the store refuses the same facet resolved today as another state of it |
-| 0.0.20 → 0.0.21 | facets | adds `resolve_inputs` (null) after `resolve_version` | array facets (`family = genotype_table`) whose REF was read: null means not recorded, not "no manifest", so the store refuses the same facet resolved today with manifests as another state of it |
+| 0.0.20 → 0.0.21 | facets | adds `resolve_inputs` (null) after `resolve_version` | array facets (`family = genotype_table`) whose REF was read: null means not recorded, not "no manifest", so the store refuses the same facet resolved today with manifests as another state of it; consensus facets: null means the parents' REF states were not recorded, so the store refuses the same consensus built today |
 
 A step never invents a value: an added column is null, and where that null (or a value an older loader
 left) reads differently from what a load of the same source gives today, the facets it applies to are
@@ -2853,8 +2853,14 @@ it had.
 **The facet.** `facets`: `caller = "just-vcf consensus"`, `caller_version = CONSENSUS_VERSION`, one
 `merge` step in `method_steps`, `derivation_inputs` one `error_rates` entry whose `sha256` digests
 `Consensus.rates` (and a `prior` entry under a population prior), `absence_means = unknown`, `variant_classes` counted from its rows, the parents'
-`assembly_label`, `ref_seqcol_digest`, `callset_type` and `subject` where they share one. `facet_id`
-digests the sorted parent ids, `CONSENSUS_VERSION`, the options and the rates. `calls`, one row per
+`assembly_label`, `ref_seqcol_digest`, `resolve_version`, `callset_type` and `subject` where they share one,
+and `resolve_inputs` a digest of every parent's REF state (its `facet_id`, `ref_seqcol_digest`,
+`resolve_version` and `resolve_inputs`, in `facet_id` order). `facet_id`
+digests the sorted parent ids, `CONSENSUS_VERSION`, the options and the rates. A parent keeps its id
+when `resolve_ref` reads it, so the id does not change with the parents' REF states, and
+`resolve_version` is null where they differ: `resolve_inputs` is what lets the durable store tell two
+builds over parents in other states apart. Rejected: digesting the parents' states into the
+`facet_id`, which would change the id of every consensus already made. `calls`, one row per
 allele in canonical order: `alts = [alt]`, `source_alleles = [REF, ALT]`, `source_ref` the REF,
 `ref` the same where a parent read it from the reference (charter 10), `ref_check = not_run`, `gp` the
 posterior (VCF genotype order over `[REF, ALT]`), `gt` and `gt_alleles` its most probable genotype
@@ -3228,10 +3234,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   (Decision 2), a new null combination on rows that were filled before.
 
 - **0.0.21** (2026-10-26, the manifests that read REF): `facets.resolve_inputs` (`str` or null), a
-  digest of the chip manifests `resolve_ref` read an array's rows with, inherited by derived facets.
-  Additive. A store of 0.0.20 migrates with it null, named as not recorded on its resolved array
-  facets. Rule change in the store: `REF_STATE` gains it, so the same array resolved without and then
-  with manifests is refused (`StoreConflictError`) where it was reported `present`.
+  digest of the chip manifests `resolve_ref` read an array's rows with, inherited by derived facets;
+  on a consensus, a digest of its parents' REF states. Additive. A store of 0.0.20 migrates with it
+  null, named as not recorded on its resolved array facets and its consensus facets. Rule change in
+  the store: `REF_STATE` gains it, so the same array resolved without and then with manifests, or a
+  consensus rebuilt over parents in other REF states, is refused (`StoreConflictError`) where it was
+  reported `present`.
 
 - **0.0.20** (2026-10-26, the rule that read REF): `facets.resolve_version` (`u32` or null), the
   `RESOLVE_VERSION` that read the facet's REF, inherited by derived facets. Additive. A store of

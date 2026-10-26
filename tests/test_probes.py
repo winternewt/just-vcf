@@ -348,7 +348,7 @@ def test_an_array_resolved_before_0021_has_its_manifests_named_unknown(tmp_path:
         ("0.0.21", "facets", ("resolve_inputs",), (facet_id,))
     ]
     assert Store.open(root).loaded().facets.collect()["resolve_inputs"].to_list() == [None]
-    with pytest.raises(StoreConflictError, match="no manifest recorded"):
+    with pytest.raises(StoreConflictError, match="no resolve_inputs recorded"):
         Store.open(root).add(resolved)
 
 

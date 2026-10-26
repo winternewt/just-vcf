@@ -33,6 +33,9 @@ from just_vcf.links import CONSENSUS
 from just_vcf.loading import Loaded
 from just_vcf.person import Person
 from just_vcf.schema import CALLS, FACETS
+from just_vcf.store import Store, StoreConflictError, migrate_store
+from test_store import SUBJECT
+from test_store_migration import _old_store
 
 RNG = random.Random(280)
 SEQ = {"1": "".join(RNG.choice("ACGT") for _ in range(2000)), "2": "".join(RNG.choice("ACGT") for _ in range(1000))}
@@ -774,6 +777,47 @@ def test_refusals(tmp_path: Path, store: ReferenceStore) -> None:
     regions = RegionSet.from_frames("t", "GRCh37", {"easy": pl.DataFrame({"chrom": ["1"], "pos": [1], "end_pos": [10]})})
     with pytest.raises(ValueError, match="regions are on"):
         consensus([x, y], atlas=TRIANGLE, regions=regions)
+
+
+def test_a_store_tells_consensus_facets_over_parents_in_other_ref_states_apart(tmp_path: Path, store: ReferenceStore) -> None:
+    """A consensus's `facet_id` digests its parents' ids, its options and its rates, and `resolve_ref`
+    keeps a parent's id, so a consensus over the same parents with REF read by other `RESOLVE_VERSION`s
+    keeps its id too (pinned here). Its `resolve_version` is null wherever the parents differ, so two
+    such builds both carried null and the store reported the second `present`, keeping the first's
+    rows. The consensus now records its parents' REF states (`resolve_inputs`), and the store refuses
+    the other build; the same build again is still a no-op."""
+    x = facet(tmp_path, "x", "X", "1", [snv("1", 100, "0/1")], store, subject=SUBJECT)
+    y = facet(tmp_path, "y", "Y", "1", [snv("1", 100, "0/1")], store, subject=SUBJECT)
+
+    def read_by(loaded: Loaded, version: int) -> Loaded:
+        return loaded.model_copy(update={"facets": loaded.facets.with_columns(pl.lit(version, dtype=pl.UInt32).alias("resolve_version"))})
+
+    current = x.facets.collect()["resolve_version"].item()
+    one = consensus([x, read_by(y, current - 1)], atlas=TRIANGLE)
+    two = consensus([x, read_by(y, current - 2)], atlas=TRIANGLE)
+    first, second = one.facets.collect(), two.facets.collect()
+    assert first["facet_id"].item() == second["facet_id"].item(), "the consensus id does not see its parents' REF states"
+    assert first["resolve_version"].to_list() == second["resolve_version"].to_list() == [None]
+    held = Store.open(tmp_path / "people", subject=SUBJECT)
+    assert held.add(one).added == (first["facet_id"].item(),)
+    with pytest.raises(StoreConflictError, match=first["facet_id"].item()):
+        held.add(two)
+    assert held.add(consensus([x, read_by(y, current - 1)], atlas=TRIANGLE)).present == (first["facet_id"].item(),)
+    assert first["resolve_inputs"].item() is not None and first["resolve_inputs"].item() != second["resolve_inputs"].item()
+
+
+def test_a_consensus_stored_before_0021_has_its_parents_states_named_unknown(tmp_path: Path, store: ReferenceStore) -> None:
+    """A 0.0.20 store recorded no parents' REF states on a consensus: the step to 0.0.21 fills
+    `resolve_inputs` null there and names it, and the same consensus built today is another state."""
+    parents = [facet(tmp_path, n, c, "1", [snv("1", 100, "0/1")], store, subject=SUBJECT) for n, c in (("x", "X"), ("y", "Y"))]
+    built = consensus(parents, atlas=TRIANGLE)
+    root = tmp_path / "people"
+    _old_store(root, "0.0.20", [built])
+    facet_id = built.facets.collect()["facet_id"].item()
+    report = migrate_store(root)
+    assert [(entry.version, entry.columns, entry.facet_ids) for entry in report.filled_unknown] == [("0.0.21", ("resolve_inputs",), (facet_id,))]
+    with pytest.raises(StoreConflictError, match="no resolve_inputs recorded"):
+        Store.open(root).add(built)
 
 
 def test_label_only_assembly_is_warned(tmp_path: Path, store: ReferenceStore) -> None:

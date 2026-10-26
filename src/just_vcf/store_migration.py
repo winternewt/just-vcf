@@ -289,6 +289,14 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
                 "0.0.21: resolve_inputs null here means not recorded, not 'no manifest', so the store takes the same "
                 f"facet resolved today with manifests for another state of it; {_RELOAD} and resolve them into a new store",
             ),
+            Caveat(
+                "facets",
+                ("resolve_inputs",),
+                pl.col("relation") == "consensus",
+                "which REF states these consensus facets' parents were in was not recorded before 0.0.21: resolve_inputs "
+                "null here means not recorded, so the store takes the same consensus built today for another state of "
+                "it; build it again into a new store",
+            ),
         ),
     ),
 )

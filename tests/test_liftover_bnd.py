@@ -395,3 +395,32 @@ def test_a_generation_without_the_mate_contigs_group_is_written_again(tmp_path: 
     again = liftover(resolved, forward, store)
     assert again.loaded.facets.collect().row(0, named=True)["contig_map"] == first
     assert "mate_contigs" in json.loads(result.read_text())["files"]
+
+
+def test_each_alt_of_a_record_mirrors_its_own_interval_pair(tmp_path: Path, setup) -> None:
+    """Two bracket ALTs in one record with a CIPOS and a CIEND pair each (VCF 4.5's shape): CIPOS pair
+    `k` mirrors with POS's strand, CIEND pair `k` with ALT `k`'s mate's, `[lo, hi]` to `[-hi, -lo]`.
+    The mates of each record land on two strands, so a pair read for the wrong ALT shows."""
+    store, source, _, forward, _ = setup
+    ci = "SVTYPE=BND;CIPOS=-1,2,-3,4;CIEND=-5,6,-7,8"
+    cases = {
+        # POS on P1 (plus); mate 0 on P1 (plus), mate 1 on M2 (minus).
+        "two_ci_p": bnd("two_ci_p", "1", 270, "{r}[1:300[,{r}]2:400]", gt="1/2", info=ci),
+        # POS on M1 (minus); mate 0 on P2 (plus), mate 1 on M1 (minus).
+        "two_ci_m": bnd("two_ci_m", "1", 600, "{r}[2:100[,{r}]1:700]", gt="1/2", info=ci),
+    }
+    mates = {"two_ci_p": [("1", 300), ("2", 400)], "two_ci_m": [("2", 100), ("1", 700)]}
+    _, lifted = lift_cases(tmp_path, store, source, forward, cases)
+    calls = by_case(lifted.loaded.calls.collect())
+    assert set(calls) == set(cases)
+
+    def mirrored(pair: list[int], minus: bool) -> list[int]:
+        return [-pair[1], -pair[0]] if minus else pair
+
+    cipos, ciend = [[-1, 2], [-3, 4]], [[-5, 6], [-7, 8]]
+    for case, (chrom, pos) in (("two_ci_p", ("1", 270)), ("two_ci_m", ("1", 600))):
+        own_minus = image(chrom, pos)[2] == "-"
+        mate_minus = [image(*mate)[2] == "-" for mate in mates[case]]
+        assert mate_minus[0] != mate_minus[1], case
+        assert calls[case]["cipos"] == [v for k in range(2) for v in mirrored(cipos[k], own_minus)], case
+        assert calls[case]["ciend"] == [v for k in range(2) for v in mirrored(ciend[k], mate_minus[k])], case

@@ -5,6 +5,10 @@ each reset.
 
 ## Open
 
+0. **One builder at a time until 2026-10-31** (the person, 2026-10-26: "We're ahead of pace for this week on
+   building. Turn of parallelism until Oct 31"). No second builder or audit runs beside another; the two
+   already running when this was said (audit 12, the private-pair atlas rebuild) finish. From 2026-11-01 the
+   desk #103 default (one or two at a time) applies again.
 1. **The data cache holds whole private genomes** (RM268, shipped 731d38c): stale versions are swept on each
    step, and `clear_cache(source=...)` removes every copy of a deleted genome. Entries written before the
    index (REWRITE_VERSION 7) are swept as stale.

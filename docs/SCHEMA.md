@@ -2122,7 +2122,7 @@ position, what that answer rests on, and why:
 
 | `support` | When | Grade | `reason` |
 |---|---|---|---|
-| `call` | a `calls` row covers the position (from `pos` to `end_pos`, both inclusive) | as `genotype_evidence`: `genotype_index` 0 states hom-ref, any other an ALT on some haplotype, null none | `call_at_position`, `call_spans_position` |
+| `call` | a `calls` row covers the position (from `pos` to `end_pos`, both inclusive) | as `genotype_evidence`: `genotype_index` 0 states hom-ref, any other an ALT on some haplotype, null none; on a row with a `split_signal` a `0` may be another ALT (Decision 2), so `rejoin_split` first | `call_at_position`, `call_spans_position` |
 | `block` | a `blocks` row covers it (both ends inclusive) | a `ref` block by `block_grade`, `genotype_index` 0; a `no_call` block by its likelihoods, else `no_call` | `ref_block`, `no_call_block` |
 | `absence` | nothing covers it, and `absence_support` reads the silence as reference | `absent_reference`, asserted, `genotype_index` 0, no number | `whole_genome_silence`, `omitted_called_reference`, `content_filter_forced` |
 | `none` | nothing covers it, and the silence says nothing | `absent_unknown`, unknown, no genotype | the `AbsenceReason` (Decision 4): `outside_blocks`, `array`, `targeted`, `imputed`, `callset_type_unknown`, `class_not_counted`, `class_not_called`, `content_filter_held`, `class_cut_by_filter` |
@@ -2135,7 +2135,9 @@ not from a constant; until the person asks for one, none is given. `records` cou
 covering the position (0 for `absence` and `none`). Where several do, one answers: a call starting at
 the position, else the call starting nearest before it, else the block (a facet's blocks do not
 overlap one another, so there is at most one); among calls of one span, one stating an ALT before one
-stating nothing before one stating hom-ref, then the least `confidence`. A GATK gVCF does start a
+stating nothing before one stating hom-ref, then a quantified one before an unquantified one, the
+least `confidence` first, then by allele list (and, past that, the genotype, the basis and the
+vector), so no tie depends on the order a join emits rows. A GATK gVCF does start a
 `ref` block inside a deletion's span, and a reference statement must not hide a variant stated at the
 same base. Rejected: one row per covering record, as `genotype_evidence_at` gives, which leaves every
 consumer restoring hom-ref to pick among them, each by its own rule. The asked positions and the facet

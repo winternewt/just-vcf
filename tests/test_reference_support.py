@@ -151,6 +151,23 @@ def test_a_call_answers_before_a_block_and_a_variant_before_a_reference(tmp_path
     assert both["genotype_alleles"] == ["A", "T"]
 
 
+def test_calls_tied_on_every_grade_are_ordered_by_their_alleles(tmp_path: Path) -> None:
+    """Two rows of one split site, each het with the same PL: nothing in the grade separates them, so
+    the allele list does (`["A", "C"]` before `["A", "G"]`), whatever order the file or a join gives."""
+    rows = [f"1\t500\t.\tA\t{alt}\t50\t.\t.\tGT:GQ:PL:GP\t0/1:30:30,0,300:." for alt in ("G", "C")]
+    answers = []
+    for name, records in (("ga.vcf", rows), ("cg.vcf", rows[::-1])):
+        loaded = _vcf(tmp_path, records, name=name)
+        sites = pl.DataFrame({"chrom": ["1", "1"], "pos": [500, 499]})
+        answer = reference_support(loaded, sites, variant_class="snv").collect()
+        assert reference_support(loaded, sites.reverse(), variant_class="snv").collect().equals(answer)
+        row = answer.row(1, named=True)
+        assert (row["support"], row["records"], row["genotype_index"]) == ("call", 2, 1)
+        assert row["genotype_alleles"] == ["A", "C"]
+        answers.append(answer.drop("facet_id"))
+    assert answers[0].equals(answers[1]), "the file's row order does not reach the answer"
+
+
 def test_positions_come_out_in_canonical_order_once(tmp_path: Path) -> None:
     loaded = _vcf(tmp_path, GVCF)
     sites = pl.DataFrame({"chrom": ["2", "1", "1", "2", "1"], "pos": [5, 900, 100, 5, 113]})

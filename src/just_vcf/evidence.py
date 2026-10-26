@@ -614,6 +614,8 @@ def reference_support(
 
     - `call`: a `calls` row covers the position, graded as `genotype_evidence` grades it.
       `genotype_index` 0 states hom-ref; any other states an ALT on at least one haplotype; null, none.
+      On a row with a `split_signal` (one ALT of a multi-allelic site per row) a `0` may be another
+      ALT, not REF (docs/SCHEMA.md Decision 2): `rejoin_split` first.
     - `block`: a `blocks` row covers it. A `ref` block is reference (`genotype_index` 0) graded by
       `block_grade` (`BlockGrade`); a `no_call` block is graded by its likelihoods, or is `no_call`.
     - `absence`: nothing covers it and `absence_support(facet, variant_class, force=force)` reads the
@@ -629,7 +631,8 @@ def reference_support(
     Where several records cover a position, one answers, and `records` says how many there were: a
     call starting at the position, else the call starting nearest before it, else the block; among
     calls of one span, one stating an ALT before one stating nothing before one stating hom-ref, then
-    the least confidence, so a reference statement never hides a variant stated at the same site.
+    a quantified one before an unquantified one, the least confidence first, then by allele list, so
+    a reference statement never hides a variant stated at the same site and no tie depends on row order.
     `variant_class` is the class the question is about; a facet's silence speaks only for the classes
     it called. `gq_on_reference` and `block_grade` are `genotype_evidence`'s. Rows come out in
     canonical order (contig rank, then position), whatever order `sites` came in.
@@ -654,6 +657,12 @@ def reference_support(
     is_block = pl.col("evidence_basis") == EvidenceBasis.REF_BLOCK.value
     at_position = pl.col("record_pos").cast(pl.Int64) == pl.col("pos")
     index = pl.col("genotype_index")
+    # Every key down to the alleles and the vector, so two rows still tied state the same thing: the
+    # join gives no row order, and the answer must not depend on it.
+    as_text = {
+        "_alleles": pl.col("genotype_alleles").list.eval(pl.element().fill_null(".")).list.join(","),
+        "_vector": pl.col("genotype_probabilities").list.eval(pl.element().cast(pl.String)).list.join(","),
+    }
     covered = (
         graded.rename({"pos": "record_pos", "end_pos": "record_end_pos"}).drop("chrom")
         .join(asked.lazy(), on="_site", how="inner")
@@ -661,9 +670,11 @@ def reference_support(
             pl.when(is_block).then(2).when(at_position).then(0).otherwise(1).alias("_precedence"),
             pl.when(index > 0).then(0).when(index.is_null()).then(1).otherwise(2).alias("_states"),
             pl.len().over("_site").cast(pl.UInt32).alias("records"),
+            pl.col("grade_basis").cast(pl.String).alias("_basis"),
+            **as_text,
         )
-        .sort(["_site", "_precedence", "record_pos", "record_end_pos", "_states", "confidence"],
-              descending=[False, False, True, False, False, False], nulls_last=True, maintain_order=True)
+        .sort(["_site", "_precedence", "record_pos", "record_end_pos", "_states", "confidence", "_alleles", "genotype_index", "_basis", "_vector"],
+              descending=[False, False, True, False, False, False, False, False, False, False], nulls_last=True, maintain_order=True)
         .unique("_site", keep="first", maintain_order=True)
         .with_columns(
             pl.when(is_block).then(pl.lit(SupportKind.BLOCK.value)).otherwise(pl.lit(SupportKind.CALL.value)).alias("support"),

@@ -4,6 +4,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `ReferenceStore.fetch` uppercases what it returns itself, as its docstring promised (audit 12). It
+  returned gtars's substrings as they came; `liftover`, `resolve_ref` and `normalize` uppercased after
+  it, `build_aadr_panel`'s REF read did not. gtars already stores every sequence uppercased (checked:
+  a soft-masked FASTA reads back uppercase with encoding on or off, and 0 lowercase of 2,400 bases in
+  a soft-masked hg19 region), so no output changes today; the guard holds for any store underneath.
+  A text already uppercase is not copied. The seven `.upper()` calls on `fetch`'s results in
+  `liftover.py`, `reference.py` and `normalize.py` are gone; those on a facet's own alleles stay.
 - `build_pca_panel` checks `extra_meta` before it writes anything (audit 12). It wrote the sites and
   reference-sample parquet files first and only then refused an `extra_meta` key that would replace
   one of its own, leaving a new matrix beside the old meta file. The clash check (against the new

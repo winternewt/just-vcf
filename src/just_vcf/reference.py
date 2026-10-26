@@ -299,10 +299,14 @@ class ReferenceStore:
         return found[0]
 
     def fetch(self, contig: Contig, ranges: list[tuple[int, int]]) -> list[str]:
-        """The bases over 0-based half-open `ranges` of `contig`, in order. Uppercase."""
+        """The bases over 0-based half-open `ranges` of `contig`, in order. Uppercase.
+
+        gtars stores every sequence uppercased, so this is a guard: a soft-masked FASTA's lowercase
+        never reaches a caller, whatever store holds it. A text already uppercase is returned as it
+        is, not copied (a whole chromosome is one text)."""
         if not ranges:
             return []
-        return self.store.get_substrings(contig.digest, ranges)
+        return [text if text.isupper() else text.upper() for text in self.store.get_substrings(contig.digest, ranges)]
 
     def _label_from_lengths(self, digest: str) -> str | None:
         level2 = self.store.get_collection_level2(digest)
@@ -767,7 +771,7 @@ def _anchor_points(rows: pl.DataFrame, store: ReferenceStore, contig: Contig, co
     # The anchor: the base at 1-based `pos`, 0-based [pos - 1, pos); before the first base, base 1.
     starts = [max(pos, 1) - 1 for pos in inside["pos"].to_list()]
     spans = sorted(set(starts))
-    bases = dict(zip(spans, (text.upper() for text in store.fetch(contig, [(start, start + 1) for start in spans]))))
+    bases = dict(zip(spans, store.fetch(contig, [(start, start + 1) for start in spans])))
     found: dict[str, list] = {"_p": [], **{f"_a_{name}": [] for name in _ANCHORED}}
     for (index, pos, source_ref, alts, gt_alleles, source_alleles), start in zip(
         inside.select("_p", "pos", "source_ref", "alts", "gt_alleles", "source_alleles").iter_rows(), starts
@@ -827,7 +831,7 @@ def _split_concatenated(work: pl.DataFrame, store: ReferenceStore, contig: Conti
         inside = [index for index, (start, stop) in enumerate(spans) if stop > start]
         windows = [""] * len(texts)
         for index, bases in zip(inside, store.fetch(contig, [spans[index] for index in inside])):
-            windows[index] = bases.upper()
+            windows[index] = bases
         for row, pos, text, window in zip(rows["_row"].to_list(), rows["pos"].to_list(), texts, windows):
             fits = [
                 (text[:k], text[k:])

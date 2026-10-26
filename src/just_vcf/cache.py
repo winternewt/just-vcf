@@ -364,13 +364,12 @@ class Spill:
         if not path.is_dir():
             return None
         record = _read_generation(path / _RESULT)
-        if (
-            record is not None
-            and set(record.files) == set(self.groups)
-            and all((path / name).is_file() for names in record.files.values() for name in names)
-        ):
+        if record is not None and set(record.files) != set(self.groups):
+            logger.warning("cache: %s/%s holds the groups %s, not this step's %s; written again", self.entry.name, key, sorted(record.files), sorted(self.groups))
+        elif record is not None and all((path / name).is_file() for names in record.files.values() for name in names):
             return Committed(path, record)
-        logger.warning("cache: %s/%s is incomplete; written again", self.entry.name, key)
+        else:
+            logger.warning("cache: %s/%s is incomplete; written again", self.entry.name, key)
         shutil.rmtree(path)
         return None
 

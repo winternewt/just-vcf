@@ -1,9 +1,11 @@
 import csv
 import gzip
 import io
+import itertools
 import re
 import struct
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 import polars as pl
@@ -1411,6 +1413,32 @@ def test_a_genotype_past_the_alts_is_counted_from_the_gt_text(tmp_path: Path, ve
     assert (by_pos[200]["gt"], by_pos[200]["gt_alleles"]) == ([0, 2], ["A", None])
     assert (by_pos[500]["gt"], by_pos[500]["gt_alleles"]) == ([0, 1], ["A", None])
     assert by_pos[400]["gt_alleles"] == ["G", "T"]
+
+
+WIDE_INDEX_WARNING = (
+    "genotype(s) hold an allele index past what gt can hold (255), though the row has that allele; "
+    "gt and gt_alleles have a null there, as an uncalled slot does"
+)
+THREE_HUNDRED_ALTS = [alt for alt in ("".join(bases) for bases in itertools.product("ACGT", repeat=5)) if alt != "AAAAA"][:300]
+"""Three hundred distinct ALTs: more than a `u8` index reaches."""
+
+
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.4"])
+def test_an_index_gt_cannot_hold_is_counted_under_its_own_reason(tmp_path: Path, version: str) -> None:
+    """`gt` is a `u8` list, so on a row with 300 ALTs `0/300` names an allele the row has, yet reads
+    `gt [0, null]`, the frame of the half-call `0/.`; it was counted nowhere, since it is not past the
+    ALTs. It has its own warning now. `0/255` fits, and `0/301` or `300/301` is past the ALTs and counted
+    as that alone, so the two counts add up to the genotypes they name."""
+    alts = ",".join(THREE_HUNDRED_ALTS)
+    genotypes = {100: ("0/255", None), 200: ("0/256", "wide"), 300: ("0/300", "wide"), 400: ("0/301", "past"), 500: ("300/301", "past")}
+    records = [f"1\t{pos}\t.\tA\t{alts}\t.\t.\t.\tGT\t{gt}" for pos, (gt, _) in genotypes.items()]
+    calls, _, warnings = frames(write(tmp_path, vcf_text(records, version=version)))
+    counts = Counter(why for _, why in genotypes.values() if why)
+    assert [w for w in warnings if WIDE_INDEX_WARNING in w] == [f"{counts['wide']} {WIDE_INDEX_WARNING}"], warnings
+    assert [w for w in warnings if PAST_ALTS_WARNING in w] == [f"{counts['past']} {PAST_ALTS_WARNING}"], warnings
+    by_pos = {row["pos"]: row for row in calls.iter_rows(named=True)}
+    assert (by_pos[100]["gt"], by_pos[100]["gt_alleles"]) == ([0, 255], ["A", THREE_HUNDRED_ALTS[254]])
+    assert (by_pos[300]["gt"], by_pos[300]["gt_alleles"]) == ([0, None], ["A", None])
 
 
 @pytest.mark.parametrize(("neighbour", "value"), [

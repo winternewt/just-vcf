@@ -11,6 +11,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   'Null'") on the `cipos`/`ciend` slice. Those two values are read with `list.get` now. The output of
   every input that normalized before is unchanged (`NORMALIZE_VERSION` stays 8).
 
+- The VCF, key=value and Nirvana loaders count a genotype whose allele index the row has but `gt`
+  cannot hold (`0/300` over 300 ALTs: `gt` is a `u8` list), with its own warning (`… genotype(s) hold
+  an allele index past what gt can hold (255), though the row has that allele; gt and gt_alleles have
+  a null there, as an uncalled slot does`). It read `gt [0, null]`, the frame of the half-call `0/.`,
+  counted nowhere, since it is not past the ALTs. A genotype past the ALTs is counted as that alone.
+  The frame does not change; widening `gt` to `u16`, a retype, is left to the person.
+
 - A VCF 4.3+ key its version reserves and the loader never carries (FORMAT MQ, NQ, INFO DP, AN, and
   the rest of the reader's table) is skipped unread in the retry whatever its values, declared in the
   file or not: the structural copy left its line out, polars-bio's reader parsed it under the

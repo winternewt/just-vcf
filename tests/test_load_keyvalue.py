@@ -8,6 +8,7 @@ The synthetic rows copy the shapes counted in the one PGP-HMS table on disk (202
 
 import gzip
 import random
+from collections import Counter
 from pathlib import Path
 
 import polars as pl
@@ -15,7 +16,7 @@ import pytest
 
 from just_vcf import load, sniff
 from just_vcf.schema import CALLS, canonical_chrom
-from test_load_vcf import assert_gt_consistent
+from test_load_vcf import THREE_HUNDRED_ALTS, WIDE_INDEX_WARNING, assert_gt_consistent
 
 TAIL = "KG=0.3196\tAFR_MAF=0.70\tEFF_RESULTS\tEFF_HGVS=NM_002849:c.471+1175G>T\tVEP_RESULTS"
 FIELDS = ("GenoType", "RefAlleleCount", "ReferenceAlleleQ", "TotalDepth")
@@ -143,6 +144,24 @@ def test_an_index_past_the_alts_is_counted(tmp_path: Path) -> None:
     bad = rows["freeBayes"].filter(pl.col("pos") == 4000).row(0, named=True)
     assert bad["gt"] == [0, 2] and bad["gt_alleles"] == ["A", None]
     assert "freeBayes facet: 1 genotype(s) index an allele past the row's ALT list; gt_alleles has a null there" in loaded.warnings
+
+
+def test_an_index_gt_cannot_hold_is_counted_under_its_own_reason(tmp_path: Path) -> None:
+    """On a row with 300 ALTs `0/300` names an allele the row has, yet `gt`, a `u8` list, reads it
+    `[0, null]`; it was counted nowhere. It has its own warning, apart from the past-ALT one."""
+    alts = ",".join(THREE_HUNDRED_ALTS)
+    genotypes = {"0/255": None, "0/256": "wide", "0/300": "wide", "0/301": "past", "300/301": "past"}
+    lines = [row("chr1", 1000 + i, "A", alts, (gt, "NULL", "NULL", "10"), NULLS) for i, gt in enumerate(genotypes)]
+    loaded, _, _, rows, _, _ = frames(write(tmp_path, lines))
+    counts = Counter(why for why in genotypes.values() if why)
+    found = [w for w in loaded.warnings if WIDE_INDEX_WARNING in w or "past the row's ALT list" in w]
+    assert sorted(found) == sorted([
+        f"freeBayes facet: {counts['wide']} {WIDE_INDEX_WARNING}",
+        f"freeBayes facet: {counts['past']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there",
+    ]), found
+    by_gt = {r["source_gt"]: r for r in rows["freeBayes"].iter_rows(named=True)}
+    assert (by_gt["0/300"]["gt"], by_gt["0/300"]["gt_alleles"]) == ([0, None], ["A", None])
+    assert by_gt["0/255"]["gt_alleles"] == ["A", THREE_HUNDRED_ALTS[254]]
 
 
 UNREADABLE = "not readable as allele indices kept with gt, gt_alleles and phased null, and the text in source_gt"

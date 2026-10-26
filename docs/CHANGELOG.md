@@ -48,7 +48,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   it (coverage, concordance, consensus). The passes after the spill (`split_groups`, the callset
   spread, the variant-class counts) run in the streaming engine. Same rows, order, dtypes, facet and
   warnings (both frames hashed row by row, before and after), and the spill's staged bytes are the
-  same, so a generation an earlier version wrote is found again: no version constant changes. PGP-HMS
+  same, so no version constant changes for it: a generation written since the spill rekeying below
+  (7e35a46, in this same Unreleased block) is found again, while one written before it is written
+  once more, by that rekeying and not by this change. PGP-HMS
   hu416394's bcftools gVCF (9,651,143 calls, 9,473,303 blocks; 2026-10-26, a 62 GB machine shared
   with other sessions): peak 8.1 → 3.9 GB on a fresh cache (now the sort a part at a time,
   `canonical_parts`), 8.1 → 2.1 GB with its frames cached; the spill's sink alone 8.1 → 0.8 GB.
@@ -69,7 +71,7 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   gain `##contig` lines. Two canonical names a style writes as one (a lifted scaffold under the
   chain's name and the FASTA's) share one `##contig` line, and `write_vcf_zarr` indexes `contig_id` by
   written name for the same reason. `write_vcf_zarr` itself still writes ALTs as held and declares
-  no mate (left open). No version constant changes: the writer has none and its output is cached
+  no mate (left open; logged as F32 in docs/DOGFOODING.md). No version constant changes: the writer has none and its output is cached
   nowhere.
 - A spill's generation key covers the step's versions and the set of file groups its generations
   hold (`cache.Spill.key`), besides the input it was computed from, and a generation found holding

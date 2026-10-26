@@ -147,3 +147,17 @@ refuses. It predates F30; the lift's rows take the chain's name and its mates th
 Repairs: name lifted rows by the collection too, which renames every lifted scaffold row; or map the
 chain's name to the collection's through F19's alias table before either is written, which is the
 table's job. Not fixed: which name a lifted facet should carry is a naming rule for the whole lift.
+
+## F32 — `write_vcf_zarr` leaves a breakend's mate as held and declares none
+
+Severity: low · Found 2026-10-26 in an audit of F30's repair; until now only the CHANGELOG said so.
+
+F30's repair taught `write_vcf` to name a breakend mate's contig inside ALT as it names CHROM and to
+declare every mate contig; `write_vcf_zarr` shares its contig mapping (`writing._contig_names`) but
+not the mate handling. A one-row synthetic VCF, `1 100 A[2:500[` with only contig 1 declared, written
+with `contig_names="chr"`: `contig_id` is `['chr1']`, and `scan_vcf_zarr` reads the row back as
+`chr1`, ALT `A[2:500[`. The mate is on a contig the store's `contig_id` does not list, under a name
+the style would not give it, the shape F30 was about. Repairs: write `variant_allele` through
+`breakends.mate_renamed` with the same mapping and add the mates (`writing._mate_chroms`, angle
+bracketed ones left out) to `contig_id`, as `write_vcf` does; or refuse breakends under `chr` and
+`source` until it does. Not fixed here: it is the zarr export's slice, logged so it is not lost.

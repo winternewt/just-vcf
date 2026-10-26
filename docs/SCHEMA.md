@@ -187,8 +187,10 @@ also meets the reference under the other names NCBI's assembly reports give it (
 `chr1_KI270706v1_random`, GenBank's and Ensembl's `KI270706.1`, RefSeq's `NT_187361.1`; F19,
 `ReferenceStore.contigs_by_chrom`), only where the reference contig's length is the report's and the
 reference holds no contig of that name itself; the row keeps its source spelling in `chrom`. NCBI36's
-report names its scaffolds by RefSeq accession only, so it adds no other name for one (those GRCh37
-kept, such as `NT_113878.1`, already meet GRCh37's names):
+report names its scaffolds by RefSeq accession, and gives a UCSC name to two of them only, the alt
+haplotypes `chr6_cox_hap1` (`NT_113891.1`, 4,731,698 bases) and `chr22_h2_hap1` (`NT_113959.1`, 63,661),
+which meet each other's name. It adds no other name for the rest (those GRCh37 kept, such as
+`NT_113878.1`, already meet GRCh37's names):
 
 - the facet stated the contig's length (`header_contigs`): the reference's length must equal it, and
   its md5 too where the header gives one;

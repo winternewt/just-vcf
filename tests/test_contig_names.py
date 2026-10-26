@@ -169,13 +169,32 @@ def test_scaffold_names_need_the_reports_length() -> None:
     # The assembled molecules are not scaffolds: the reports' MT row (`chrM`, rCRS) vouches for nothing,
     # since hg19's chrM is another sequence.
     assert scaffold_names("chrM", 16569) == scaffold_names("J01415.2", 16569) == frozenset()
-    # NCBI36's scaffolds have a RefSeq name only. One GRCh37 kept gains GRCh37's names; one it did not
-    # has no other name.
+    # NCBI36's scaffolds have a RefSeq name, and two a UCSC one too (below). One GRCh37 kept gains
+    # GRCh37's names; one it did not, with no UCSC name, has no other name.
     kept = next(row for row in report("GRCh36") if row["RefSeq-Accn"] == scaffold("GRCh37", "chr1_gl000191_random")["RefSeq-Accn"])
     assert scaffold_names(kept["RefSeq-Accn"], int(kept["Sequence-Length"])) == {"GL000191.1", "chr1_gl000191_random"}
     later = {row["RefSeq-Accn"] for a in ("GRCh37", "GRCh38") for row in report(a)}
-    alone = next(row for row in report("GRCh36") if row["Sequence-Role"] != "assembled-molecule" and row["RefSeq-Accn"] not in later)
+    alone = next(
+        row
+        for row in report("GRCh36")
+        if row["Sequence-Role"] != "assembled-molecule" and row["RefSeq-Accn"] not in later and row["UCSC-style-name"] == "na"
+    )
     assert scaffold_names(alone["RefSeq-Accn"], int(alone["Sequence-Length"])) == frozenset()
+
+
+def test_ncbi36s_two_ucsc_named_scaffolds_meet_their_refseq_accessions() -> None:
+    # NCBI36's report gives a UCSC name to two scaffolds, both alt haplotypes, and to no other: each
+    # name and its RefSeq accession are the other's alias, at the report's length only.
+    named = [row for row in report("GRCh36") if row["Sequence-Role"] != "assembled-molecule" and row["UCSC-style-name"] != "na"]
+    assert {(row["UCSC-style-name"], row["RefSeq-Accn"]) for row in named} == {("chr6_cox_hap1", "NT_113891.1"), ("chr22_h2_hap1", "NT_113959.1")}
+    for row in named:
+        ucsc, refseq, length = row["UCSC-style-name"], row["RefSeq-Accn"], int(row["Sequence-Length"])
+        assert scaffold_names(ucsc, length) == {refseq}
+        assert scaffold_names(refseq, length) == {ucsc}
+        assert scaffold_names(ucsc, length + 1) == frozenset()
+    # GRCh37's chr6_cox_hap2 is NT_113891.2, another sequence of another length: no build-36 name meets it.
+    grch37 = scaffold("GRCh37", "chr6_cox_hap2")
+    assert scaffold_names("chr6_cox_hap1", int(grch37["Sequence-Length"])) == frozenset()
 
 
 ACCESSION_COLUMNS = [

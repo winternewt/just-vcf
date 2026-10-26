@@ -462,10 +462,10 @@ def liftover(
 
 
 _VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "LIFT_VERSION": LIFT_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+"""The version keys of a lift spill, in its cache manifest."""
 
 _GROUPS = ("calls", "report", "blocks", "block_report", "mate_contigs")
 """The file groups of a lift's generation, which its key covers with `_VERSIONS` (`cache.Spill.key`)."""
-"""The version keys of a lift spill, in its cache manifest."""
 
 
 def _lift_into(

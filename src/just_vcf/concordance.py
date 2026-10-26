@@ -58,7 +58,7 @@ from pathlib import Path
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
-from just_vcf.breakends import SINGLE_BREAKEND, breakend_parts
+from just_vcf.breakends import ASSEMBLY_CONTIG, SINGLE_BREAKEND, breakend_parts
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
 from just_vcf.intervals import contig_join, covering, nearest_block
 from just_vcf.loading import Loaded
@@ -418,7 +418,10 @@ def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame 
     )
     tagged = exploded.with_columns(reason.alias("_excluded"))
     if shared is not None:
-        elsewhere = ~pl.col("chrom").is_in(sorted(shared)) | (pl.col("_mate_chrom").is_not_null() & ~pl.col("_mate_chrom").is_in(sorted(shared)))
+        # A mate on a contig of the assembly file is on neither collection, and compared by its name as
+        # written (`_bnd_sites`); only a reference mate must be on a shared contig.
+        mate_elsewhere = ~pl.col("_mate_chrom").is_in(sorted(shared)) & ~pl.col("_mate_chrom").str.contains(ASSEMBLY_CONTIG)
+        elsewhere = ~pl.col("chrom").is_in(sorted(shared)) | (pl.col("_mate_chrom").is_not_null() & mate_elsewhere)
         tagged = tagged.with_columns(
             pl.when(pl.col("_excluded").is_null() & elsewhere).then(pl.lit("contig_not_shared")).otherwise(pl.col("_excluded")).alias("_excluded")
         )
@@ -990,14 +993,16 @@ def _sv_one_sided(
     SVs of its own near it (`near`'s rows: within `refdist` for a symbolic allele, within a breakend's
     position window for a breakend; `other_alleles`), else its absence rule for the `sv` class
     (`absence_is_reference`), on a contig it declared (and, for a breakend, the `mate` column's contig
-    too). Its blocks are not read: a block states the bases a small-variant caller saw, and an SV's
-    anchor base lies outside the event."""
+    too, never a contig of the assembly file, `<ctg1>`: a facet could state a join into one only with
+    an assembly file of its own). Its blocks are not read: a block states the bases a small-variant
+    caller saw, and an SV's anchor base lies outside the event."""
     other_loaded, other_facet = other
     other_side = "b" if side == "a" else "a"
     declared = sorted(_declared_contigs(other_loaded, other_facet))
     reference = absence_is_reference(other_facet, VariantClass.SV) is True
     marked = rest.join(near.with_columns(pl.lit(True).alias("_near")), on=[f"_{side}_row", f"_{side}_k"], how="left")
-    seen = pl.col(f"{side}_chrom").is_in(declared) & (pl.col(mate).is_in(declared) if mate else pl.lit(True))
+    mate_seen = (pl.col(mate).is_in(declared) & ~pl.col(mate).str.contains(ASSEMBLY_CONTIG)) if mate else pl.lit(True)
+    seen = pl.col(f"{side}_chrom").is_in(declared) & mate_seen
     absence = (
         pl.when(pl.col("_near").fill_null(False))
         .then(pl.lit(AbsenceReading.OTHER_ALLELES.value))
@@ -1168,7 +1173,8 @@ def _bnd_sites(
 
     Two records meet when they lie on one contig with their position windows overlapping strictly
     (truvari's `overlaps`: `max(starts) < min(ends)`), their mates on one contig (parsed from ALT,
-    canonical names here where truvari compares them as written) with those windows overlapping too,
+    canonical names here where truvari compares them as written, except a contig of the assembly file,
+    `<ctg1>`, compared as written here too) with those windows overlapping too,
     and their ALTs in the same form (truvari's `bnd_direction_strand`). Two adjacencies meet when any
     of their records do (truvari compares records; a pair of mates is two of them); the record pair
     shown is the best by truvari's score, `max(0, 1 - mean(|start|, |end| distance) / (2 * bnddist))`

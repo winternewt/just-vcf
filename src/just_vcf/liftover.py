@@ -52,7 +52,9 @@ short:
    source's (complemented on a minus block). A mate on the record's own source contig must land on
    its target contig, in the order the strand gives, at a distance within `SV_LENGTH_TOLERANCE`
    (liftoverSV's checks). `cipos` mirrors with POS's strand and `ciend` with the mate's; they never
-   swap, since POS stays POS.
+   swap, since POS stays POS. A mate in angle brackets (`C[<ctg1>:7[`, VCF 4.3 §5.4.2) is a contig of
+   the `##assembly` file, not of the reference: no chain moves it, so it is kept as written, and the
+   form turns by POS's strand alone (`breakends.turned` with the mate on a plus strand), `ciend` as it was.
 7. **Withheld in this slice**, each counted: a minus-strand indel or SV whose new anchor would be
    before the target contig's first base, breakend ALTs that are none of the forms or sit beside
    another kind of allele, other symbolic alleles and `*`, and rows flagged as one record of a
@@ -90,14 +92,16 @@ from just_vcf.schema import BLOCKS, CALLS, FACETS, SCHEMA_VERSION, AbsenceMeans,
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 11
+LIFT_VERSION = 12
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
 row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
 `phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
 6: the lifted facet's `reference` is null, since it named the source's file; 7: schema 0.0.19's `hq` carried;
 8: the `blocks` frame lifted; 9: symbolic SVs and copy-number segments lifted by both ends; 10: on a
 minus strand, a source SV with CIEND and no CIPOS gets `ciend = [0, 0]`, its precise POS, not null;
-11: breakends lifted by both ends, the mate rewritten inside ALT and the brackets turned per strand)."""
+11: breakends lifted by both ends, the mate rewritten inside ALT and the brackets turned per strand;
+12: a breakend whose mate is a contig of the `##assembly` file, `<ctg1>`, lifted by POS alone, the mate
+kept as written)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -914,7 +918,8 @@ def _place_bnd(
     the source's REF, complemented on a minus-strand block (the base at POS is part of the joined
     sequence, unlike a symbolic SV's padding base). Each mate is placed the same way through the
     chain blocks of the contig it names, as `mates` holds it (`_mate_places`; `breakend_mate_not_lifted`
-    where any has no single target).
+    where any has no single target); a mate on a contig of the assembly file (`<ctg1>`) is placed by
+    none and stays as written, on a plus strand.
     A mate on the row's own source contig is held to liftoverSV's checks on its two ends: one target
     contig (`breakend_ends_apart`), their order kept on a plus strand and reversed on a minus one when
     both share a strand (`breakend_ends_reversed`), and their distance within `SV_LENGTH_TOLERANCE`
@@ -943,9 +948,15 @@ def _place_bnd(
         read = store.fetch(targets[target], [(start, start + 1) for start in part["_q0"].to_list()])
         bases.update(zip(part["_row"].to_list(), (base.upper() for base in read), strict=True))
 
-    # Every ALT's mate, where `_mate_places` put it.
+    # Every ALT's mate on a reference contig, where `_mate_places` put it. A mate on a contig of the
+    # assembly file is placed by no chain: it stays where the ALT says, on the strand it was.
     parsed = {row: [parse_breakend(alt) for alt in alts] for row, alts in rows.select("_row", "alts").iter_rows()}
-    placed_mates = {(row, k): mates[(canonical_chrom(b.mate_contig), b.mate_pos)] for row, found in parsed.items() for k, b in enumerate(found) if b.mate_contig is not None}
+    placed_mates = {
+        (row, k): mates[(canonical_chrom(b.mate_contig), b.mate_pos)]
+        for row, found in parsed.items()
+        for k, b in enumerate(found)
+        if b.mate_contig is not None and not b.mate_in_assembly
+    }
 
     out: dict[str, list] = {name: [] for name in ("_row", "_reason2", "_t_ref", "_bnd_alts", "_bnd_cipos", "_bnd_ciend")}
     for (row, pos, ref, cipos, ciend), (_, cause, target, q0, minus) in zip(
@@ -957,14 +968,14 @@ def _place_bnd(
             anchor = ref.upper().translate(_BASE_COMPLEMENT) if minus else ref.upper()
             reason = "ref_mismatch_after_lift" if bases.get(row) != anchor else None
         if reason is None:
-            failed = [placed_mates[(row, k)][0] for k, b in enumerate(found) if b.mate_contig is not None and placed_mates[(row, k)][0] is not None]
+            failed = [placed_mates[(row, k)][0] for k in range(len(found)) if (row, k) in placed_mates and placed_mates[(row, k)][0] is not None]
             for mate_cause in failed:
                 counts[f"bnd_mate:{mate_cause}"] += 1
             reason = "breakend_mate_not_lifted" if failed else None
         if reason is None:
             checks: set[str] = set()
             for k, b in enumerate(found):
-                if b.mate_contig is None:
+                if (row, k) not in placed_mates:
                     continue
                 _, mate_target, mate_q0, minus_k = placed_mates[(row, k)]
                 mate_minus[k] = bool(minus_k)
@@ -984,6 +995,10 @@ def _place_bnd(
             for k, b in enumerate(found):
                 if b.mate_contig is None:
                     alts.append(turned(b, bool(minus), False, None, None))
+                    continue
+                if b.mate_in_assembly:
+                    counts["bnd_mate_assembly"] += 1
+                    alts.append(turned(b, bool(minus), False, b.mate_contig, b.mate_pos))
                     continue
                 _, mate_target, mate_q0, _ = placed_mates[(row, k)]
                 counts[f"bnd_mate_chrom:{mate_target}"] += 1
@@ -1030,7 +1045,7 @@ def _mate_places(frames: list[pl.DataFrame], chain: Chain, source_ok: dict[str, 
     for alts in (alts for frame in frames for alts in frame.filter(bracket)["alts"]):
         for alt in alts:
             found = parse_breakend(alt) if alt is not None else None
-            if found is not None and found.mate_contig is not None:
+            if found is not None and found.mate_contig is not None and not found.mate_in_assembly:
                 positions.setdefault(canonical_chrom(found.mate_contig), set()).add(found.mate_pos)
     fates: dict[tuple[str, int], _MateFate] = {}
     for mate_chrom in sorted(positions):
@@ -1428,6 +1443,11 @@ def _warnings(
             f"{counts['bnd_lifted']} lifted row(s) were breakends, each mate lifted through the chain and named inside ALT as the target "
             f"collection names it; {counts['bnd_minus']} with POS on a minus-strand block (t reverse-complemented to the brackets' other "
             f"side, cipos mirrored), {counts['bnd_mate_minus']} mate(s) on one (brackets turned, ciend mirrored)"
+        )
+    if counts["bnd_mate_assembly"]:
+        lines.append(
+            f"{counts['bnd_mate_assembly']} breakend mate(s) on a contig of the ##assembly file kept as written (no chain moves it; "
+            "the brackets turned by POS's strand alone)"
         )
     mate_causes = sorted(key for key in counts if key.startswith("bnd_mate:"))
     if mate_causes:

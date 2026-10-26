@@ -11,8 +11,12 @@ joined before t" (right, left); `[p[t` "reverse comp piece extending right of p 
 
 `concordance` reads the form and the mate to meet breakends (truvari's `bnd_match`); `liftover` turns
 the form when an end lands on a minus-strand chain block (`turned`); `write_vcf` names the mate as it
-names CHROM (`mate_renamed`, F30), except a mate on a contig of the `##assembly` file, `<ctg1>`, which
-is no reference contig and is written as it came (`assembly_mate`).
+names CHROM (`mate_renamed`, F30).
+
+A mate in angle brackets, `<ctg1>` (VCF 4.3 §5.4.2's large insertion), is a contig of the `##assembly`
+file (§1.6.1's CHROM), not of the reference: it is never read as a canonical name (`breakend_parts`
+keeps it verbatim), never placed by a chain (`liftover` keeps it, and turns the form by POS's strand
+alone) and never declared or renamed by a writer (`assembly_mate`, `is_assembly_contig`).
 """
 
 import re
@@ -64,10 +68,13 @@ def _read(alt: pl.Expr) -> tuple[pl.Expr, pl.Expr, pl.Expr, pl.Expr]:
 
 
 def breakend_parts(alt: pl.Expr) -> list[pl.Expr]:
-    """`_form`, `_mate_chrom` (canonical) and `_mate_pos` of a breakend ALT, all null where the ALT is
-    none of the four forms: brackets that do not pair, or no `contig:position` between them."""
+    """`_form`, `_mate_chrom` and `_mate_pos` of a breakend ALT, all null where the ALT is none of the
+    four forms: brackets that do not pair, or no `contig:position` between them. `_mate_chrom` is
+    canonical, except a contig of the assembly file (`assembly_mate`), which has no other name and is
+    kept as written, brackets included."""
     _, _, form, position = _read(alt)
-    contig = mate_contig(alt).replace(CONTIG_ALIASES)
+    spelled = mate_contig(alt)
+    contig = pl.when(assembly_mate(alt).fill_null(False)).then(spelled).otherwise(spelled.replace(CONTIG_ALIASES))
     return [form.alias("_form"), pl.when(form.is_not_null()).then(contig).alias("_mate_chrom"), pl.when(form.is_not_null()).then(position).alias("_mate_pos")]
 
 
@@ -103,6 +110,12 @@ ASSEMBLY_CONTIG = r"^<.+>$"
 CHROM; §5.4.2's large insertion, `C[<ctg1>:7[`)."""
 
 
+def is_assembly_contig(name: str) -> bool:
+    """Whether a contig name is one of the assembly file's (`ASSEMBLY_CONTIG`), as `assembly_mate` reads
+    an ALT's mate."""
+    return re.fullmatch(ASSEMBLY_CONTIG, name) is not None
+
+
 def assembly_mate(alt: pl.Expr) -> pl.Expr:
     """True where a breakend ALT's mate is a contig of the assembly file (`ASSEMBLY_CONTIG`), False on
     any other mate, null on an allele that names none. Such a mate has no `##contig` line and no other
@@ -121,6 +134,11 @@ class Breakend:
     mate_contig: str | None
     """The mate's contig as written (null on a single breakend)."""
     mate_pos: int | None
+
+    @property
+    def mate_in_assembly(self) -> bool:
+        """Whether the mate is on a contig of the assembly file (`is_assembly_contig`), not the reference."""
+        return self.mate_contig is not None and is_assembly_contig(self.mate_contig)
 
     @property
     def side(self) -> str:

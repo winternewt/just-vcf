@@ -4,6 +4,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A breakend mate in angle brackets (`C[<ctg1>:7[`, VCF 4.3 §5.4.2's large insertion) is read as a
+  contig of the `##assembly` file, not of the reference, by `liftover` and `concordance` too (the
+  writer already did). `liftover` left every such row behind as `breakend_mate_not_lifted`, the
+  contig being in no chain; it now lifts the record's own position, keeps the mate as written, and
+  turns the form by POS's strand alone (`t[p[` on a minus-strand block becomes `[p[t`), `ciend`
+  unmirrored; the lifted facet's `contig_map` does not list the contig (the lead's call; docs/SCHEMA.md,
+  "Lifting breakends", step 7, which derives it from §5.4's four sentences). `concordance` compares
+  such a mate by its text as written, as truvari 5.5's `bnd_position` does, and no longer leaves it
+  out as `contig_not_shared` when the two facets' collections differ; a lone one reads `unknown`,
+  never `reference`. `breakend_parts` keeps the name verbatim, and `breakends` gains
+  `is_assembly_contig` and `Breakend.mate_in_assembly`. `LIFT_VERSION` 12, so lifted facets get a
+  new `facet_id`. **Values change**: such rows are lifted, and compared.
+
 - `resolve_ref`, `normalize` and `liftover` work and spill a group of whole contigs at a time (F24),
   where each contig with rows cost a filtered scan, a pass and a parquet file. The groups are the ones
   `load`'s spill is written in, consecutive contigs in canonical order up to `SPILL_PART_ROWS` rows

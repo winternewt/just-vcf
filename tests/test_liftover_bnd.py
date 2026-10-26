@@ -456,3 +456,85 @@ def test_each_alt_of_a_record_mirrors_its_own_interval_pair(tmp_path: Path, setu
         assert mate_minus[0] != mate_minus[1], case
         assert calls[case]["cipos"] == [v for k in range(2) for v in mirrored(cipos[k], own_minus)], case
         assert calls[case]["ciend"] == [v for k in range(2) for v in mirrored(ciend[k], mate_minus[k])], case
+
+
+# VCF 4.3 §5.4.2's large insertion: a mate in angle brackets names a contig of the `##assembly` file
+# (§1.6.1), not of the reference, so no chain moves it. The record's own end lifts; the mate's contig,
+# position and side stay as written, and only POS's strand turns the form (`FORM_AFTER` with the mate
+# on a plus strand). `CTG1` is that contig's sequence for the oracle alone (`junction`): it is in no
+# FASTA, and the lift never reads it.
+CTG1 = random_bases(400)
+ASSEMBLY_CASES = {
+    # POS on P1 (plus): the ALT comes back as written.
+    "asm_plus_lr": bnd("asm_plus_lr", "1", 240, "{r}[<ctg1>:7["),
+    "asm_plus_rl": bnd("asm_plus_rl", "1", 241, "]<ctg1>:214]{r}"),
+    # POS on M1 (minus): the record's side flips, the mate's does not.
+    **four("asm_m", "1", 640, "<ctg1>:7", info=CI),
+    # Inserted bases on a minus own end: reverse-complemented to the other side of REF, as for any mate.
+    "asm_ins_minus": bnd("asm_ins_minus", "1", 650, "{r}GTCA[<ctg1>:20["),
+    # Two ALTs, an assembly mate beside a reference mate on a minus block (M2), which still lifts and turns.
+    "asm_two_alts": bnd("asm_two_alts", "1", 280, "{r}[<ctg1>:7[,{r}]2:400]", gt="1/2"),
+}
+
+
+def test_an_assembly_mate_stays_as_written_and_pos_alone_turns_the_form(tmp_path: Path, setup) -> None:
+    store, source, _, forward, _ = setup
+    _, lifted = lift_cases(tmp_path, store, source, forward, ASSEMBLY_CASES)
+    report = by_case(lifted.report.collect())
+    assert {case: r["lift_reason"] for case, r in report.items()} == {case: None for case in ASSEMBLY_CASES}
+    calls = by_case(lifted.loaded.calls.collect())
+    for case, r in calls.items():
+        source_row = report[case]
+        own = image("1", source_row["pos"])
+        assert (r["chrom"], r["pos"], source_row["lift_strand"]) == (own[0].removeprefix("chr"), own[1], own[2]), case
+        assert r["ref"] == (comp(source_row["ref"]) if own[2] == "-" else source_row["ref"])
+        for source_alt, lifted_alt in zip(source_row["alts"], r["alts"], strict=True):
+            form, mate_chrom, mate_pos, _ = parse(source_alt)
+            if mate_chrom.startswith("<"):
+                mate_strand, mate_at = "+", (mate_chrom, mate_pos)
+            else:
+                mate = image(mate_chrom, mate_pos)
+                mate_strand, mate_at = mate[2], (mate[0], mate[1])
+            lifted_form, lifted_chrom, lifted_pos, _ = parse(lifted_alt)
+            assert lifted_form == FORM_AFTER[(form, own[2], mate_strand)], (case, source_alt, lifted_alt)
+            assert (lifted_chrom, lifted_pos) == mate_at, (case, source_alt, lifted_alt)
+    # On a plus own end the ALT is unchanged; on a minus one it turns, and the mate's CIEND never moves.
+    assert calls["asm_plus_lr"]["alts"] == report["asm_plus_lr"]["alts"]
+    assert calls["asm_m_lr"]["alts"] == [f"[<ctg1>:7[{calls['asm_m_lr']['ref']}"]
+    assert (calls["asm_m_lr"]["cipos"], calls["asm_m_lr"]["ciend"]) == ([-5, 3], [-2, 7])
+
+
+def test_a_lifted_assembly_mate_asserts_the_same_novel_sequence(tmp_path: Path, setup) -> None:
+    """`test_a_lifted_breakend_asserts_the_same_novel_sequence`'s check, with the assembly contig's
+    sequence beside both assemblies': no lift moves it, so it is the same on both sides."""
+    store, source, _, forward, _ = setup
+    _, lifted = lift_cases(tmp_path, store, source, forward, ASSEMBLY_CASES)
+    calls = by_case(lifted.loaded.calls.collect())
+    report = by_case(lifted.report.collect())
+    names = {**TARGET, **{name.removeprefix("chr"): seq for name, seq in TARGET.items()}, "<ctg1>": CTG1}
+    checked = 0
+    for case, r in calls.items():
+        source_row = report[case]
+        for source_alt, lifted_alt in zip(source_row["alts"], r["alts"], strict=True):
+            before = junction({**SOURCE, "<ctg1>": CTG1}, source_row["chrom"], source_row["pos"], source_alt)
+            after = junction(names, r["chrom"], r["pos"], lifted_alt)
+            assert after in (before, revcomp(before)), (case, source_alt, lifted_alt)
+            checked += 1
+    assert checked == sum(len(r["alts"]) for r in calls.values()) == len(ASSEMBLY_CASES) + 1
+
+
+def test_an_assembly_mate_names_no_contig_and_lifts_back(tmp_path: Path, setup) -> None:
+    store, source, _, forward, back = setup
+    resolved, there = lift_cases(tmp_path, store, source, forward, ASSEMBLY_CASES)
+    facet = there.loaded.facets.collect().row(0, named=True)
+    # The target collection has no `<ctg1>`: the map lists the contigs rows stand on and the reference
+    # mates name (asm_two_alts' 2:400 lands on chr3), never the assembly contig.
+    assert {entry["source"] for entry in facet["contig_map"]} == {"chr1", "chr2", "chr3"}
+    assert any("mate(s) on a contig of the ##assembly file kept as written" in warning for warning in there.loaded.warnings)
+    returned = liftover(there.loaded, back, store, target=source)
+    assert returned.reasons == {}
+    original, home = by_case(resolved.calls.collect()), by_case(returned.loaded.calls.collect())
+    columns = ("chrom", "pos", "end_pos", "ref", "alts", "gt", "gt_alleles", "cipos", "ciend", "sv_type")
+    assert set(home) == set(ASSEMBLY_CASES)
+    for case, r in home.items():
+        assert {c: r[c] for c in columns} == {c: original[case][c] for c in columns}, case

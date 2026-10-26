@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `loaders.text.GT_INDEX_MAX` is an int (255), read from `gt`'s dtype. It was `pl.UInt8.max()`, an
+  expression annotated `int`; the warning for an index `gt` cannot hold printed "(255)" only because
+  polars renders that literal bare. No value changes.
+
 - A store written under an older schema version can be migrated (RM276): `migrate_store(path)`
   rewrites it to this version by one step per schema bump since the store shipped under 0.0.14
   (`just_vcf.store_migration.MIGRATIONS`, five steps to 0.0.19), and returns a `StoreMigration`

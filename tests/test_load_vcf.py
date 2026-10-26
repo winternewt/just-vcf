@@ -12,6 +12,7 @@ import polars as pl
 import pytest
 
 from just_vcf import MultiSampleError, NoSampleError, load, rejoin_split, vcf_samples, write_vcf
+from just_vcf.loaders.text import GT_INDEX_MAX, PAST_GT_WARNING
 from just_vcf.loaders.vcf import FORMAT_KEYS, HeaderRefused, undo_resave
 from just_vcf.schema import BLOCKS, CALLS
 
@@ -1531,3 +1532,11 @@ def test_a_flag_with_a_value_past_the_rows_read_ahead_is_refused_as_such(tmp_pat
     with pytest.raises(HeaderRefused, match=r"none of the first 1000 records writes one") as refused:
         load(write(tmp_path, vcf_text(records, version="VCFv4.3", extra_meta=(SVTYPE_LINE,))))
     assert refused.value.key is None and "DB" in str(refused.value)
+
+
+def test_the_largest_gt_index_is_an_int_read_from_the_dtype() -> None:
+    """`GT_INDEX_MAX` is annotated `int` and compared with Python ints; it was `pl.UInt8.max()`, an
+    expression, whose `(255)` in the warning printed only because polars renders that literal bare."""
+    assert type(GT_INDEX_MAX) is int
+    assert GT_INDEX_MAX == pl.select(CALLS["gt"].inner.max()).item() == 255
+    assert f"({GT_INDEX_MAX})" in PAST_GT_WARNING

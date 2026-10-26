@@ -624,21 +624,55 @@ GRCH36_CHR1 = 247_249_719
 """NCBI36/hg18 chr1's length (UCSC hg18.chrom.sizes), a domain constant."""
 
 
-def test_a_collection_serving_contig_1_twice_names_no_assembly(tmp_path: Path) -> None:
-    """`chr1` at GRCh37's length, then `1` at GRCh38's (all N, so the file stays small): which length
-    is contig 1's is not known, so the lengths name no assembly, as `contigs_by_chrom` lists both and
-    a caller reads neither. Before, the later sequence overwrote the earlier one and named GRCh38."""
-    lengths = {"GRCh37": 249_250_621, "GRCh38": 248_956_422}
-    fasta = tmp_path / "two_ones.fa.gz"
+CHR1_LENGTH = {"GRCh37": 249_250_621, "GRCh38": 248_956_422}
+"""GRCh37's and GRCh38's chr1 lengths (NCBI's assembly reports), domain constants."""
+
+
+def contig_1_fasta(fasta: Path, ones: list[tuple[str, str]]) -> Path:
+    """A gzipped FASTA of the given contig 1s, then contig 2. A pair (name, assembly) is all N at that
+    assembly's chr1 length, so the file stays small; (name, "short") is `SEQ['1']`, a length that
+    names no assembly."""
     with gzip.open(fasta, "wb", compresslevel=1) as handle:
-        for name, assembly in (("chr1", "GRCh37"), ("1", "GRCh38")):
-            full, rest = divmod(lengths[assembly], 60)
+        for name, assembly in ones:
+            if assembly == "short":
+                handle.write(f">{name}\n{SEQ['1']}\n".encode())
+                continue
+            full, rest = divmod(CHR1_LENGTH[assembly], 60)
             handle.write(f">{name}\n".encode() + (b"N" * 60 + b"\n") * full + b"N" * rest + b"\n")
         handle.write(f">2\n{SEQ['2']}\n".encode())
+    return fasta
+
+
+def test_a_collection_serving_contig_1_twice_names_no_assembly(tmp_path: Path) -> None:
+    """`chr1` at GRCh37's length, then `1` at GRCh38's: which length is contig 1's is not known, so
+    the lengths name no assembly, as `contigs_by_chrom` lists both and a caller reads neither. Before,
+    the later sequence overwrote the earlier one and named GRCh38.
+
+    An asserted label is refused all the same, whichever of the two it names: each contig 1's length
+    names an assembly, and one of them is not the asserted one. The lengths name none only because
+    they disagree, which is no ground to trust the assertion over them. A refused label leaves no
+    alias behind, so the collection stays unlabelled."""
+    fasta = contig_1_fasta(tmp_path / "two_ones.fa.gz", [("chr1", "GRCh37"), ("1", "GRCh38")])
     s = ReferenceStore.in_memory()
+    with pytest.raises(ReferenceMismatchError, match=r"two_ones\.fa\.gz: its contig 1 is GRCh38's length, not GRCh37's"):
+        s.add_fasta(fasta, assembly_label="GRCh37")
+    with pytest.raises(ReferenceMismatchError, match=r"two_ones\.fa\.gz: its contig 1 is GRCh37's length, not GRCh38's"):
+        s.add_fasta(fasta, assembly_label="GRCh38")
     digest = s.add_fasta(fasta)
     assert [c.name for c in s.contigs_by_chrom(digest)["1"]] == ["chr1", "1"]
+    assert s.asserted_labels(digest) == []
     assert s.assembly_label(digest) is None
+
+
+def test_a_label_asserted_over_two_contig_1s_holds_where_no_length_names_another(tmp_path: Path) -> None:
+    """`chr1` at GRCh37's length and `1` at a length that names nothing: no length contradicts
+    GRCh37, so the asserted label is kept and names the collection, which its lengths alone do not."""
+    fasta = contig_1_fasta(tmp_path / "one_named.fa.gz", [("chr1", "GRCh37"), ("1", "short")])
+    s = ReferenceStore.in_memory()
+    digest = s.add_fasta(fasta, assembly_label="GRCh37")
+    assert s._label_from_lengths(digest) is None
+    assert s.asserted_labels(digest) == ["GRCh37"]
+    assert s.assembly_label(digest) == "GRCh37"
 
 
 def test_a_grch36_reference_is_named_by_its_contig_1_and_cannot_vouch_for_mt(tmp_path: Path) -> None:

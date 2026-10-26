@@ -197,7 +197,9 @@ which meet each other's name. It adds no other name for the rest (those GRCh37 k
 - it did not (arrays): the facet's `assembly_label` must equal the reference's. The reference's label
   comes from its contig 1 length (GRCh36, GRCh37, GRCh38, T2T-CHM13), or from one the caller asserted
   when adding the FASTA. A reference holding two sequences named contig 1 (`chr1` and `1`) has no
-  label from its lengths, since which is contig 1 is unknown. `GRCh37` cannot vouch for MT, since it covers hg19's chrM (16,571 bases) as
+  label from its lengths, since which is contig 1 is unknown. An asserted label is refused when any
+  sequence named contig 1 has a length that names another assembly, the doubled contig 1 included;
+  it is kept where every contig 1 length names it or names nothing. `GRCh37` cannot vouch for MT, since it covers hg19's chrM (16,571 bases) as
   well as rCRS (16,569), and `GRCh36` neither (NCBI36 and hg18 carry the 16,571-base chrM), so an
   array's MT stays unread. `T2T-CHM13` neither: `chm13v2.0.fa` carries the CHM13 cell line's own
   mitochondrion and the T2T analysis set's `chm13v2.0_maskedY_rCRS.fa.gz` carries rCRS, both 16,569

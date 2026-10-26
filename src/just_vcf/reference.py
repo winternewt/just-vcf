@@ -209,7 +209,9 @@ class ReferenceStore:
         """Add a FASTA (plain or gzipped) as a collection and return its seqcol digest.
 
         `assembly_label` names the assembly when the sequence's own lengths cannot (a reference
-        without contig 1). A label that the lengths contradict is refused. A FASTA added before, same
+        without contig 1). A label that the lengths contradict is refused: any sequence whose canonical
+        name is `1` at a length `CHR1_LENGTHS` gives to another assembly refuses it, also where the
+        collection serves contig 1 twice and its lengths name no assembly. A FASTA added before, same
         path, size and modification time, is not read again.
         """
         fasta = Path(fasta).resolve()
@@ -222,10 +224,10 @@ class ReferenceStore:
             digest = meta.digest
             self.store.add_collection_alias(_FASTA_NAMESPACE, fingerprint, digest)
         if assembly_label is not None:
-            measured = self._label_from_lengths(digest)
-            if measured is not None and measured != assembly_label:
+            measured = sorted({CHR1_LENGTHS[length] for length in self._contig_1_lengths(digest) if length in CHR1_LENGTHS} - {assembly_label})
+            if measured:
                 raise ReferenceMismatchError(
-                    f"{fasta.name}: its contig 1 is {measured}'s length, not {assembly_label}'s"
+                    f"{fasta.name}: its contig 1 is {' and '.join(measured)}'s length, not {assembly_label}'s"
                 )
             if assembly_label not in self.asserted_labels(digest):
                 self.store.add_collection_alias(ASSEMBLY_NAMESPACE, assembly_label, digest)
@@ -312,9 +314,13 @@ class ReferenceStore:
         """The assembly contig 1's length names (`CHR1_LENGTHS`); None where the collection has no
         contig 1, or more than one sequence whose canonical name is `1` (`chr1` and `1`), since which
         length is contig 1's is then unknown (`contigs_by_chrom` lists both, and no caller reads one)."""
-        level2 = self.store.get_collection_level2(digest)
-        ones = [int(length) for name, length in zip(level2["names"], level2["lengths"]) if canonical_chrom(name) == "1"]
+        ones = self._contig_1_lengths(digest)
         return CHR1_LENGTHS.get(ones[0]) if len(ones) == 1 else None
+
+    def _contig_1_lengths(self, digest: str) -> list[int]:
+        """The lengths of the collection's sequences whose canonical name is `1`, in collection order."""
+        level2 = self.store.get_collection_level2(digest)
+        return [int(length) for name, length in zip(level2["names"], level2["lengths"]) if canonical_chrom(name) == "1"]
 
     def _namespaces(self) -> list[str]:
         return list(self.store.list_collection_alias_namespaces())

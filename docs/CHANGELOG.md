@@ -4,6 +4,26 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `reference_support(loaded, sites, variant_class=…)` materialises reference-supported positions
+  (RM3): per asked position of a one-facet `loaded`, one row (`REFERENCE_SUPPORT`) saying what the
+  facet states about the reference allele there and on what it rests: `support` `call` or `block`
+  (graded as `genotype_evidence` grades the record, `block_grade` and `gq_on_reference` included),
+  `absence` (a silence `absence_support` reads as reference: asserted, `genotype_index` 0, no number)
+  or `none` (an array, an exome off target, a gVCF outside its blocks, a filtered genome without
+  `force`, a class the facet never wrote, a callset of unknown type), with `records` and a `reason`
+  (`RecordReason` or `AbsenceReason`). Where a call and a block both cover a position the call
+  answers, and among calls one stating an ALT. Lazy, canonical order. New: `SupportKind`,
+  `RecordReason`, `REFERENCE_SUPPORT`, `REFERENCE_SUPPORT_REASON`. `genotype_evidence_at` shares its
+  record matching; its answers do not change (docs/SCHEMA.md, "Graded genotype evidence").
+
+- `absence_support(facet, variant_class, force=False)` answers what `absence_is_reference` answers,
+  with the gate that decided it (`AbsenceReason`): why a whole genome's silence reads as reference
+  (`whole_genome_silence`, `omitted_called_reference`, `content_filter_forced`), or why an absence says
+  nothing (`outside_blocks`, `array`, `targeted`, `imputed`, `callset_type_unknown`,
+  `class_not_counted`, `class_not_called`, `content_filter_held`, `class_cut_by_filter`).
+  `absence_is_reference` now returns its `reads_reference`; its answers do not change
+  (docs/SCHEMA.md Decision 4).
+
 - `concordance` compares structural-variant calls across two facets (RM282). A symbolic allele
   (`<DEL>`, `<DUP:TANDEM>`, `<INV>`, `<INS>`, `<CNV>`, `<CNn>`) pairs with at most one of the other
   facet's by type and extent, under truvari bench's matching and defaults (`SvMatching`: `refdist`

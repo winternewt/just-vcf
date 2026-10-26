@@ -26,6 +26,7 @@ conversions write, so its spread alone is not taken as a whole-genome callset.
 
 import re
 from collections.abc import Mapping
+from enum import Enum
 from pathlib import Path
 
 import polars as pl
@@ -433,13 +434,102 @@ def absence_means(callset_type: CallsetType | None, has_blocks: bool, *, omitted
     return AbsenceMeans.WEAK_REFERENCE if callset_type is CallsetType.WGS else AbsenceMeans.UNKNOWN
 
 
+class AbsenceReason(str, Enum):
+    """Why a position absent from a facet reads as reference, or why it says nothing (`absence_support`).
+
+    just-vcf's own vocabulary (charter 2). The first three read as reference; every other one is
+    unknown, never a negative."""
+
+    WHOLE_GENOME_SILENCE = "whole_genome_silence"
+    """`absence_means = weak_reference`: a whole-genome caller reported no variant there."""
+    OMITTED_CALLED_REFERENCE = "omitted_called_reference"
+    """`absence_means = reference`: the producer called every position it left out reference (CGI's VCF)."""
+    CONTENT_FILTER_FORCED = "content_filter_forced"
+    """Either of the two above on a whole genome cut to one class, read as reference for the kept class
+    only because the caller passed `force=True` (the person's 2026-10-22 ruling: restoration on a
+    filtered genome is additionally gated). `absence_means` still says which of the two it was."""
+    OUTSIDE_BLOCKS = "outside_blocks"
+    """`absence_means = blocks`: the facet states its reference in blocks, and none covers the position."""
+    ARRAY = "array"
+    """An array: it probes chosen sites, and an absent one is unknown (RM281's `chip_absence` says why)."""
+    TARGETED = "targeted"
+    """An exome or a panel: nothing outside its targets was looked at."""
+    IMPUTED = "imputed"
+    """Imputed content: its sites are a reference panel's, so its silence says nothing about others."""
+    CALLSET_TYPE_UNKNOWN = "callset_type_unknown"
+    """`absence_means = unknown` and RM4 could not name the callset type."""
+    CLASS_NOT_COUNTED = "class_not_counted"
+    """The facet's `variant_classes` were not counted (a genotype table writes no REF/ALT to count)."""
+    CLASS_NOT_CALLED = "class_not_called"
+    """The facet wrote no allele of the asked class, so its silence says nothing about that class."""
+    CONTENT_FILTER_HELD = "content_filter_held"
+    """A whole genome cut to the asked class: held back unless `force=True`."""
+    CLASS_CUT_BY_FILTER = "class_cut_by_filter"
+    """A whole genome cut to another class: the asked class was cut away, and `force` does not lift it."""
+
+
+READS_REFERENCE = frozenset({AbsenceReason.WHOLE_GENOME_SILENCE, AbsenceReason.OMITTED_CALLED_REFERENCE, AbsenceReason.CONTENT_FILTER_FORCED})
+"""The reasons under which an absent position reads as reference."""
+
+_UNKNOWN_BY_CALLSET = {
+    CallsetType.ARRAY.value: AbsenceReason.ARRAY,
+    CallsetType.WES.value: AbsenceReason.TARGETED,
+    CallsetType.PANEL.value: AbsenceReason.TARGETED,
+    CallsetType.IMPUTED.value: AbsenceReason.IMPUTED,
+}
+
+
+class AbsenceSupport(BaseModel):
+    """What a position absent from a facet says about reference, and why. Truthy only when it reads as
+    reference; `reads_reference` is `True` or `None` (unknown), never `False`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    reads_reference: bool | None
+    reason: AbsenceReason
+
+    def __bool__(self) -> bool:
+        return self.reads_reference is True
+
+
+def absence_support(facet: Mapping[str, object], variant_class: VariantClass | str, *, force: bool = False) -> AbsenceSupport:
+    """`absence_is_reference` with its reason: the gates below, in that order, each with its own reason.
+
+    A facet whose `absence_means` is `unknown` (or missing) is answered by its `callset_type`: `array`,
+    `targeted` (an exome or a panel), `imputed`, else `callset_type_unknown`.
+    """
+    asked = VariantClass(variant_class)
+    means = facet.get("absence_means")
+    if means == AbsenceMeans.BLOCKS.value:
+        return AbsenceSupport(reads_reference=None, reason=AbsenceReason.OUTSIDE_BLOCKS)
+    if means not in (AbsenceMeans.WEAK_REFERENCE.value, AbsenceMeans.REFERENCE.value):
+        unknown = _UNKNOWN_BY_CALLSET.get(str(facet.get("callset_type")), AbsenceReason.CALLSET_TYPE_UNKNOWN)
+        return AbsenceSupport(reads_reference=None, reason=unknown)
+    counted = facet.get("variant_classes")
+    if not isinstance(counted, list):
+        return AbsenceSupport(reads_reference=None, reason=AbsenceReason.CLASS_NOT_COUNTED)
+    content_filter = facet.get("content_filter")
+    # A class the filter cut is named so before the class count: the cut is why the facet wrote none.
+    if content_filter is not None and CONTENT_FILTER_KEEPS[ContentFilter(content_filter)] is not asked:
+        return AbsenceSupport(reads_reference=None, reason=AbsenceReason.CLASS_CUT_BY_FILTER)
+    if asked.value not in {entry["variant_class"] for entry in counted if entry["alleles"]}:
+        return AbsenceSupport(reads_reference=None, reason=AbsenceReason.CLASS_NOT_CALLED)
+    if content_filter is not None:
+        if not force:
+            return AbsenceSupport(reads_reference=None, reason=AbsenceReason.CONTENT_FILTER_HELD)
+        return AbsenceSupport(reads_reference=True, reason=AbsenceReason.CONTENT_FILTER_FORCED)
+    if means == AbsenceMeans.REFERENCE.value:
+        return AbsenceSupport(reads_reference=True, reason=AbsenceReason.OMITTED_CALLED_REFERENCE)
+    return AbsenceSupport(reads_reference=True, reason=AbsenceReason.WHOLE_GENOME_SILENCE)
+
+
 def absence_is_reference(facet: Mapping[str, object], variant_class: VariantClass | str, *, force: bool = False) -> bool | None:
     """Whether a position absent from `facet` reads as evidence of reference for `variant_class`.
 
     `facet` is one `facets` row (`load(...).facets.collect().row(0, named=True)`). A position is
     absent when no `calls` row and no `blocks` row covers it. The answer is Kleene with no negative:
     `True` or `None` (unknown), never `False`, because a facet's silence never shows that a variant is
-    there. `True` needs all of:
+    there. `absence_support` gives the same answer with its reason. `True` needs all of:
 
     - `absence_means` is `weak_reference` (a whole-genome callset without blocks) or `reference` (a
       producer that called every omitted position reference; how strong the evidence is, the member
@@ -455,15 +545,4 @@ def absence_is_reference(facet: Mapping[str, object], variant_class: VariantClas
     Hom-ref restoration from absence, in just-vcf or in a consumer, gates on this and refuses a
     position where the answer is not `True` (docs/SCHEMA.md Decision 4).
     """
-    if facet.get("absence_means") not in (AbsenceMeans.WEAK_REFERENCE.value, AbsenceMeans.REFERENCE.value):
-        return None
-    asked = VariantClass(variant_class)
-    counted = facet.get("variant_classes")
-    if not isinstance(counted, list):
-        return None
-    if asked.value not in {entry["variant_class"] for entry in counted if entry["alleles"]}:
-        return None
-    content_filter = facet.get("content_filter")
-    if content_filter is not None and (not force or CONTENT_FILTER_KEEPS[ContentFilter(content_filter)] is not asked):
-        return None
-    return True
+    return absence_support(facet, variant_class, force=force).reads_reference

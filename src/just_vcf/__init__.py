@@ -4,7 +4,7 @@ from importlib.metadata import version
 
 from just_vcf.atlas import RegionSet, giab_stratifications, method_atlas, pair_counts, pool_counts
 from just_vcf.cache import CacheClearReport, CacheEntryInfo, clear_cache
-from just_vcf.callset import absence_is_reference
+from just_vcf.callset import AbsenceReason, AbsenceSupport, absence_is_reference, absence_support
 from just_vcf.coverage import (
     Callability,
     Coverage,
@@ -22,12 +22,17 @@ from just_vcf.consensus import AlleleFrequencyPrior, Consensus, GpReading, RateB
 from just_vcf.evidence import (
     GENOTYPE_EVIDENCE,
     GENOTYPE_EVIDENCE_AT,
+    REFERENCE_SUPPORT,
+    REFERENCE_SUPPORT_REASON,
     BlockGrade,
     ConfidenceKind,
     GradeBasis,
+    RecordReason,
+    SupportKind,
     VectorPrior,
     genotype_evidence,
     genotype_evidence_at,
+    reference_support,
 )
 from just_vcf.karyotype import (
     KaryotypicSex,
@@ -107,12 +112,16 @@ __all__ = [
     "GENOTYPE_EVIDENCE_AT",
     "LINKS",
     "LOADABLE_FORMATS",
+    "REFERENCE_SUPPORT",
+    "REFERENCE_SUPPORT_REASON",
     "SCHEMA_VERSION",
     "AbsenceCause",
     "SUBJECT_CHECKS",
     "VCF_ZARR_VERSION",
     "AbsenceMeans",
     "AbsenceReading",
+    "AbsenceReason",
+    "AbsenceSupport",
     "Agreement",
     "AlleleFrequencyPrior",
     "AssemblyLabelBasis",
@@ -163,6 +172,7 @@ __all__ = [
     "Presence",
     "PresenceBasis",
     "Query",
+    "RecordReason",
     "RefCheck",
     "ReferenceMismatchError",
     "ReferenceStore",
@@ -190,6 +200,7 @@ __all__ = [
     "StrandCheck",
     "SubjectCheckOutcome",
     "SubjectError",
+    "SupportKind",
     "TableLayoutError",
     "UnsortedRowsError",
     "UnsupportedCoverageError",
@@ -202,6 +213,7 @@ __all__ = [
     "XCopies",
     "__version__",
     "absence_is_reference",
+    "absence_support",
     "chip_absence",
     "cis_phased_blocks",
     "alignment_coverage",
@@ -235,6 +247,7 @@ __all__ = [
     "read_pedigree",
     "read_coverage",
     "reference_dir",
+    "reference_support",
     "rejoin_split",
     "relatedness",
     "resolve_ref",

@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- A facet records the rule that read its REF, and the store refuses a held facet given again in
+  another REF state (schema 0.0.20). `resolve_ref` keeps a facet's `facet_id`, so `Store.add` of the
+  facet resolved under a newer `RESOLVE_VERSION`, or of the loaded facet once its resolved twin was
+  stored (or the reverse), reported it `present` and kept the held rows. `facets.resolve_version` is
+  new (the `RESOLVE_VERSION`, null until REF is read, inherited by derived facets), and `Store.add`
+  compares it and `ref_seqcol_digest` with the held facet's, raising `StoreConflictError` (new, a
+  `StoreError`) before anything is written. A held facet is never rewritten: the other state goes into
+  a new store. `migrate_store` adds the column to a 0.0.19 store, null and named as not recorded on
+  facets whose REF was read (docs/SCHEMA.md, "The durable store" and "Store migration").
+
 - `alignment_coverage` names a BAM or CRAM with no index beside it by the sha256 of its bytes, now in
   `CoverageFacet.source_sha256`, its `facet_id` and its spill key. Its header and byte size alone named
   it, so a file rewritten in place with the same header and size but other reads was served the old

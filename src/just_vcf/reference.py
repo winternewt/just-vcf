@@ -319,7 +319,8 @@ def resolve_ref(
     contig checks; `collection` names one instead.
 
     The result is the same facet (same `facet_id`) with the slots SCHEMA.md leaves open until the
-    sequence is read now filled, and `facets.ref_seqcol_digest` naming the collection that was read.
+    sequence is read now filled, `facets.ref_seqcol_digest` naming the collection that was read and
+    `facets.resolve_version` the `RESOLVE_VERSION` that read it.
     The input `Loaded` is not changed. Rows that could not be read keep `ref` null (and `ref_check`
     `not_run`), each reason counted once in the warnings.
 
@@ -394,6 +395,8 @@ def resolve_ref(
     return Loaded(
         facets=loaded.facets.with_columns(
             pl.lit(plan.digest).alias("ref_seqcol_digest"),
+            # The rule that read the rows, since the facet keeps its id: a store tells two REF states apart by it.
+            pl.lit(RESOLVE_VERSION, dtype=FACETS["resolve_version"]).alias("resolve_version"),
             pl.lit(strand.check.value if strand is not None and strand.check is not None else None)
             .cast(FACETS["strand_check"])
             .alias("strand_check"),

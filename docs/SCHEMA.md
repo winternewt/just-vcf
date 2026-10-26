@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.19.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.20.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -83,7 +83,12 @@ sequence, not by a choice. The same holds for an array's `assembly_label` when t
 (null is "unknown", and the rows against the sequence settle it, below); a stated label is never
 replaced. The alternative, a derived facet (`relation = ref_checked`), was rejected:
 every facet would then stay `not_run` for ever and its checked twin would be a second identity for the
-same calls. A facet already read is refused rather than read again.
+same calls. A facet already read is refused rather than read again. Since the id stays, the facet
+records the rule that read it: `facets.resolve_version` is the `RESOLVE_VERSION` (0.0.20), so a rule
+change that rewrites rows is visible on the facet, and the durable store refuses to take the same
+facet in another REF state as `present`. Rejected: digesting `RESOLVE_VERSION` into the `facet_id`,
+as `normalize`, `liftover` and `rejoin_split` digest theirs, which would make every resolved facet the
+second identity rejected above.
 
 - A row with `source_ref`: `ref` is the reference over the same span, `pos` to
   `pos + len(source_ref) - 1`. `ref_check` compares case-insensitively (VCF REF bases are), so a
@@ -675,6 +680,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
+| `resolve_version` | the `RESOLVE_VERSION` of the `resolve_ref` that read REF (u32). Null until REF is read, and on a facet a store migrated from before 0.0.20 whose REF was read (not recorded). A derived facet keeps its parent's; a consensus its parents' where they share one, else null. `resolve_ref` keeps the `facet_id`, so this column and `ref_seqcol_digest` are what tell two REF states of one facet apart (the durable store refuses an add that meets a held facet in another). just-vcf's own shape |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
 | `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele; null = not counted (a genotype table, which writes no REF or ALT). just-vcf's own shape |
@@ -2120,7 +2126,14 @@ a load warning may quote a sample or a file name.
   is refused.
 - **Facets accumulate (charter 5).** A facet's directory is written once and never rewritten or
   removed, except by a migration, which rewrites every facet's files with the same facets and rows;
-  adding a facet the store holds, by `facet_id`, is a no-op that writes nothing. The links
+  adding a facet the store holds, by `facet_id`, is a no-op that writes nothing, when its REF state is
+  the held one's (`store.REF_STATE`: `ref_seqcol_digest` and `resolve_version`). One in another state
+  (held as loaded and given resolved, or the reverse, or read by another `RESOLVE_VERSION` or from
+  another collection) is refused with `StoreConflictError`, naming the facet and both states, before
+  anything is written: `resolve_ref` keeps the `facet_id`, and a `present` there kept the held rows
+  while the caller thought the new ones stored. A held facet's files are never rewritten, so the other
+  state goes into a new store. Rejected: replacing the held facet (charter 5; a replace is the
+  person's call, not an add's), and comparing the rows (a full read of both on every re-add). The links
   are kept per facet, so adding one never touches a file another facet owns: each facet keeps the
   links of the `Loaded` it came with that end at it or at one of its lineage ancestors, so a facet
   added without its parent still names it. `loaded()` reads them all back once each, in Decision 12's
@@ -2163,6 +2176,7 @@ a step fails it.
 | 0.0.16 → 0.0.17 | calls | casts `phase_set_kinds` to the enum with `cgi_haplink` | CGI `var` and masterVarBeta facets: `phased`, `phase_sets`, `phase_set_kinds` null for hapLink not read; masterVarBeta facets: `ad`, `source_alleles` for read counts not read |
 | 0.0.17 → 0.0.18 | facets | adds `gl_source` (null) after `split_marker` | VCF facets: null means not recorded, not "no likelihoods" |
 | 0.0.18 → 0.0.19 | calls | adds `hq` (null) after `gq` | CGI native facets, and facets whose `dropped_fields` list FORMAT `HQ`: `hq` null for not read, so their rows grade `gt_only` |
+| 0.0.19 → 0.0.20 | facets | adds `resolve_version` (null) after `ref_seqcol_digest` | facets whose REF was read (`ref_seqcol_digest` set): null means not recorded, not "REF not read", so the store refuses the same facet resolved today as another state of it |
 
 A step never invents a value: an added column is null, and where that null (or a value an older loader
 left) reads differently from what a load of the same source gives today, the facets it applies to are
@@ -2953,6 +2967,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   the rule above is a minor bump, 0.0.10. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.20** (2026-10-26, the rule that read REF): `facets.resolve_version` (`u32` or null), the
+  `RESOLVE_VERSION` that read the facet's REF, inherited by derived facets. Additive. A store of
+  0.0.19 migrates with it null, named as not recorded on its resolved facets. Rule change in the
+  store: re-adding a held facet in another REF state is refused (`StoreConflictError`) where it was
+  reported `present`.
 
 - **0.0.19** (2026-10-24, CGI's allele scores): `calls.hq` (`list[u16]` or null). Additive.
 

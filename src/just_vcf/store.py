@@ -12,7 +12,9 @@ everything in it back, lazily. The layout (docs/SCHEMA.md, "The durable store"):
 The rules, each from the charter or the item:
 
 - **Facets accumulate (charter 5).** A facet's directory is written once, never rewritten or removed.
-  Adding a facet the store already holds, by `facet_id`, is a no-op. Adding one never touches another
+  Adding a facet the store already holds, by `facet_id`, is a no-op when its REF state (`REF_STATE`)
+  is the held one's, and refused (`StoreConflictError`) when not: `resolve_ref` keeps the id, so the
+  id alone does not say which rows the store holds. Adding one never touches another
   facet's files: the links live per facet (the links ending at the facet and at its ancestors, from
   the `Loaded` it came with), so no file is shared between facets. The manifest is the store's index,
   rewritten whole (temporary name, then `os.replace`) after each facet.
@@ -90,6 +92,16 @@ class StoreError(ValueError):
 
 class StoreVersionError(StoreError):
     """A schema version or store layout other than the store's: refused, never mixed."""
+
+
+class StoreConflictError(StoreError):
+    """A facet the store holds, given again with REF in another state: not read where the held one was,
+    or read from another collection or by another `RESOLVE_VERSION`. Its files are never rewritten."""
+
+
+REF_STATE = ("ref_seqcol_digest", "resolve_version")
+"""The facet columns that say how a facet's REF was read. `resolve_ref` keeps the `facet_id`, so a facet
+id alone does not tell a held facet's rows from those of the same facet resolved otherwise."""
 
 
 class StoredFacet(BaseModel):
@@ -215,7 +227,10 @@ class Store:
 
         Refused, with nothing written: a `Loaded` of another schema version (`StoreVersionError`); a
         facet with no subject or another subject than the store's (`SubjectError`); one `facet_id`
-        twice in `loaded`.
+        twice in `loaded`; a facet the store holds whose REF state (`REF_STATE`: the collection REF was
+        read from and the `RESOLVE_VERSION` that read it, both null before `resolve_ref`) differs from
+        the held one's (`StoreConflictError`). A held facet is never rewritten, so the rows of the same
+        facet resolved otherwise go into another store.
         """
         manifest = self.manifest
         _check_version(manifest.schema_version, loaded.schema_version, "the Loaded")
@@ -243,6 +258,7 @@ class Store:
                 logger.info("store: removing %s, left by an add that did not finish", orphan)
                 shutil.rmtree(self.path / orphan, ignore_errors=True)
             held = {entry.facet_id for entry in manifest.facets}
+            self._check_ref_state(facets.filter(pl.col("facet_id").is_in(sorted(held & set(ids)))))
             for facet_id in sorted(ids):
                 if facet_id in held:
                     present.append(facet_id)
@@ -290,6 +306,23 @@ class Store:
             raise StoreError("the store holds no facets yet")
         return Person.of(self.loaded(), check=check)
 
+    def _check_ref_state(self, given: pl.DataFrame) -> None:
+        """Refuse `given`, facet rows the store holds, where one's REF state is not the held one's."""
+        if given.is_empty():
+            return
+        files = [self.path / _FACETS_DIR / facet_id / "facets.parquet" for facet_id in sorted(given["facet_id"].to_list())]
+        held = pl.read_parquet(files, columns=["facet_id", *REF_STATE])
+        differ = []
+        for row in given.select("facet_id", *REF_STATE).sort("facet_id").iter_rows(named=True):
+            stored = held.filter(pl.col("facet_id") == row["facet_id"]).row(0, named=True)
+            if any(row[name] != stored[name] for name in REF_STATE):
+                differ.append(f"{row['facet_id']} (held: {_ref_state(stored)}; given: {_ref_state(row)})")
+        if differ:
+            raise StoreConflictError(
+                f"facet(s) held with REF in another state: {'; '.join(differ)}. A held facet is never rewritten "
+                "(resolve_ref keeps its facet_id); add these to a new store, or keep the held rows"
+            )
+
     def _write_facet(self, loaded: Loaded, facet_id: str, links: pl.DataFrame) -> None:
         """Sink one facet's four frames into a staging directory, sync them, and rename it into place."""
         stage = self.path / f"{_STAGING}{os.getpid()}-{os.urandom(4).hex()}"
@@ -321,6 +354,13 @@ class Store:
         if facets_dir.is_dir():
             found += sorted(f"{_FACETS_DIR}/{child.name}" for child in facets_dir.iterdir() if child.name not in held)
         return found
+
+
+def _ref_state(row: dict) -> str:
+    if row["ref_seqcol_digest"] is None:
+        return "REF not read"
+    version = "an unrecorded RESOLVE_VERSION" if row["resolve_version"] is None else f"RESOLVE_VERSION {row['resolve_version']}"
+    return f"REF read from {row['ref_seqcol_digest']} by {version}"
 
 
 def _links_of(links: pl.DataFrame, facet_id: str) -> pl.DataFrame:

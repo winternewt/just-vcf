@@ -12,17 +12,22 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import load, rejoin_split
+from just_vcf import ReferenceStore, load, normalize, rejoin_split, resolve_ref
 from just_vcf.links import CALLER_SPLIT, SPLIT_REJOINED, link_disagreements
 from just_vcf.loading import Loaded
 from just_vcf.person import Person, SubjectError
 from just_vcf.schema import BLOCKS, CALLS, FACETS, LINKS, SCHEMA_VERSION
-from just_vcf.store import FRAMES, Store, StoreError, StoreVersionError
+from just_vcf.reference import RESOLVE_VERSION
+from just_vcf.store import FRAMES, Store, StoreConflictError, StoreError, StoreVersionError
+from test_insertion_points import point_loci
+from test_load_cgi import var_text
+from test_load_cgi import write as write_cgi
 from test_load_fbvs import COLUMNS, FB_ONLY, FB_SHARED, META, VS_ONLY
 from test_load_vcf import vcf_text
 from test_load_vcf import write as write_vcf_text
 from test_person import _array_file, _vcf_file
 from test_rejoin import SPLIT
+from test_reference import SEQ, write_fasta
 from test_rejoin import write as write_split
 
 SUBJECT = "person-a"
@@ -125,6 +130,48 @@ def test_adding_a_facet_already_held_is_a_no_op(tmp_path: Path) -> None:
     assert first.added == again.present and again.added == ()
     assert _files(tmp_path / "store") == before
     assert store.manifest == manifest, "the added time is the first add's"
+
+
+def _resolved_cgi(tmp_path: Path) -> tuple[Loaded, Loaded, ReferenceStore]:
+    reference = ReferenceStore.open(tmp_path / "grch37")
+    reference.add_fasta(write_fasta(tmp_path / "grch37.fa", SEQ), assembly_label="GRCh37")
+    loaded = load(write_cgi(tmp_path, var_text(point_loci()), "var-GS000000001-ASM.tsv.bz2"), subject=SUBJECT)
+    return loaded, resolve_ref(loaded, reference), reference
+
+
+def test_a_facet_held_in_another_ref_state_is_refused_not_reported_present(tmp_path: Path) -> None:
+    """`resolve_ref` keeps a facet's `facet_id` (SCHEMA.md, "How RM3 fills these slots"), so the id
+    alone does not say whether the store holds the facet as loaded, or with REF read by an older
+    `RESOLVE_VERSION` than this one: an add reported `present` and kept the rows it held. The facet now
+    records the rule that read its REF (`resolve_version`, inherited by what is derived from it), and an
+    add that meets a held facet in another REF state is refused, nothing written, naming the facet. The
+    same state again is a no-op, as before."""
+    loaded, resolved, reference = _resolved_cgi(tmp_path)
+    assert resolved.facets.collect()["resolve_version"].to_list() == [RESOLVE_VERSION]
+    assert loaded.facets.collect()["resolve_version"].to_list() == [None]
+    normalized = normalize(resolved, reference)
+    assert normalized.facets.collect()["resolve_version"].to_list() == [RESOLVE_VERSION]
+    facet_id = resolved.facets.collect()["facet_id"].item()
+
+    store = Store.open(tmp_path / "store", subject=SUBJECT)
+    older = resolved.model_copy(update={"facets": resolved.facets.with_columns(pl.lit(RESOLVE_VERSION - 1, dtype=pl.UInt32).alias("resolve_version"))})
+    assert store.add(older).added == (facet_id,)
+    before, manifest = _files(tmp_path / "store"), store.manifest
+    for other in (resolved, loaded):
+        with pytest.raises(StoreConflictError, match=facet_id):
+            store.add(other)
+        assert _files(tmp_path / "store") == before and store.manifest == manifest, "nothing written"
+    assert store.add(older).present == (facet_id,)
+
+    fresh = Store.open(tmp_path / "fresh", subject=SUBJECT)
+    fresh.add(loaded)
+    with pytest.raises(StoreConflictError, match="REF not read"):
+        fresh.add(resolved)
+    # A Loaded holding a held facet in another state and a new one is refused whole.
+    both = Person.of(resolved, normalized, check=None)
+    with pytest.raises(StoreConflictError):
+        fresh.add(Loaded(facets=both.facets, calls=both.calls, blocks=both.blocks, links=both.links, schema_version=both.schema_version))
+    assert fresh.facet_ids == (facet_id,)
 
 
 def test_adding_a_facet_never_rewrites_another(tmp_path: Path) -> None:

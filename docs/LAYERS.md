@@ -142,6 +142,13 @@ meanwhile. The desk carries the ones filed there.
   bumping `cache.SPILL_LAYOUT`, so the resolve, lift, VRS and coverage spills are not retired with it (alternative
   rejected: one `SPILL_LAYOUT` bump, which recomputes all of them). Left: `rejoin_split`'s spill still sorts per
   contig on read; hu80855C's 138M-block load not re-measured.
+- **Layer 5, the lead's calls on breakends in concordance (built, listed for veto):** truvari 5.5's `bnd_match` is
+  mirrored as its code runs, including its reading of CIPOS's upper offset on both sides (`bounds()` sets the key
+  before testing it, an apparent truvari bug; not reported upstream, the person's call). Mates are found by the
+  ends each record states, Manta's within each other's CIPOS (F28), not by MATEID, which the schema drops; a pair
+  of mates is one row. Single breakends are counted as `single_breakend`, as truvari's default leaves them out.
+  The `breakend` exclusion reason is gone (pre-1.0 break, in the changelog). Left for the person: whether a
+  symbolic `<DEL>`/`<DUP>`/`<INV>` should meet the breakends another caller writes for it (truvari's `decompose`).
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

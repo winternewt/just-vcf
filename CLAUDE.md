@@ -342,6 +342,12 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
   of rows sharing the key is held at once (26 GB for 20,000 breakend records on 22 contigs, met
   2026-10-26). Split by the equality key and range-join each part with the inequalities alone, which
   polars runs as an IEJoin: `intervals.contig_join`. Check a new `join_where` with `.lazy().explain()`.
+- **Polars `replace` / `replace_strict` with a mapping in a plan that should stream:** polars 1.44 runs
+  it as a columnar function, an in-memory fallback, and holds every other column of the plan beside it
+  until it has the whole column (`load`'s sink of a 9.65M-call gVCF held 8 GB for 2.6 GB of rows, F26).
+  Map one batch at a time (`map_batches(..., is_elementwise=True)`, as `schema.canonical_chrom_expr`
+  does), and check a plan with `show_graph(engine="streaming", plan_stage="physical")`: a node filled
+  as "in-memory engine fallback" holds its input (`tests/test_spill_streams.py` reads it so).
 - **Heed terminal warnings, deprecations especially.** A deprecation in code you touched is a
   **blocker**: find the current upstream API, fix it, and update this file.
 - **Refactor internals aggressively** — no dead code, no old API kept for nostalgia. The contract —

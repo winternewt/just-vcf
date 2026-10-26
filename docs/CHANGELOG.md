@@ -4,6 +4,25 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load` streams a VCF's rows into its spill again, a batch at a time (F26). The canonical `chrom`
+  (`schema.canonical_chrom_expr`) was polars' `replace` with the alias mapping, which polars 1.44's
+  streaming engine runs as a columnar function it cannot split into batches, an in-memory fallback,
+  and it held every other column of the plan beside it until that function had the whole column. It
+  now maps each batch on its own (`map_batches`, elementwise), to the same values. The same plan shape
+  held the key=value and Nirvana loaders' calls, and every other step that canonicalises `chrom` with
+  it (coverage, concordance, consensus). The passes after the spill (`split_groups`, the callset
+  spread, the variant-class counts) run in the streaming engine. Same rows, order, dtypes, facet and
+  warnings (both frames hashed row by row, before and after), and the spill's staged bytes are the
+  same, so a generation an earlier version wrote is found again: no version constant changes. PGP-HMS
+  hu416394's bcftools gVCF (9,651,143 calls, 9,473,303 blocks; 2026-10-26, a 62 GB machine shared
+  with other sessions): peak 8.1 → 3.9 GB on a fresh cache (now the sort a part at a time,
+  `canonical_parts`), 8.1 → 2.1 GB with its frames cached; the spill's sink alone 8.1 → 0.8 GB.
+  hu80855C's Isaac gVCF (45,242,155 calls, 138,019,217 blocks): 46 to 54 GB → 9.4 GB fresh (1,035 s,
+  measured before the passes after the spill streamed, which held that peak) and 6.8 GB cached (804 s,
+  with them). Not changed: a load whose frames are
+  cached still reads the VCF through polars-bio twice, once for the warning counts and once for the
+  bytes its spill key is computed from (docs/PREVIOUS_ISSUES.md, F26).
+
 - `write_vcf` names a breakend's mate inside ALT as it names CHROM, and declares it (F30). The mate's
   contig in each of the four bracket forms is read canonically and written through the same
   `contig_names` mapping as CHROM (`breakends.mate_renamed`), and every contig a written ALT names

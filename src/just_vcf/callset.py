@@ -134,7 +134,7 @@ def spread(calls: pl.LazyFrame, flank_bp: int = FLANK_BP) -> dict:
             (pl.col("pos").max().cast(pl.Int64) - pl.col("pos").min().cast(pl.Int64)).alias("span"),
             pl.col("pos").sort().cast(pl.Int64).diff().clip(upper_bound=2 * flank_bp).sum().alias("reach"),
         )
-        .collect()
+        .collect(engine="streaming")
     )
     total = int(per_contig["n"].sum() or 0)
     span = int(per_contig["span"].sum() or 0)
@@ -209,7 +209,7 @@ def variant_class_counts(calls: pl.LazyFrame) -> dict[VariantClass, int]:
         .drop_nulls()
         .group_by("variant_class")
         .len()
-        .collect()
+        .collect(engine="streaming")
     )
     found = dict(zip(counted["variant_class"].to_list(), counted["len"].to_list(), strict=True))
     return {cls: int(found.get(cls.value, 0)) for cls in VariantClass}

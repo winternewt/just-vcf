@@ -3,6 +3,63 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F26 — Loading a WGS gVCF holds gigabytes
+
+Severity: low · Found 2026-10-26 dogfooding RM6's block lift on the PGP-HMS gVCFs.
+
+`load` of hu416394's bcftools gVCF (a 397 MB member of a zip, 9,651,143 calls and 9,473,303 blocks)
+peaks at 7.8 GB on a fresh cache (151 s) and at 7.7 GB again with its frames already cached (89 s);
+`resolve_ref`, `liftover` and `write_vcf` after it stay within that peak (sampled per phase). The
+whole pipeline over hu80855C's Isaac gVCF (1.9 GB, 45,242,155 calls and 138,019,217 blocks) peaked at
+46 GB by the end of `load` (1,008 s) and 49 GB on the reload, on a 62 GB machine; that run's own
+counting over the frames is inside the figure, so `load`'s share there is not measured. Not looked
+into: where in `load` the memory goes (the per-contig spill is meant to bound it, PREVIOUS_ISSUES has
+the 6.4-million-call DeepVariant file at 3.6 GB), and why a load whose frames are cached still takes
+89 s at the same peak. Blocks nothing yet; a 30x Isaac gVCF is near the edge of this machine.
+
+**Resolved 2026-10-26** for the memory; the cached load's time is explained, not changed. Profiled
+phase by phase through the library (RSS sampled every 50 ms, counts and digests only, the same file
+from the Krypton share), hu416394 before the repair, fresh / cached: `file_sha256` 4.3 / 0.3 s; the
+BGZF copy out of the zip 13 s / reused; `scan_stats`, one polars-bio pass for the warning counts,
+40 / 39 s at 0.7 GB; the spill's sink of calls and blocks 53 / 65 s at **8.1 GB**; the spill key's
+hash of the staged files 0.1 s; `canonical_parts` 25 s / skipped (generation found) at 6.0 GB, which
+was the sink's memory not yet handed back; `split_groups`, `classify` and the variant classes 1 to
+2 s each near 5 GB. Sunk alone, the calls plan held 8.0 GB and the blocks plan 2.0 GB, while the raw
+records polars-bio hands over (19,124,446 rows) sank at no growth. Bisecting the calls plan by
+columns showed memory growing with every column sunk, `chrom` and `pos` alone 0.7 GB, and polars'
+physical graph of the plan marked one node as an in-memory fallback: `replace(CONTIG_ALIASES)`, the
+canonical `chrom`. polars 1.44 runs `replace` with a mapping as a columnar function, fed through a
+multiplexer and zipped back to the other columns, so the multiplexer held every other column until
+the function had the whole column. The blocks plan, which also canonicalises `chrom`, held less only
+because its rows are narrower. Not polars-bio's: the same plan over a synthetic parquet (30M rows,
+three columns) held 2.9 GB against 0.9 GB without the `replace`.
+
+Repair: `schema.canonical_chrom_expr` maps each batch on its own (`map_batches`, elementwise), the
+same values, and the plan streams; the post-spill passes (`split_groups`, `callset.spread`,
+`callset.variant_class_counts`) collect in the streaming engine. Rows, order, dtypes, facet and
+warnings are the same (both frames hashed row by row), and so are the staged bytes: the generation
+key is the one the code before wrote, so a cached generation is found again. hu416394 after: 3.9 GB
+fresh (the sink 0.8 GB; the peak is now `canonical_parts` sorting one part at a time), 2.1 GB cached
+(87.7 s). hu80855C's Isaac gVCF, under a 40 GB cap: 9.4 GB fresh (1,035 s: the copy 173 s,
+`scan_stats` 279 s, the sink 434 s, `canonical_parts` 106 s, peak in the passes after the spill,
+measured before they streamed) and 6.8 GB cached (804 s, with them; the peak is `callset.spread`'s
+unique sites).
+
+Why a cached load takes as long: it reads the VCF through polars-bio twice, as a fresh one does.
+`scan_stats` counts the warnings, and the spill's sink writes the rows unsorted only so that
+`cache.Spill.key` can hash them and find the generation an earlier load committed; the staged files
+are then thrown away. Nothing re-reads the source for a content key or a facet field: `file_sha256`
+of the 397 MB zip is 0.3 s warm, and the copy is reused. The two passes are 38 + 45 s of hu416394's 88
+s and 371 + 406 s of the Isaac file's 804 s. Shortening it is a design call, not taken here: keying a
+load's generation by its inputs (the source digest, the options and a loader version bumped with
+every change to the rows) would make a cached load a hash and a lookup, which is what `_spill_files`'s
+docstring rejected, since a loader fix that forgets the bump would hand back the rows an older loader
+wrote. A narrower option keeps the key and caches `scan_stats`'s counts by the copy's digest, saving
+the first pass only. Code: `schema.canonical_chrom_expr`, `loaders/vcf.split_groups`,
+`callset.spread`, `callset.variant_class_counts`; test in `tests/test_spill_streams.py` (no spilled
+plan of the gVCF, CGI, key=value or Nirvana loaders has an in-memory fallback node; failed on the
+gVCF, key=value and Nirvana plans before).
+
 ## F30 — `write_vcf`'s contig names do not reach a breakend's mate inside ALT
 
 Severity: low · Found 2026-10-26 dogfooding RM6's breakend lift on hu1C1368's Manta file.

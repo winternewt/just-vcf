@@ -1181,6 +1181,25 @@ real gVCF yet. Decisions, each with what was rejected:
 - Overlapping lifted blocks (two source regions sent to one target) are kept and counted. Rejected:
   dropping one, which picks a winner the data does not choose (charter 8).
 
+*Dogfooded 2026-10-26 on two PGP-HMS gVCFs* (load, `resolve_ref`, `liftover`, `write_vcf(blocks=True)`,
+reload; counts only). hu80855C's Isaac gVCF, GRCh37 → 38 through `hg19ToHg38`: 138,019,217 blocks
+over 3,051,109,664 bases, 137,949,085 lifted whole, 28,685 cut at a gap or edge, 41,447 left behind;
+138,007,779 pieces over 2,815,814,544 bases lifted, and behind 234,693,206 bases in no chain block,
+590,351 onto target contigs the store lacks, 11,563 on MT (hg19's chrM); 45,007,744 of 45,242,155
+calls lifted (198,239 `split_flagged`). hu416394's bcftools gVCF (Sequencing.com, in a zip), GRCh38 →
+37 through `hg38ToHg19`: 9,473,303 blocks over 2,921,239,528 bases, 8,422,871 pieces over
+2,854,838,559 bases lifted, 51,718,007 bases in no chain block and 14,666,440 on contigs the chain does
+not name; 8,137,269 of 9,651,143 calls lifted (1,101,719 in no chain block, 263,271 on decoys and
+scaffolds, F25). On both, lifted plus left-behind bases equal the source's exactly; the written VCF
+reloads to the same blocks (chrom, pos, end, kind) as the lifted facet; 200 seeded source blocks of the
+Isaac file, mapped base by base through pyliftover, give 200 pieces, all found among the lifted blocks.
+Overlapping lifted blocks kept: 416,776 and 280,668. The reload of each written VCF flags 2,629 and
+3,568 rows as pre-split (RM270), which the lift's input did not carry into the output (its own flagged
+rows stayed behind); positions two source regions send to one place are the likely cause, not checked.
+Time, Isaac: `liftover` 422 s, `write_vcf` 338 s, `resolve_ref` 143 s, `load` 1,008 s. Memory,
+bcftools file per phase: `load` 7.7 GB, `resolve_ref`, `liftover` and `write_vcf` add nothing above it
+(F26).
+
 **Shipped 2026-10-26: symbolic SVs in a lift** (rules in docs/SCHEMA.md, "Lifting symbolic SVs";
 `LIFT_VERSION` 9). POS and `end_pos` lifted as two points; kept on one contig and strand, in order,
 length within 5%. Copy-number segments (`ALT .` with END and CN) take the same path; they had lifted
@@ -1206,6 +1225,21 @@ strands). Not run on a real SV file yet (the PGP-HMS Manta, Canvas and DRAGEN fi
   needs the mate lifted on any contig, its name rewritten inside ALT (the frame stores canonical names,
   the ALT the source's spelling) and the brackets turned per strand, with both mate records agreeing.
 - `<INS>` lifts as a point at its anchor. The frame keeps no inserted length, so nothing else moves.
+
+*Dogfooded 2026-10-26 on the PGP-HMS SV and CNV files* (load, `resolve_ref`, `liftover`, `write_vcf`,
+reload; counts only). Manta files lift their symbolic SVs: hu1C1368 (GRCh37 → 38, `hg19ToHg38`)
+473 of 477 `<DEL>`, 236 of 236 `<DUP>`, 1,047 of 1,049 `<INS>`; hu416394 (GRCh38 → 37, `hg38ToHg19`)
+647 of 848 `<DEL>`, 387 of 558 `<DUP>`, 242 of 251 `<INS>`, most of the rest on decoys and scaffolds
+(`no_chain_block`, `ref_unread`); huBEF5E2's Veritas file 1,654 of 1,668 `<DEL>` and 206 of 216
+`<INV>`, its 3,730 BreakDancer `<ITX>`/`<CTX>` behind (3,721 as `allele_not_sequence`, 9 on MT as `ref_unread`). Every `sv_` reason fired
+on real rows (`sv_end_unlifted` 23, `sv_length_changed` 20, `sv_ends_apart` 6, `sv_ends_reversed`
+2); no real SV came near a contig end (`indel_minus_strand`), so that edge rests on the synthetic tests. Breakends (1,228, 2,040, 1,310 more unread) stay behind as designed. Checked against pyliftover's
+placing of both ends: 4,892 of 4,892 lifted SVs agree, 52 on minus-strand blocks and 74 whose span
+crosses a chain gap (lifted length changed within 5%). Reloaded, every lifted SV keeps its `end_pos`,
+`cipos` and `ciend`, with no END/SVLEN disagreement warned. A few seconds per file under 500 MB,
+except hu416394's decoy-heavy header (F24). **No CNV file lifts**: DRAGEN and Canvas write REF `N`,
+which `resolve_ref` reads as a mismatch (F23), so 0 of 1,324 copy-number rows, segments included,
+have lifted on real data.
 
 
 ## RM271 — VRS allele ids

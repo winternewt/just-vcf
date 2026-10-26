@@ -333,6 +333,19 @@ def test_rule_5_keeps_numbered_groups_and_excludes_qc_marks() -> None:
     assert {label: group_label_flag(label) for label in GROUP_LABELS} == GROUP_LABELS
 
 
+def test_an_annotation_file_listing_one_genetic_id_twice_is_refused(fixture: Fixture, tmp_path: Path) -> None:
+    """Two `.anno` rows for one Genetic ID would select that person's `.geno` column twice; the build
+    refuses, naming how many Genetic IDs repeat, before reading a genotype."""
+    lines = fixture.anno.read_text().splitlines()
+    first_two = [line for line in lines[1:] if line.split("\t")[0] in ("Alpha1.HO", "Beta1.HO")]
+    anno = tmp_path / "doubled.anno"
+    anno.write_text("\n".join([*lines, *first_two]) + "\n")
+    fixture.write_geno("tgeno", Path(f"{fixture.prefix}.geno"))
+    with pytest.raises(ValueError, match=r"2 Genetic IDs appear more than once"):
+        build_aadr_panel(fixture.prefix, anno, tmp_path / "panel", reference=fixture.store(tmp_path), dim_ref=DIM_REF)
+    assert not (tmp_path / "panel").exists()
+
+
 def test_individuals_are_kept_and_excluded_by_the_stated_rules(fixture: Fixture, built: dict) -> None:
     build, _ = built["tgeno"]
     expected: dict[str, int] = dict.fromkeys(INDIVIDUAL_EXCLUSIONS, 0)

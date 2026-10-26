@@ -105,7 +105,8 @@ It needs a refget store holding one GRCh37 collection (`reference=`, default the
 **Who goes in.** Each rule in order; the first one an individual fails is the reason it is counted
 under:
 
-1. listed in the `.anno`;
+1. listed in the `.anno`. An `.anno` that lists one Genetic ID twice is refused, naming how many
+   repeat, since the join would read that person's genotypes twice (v66.p1's has no repeat);
 2. present-day (`Date mean in BP` 0): the ancient individuals are out, as in just-prs;
 3. diploid data (`Data type` `HumanOrigins` or `Shotgun.diploid`): pseudo-haploid shotgun and capture
    data, one read per site, would look homozygous everywhere, and the reference genomes (human, chimp,

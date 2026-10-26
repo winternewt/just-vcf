@@ -4,6 +4,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `build_aadr_panel` refuses an `.anno` that lists one Genetic ID more than once, with a `ValueError`
+  naming how many repeat, before reading any genotype (audit 12). The `.ind` was left-joined to the
+  `.anno` with no check, so a repeated row selected that person's `.geno` column twice and weighed
+  them double in the frequencies and the PCA. AADR v66.p1's `compatibility_HO` `.anno` has no repeat.
 - **`build_aadr_panel` keeps AADR's numbered sub-groups** (the person's decision, 2026-10-26: "keep
   numbered AADR groups"). Rule 5 excluded every group label with a `-` in it, which also dropped
   `Kumyk-1`, `Uzbek-2`, `Hazara_1-1` and the like. AADR's README names only `Ignore_` and outliers as

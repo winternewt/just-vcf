@@ -9,7 +9,8 @@ East and Central Asia. docs/ANCESTRY_PANELS.md has the rules in prose and a meas
 
 Who goes in, each rule applied in this order, the first one an individual fails being its reason:
 
-1. in the `.anno` file;
+1. in the `.anno` file. An `.anno` listing one Genetic ID twice is refused before anything is read
+   from the `.geno`: the join would select that person's genotypes twice;
 2. present-day: `Date mean in BP` is 0;
 3. diploid data: `Data type` is `HumanOrigins` (the array) or `Shotgun.diploid` (a genome with diploid
    calls). Pseudo-haploid shotgun and capture data (one read per site) and the reference genomes
@@ -255,7 +256,13 @@ def build_aadr_panel(
     layout = geno_layout(geno)
 
     ind = read_ind(ind_path).with_row_index("row")
-    chosen, excluded, regions = _choose(ind, read_anno(anno), box)
+    annotations = read_anno(anno)
+    repeated = annotations["genetic_id"].is_duplicated().sum()
+    if repeated:
+        # Joined to the .ind, a repeated row would select that person's .geno column twice.
+        n_ids = annotations.filter(annotations["genetic_id"].is_duplicated())["genetic_id"].n_unique()
+        raise ValueError(f"{anno.name}: {n_ids} Genetic IDs appear more than once ({repeated} rows); each must be listed once")
+    chosen, excluded, regions = _choose(ind, annotations, box)
     if chosen.height < 8 * dim_ref:
         raise ValueError(f"{chosen.height} individuals chosen; {dim_ref} components need at least {8 * dim_ref}")
 

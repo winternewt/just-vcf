@@ -3,6 +3,64 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F27 — Every read of a loaded VCF facet's frames pays one scan and sort per source contig
+
+Severity: medium · Found 2026-10-26 measuring `reference_support` and `genotype_evidence_at` at
+whole-genome scale (RM3) on hu416394's bcftools gVCF (Sequencing.com, GRCh38, 9,651,143 calls and
+9,473,303 blocks; rows on 2,179 of the header's contigs).
+
+`load` hands back `calls` and `blocks` as one filtered, sorted scan of the spill per contig that has
+rows (`canonical_order_per_contig`), so a facet from a decoy-heavy header is a union of 2,179 parts,
+and every query re-runs it. Measured with the library, one process, after `load`: the calls filtered
+to the 24 primary contigs and to the rows a lookup can use (866,279 spanning calls plus those at the
+asked positions) take 83 s at about 3 GB above the post-load baseline, however few rows match; the
+blocks' as-of join 22 s; `select(pl.len())` over both frames 16 s at 5 GB. The same lookups over those
+frames collected into memory take 1.2 s for 1,000 sites and 2.9 s for a million, and over the lifted
+facet's frames (24 parts in its spill) 1.6 s and 4.1 s. A filter on a million positions costs 128 s
+more on the loaded facet (211 s against 83 s), consistent with the position set being evaluated in
+each part's scan; on the lifted facet it costs nothing visible.
+
+Joins over these frames also held far more than the rows they keep: before `_covering` read each
+frame once, 1,000 sites ran past 30 GB (before 6750e05, also with the sites on chr21 and chr22 only)
+and past 55 GB after it, where the same queries over the frames held in memory peak at 10 GB. `_covering` no longer joins the
+lazy frames, so the lookups are within bounds; the per-query read cost stays.
+
+The part count is what costs: hu80855C's Isaac gVCF (25 parts, 45,242,155 calls and 138,019,217
+blocks, ten times the rows) answers 1,000 sites in 20 s and a million in 24 s (RM3). Not looked into:
+what in each part's scan costs. Repairs, each a change
+to `load`'s spill: write the spill in canonical order once, so the frames are one scan with no sort
+at read time (the reason it is not is the 11 GB global sort `loading.py` notes; a per-contig sort at
+load time, written in order, would keep that bound); or batch the small contigs into one part, F24's
+first repair. Both change `SPILL_LAYOUT`. Blocks nothing; a panel query on such a facet takes
+minutes instead of seconds.
+
+Resolved 2026-10-26 by the lead's decision: the spill is written in canonical order once, at load time,
+sorted a part at a time so load's memory stays bound, and the frames come back as one scan with no
+sort. `_spill_files` still sinks each frame unsorted in one streaming pass, then `_canonical_parts`
+writes it again as parts of whole contigs, consecutive in canonical contig order, up to
+`SPILL_PART_ROWS` rows unless one contig alone has more, each part filtered from the staged file,
+sorted (`canonical_order`) and written; the unsorted file is removed. The frames are
+`pl.scan_parquet(parts)`. Contigs with a few rows share a part, F24's first repair for `load`'s spill.
+A load spill's manifest and generation key carry `FRAMES_LAYOUT` 1, so a generation an older version
+wrote is never found, and the sweep retires an older entry; `cache.SPILL_LAYOUT` stays, since the
+derived steps' spills, which carry it too, did not change. Every loader that spills goes through it
+(VCF, Nirvana, key=value, CGI).
+
+Measured on hu416394 (RM3, "after F27's repair"): one scan of 12 call parts and 11 block parts, no
+sort; `select(pl.len())` 15.7 s → 0.3 s; `reference_support` at 1M sites 249 s → 4.0 s; both frames
+and both answer sets hash the same row for row; `load` peaks at 7.7–7.9 GB as before, its sort pass
+15 s. Code: `loading.py` `_spill_files`, `_canonical_parts`; tests: `tests/test_spill_order.py` (the
+frames against the old per-contig read of the same staged bytes, the plan with no sort node, the
+parts holding whole contigs, an older layout's generation not read and swept).
+
+Rejected: one sorted file per frame, which needs the whole frame sorted in memory (the 11 GB global
+sort) or a parquet writer that appends a part at a time (pyarrow's, not a core dependency), when the
+parts already read as one scan; and bumping `cache.SPILL_LAYOUT`, which would mark every resolve,
+lift, VRS, normalize and coverage spill older too, so the sweep would retire those unused for the grace
+period and their next run recompute them, though their layout did not change. Left: `rejoin_split`'s own spill (`rejoin.py`) is still read back one contig at a time with
+`canonical_order_per_contig`, so a rejoined whole-genome facet still pays a sort per contig on each
+read.
+
 ## F22 — A haploid call against the same allele's diploid homozygous call counts as discordant
 
 Severity: medium · Found 2026-10-23 by RM279 on the PGP-HMS CGI against freeBayes pairs.

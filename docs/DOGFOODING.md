@@ -106,6 +106,12 @@ contig the store or the chain does not hold straight to their reason without a p
 Neither is free: the per-contig parts are what keep a WGS gVCF within memory, and their layout is a
 cache key (`SPILL_LAYOUT`).
 
+*Updated 2026-10-26:* the first repair is in for `load`'s own spill (F27, PREVIOUS_ISSUES.md): it is
+written in parts of whole contigs, consecutive in canonical order, up to `SPILL_PART_ROWS` rows, so
+contigs with a few rows share a file (`loading._canonical_parts`). hu416394's bcftools gVCF, rows on
+2,179 contigs, is 12 call parts and 11 block parts. `resolve_ref` and `liftover` still make a pass and
+write a file per source contig, which is what this finding measured; it stays open for them.
+
 ## F25 — UCSC scaffold names written without `chr` are not matched to the store
 
 Severity: low · Found 2026-10-26 dogfooding RM6's SV lift on hu416394's Manta file.
@@ -133,34 +139,3 @@ counting over the frames is inside the figure, so `load`'s share there is not me
 into: where in `load` the memory goes (the per-contig spill is meant to bound it, PREVIOUS_ISSUES has
 the 6.4-million-call DeepVariant file at 3.6 GB), and why a load whose frames are cached still takes
 89 s at the same peak. Blocks nothing yet; a 30x Isaac gVCF is near the edge of this machine.
-
-## F27 — Every read of a loaded VCF facet's frames pays one scan and sort per source contig
-
-Severity: medium · Found 2026-10-26 measuring `reference_support` and `genotype_evidence_at` at
-whole-genome scale (RM3) on hu416394's bcftools gVCF (Sequencing.com, GRCh38, 9,651,143 calls and
-9,473,303 blocks; rows on 2,179 of the header's contigs).
-
-`load` hands back `calls` and `blocks` as one filtered, sorted scan of the spill per contig that has
-rows (`canonical_order_per_contig`), so a facet from a decoy-heavy header is a union of 2,179 parts,
-and every query re-runs it. Measured with the library, one process, after `load`: the calls filtered
-to the 24 primary contigs and to the rows a lookup can use (866,279 spanning calls plus those at the
-asked positions) take 83 s at about 3 GB above the post-load baseline, however few rows match; the
-blocks' as-of join 22 s; `select(pl.len())` over both frames 16 s at 5 GB. The same lookups over those
-frames collected into memory take 1.2 s for 1,000 sites and 2.9 s for a million, and over the lifted
-facet's frames (24 parts in its spill) 1.6 s and 4.1 s. A filter on a million positions costs 128 s
-more on the loaded facet (211 s against 83 s), consistent with the position set being evaluated in
-each part's scan; on the lifted facet it costs nothing visible.
-
-Joins over these frames also held far more than the rows they keep: before `_covering` read each
-frame once, 1,000 sites ran past 30 GB (before 6750e05, also with the sites on chr21 and chr22 only)
-and past 55 GB after it, where the same queries over the frames held in memory peak at 10 GB. `_covering` no longer joins the
-lazy frames, so the lookups are within bounds; the per-query read cost stays.
-
-The part count is what costs: hu80855C's Isaac gVCF (25 parts, 45,242,155 calls and 138,019,217
-blocks, ten times the rows) answers 1,000 sites in 20 s and a million in 24 s (RM3). Not looked into:
-what in each part's scan costs. Repairs, each a change
-to `load`'s spill: write the spill in canonical order once, so the frames are one scan with no sort
-at read time (the reason it is not is the 11 GB global sort `loading.py` notes; a per-contig sort at
-load time, written in order, would keep that bound); or batch the small contigs into one part, F24's
-first repair. Both change `SPILL_LAYOUT`. Blocks nothing; a panel query on such a facet takes
-minutes instead of seconds.

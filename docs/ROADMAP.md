@@ -654,6 +654,19 @@ brought in nor the one before it could run, so the matching was rewritten (`_cov
   `no_call_block`, 14,563 and 269 calls at and spanning the position, no `none`; 534 sites with more
   than one record.
 
+*Measured 2026-10-26, after F27's repair* (`load` writes its spill in canonical order; same library-only
+bench, counts, timings and digests only, a fresh cache per run, on the 62 GB machine shared with
+other sessions). hu416394's bcftools gVCF, before → after: the frames' plan 2,179 scans and 2,179
+sorts → one scan of 12 call parts (11 for the blocks) and no sort; `select(pl.len())` over both frames
+15.7 s at 8.2 GB → 0.3 s at 4.0 GB; `reference_support` at 1k seeded sites 107 s → 1.9 s and at 1M
+249 s → 4.0 s; `genotype_evidence_at` 111 s → 1.9 s and 249 s → 3.7 s; peaks 7.2–7.6 GB → 5.2–5.5 GB.
+The answers at both sizes, and both frames collected whole, hash the same row for row before and after.
+`load` on a fresh cache peaks at 7.7–7.9 GB either way (three runs each); its time
+varied more between runs than between versions (97–165 s before, 110–151 s after), the sort pass
+itself taking 15 s (11 s for the calls, 4.5 s for the blocks). A load whose frames are cached takes
+87 s before and 86 s after, at 7.7 and 7.9 GB. hu80855C's Isaac gVCF was not re-run: its `load`
+peaked at 54 GB, more than the machine had free.
+
 UCSC's scaffold names meet
 Ensembl's accessions since 2026-10-23, through NCBI's assembly reports rather than the accession inside
 the name (F19, docs/PREVIOUS_ISSUES.md). A VCF with neither

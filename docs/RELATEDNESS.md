@@ -28,6 +28,26 @@ not about who their people are.
   gives a standard error; a band is named only when kinship ± 2 SE lies inside it, otherwise the
   answer is `unknown`, reason `between_bands`. `same_person` is True above the one-person floor, False
   below it, None across it.
+- **First degree, split by IBS0.** Kinship puts a parent and child and full siblings at the same 0.25.
+  What tells them apart is IBS0, the share of shared sites where the two are homozygous for opposite
+  alleles: a parent and child share an allele at every site, so only genotyping error gives them any,
+  while full siblings share no allele identical by descent over about a quarter of the genome. The
+  rule is KING's (Manichaikul et al. 2010, Bioinformatics 26:2867, section 2.3: "IBS between a
+  parent–offspring pair is always 1 or 2 at any SNP in the absence of genotyping errors"). Neither the
+  paper nor KING's manual prints a cutoff; the numbers are the fixed defaults in KING 2.3.2's source
+  (`KingCore.cpp`, the first-degree split `--build` makes before it refits the cutoff to the sample;
+  `relationship.cpp` falls back to the same 0.005): IBS0 at most 0.005 is parent and offspring, above
+  0.008 full siblings, and between the two KING breaks the tie by kinship above 0.24. Here a
+  first-degree band reads `parent_child` when the IBS0 share's interval lies wholly at or below 0.005,
+  `full_siblings` when wholly above 0.008, and stays `first_degree` otherwise. The interval is
+  Wilson's score interval at two standard errors, so a share of 0 needs about 800 sites before it
+  rules out 0.005 (at 700 it reaches 0.0057). For comparison, GWASTools' `ibdAssignRelatednessKing`
+  takes 0.003 as its parent-offspring cutoff. Rejected: KING's tie-break by kinship (both kinds expect
+  0.25, so it is a guess); a cutoff fitted to the sample's own pairs, as KING does when it can (a
+  threshold fitted to local data, and a person has few pairs); a jackknife SE for the share, as the
+  kinship has (a parent and child with no IBS0 in any block have an SE of zero, and would read
+  `parent_child` from a few dozen sites). somalier's pairs are split the same way, from its own IBS0
+  count over its `n` sites.
 - **Unknown, with a reason.** `assembly_unknown` (a facet has no `assembly_label`; run `resolve_ref`
   first), `assembly_mismatch` (positions do not compare across builds; nothing is lifted here),
   `no_panel`, `too_few_sites` (under 500 shared, by default), `no_heterozygous_sites`, `between_bands`,
@@ -43,7 +63,10 @@ not about who their people are.
   and half siblings, twins, grandparents, parental siblings, cousins), founders unrelated where nothing
   links them (basis `assumed`). Which term allows which kinship is just-vcf's own reading of KIN, listed
   in the `just_vcf.pedigree` docstring; a term that allows two (a sibling of either kind, a cousin)
-  allows both bands. `check_pedigree` sets that beside the measured relatedness of the facets whose
+  allows both bands. A first-degree value is expected as `parent_child` for a listed parent link,
+  `full_siblings` for two shared listed parents or a stated sibling term, and `first_degree`, either
+  kind, when the pedigree reaches it some other way (a twin's child and the other twin).
+  `check_pedigree` sets that beside the measured relatedness of the facets whose
   `subject` is each individual's id: `agrees` when every band the measured interval (kinship ± 2 SE)
   reaches is allowed, `disagrees` when none is, otherwise `cannot_tell` with a reason. A disagreement
   is a row and, through `people(..., pedigree=...)`, a warning naming facet ids. It never corrects the
@@ -105,15 +128,22 @@ What the table says:
 - **`too_few_sites`** are the merges' caller-split parts (VarScan2's indel-heavy part shares under 300
   panel sites with anything). **`assembly_mismatch`** is huA4F281's headerless export, which
   `resolve_ref` placed on GRCh36 (NCBI36), against GRCh37 facets; huF31554's export was placed on GRCh37.
-- **Not measured:** first- and second-degree pairs. No PGP-HMS pedigree is on this machine; the
+- **Not measured:** first- and second-degree pairs, and so the first-degree split. No PGP-HMS
+  pedigree is on this machine and none of the participants measured here is related to another; the
   synthetic family in `tests/test_relatedness.py` is the only check of those bands. No VRS ids were
   minted in this run, so the VRS cross-check is tested only on synthetic data.
 
 ## Limits
 
 - A monozygotic twin reads as the same person; genotypes cannot tell them apart.
-- First degree is one band: parent and child (IBS0 near 0) and full siblings (IBS0 above 0) are told
-  apart only by reading `ibs0` beside the band.
+- KING's IBS0 cutoffs assume array-grade genotypes, and facets of one person measured here disagree
+  more than that: the same-person pairs above reach an IBS0 of 0.016 (one person's kinship is lowest
+  where one side is PGP's freeBayes+VarScan2 merge or an imputed facet). A parent and child read from
+  facets that disagree as much would show IBS0 past 0.008 and read `full_siblings`, and a pedigree's
+  parent link against them `disagrees`. The test fixture shows it: a child's genotypes with one
+  haplotype's allele flipped at 8% of sites (IBS0 0.013) read as the parent's full sibling. A facet's
+  own error rate is not estimated, so nothing here can tell such a pair from real siblings; `ibs0`
+  beside the band is what to read.
 - Facets on different builds are not compared. Lifting one first (`liftover`) makes them comparable.
 - The jackknife captures the sampling of sites, not the spread of real relationships (two second-degree
   relatives share anywhere from about 0.09 to 0.17), so a band near a floor can be `unknown` for a

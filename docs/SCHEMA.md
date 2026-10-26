@@ -1505,7 +1505,10 @@ supplies, read into frames of its own. docs/RELATEDNESS.md has the method.
 
 - **`RELATEDNESS_FRAME`** (`pairwise_relatedness`, `just_vcf.somalier`; one `Relatedness` model per
   row): `facet_a`, `facet_b`, `method` (`king_robust` or `somalier`, an open vocabulary), `band` (a
-  `pl.Enum`: `same_person`, `first_degree`, `second_degree`, `third_degree`, `unrelated`, `unknown`),
+  `pl.Enum`: `same_person`, `first_degree`, `parent_child`, `full_siblings`, `second_degree`,
+  `third_degree`, `unrelated`, `unknown`; a first-degree kinship reads `parent_child` or
+  `full_siblings` where the IBS0 share's interval lies wholly on one side of KING's cutoffs, and
+  `first_degree` where it does not, the kind not told),
   `reason` (why `unknown`: `assembly_unknown`, `assembly_mismatch`, `no_panel`, `too_few_sites`,
   `no_heterozygous_sites`, `between_bands`, `variant_sites_only`; an open vocabulary), `assembly_label`, `panel`, `kinship`
   and `kinship_se` (KING's scale, one person 0.5), `ibs0` and `ibs2` (shares of the shared sites), the
@@ -1523,7 +1526,9 @@ supplies, read into frames of its own. docs/RELATEDNESS.md has the method.
   `relation_label` (the first statement relating the two, verbatim, null when none does), `basis`
   (`stated`, `derived` through parent links, or `assumed`: no biological path, founders taken as
   unrelated), `expected_kinship` (null unless the pedigree allows one value), `expected_bands` (every
-  band the allowed values fall in, least related first) and `expected_reason` (why there is none:
+  band the allowed values fall in, least related first; a first-degree value is `parent_child` for a
+  listed parent link, `full_siblings` for two shared listed parents or a stated sibling term, and
+  `first_degree` reached any other way) and `expected_reason` (why there is none:
   `term_without_degree`, `more_than_two_parents`, `statements_conflict`; an open vocabulary). Which KIN
   term allows which kinship is just-vcf's own reading (KIN has no kinship values); the
   `just_vcf.pedigree` docstring lists it.
@@ -1532,7 +1537,9 @@ supplies, read into frames of its own. docs/RELATEDNESS.md has the method.
   `kinship_se`, `ibs0`, `n_sites` and `relatedness_reason`, and `agreement` (`agrees`: every band the
   measured interval reaches is allowed; `disagrees`: none is; `cannot_tell`), with `reason` for
   `cannot_tell` (`no_facet`, a pedigree reason, a relatedness reason, or `between_bands` when the
-  interval reaches allowed and other bands). A pedigree individual is matched to facets by its
+  interval reaches allowed and other bands). The two first-degree kinds are bands of their own here,
+  and `first_degree` on either side stands for both: a parent link measured `full_siblings`
+  disagrees, one measured `first_degree` (the kind not told) is `cannot_tell`, `between_bands`. A pedigree individual is matched to facets by its
   `individual_id` as `subject` (RM273), each source once as `Person.checks` stands it; one row per pair
   of those facets, one row with null facets when an individual has none. The pedigree is never changed
   and nothing is relabelled (charter invariant 8). `people(..., pedigree=...)` runs it and warns each
@@ -2451,6 +2458,22 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **Two enum members, outside the three frames** (2026-10-26, RM274's first-degree split):
+  `RelationBand.PARENT_CHILD` (`parent_child`) and `RelationBand.FULL_SIBLINGS` (`full_siblings`),
+  just-vcf's own terms, in the `band` `pl.Enum` of `RELATEDNESS_FRAME` and `PEDIGREE_CHECKS` and in
+  `EXPECTED_KINSHIP`'s `expected_bands` ("Relatedness and pedigrees" above). No column of `facets`,
+  `calls` or `blocks` changes, so by RM274's precedent no `SCHEMA_VERSION` change; the lead's call at
+  merge. Legality: the vocabulary grows without a removal or a rename, but the change is **not
+  additive for a reader of `band`**. A pair that read `first_degree` now reads `parent_child` or
+  `full_siblings` wherever its IBS0 share is told, so `first_degree` narrows from "first degree" to
+  "first degree, the kind not told", and a consumer selecting `band == "first_degree"` gets fewer rows.
+  That is a redefinition of a value a consumer reads (§8 says add, not redefine), allowed before 1.0
+  and said so in the changelog; no sibling repo reads `band` (just-prs and just-dna-lite checked
+  2026-10-26). The pedigree check's rule changes with it: a parent link measured `full_siblings`
+  (or the reverse) is `disagrees`, where it was `agrees`. Rejected: a separate nullable column (say
+  `first_degree_kind`) beside an unchanged `band`, strictly additive but a second column every reader
+  must join to the first to know what a pair is.
 
 - **No version change** (2026-10-25, genotype text that is not allele indices): the key=value table
   and Nirvana JSON withhold such a genotype whole (`gt`, `gt_alleles`, `phased` null, `source_gt`

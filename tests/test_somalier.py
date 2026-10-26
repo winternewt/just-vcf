@@ -20,6 +20,7 @@ PAIRS = [
     ("f0", "f2", 0.512, 1, 6000, 0.65, 4000, 3900, 3900, 2600, 2000, 1950, 1200, 9150, 3, 90, -1),
     ("f1", "f2", 0.03, 700, 3500, 0.38, 4010, 3900, 3900, 1100, 2004, 1950, 600, 9100, 20, 60, -1),
     ("f0", "f3", 0.9, 0, 300, 0.99, 100, 110, 100, 95, 50, 55, 50, 310, 0, 5, -1),
+    ("f2", "f3", 0.49, 180, 5600, 0.62, 3900, 3950, 3900, 2400, 1950, 1980, 1100, 9000, 4, 80, -1),
 ]
 
 
@@ -32,11 +33,15 @@ def write_pairs(path: Path) -> Path:
 def test_pairs_tsv_reads_into_the_relatedness_frame(tmp_path: Path) -> None:
     frame = read_somalier_pairs(write_pairs(tmp_path / "related.pairs.tsv"), {"f0": "facet-a", "f1": "facet-b"}, min_sites=500)
     assert frame.schema == RELATEDNESS_FRAME
-    assert frame.select("facet_a", "facet_b").rows() == [("facet-a", "facet-b"), ("facet-a", "f2"), ("facet-b", "f2"), ("facet-a", "f3")]
+    pairs = [("facet-a", "facet-b"), ("facet-a", "f2"), ("facet-b", "f2"), ("facet-a", "f3"), ("f2", "f3")]
+    assert frame.select("facet_a", "facet_b").rows() == pairs
     assert frame["somalier_relatedness"].to_list() == [row[2] for row in PAIRS]
     # somalier's relatedness is twice KING's kinship scale.
     assert frame["kinship"].to_list()[:3] == pytest.approx([row[2] / 2 for row in PAIRS[:3]])
-    assert frame["band"].to_list()[:3] == [RelationBand.SAME_PERSON.value, RelationBand.FIRST_DEGREE.value, RelationBand.UNRELATED.value]
+    # First degree is split by IBS0 as KING-robust's is: 1 of 9,150 sites is parent and child, 180 of
+    # 9,000 (0.02, past KING's 0.008) full siblings.
+    assert frame["band"].to_list()[:3] == ["same_person", "parent_child", "unrelated"]
+    assert frame["band"][4] == "full_siblings"
     assert frame["n_sites"].to_list() == [row[13] for row in PAIRS]
     assert frame["n_het_both"].to_list() == [row[9] for row in PAIRS]
     assert frame["ibs0"].to_list()[:3] == pytest.approx([row[3] / row[13] for row in PAIRS[:3]])

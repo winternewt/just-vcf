@@ -32,6 +32,26 @@ chose them by its own genotype, and the band is `unknown`, `variant_sites_only`,
 The bands are just-vcf's own vocabulary: GA4GH Pedigree's KIN ontology names relationships (parent
 of, sibling of), not degrees inferred from genotypes.
 
+**First degree, split by IBS0.** A parent and child share an allele at every site, so absent
+genotyping error they are never homozygous for opposite alleles; full siblings share no allele
+identical by descent over about a quarter of the genome, and there show IBS0 as unrelated people do.
+Kinship cannot tell the two (both 0.25); the IBS0 share (`ibs0`, of the shared sites, as KING's own
+`IBS0` column) can. The rule is KING's (Manichaikul et al. 2010, section 2.3:
+"IBS between a parent–offspring pair is always 1 or 2 at any SNP in the absence of genotyping
+errors"); the paper gives no number. The cutoffs are the fixed defaults in KING 2.3.2's source
+(`KingCore.cpp`, the first-degree split of `--build`): IBS0 at most 0.005 parent and offspring,
+above 0.008 full siblings. A first-degree band is `parent_child` when the IBS0 share's interval lies
+wholly at or below 0.005, `full_siblings` when wholly above 0.008, and stays `first_degree`
+otherwise: KING's own grey zone between the two, or too few sites for the share to be placed. The
+interval is Wilson's score interval at `INTERVAL_SES` (two) standard errors. Rejected: KING's
+tie-break inside the grey zone (`kinship > 0.24` reads siblings), since both kinds expect 0.25 and a
+tie-break is a guess; KING's cutoff fitted to a sample's own pairs (pedigree-labelled pairs, or the
+valley of the IBS0 histogram), since that fits a threshold to local data and a person has few
+pairs; a jackknife over the blocks, as the kinship's SE is, since a parent and child with no IBS0 in
+any block have an SE of zero, which would name `parent_child` from a few dozen sites. KING's cutoffs
+assume array-grade genotypes: a pair whose facets disagree with each other more than that (an
+imputed or merged facet) can read `full_siblings` for a parent and child (docs/RELATEDNESS.md).
+
 A facet's genotypes say nothing about who someone is: this measures only how alike two facets'
 genotypes are. Same-person (`same_person`) is the check `just_vcf.person` runs on facets a caller says
 are one person.
@@ -94,6 +114,11 @@ FIRST_DEGREE_FLOOR = 2**-2.5
 SECOND_DEGREE_FLOOR = 2**-3.5
 THIRD_DEGREE_FLOOR = 2**-4.5
 
+PARENT_CHILD_IBS0_CEILING = 0.005
+"""KING 2.3.2's IBS0 share at or below which a first-degree pair is parent and offspring."""
+FULL_SIBLINGS_IBS0_FLOOR = 0.008
+"""KING 2.3.2's IBS0 share above which a first-degree pair is full siblings."""
+
 
 class RelationBand(str, Enum):
     """The degree of relationship a kinship falls in (KING's inference criteria). Just-vcf's own terms."""
@@ -101,14 +126,29 @@ class RelationBand(str, Enum):
     SAME_PERSON = "same_person"
     """One person, or a monozygotic twin: genotypes cannot tell the two apart."""
     FIRST_DEGREE = "first_degree"
+    """First degree, of a kind the IBS0 share does not tell (or a band with no IBS0 count to read)."""
+    PARENT_CHILD = "parent_child"
+    """First degree, parent and child: the IBS0 share lies wholly at or below KING's 0.005."""
+    FULL_SIBLINGS = "full_siblings"
+    """First degree, full siblings (or dizygotic twins): the IBS0 share lies wholly above KING's 0.008."""
     SECOND_DEGREE = "second_degree"
     THIRD_DEGREE = "third_degree"
     UNRELATED = "unrelated"
     UNKNOWN = "unknown"
 
 
+FIRST_DEGREE_KINDS: frozenset[RelationBand] = frozenset({RelationBand.PARENT_CHILD, RelationBand.FULL_SIBLINGS})
+"""The two bands at the first degree's kinship, told apart by IBS0."""
+
+
+def finest_bands(band: RelationBand) -> frozenset[RelationBand]:
+    """The bands `band` stands for: `first_degree` is either kind, any other band itself."""
+    return FIRST_DEGREE_KINDS if band is RelationBand.FIRST_DEGREE else frozenset({band})
+
+
 def band_of(kinship: float) -> RelationBand:
-    """The band a kinship value falls in."""
+    """The band a kinship value falls in, on kinship alone: first degree is `first_degree` here, and
+    `first_degree_kind` reads which."""
     if kinship > SAME_PERSON_FLOOR:
         return RelationBand.SAME_PERSON
     if kinship > FIRST_DEGREE_FLOOR:
@@ -263,6 +303,34 @@ def king_robust(n_het_a: int, n_het_b: int, n_het_both: int, n_ibs0: int) -> flo
     if smaller == 0:
         return None
     return 0.5 - (n_het_a + n_het_b) / (4 * smaller) + (n_het_both - 2 * n_ibs0) / (2 * smaller)
+
+
+def ibs0_interval(n_ibs0: int, n_sites: int) -> tuple[float, float]:
+    """Wilson's score interval for the IBS0 share `n_ibs0 / n_sites`, `INTERVAL_SES` standard errors wide."""
+    z2 = INTERVAL_SES**2
+    share = n_ibs0 / n_sites
+    centre = (share + z2 / (2 * n_sites)) / (1 + z2 / n_sites)
+    half = INTERVAL_SES * math.sqrt(share * (1 - share) / n_sites + z2 / (4 * n_sites**2)) / (1 + z2 / n_sites)
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def first_degree_kind(n_ibs0: int | None, n_sites: int | None) -> RelationBand:
+    """Which first-degree band the IBS0 count says (module docstring): `parent_child` when the share's
+    interval lies wholly at or below `PARENT_CHILD_IBS0_CEILING`, `full_siblings` when wholly above
+    `FULL_SIBLINGS_IBS0_FLOOR`, else `first_degree`, the kind not told. No count is not told either."""
+    if n_ibs0 is None or not n_sites:
+        return RelationBand.FIRST_DEGREE
+    low, high = ibs0_interval(n_ibs0, n_sites)
+    if high <= PARENT_CHILD_IBS0_CEILING:
+        return RelationBand.PARENT_CHILD
+    if low > FULL_SIBLINGS_IBS0_FLOOR:
+        return RelationBand.FULL_SIBLINGS
+    return RelationBand.FIRST_DEGREE
+
+
+def split_first_degree(band: RelationBand, n_ibs0: int | None, n_sites: int | None) -> RelationBand:
+    """`band`, with `first_degree` replaced by the kind `first_degree_kind` reads; other bands as given."""
+    return first_degree_kind(n_ibs0, n_sites) if band is RelationBand.FIRST_DEGREE else band
 
 
 def interval_band(kinship: float, se: float) -> RelationBand:
@@ -439,6 +507,7 @@ def _compare(first: Facet, second: Facet, a: pl.DataFrame, b: pl.DataFrame, pane
     known["kinship_se"] = se
     band = interval_band(kinship, se) if se is not None else band_of(kinship)
     reason = BETWEEN_BANDS if band is RelationBand.UNKNOWN else None
+    band = split_first_degree(band, totals["ibs0"], totals["n"])
     if totals["hom_ref_a"] == 0 or totals["hom_ref_b"] == 0:
         band, reason = RelationBand.UNKNOWN, VARIANT_SITES_ONLY
     return {"facet_a": first.facet_id, "facet_b": second.facet_id, "method": KING_METHOD, "band": band.value, "reason": reason, **known}
@@ -466,8 +535,11 @@ __all__ = [
     "ASSEMBLY_UNKNOWN",
     "BETWEEN_BANDS",
     "DEFAULT_MIN_SITES",
+    "FIRST_DEGREE_KINDS",
+    "FULL_SIBLINGS_IBS0_FLOOR",
     "NO_HETEROZYGOUS_SITES",
     "NO_PANEL",
+    "PARENT_CHILD_IBS0_CEILING",
     "RELATEDNESS_FRAME",
     "RELATEDNESS_METHODS",
     "RELATEDNESS_REASONS",
@@ -477,10 +549,14 @@ __all__ = [
     "SitePanel",
     "interval_band",
     "band_of",
+    "finest_bands",
+    "first_degree_kind",
+    "ibs0_interval",
     "king_robust",
     "packaged_assemblies",
     "packaged_panel",
     "pairwise_relatedness",
     "relatedness",
     "same_person",
+    "split_first_degree",
 ]

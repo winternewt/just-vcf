@@ -184,20 +184,20 @@ def test_genotyping_errors_lower_kinship_but_keep_one_person(family, tmp_path: P
 @pytest.mark.parametrize(
     ("other", "band", "no_ibs0"),
     [
-        ("c", RelationBand.FIRST_DEGREE, True),  # parent and child: IBS0 is impossible
-        ("s", RelationBand.FIRST_DEGREE, False),  # a parent and the child's full sibling are `a`'s children too
-        ("g", RelationBand.SECOND_DEGREE, False),
-        ("u", RelationBand.UNRELATED, False),
+        ("c", "parent_child", True),  # parent and child: IBS0 is impossible
+        ("s", "parent_child", True),  # the child's full sibling is `a`'s child too
+        ("g", "second_degree", False),
+        ("u", "unrelated", False),
     ],
 )
-def test_relatives_fall_in_their_band(family, tmp_path: Path, other: str, band: RelationBand, no_ibs0: bool) -> None:
+def test_relatives_fall_in_their_band(family, tmp_path: Path, other: str, band: str, no_ibs0: bool) -> None:
     panel, _, people = family
     a = wgs(write_vcf(tmp_path / "a.vcf", panel, people["a"]))
     b = load(write_23andme(tmp_path / f"{other}.txt", panel, people[other]))
     result = relatedness(a, b, panel)
     expected = counts_of(people["a"], people[other])
     assert result.model_dump(include=set(expected)) == expected
-    assert result.band is band and result.reason is None
+    assert result.band.value == band and result.reason is None
     assert result.kinship_se is not None and 0 < result.kinship_se < 0.03
     if no_ibs0:
         assert result.n_ibs0 == 0
@@ -208,8 +208,64 @@ def test_full_siblings_share_ibs0_where_parent_and_child_cannot(family, tmp_path
     panel, _, people = family
     c, s = (wgs(write_vcf(tmp_path / f"{x}.vcf", panel, people[x])) for x in ("c", "s"))
     result = relatedness(c, s, panel)
-    assert result.band is RelationBand.FIRST_DEGREE
+    assert result.band.value == "full_siblings"
     assert result.n_ibs0 == counts_of(people["c"], people["s"])["n_ibs0"] > 0
+
+
+def _with_errors(haplotypes: list[tuple[int, int]], rate: float, seed: int) -> list[tuple[int, int]]:
+    """One haplotype's allele flipped at a share `rate` of sites: genotyping error, drawn with `seed`."""
+    rng = random.Random(seed)
+    return [(1 - h1, h2) if rng.random() < rate else (h1, h2) for h1, h2 in haplotypes]
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "error", "band", "zone"),
+    [
+        ("a", "c", 0.0, "parent_child", (0.0, 0.0)),  # IBS0 is impossible between parent and child
+        ("a", "s", 0.0, "parent_child", (0.0, 0.0)),
+        ("c", "g", 0.0, "parent_child", (0.0, 0.0)),
+        ("c", "s", 0.0, "full_siblings", (0.008, 1.0)),  # siblings share no allele IBD at about a quarter of sites
+        ("a", "c", 0.01, "parent_child", (0.0, 0.005)),  # genotype error below KING's 0.005: still told
+        ("a", "c", 0.035, "first_degree", (0.005, 0.008)),  # inside KING's grey zone: not told, not guessed
+        # Error past 0.008 reads as siblings: KING's cutoffs assume array-grade genotypes (docs/RELATEDNESS.md).
+        ("a", "c", 0.08, "full_siblings", (0.008, 1.0)),
+    ],
+)
+def test_first_degree_is_split_by_ibs0(
+    family, tmp_path: Path, first: str, second: str, error: float, band: str, zone: tuple[float, float]
+) -> None:
+    """KING's split of the first degree (Manichaikul et al. 2010, section 2.3, cut at KING 2.3.2's 0.005
+    and 0.008): the band is named only when the IBS0 share's interval lies on one side of both."""
+    panel, _, people = family
+    genotypes = _with_errors(people[second], error, SEED + 10) if error else people[second]
+    a = wgs(write_vcf(tmp_path / f"{first}.vcf", panel, people[first]))
+    b = load(write_23andme(tmp_path / f"{second}.txt", panel, genotypes))
+    result = relatedness(a, b, panel)
+    expected = counts_of(people[first], genotypes)
+    assert result.model_dump(include=set(expected)) == expected
+    share = expected["n_ibs0"] / expected["n_sites"]
+    assert zone[0] <= share <= zone[1]  # the simulation landed where the row says
+    # The kinship alone says first degree; the IBS0 share says which.
+    assert interval_band(result.kinship, result.kinship_se) is RelationBand.FIRST_DEGREE
+    assert (result.band.value, result.reason) == (band, None)
+    assert same_person(a, b, panel) is False
+
+
+def test_too_few_sites_leave_the_first_degree_unsplit(family, tmp_path: Path) -> None:
+    """No IBS0 at 700 sites does not rule out KING's 0.005 (two SEs of a share of 0 out of 700 reach
+    0.0057), so parent and child stay `first_degree` there; at the panel's 9,000 they read
+    `parent_child`. Full siblings' IBS0 at the same 700 sites is already past 0.008."""
+    panel, _, people = family
+    small = SitePanel(assembly_label="GRCh37", sites=panel.sites.head(700), source="synthetic")
+    a, c, s = (wgs(write_vcf(tmp_path / f"{x}.vcf", panel, people[x])) for x in "acs")
+    thin = relatedness(a, c, small)
+    assert (thin.n_sites, thin.n_ibs0) == (700, counts_of(people["a"], people["c"], set(range(700)))["n_ibs0"]) == (700, 0)
+    assert interval_band(thin.kinship, thin.kinship_se) is RelationBand.FIRST_DEGREE
+    assert (thin.band.value, thin.reason) == ("first_degree", None)
+    assert relatedness(a, c, panel).band.value == "parent_child"
+    siblings = relatedness(c, s, small)
+    assert siblings.n_ibs0 == counts_of(people["c"], people["s"], set(range(700)))["n_ibs0"] > 0
+    assert siblings.band.value == "full_siblings"
 
 
 def test_an_array_absence_is_not_reference(family, tmp_path: Path) -> None:
@@ -371,27 +427,63 @@ def test_a_pedigree_is_checked_against_measured_bands(family_on_panel, tmp_path:
         found = relatedness(*(loaded[with_facets.index(x)] for x in (row["individual_id"][-1], row["relative_id"][-1])), panel)
         assert (row["kinship"], row["band"]) == (found.kinship, found.band.value)
         low, high = (BAND_ORDER.index(band_of(found.kinship + side * 2 * found.kinship_se)) for side in (-1, 1))
-        reached = set(BAND_ORDER[low : high + 1])
-        allowed = {RelationBand(value) for value in row["expected_bands"]}
+        # First degree is two bands at one kinship: the measured one where IBS0 told it, both where not.
+        told = {found.band.value} & FIRST_DEGREE_KINDS
+        reached = set().union(*(_finest(band.value, told) for band in BAND_ORDER[low : high + 1]))
+        allowed = set().union(*(_finest(value) for value in row["expected_bands"]))
         if reached <= allowed:
             assert row["agreement"] == "agrees"
         else:
             assert row["agreement"] == ("disagrees" if not reached & allowed else "cannot_tell")
     # Each kind the fixture drew, and what its band must read.
-    for pair, kinship, agreement in (
-        ("ac", 0.25, "agrees"),  # parent and child
-        ("cs", 0.25, "agrees"),  # full siblings
-        ("ch", 0.125, "agrees"),  # half siblings
-        ("ag", 0.125, "agrees"),  # grandparent
-        ("sg", 0.125, "agrees"),  # aunt or uncle
-        ("ab", 0.0, "agrees"),  # founders
-        ("au", 0.0, "agrees"),
+    for pair, kinship, bands, agreement in (
+        ("ac", 0.25, ["parent_child"], "agrees"),  # parent and child
+        ("gc", 0.25, ["parent_child"], "agrees"),
+        ("cs", 0.25, ["full_siblings"], "agrees"),  # full siblings: both parents listed for both
+        ("ch", 0.125, ["second_degree"], "agrees"),  # half siblings
+        ("ag", 0.125, ["second_degree"], "agrees"),  # grandparent
+        ("sg", 0.125, ["second_degree"], "agrees"),  # aunt or uncle
+        ("ab", 0.0, ["unrelated"], "agrees"),  # founders
+        ("au", 0.0, ["unrelated"], "agrees"),
     ):
         row = rows[frozenset(pair)]
-        assert (row["expected_kinship"], row["agreement"]) == (kinship, agreement), pair
+        assert (row["expected_kinship"], row["expected_bands"], row["agreement"]) == (kinship, bands, agreement), pair
+    assert (rows[frozenset("ac")]["band"], rows[frozenset("cs")]["band"]) == ("parent_child", "full_siblings")
     cousins = rows[frozenset("gk")]
     assert cousins["expected_kinship"] == 0.0625 and cousins["agreement"] in ("agrees", "cannot_tell")
     assert not frame.filter(pl.col("agreement") == "disagrees").height
+
+
+FIRST_DEGREE_KINDS = {"parent_child", "full_siblings"}
+
+
+def _finest(band: str, told: set[str] = FIRST_DEGREE_KINDS) -> set[str]:
+    """The bands `band` stands for: first degree is either kind, or the one IBS0 `told`."""
+    return set(told) if band == "first_degree" else {band}
+
+
+def test_a_parent_who_reads_as_a_sibling_disagrees(family_on_panel, tmp_path: Path) -> None:
+    """The pedigree's parent-child edge against its sibling edge: `c` stated as `s`'s mother (they are
+    full siblings) and `a` stated as `c`'s full sibling (she is the mother) both read `disagrees`, at a
+    kinship that agrees; the true mother link `a`-`s` agrees. On 700 sites a mother link reads
+    `cannot_tell`, `between_bands`: no IBS0 there cannot yet rule siblings out."""
+    panel, people = family_on_panel
+    loaded = [wgs(write_vcf(tmp_path / f"{x}.vcf", panel, people[x]), subject=f"subject-{x}") for x in "acs"]
+    # One pedigree per statement: together they would make `s` a child of two siblings.
+    statements = {
+        "cs": (("c", KIN_MOTHER, "s"), ["parent_child"], "full_siblings", "disagrees"),
+        "ac": (("a", "KIN:008", "c"), ["full_siblings"], "parent_child", "disagrees"),
+        "as": (("a", KIN_MOTHER, "s"), ["parent_child"], "parent_child", "agrees"),
+    }
+    for pair, (link, bands, band, agreement) in statements.items():
+        (row,) = check_pedigree(_family_pedigree([link], pair), *loaded).iter_rows(named=True)
+        assert (row["expected_kinship"], row["expected_bands"], row["band"], row["agreement"]) == (0.25, bands, band, agreement), pair
+    grouped = people_of(*loaded, check=None, pedigree=_family_pedigree([statements["cs"][0]], "acs"))
+    (warning,) = [w for w in grouped["subject-s"].warnings if "pedigree" in w]
+    assert "expected parent_child, measured full_siblings" in warning
+    small = SitePanel(assembly_label="GRCh37", sites=panel.sites.head(700), source="synthetic")
+    thin = check_pedigree(_family_pedigree([("a", KIN_MOTHER, "s")], "as"), *loaded, panel=small).row(0, named=True)
+    assert (thin["band"], thin["agreement"], thin["reason"]) == ("first_degree", "cannot_tell", BETWEEN_BANDS)
 
 
 def test_a_stated_relationship_the_genotypes_contradict_is_kept_and_warned(family_on_panel, tmp_path: Path) -> None:
@@ -404,7 +496,7 @@ def test_a_stated_relationship_the_genotypes_contradict_is_kept_and_warned(famil
     frame = check_pedigree(pedigree, *loaded, twin)
     rows = {frozenset((r["individual_id"][-1], r["relative_id"][-1])): r for r in frame.iter_rows(named=True)}
     assert (rows[frozenset("uc")]["expected_bands"], rows[frozenset("uc")]["band"], rows[frozenset("uc")]["agreement"]) == (
-        ["first_degree"],
+        ["parent_child"],
         "unrelated",
         "disagrees",
     )

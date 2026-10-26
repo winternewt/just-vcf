@@ -224,12 +224,14 @@ Rejected: filtering the staged input by `canonical_batches`, which would hand id
 order for an input not in canonical order and need a sort to put them beside the rows; keeping
 `_IDS_PER_PART` apart from the group bound, two rules for one shape. Left open, both measured above
 and neither F24's pattern: a whole contig is fetched to justify its first indel, about 0.3 s for
-chromosome 1 in `get_substrings` and 0.15 s more in `ReferenceStore.fetch`'s `isupper` guard, so on
-the Manta file 24 fetches for 4,225 indels are nearly all that remains (a window around each indel
-would need a widen-and-retry rule to be shown output-preserving, as gtars rolls over an unbounded
-region; dropping the guard is a store contract question); and one `sha512t24u_digest` call per
-location and per allele, about 24 million on the gVCF, a Python loop over gtars that only a vectorised
-digest in gtars would shorten.
+chromosome 1 in `get_substrings`, so on the Manta file 24 fetches for 4,225 indels are nearly all that
+remains (a window around each indel would need a widen-and-retry rule to be shown output-preserving,
+as gtars rolls over an unbounded region); and one `sha512t24u_digest` call per location and per
+allele, about 24 million on the gVCF, a Python loop over gtars that only a vectorised digest in gtars
+would shorten. The `isupper` guard, 0.15 s more per chromosome 1, went afterwards: the store settles
+case where a sequence enters it (a collection `add_fasta` added is uppercase from gtars' FASTA import,
+recorded by its `just_vcf_fasta` alias), so `fetch` scans only a sequence with no such record. The
+Manta file then mints in 7.45–7.55 s (11.27–11.29 s with the guard), every output hashing the same.
 
 ## F30 — `write_vcf`'s contig names do not reach a breakend's mate inside ALT
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from gtars.refget import StorageMode, digest_sequence
 
 from just_vcf import ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, normalize, reference_dir, resolve_ref
 from just_vcf.loading import Loaded
@@ -265,39 +266,45 @@ def test_soft_masked_and_gzipped_fasta_reads_uppercase(tmp_path: Path) -> None:
     assert calls["ref_check"].cast(pl.String).to_list() == ["match"]  # VCF REF bases are case-insensitive
 
 
-def test_fetch_returns_uppercase_from_a_soft_masked_fasta(tmp_path: Path) -> None:
-    """`fetch` keeps its "Uppercase" promise over soft-masked (lowercase) bases, N runs included."""
-    masked = {"1": SEQ["1"][:100] + SEQ["1"][100:400].lower() + "n" * 50 + SEQ["1"][450:]}
+MASKED = {"1": SEQ["1"][:100] + SEQ["1"][100:400].lower() + "n" * 50 + SEQ["1"][450:]}
+"""Contig 1 soft-masked over 100-400 and with a lowercase N run over 400-450."""
+
+
+@pytest.mark.parametrize("where", ["memory", "disk", "reopened"])
+def test_fetch_returns_a_soft_masked_fasta_uppercase_as_gtars_stored_it(tmp_path: Path, where: str) -> None:
+    """`fetch` keeps its "Uppercase" promise over soft-masked bases without uppercasing them itself:
+    gtars' FASTA import stored them uppercase, and `fetch` returns them as read. A gtars that stopped
+    uppercasing fails here, since nothing else would."""
+    fasta = write_fasta(tmp_path / "masked.fa", MASKED)
+    s = ReferenceStore.in_memory() if where == "memory" else ReferenceStore.open(tmp_path / "store")
+    digest = s.add_fasta(fasta)
+    if where == "reopened":
+        s = ReferenceStore.open(tmp_path / "store")
+    (contig,) = s.contigs(digest)
+    ranges = [(90, 110), (380, 460), (0, contig.length)]
+    assert contig.digest in s._uppercase_sequences()  # the store's record, so fetch takes gtars' text as is
+    assert s.store.get_substrings(contig.digest, ranges) == [MASKED["1"][a:b].upper() for a, b in ranges]
+    assert s.fetch(contig, ranges) == [MASKED["1"][a:b].upper() for a, b in ranges]
+
+
+def test_fetch_uppercases_a_sequence_that_did_not_come_from_a_fasta(tmp_path: Path) -> None:
+    """gtars stores a `SequenceRecord` whose `sequence` was set by hand as given in a raw store, so
+    lowercase does reach its `get_substrings`; the store records no case for it, and `fetch` uppercases.
+    A FASTA's collection in the same store still takes the unscanned path."""
     s = ReferenceStore.in_memory()
-    (contig,) = s.contigs(s.add_fasta(write_fasta(tmp_path / "masked.fa", masked)))
-    assert s.fetch(contig, [(90, 110), (380, 460), (0, contig.length)]) == [
-        masked["1"][90:110].upper(),
-        masked["1"][380:460].upper(),
-        masked["1"].upper(),
-    ]
-
-
-class _LowercaseSubstrate:
-    """Stands in for gtars's store under `ReferenceStore`, returning bases as a soft-masked FASTA spells
-    them. gtars uppercases every sequence it stores (its `digest_sequence`: "the original data
-    (uppercased)"), so no real store returns lowercase today; this checks `fetch`'s own guard, which
-    holds whatever store sits underneath."""
-
-    def __init__(self, sequence: str) -> None:
-        self.sequence = sequence
-
-    def set_quiet(self, quiet: bool) -> None:
-        pass
-
-    def get_substrings(self, digest: str, ranges: list[tuple[int, int]]) -> list[str]:
-        return [self.sequence[start:end] for start, end in ranges]
-
-
-def test_fetch_uppercases_whatever_the_store_underneath_returns() -> None:
+    s.store.set_encoding_mode(StorageMode.Raw)
+    (fasta_contig,) = s.contigs(s.add_fasta(write_fasta(tmp_path / "masked.fa", MASKED)))
     sequence = "ACGTacgtnnNNACGT"
-    s = ReferenceStore(_LowercaseSubstrate(sequence), None)  # type: ignore[arg-type]
-    contig = Contig(name="1", length=len(sequence), md5="", digest="d")
-    assert s.fetch(contig, [(0, 16), (4, 8), (8, 10)]) == ["ACGTACGTNNNNACGT", "ACGT", "NN"]
+    record = digest_sequence(sequence.upper().encode(), name="hand")
+    record.sequence = sequence.encode()
+    s.store.add_sequence(record, force=True)
+    hand = Contig(name="hand", length=len(sequence), md5=record.metadata.md5, digest=record.metadata.sha512t24u)
+    ranges = [(0, 16), (4, 8), (8, 10)]
+    assert s.store.get_substrings(hand.digest, ranges) == [sequence[a:b] for a, b in ranges]  # gtars kept the lowercase
+    assert hand.digest not in s._uppercase_sequences()
+    assert s.fetch(hand, ranges) == [sequence[a:b].upper() for a, b in ranges]
+    assert fasta_contig.digest in s._uppercase_sequences()
+    assert s.fetch(fasta_contig, [(90, 110)]) == [MASKED["1"][90:110].upper()]
 
 
 def test_a_fasta_added_twice_is_one_collection_and_the_store_reopens(tmp_path: Path) -> None:

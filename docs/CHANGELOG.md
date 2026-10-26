@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `absence_support` names a withheld absence meaning: a facet whose `callset_type` is known (`wgs`) but
+  whose `absence_means` is `unknown`, as a lifted or consensus whole genome has, was given
+  `callset_type_unknown`. It now gets `absence_not_carried` (new `AbsenceReason` member, so
+  `REFERENCE_SUPPORT_REASON` gains it); the answer stays unknown. `callset_type` is also read as a
+  `CallsetType` member, which matched no type and gave `callset_type_unknown` for an array or an exome.
+
 - Overlapping blocks are read whole. `liftover` keeps the overlapping blocks two source regions sent
   to one place give (a lifted WGS gVCF carries hundreds of thousands), but `genotype_evidence_at`,
   `reference_support`, `concordance` and `consensus` took the block over a position to be the last one

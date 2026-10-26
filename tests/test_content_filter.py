@@ -6,7 +6,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import AbsenceReason, ContentFilter, ContentFilterBasis, VariantClass, absence_is_reference, absence_support, load
+from just_vcf import AbsenceMeans, AbsenceReason, CallsetType, ContentFilter, ContentFilterBasis, VariantClass, absence_is_reference, absence_support, load
 from just_vcf.callset import (
     MAX_FILTER_RESIDUE,
     MIN_FILTER_ALLELES,
@@ -277,6 +277,15 @@ def typed(absence: str, callset_type: str | None) -> dict:
         (typed("unknown", "panel"), "snv", True, AbsenceReason.TARGETED),
         (typed("unknown", "imputed"), "snv", True, AbsenceReason.IMPUTED),
         (typed("unknown", None), "snv", True, AbsenceReason.CALLSET_TYPE_UNKNOWN),
+        # A whole genome whose producer withheld what its absence means (a liftover, a consensus): the
+        # type is known, so the reason is the withholding, not an unknown type.
+        (typed("unknown", "wgs"), "snv", True, AbsenceReason.ABSENCE_NOT_CARRIED),
+        ({**typed("unknown", "wgs"), "absence_means": None}, "snv", True, AbsenceReason.ABSENCE_NOT_CARRIED),
+        # The enum members are taken as their values.
+        (typed("unknown", CallsetType.ARRAY), "snv", True, AbsenceReason.ARRAY),
+        (typed("unknown", CallsetType.WES), "snv", True, AbsenceReason.TARGETED),
+        (typed("unknown", CallsetType.WGS), "snv", True, AbsenceReason.ABSENCE_NOT_CARRIED),
+        ({**typed("unknown", CallsetType.WGS), "absence_means": AbsenceMeans.WEAK_REFERENCE}, "snv", False, AbsenceReason.WHOLE_GENOME_SILENCE),
         (facet("weak_reference", None), "snv", True, AbsenceReason.CLASS_NOT_COUNTED),
         ({"absence_means": "weak_reference"}, "snv", True, AbsenceReason.CLASS_NOT_COUNTED),
     ],

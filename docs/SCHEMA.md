@@ -613,8 +613,10 @@ hom-ref restoration from absence that just-vcf grows must ask it, and refuse a f
 decided it (`AbsenceReason`, just-vcf's own vocabulary), so a refusal says why. It reads as reference
 under `whole_genome_silence` (`weak_reference`), `omitted_called_reference` (`reference`) and
 `content_filter_forced` (either, on a filtered genome, for the kept class, with `force=True`). It is
-unknown under `outside_blocks` (`blocks`); under `array`, `targeted` (an exome or a panel), `imputed`
-or `callset_type_unknown`, from the facet's `callset_type`, when `absence_means` is `unknown`; and
+unknown under `outside_blocks` (`blocks`); under `array`, `targeted` (an exome or a panel), `imputed`,
+`callset_type_unknown` (a null type) or `absence_not_carried` (a whole genome: a derived facet whose
+producer withheld what its absence means, as `liftover` and `consensus` do), from the facet's
+`callset_type`, when `absence_means` is `unknown`; and
 under `class_not_counted`, `class_not_called`, `content_filter_held` (the kept class, without
 `force`) and `class_cut_by_filter`, which a class the filter cut gets even where the facet wrote none
 of it (the cut is why). `absence_is_reference` is its `reads_reference`, so the two cannot drift.
@@ -2134,7 +2136,7 @@ position, what that answer rests on, and why:
 | `call` | a `calls` row covers the position (from `pos` to `end_pos`, both inclusive) | as `genotype_evidence`: `genotype_index` 0 states hom-ref, any other an ALT on some haplotype, null none; on a row with a `split_signal` a `0` may be another ALT (Decision 2), so `rejoin_split` first | `call_at_position`, `call_spans_position` |
 | `block` | a `blocks` row covers it (both ends inclusive) | a `ref` block by `block_grade`, `genotype_index` 0; a `no_call` block by its likelihoods, else `no_call` | `ref_block`, `no_call_block` |
 | `absence` | nothing covers it, and `absence_support` reads the silence as reference | `absent_reference`, asserted, `genotype_index` 0, no number | `whole_genome_silence`, `omitted_called_reference`, `content_filter_forced` |
-| `none` | nothing covers it, and the silence says nothing | `absent_unknown`, unknown, no genotype | the `AbsenceReason` (Decision 4): `outside_blocks`, `array`, `targeted`, `imputed`, `callset_type_unknown`, `class_not_counted`, `class_not_called`, `content_filter_held`, `class_cut_by_filter` |
+| `none` | nothing covers it, and the silence says nothing | `absent_unknown`, unknown, no genotype | the `AbsenceReason` (Decision 4): `outside_blocks`, `array`, `targeted`, `imputed`, `callset_type_unknown`, `absence_not_carried`, `class_not_counted`, `class_not_called`, `content_filter_held`, `class_cut_by_filter` |
 
 `absence_means` comes along on every row, so a producer's reference call by omission (`reference`) and
 a caller's silence (`weak_reference`) stay apart on an `absence` row. That is the absence's own grade,

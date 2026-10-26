@@ -4,6 +4,23 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `load` writes a facet's spill in canonical order once, so `calls` and `blocks` are one scan of the
+  spill's part files with no sort when they are read (F27). Before, each frame was a union of one
+  filtered scan and sort per contig with rows, re-run on every read: 2,179 of them on PGP-HMS
+  hu416394's decoy-heavy bcftools gVCF. The rows are still sunk unsorted in one streaming pass, then
+  sorted a part at a time: a part holds whole contigs, consecutive in canonical order, up to
+  `SPILL_PART_ROWS` (1,000,000) rows unless one contig alone has more, so contigs with a few rows share
+  a file (F24's first repair, for `load`'s spill only). The same frames come back, row for row and
+  dtype for dtype; only the plan changes. On hu416394: `select(pl.len())` over both frames 15.7 s →
+  0.3 s, `reference_support` at 1M sites 249 s → 4.0 s, `load` within the same 7.8 GB peak
+  (measurements under RM3). Applies to every loader that spills: VCF, Nirvana JSON, PGP's key=value
+  table and Complete Genomics. A load spill's manifest and generation key carry a new
+  `FRAMES_LAYOUT` (1): a generation an older version wrote is never read. The stale-version sweep
+  removes an older entry once it is unused past the grace period; an entry this version has loaded
+  into since keeps the old generation beside the new one, costing disk only, until `clear_cache`
+  removes it. `cache.SPILL_LAYOUT`, which the derived steps' spills carry too, did not change, so their
+  spills stay valid.
+
 - `reference_support` and `genotype_evidence_at` answer a whole-genome gVCF within a few GB. They
   matched the asked sites by joining the facet's lazy frames, which held every asked contig's rows at
   once: on PGP-HMS hu416394's bcftools gVCF (9.65M calls, 9.47M blocks) 1,000 random sites ran past

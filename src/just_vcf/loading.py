@@ -30,6 +30,7 @@ from just_vcf.loaders import cgi, keyvalue, nirvana, rsid_table, site_tables, ta
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import (
     BLOCKS,
+    CONTIG_RANK,
     FACETS,
     LINKS,
     SCHEMA_VERSION,
@@ -37,9 +38,7 @@ from just_vcf.schema import (
     AssemblyLabelBasis,
     CallsetType,
     ContentFilter,
-    canonical_chrom,
     canonical_order,
-    canonical_order_per_contig,
     contig_map,
     empty,
 )
@@ -56,6 +55,12 @@ LOADABLE_FORMATS: frozenset[str] = (
 
 SPILL_ROW_GROUP = 200_000
 """Rows per parquet row group in a spill. Small enough that a contig filter skips most of the file."""
+
+SPILL_PART_ROWS = 1_000_000
+"""Rows a part file of a load spill holds at most, unless one contig alone has more. A part holds whole
+contigs, consecutive in canonical order, so the parts read one after another are the frame in canonical
+order. A contig over the bound is a part of its own; contigs under it share one, so a header of decoys
+with a few rows each costs a few files, not one each (F24). The sort at load holds one part in memory."""
 
 _IMPUTED_FORMATS = frozenset({"genes_for_good_imputed"})
 _UNKNOWN_CALLSET_FORMATS = frozenset({"plink_23", "genos", "color_genotypes"})
@@ -159,7 +164,7 @@ def load(source: Path | str | Sniffed, sample: str | None = None, subject: str |
     as a generation the same rows find again (`just_vcf.cache.Spill`), so a load run again never
     touches the files an earlier `Loaded` reads. An input polars-bio cannot read as it is is first
     copied there; the lazy frames read the spill, never the copy. Each run first removes the cache
-    entries an older `REWRITE_VERSION`, `SCHEMA_VERSION`, `SPILL_LAYOUT` or `WORK_VERSION` wrote
+    entries an older `REWRITE_VERSION`, `SCHEMA_VERSION`, `SPILL_LAYOUT`, `FRAMES_LAYOUT` or `WORK_VERSION` wrote
     (`just_vcf.cache.sweep_stale`).
     """
     if subject is not None and not subject.strip():
@@ -292,7 +297,7 @@ def _load_nirvana_copy(sniffed: Sniffed, sample: str | None, source_sha256: str,
     options = {} if len(nirvana.samples(header)) == 1 else {"sample_index": index}
     facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options=options)
     rows = nirvana.calls_rows(nirvana.scan(copy), index)
-    spilled, _, contigs = _spill(facet_id, nirvana.to_calls_frame(rows, facet_id), empty(BLOCKS), origin)
+    spilled, _ = _spill(facet_id, nirvana.to_calls_frame(rows, facet_id), empty(BLOCKS), origin)
     counts = nirvana.stats(spilled)
     warnings = nirvana.warnings_for(counts, other)
     classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
@@ -322,7 +327,7 @@ def _load_nirvana_copy(sniffed: Sniffed, sample: str | None, source_sha256: str,
         logger.warning("%s: %s", facet_id, warning)
     return Loaded(
         facets=_facet_frame(facet),
-        calls=canonical_order_per_contig(spilled, contigs),
+        calls=spilled,
         blocks=empty(BLOCKS),
         warnings=tuple(warnings),
     )
@@ -351,7 +356,7 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
     for index, prefix, caller in keyvalue.CALLERS:
         facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={"caller_index": index})
         calls = keyvalue.to_calls_frame(keyvalue.caller_rows(rows, prefix), facet_id)
-        spilled, _, contigs = _spill(facet_id, calls, empty(BLOCKS), origin)
+        spilled, _ = _spill(facet_id, calls, empty(BLOCKS), origin)
         inference = callset.classify(spilled, ["DP"], None)
         logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
         kind = inference.callset_type if inference else None
@@ -377,7 +382,7 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
                 "dropped_fields": keyvalue.dropped_fields(head),
             }
         )
-        calls_parts.append(canonical_order_per_contig(spilled, contigs))
+        calls_parts.append(spilled)
         warnings += [f"{caller} facet: {w}" for w in [*keyvalue.warnings_for(counts, prefix), *class_warnings]]
     links = kin_links([facet["facet_id"] for facet in facets], CALLER_SPLIT)
     return _multi_facet_loaded(facets, calls_parts, [empty(BLOCKS)] * len(facets), warnings, links)
@@ -445,7 +450,7 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
 
     facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={})
     calls_frame, blocks_frame = cgi.to_frames(calls, blocks, facet_id)
-    spilled, spilled_blocks, contigs = _spill(facet_id, calls_frame, blocks_frame, origin)
+    spilled, spilled_blocks = _spill(facet_id, calls_frame, blocks_frame, origin)
     # Unanchored alleles (`""`) count as indels; the member's own name is read for its words only.
     classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
     warnings += class_warnings
@@ -480,13 +485,21 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
         logger.warning("%s: %s", facet_id, warning)
     return Loaded(
         facets=_facet_frame(facet),
-        calls=canonical_order_per_contig(spilled, contigs),
-        blocks=canonical_order_per_contig(spilled_blocks, contigs),
+        calls=spilled,
+        blocks=spilled_blocks,
         warnings=tuple(warnings),
     )
 
 
-_FRAMES_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+FRAMES_LAYOUT = 1
+"""How a load spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
+rows in canonical order, in parts of whole contigs (`_canonical_parts`), which the frames read as they
+are (F27). A spill without the key held each frame unsorted in one file, sorted one contig at a time on
+every read: its manifest lacks the key, so the sweep judges it older, and its generation key lacks it,
+so no run of this version finds it. `cache.SPILL_LAYOUT`, which every derived step's spill carries
+too, is not what changed: bumping it would retire their spills as well."""
+
+_FRAMES_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT, "FRAMES_LAYOUT": FRAMES_LAYOUT}
 """The version keys of a load spill, in its cache manifest."""
 
 WORK_VERSION = 1
@@ -517,24 +530,27 @@ def _work_copy(origin: cache.Origin, directory: str) -> Iterator[Path]:
                 leftover.unlink()
 
 
-def _spill(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origin: cache.Origin) -> tuple[pl.LazyFrame, pl.LazyFrame, list[str]]:
-    """Spill a facet's rows (`_spill_files`) and return scans of the calls and the blocks, and the
-    contigs either holds."""
-    calls_path, blocks_path = _spill_files(facet_id, calls, blocks, origin)
-    spilled, spilled_blocks = pl.scan_parquet(calls_path), pl.scan_parquet(blocks_path)
-    contigs = pl.concat([spilled.select("chrom").unique(), spilled_blocks.select("chrom").unique()]).unique().collect()["chrom"].to_list()
-    return spilled, spilled_blocks, contigs
+def _spill(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origin: cache.Origin) -> tuple[pl.LazyFrame, pl.LazyFrame]:
+    """Spill a facet's rows (`_spill_files`) and return scans of the calls and the blocks, each in
+    canonical order as it is read."""
+    calls_parts, blocks_parts = _spill_files(facet_id, calls, blocks, origin)
+    return pl.scan_parquet(calls_parts), pl.scan_parquet(blocks_parts)
 
 
-def _spill_files(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origin: cache.Origin) -> tuple[Path, Path]:
-    """Write a facet's unsorted `calls` and `blocks` to parquet in one streaming pass, as a generation
-    of `frames/<facet_id>-<SCHEMA_VERSION>/` named by the bytes written (`just_vcf.cache.Spill`).
+def _spill_files(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origin: cache.Origin) -> tuple[list[Path], list[Path]]:
+    """Write a facet's `calls` and `blocks` to parquet in canonical order, as a generation of
+    `frames/<facet_id>-<SCHEMA_VERSION>/` (`just_vcf.cache.Spill`), and return each frame's part files
+    in reading order.
 
-    The same rows sink to the same bytes, so a load run again finds the generation an earlier one
-    committed and leaves its files as they are: the frames that earlier `Loaded` returned keep reading
-    them. Rejected: reusing a complete spill by its `facet_id` without writing, which would skip the
-    sink but hand a load the rows an earlier version of the loader wrote whenever a loader fix does
-    not bump `SCHEMA_VERSION`.
+    A global sort holds every column in memory (11 GB for a 6.4M-call VCF), so the rows are first sunk
+    unsorted in one streaming pass, then sorted a part at a time (`_canonical_parts`). The frames scan
+    the parts as they are: no sort runs when they are read (F27), where one sort per contig used to run
+    on every read. The generation is named by the unsorted bytes and `FRAMES_LAYOUT`: the same rows
+    sink to the same bytes, so a load run again finds the generation an earlier one committed, skips
+    the sort and leaves its files as they are, and the frames that earlier `Loaded` returned keep
+    reading them. Rejected: reusing a complete spill by its `facet_id` without writing, which would
+    skip the sink but hand a load the rows an earlier version of the loader wrote whenever a loader
+    fix does not bump `SCHEMA_VERSION`.
     """
     entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
     with cache.spilling(entry, cache.FRAMES_SPILL, _FRAMES_VERSIONS, origin.model_copy(update={"facet_id": facet_id})) as spill:
@@ -545,9 +561,47 @@ def _spill_files(facet_id: str, calls: pl.LazyFrame, blocks: pl.LazyFrame, origi
                 blocks.sink_parquet(staged_blocks, row_group_size=SPILL_ROW_GROUP, lazy=True),
             ]
         )
-        key = cache.content_key([staged_calls, staged_blocks], {"facet_id": facet_id})
-        done = spill.find(key) or spill.commit(key, {"calls": [staged_calls], "blocks": [staged_blocks]}, [])
-    return done.files("calls")[0], done.files("blocks")[0]
+        key = cache.content_key([staged_calls, staged_blocks], {"facet_id": facet_id, "FRAMES_LAYOUT": FRAMES_LAYOUT})
+        done = spill.find(key)
+        if done is None:
+            parts = {"calls": _canonical_parts(staged_calls, "calls"), "blocks": _canonical_parts(staged_blocks, "blocks")}
+            staged_calls.unlink()
+            staged_blocks.unlink()
+            done = spill.commit(key, parts, [])
+    return done.files("calls"), done.files("blocks")
+
+
+def _canonical_parts(staged: Path, name: str) -> list[Path]:
+    """The rows of one unsorted spilled frame, written beside it as `<name>-<n>.parquet` parts in
+    canonical order (`canonical_order`): whole contigs per part, consecutive in canonical contig order,
+    up to `SPILL_PART_ROWS` rows unless one contig alone has more.
+
+    Each part is filtered from the staged file, sorted in memory and written, one at a time, so memory
+    holds one part. Rows with no `chrom` are left out, as the per-contig read before this did. A frame
+    with no rows is one empty part, so its scan keeps the staged file's schema.
+    """
+    scan = pl.scan_parquet(staged)
+    counts = dict(scan.group_by("chrom").len().drop_nulls("chrom").collect().iter_rows())
+    batches: list[list[str]] = []
+    held = 0
+    for chrom in sorted(counts, key=lambda c: (CONTIG_RANK.get(c, len(CONTIG_RANK)), c)):
+        if batches and held + counts[chrom] <= SPILL_PART_ROWS:
+            batches[-1].append(chrom)
+            held += counts[chrom]
+        else:
+            batches.append([chrom])
+            held = counts[chrom]
+    if not batches:
+        part = staged.with_name(f"{name}-00000.parquet")
+        scan.clear().collect().write_parquet(part)
+        return [part]
+    parts = []
+    for index, batch in enumerate(batches):
+        part = staged.with_name(f"{name}-{index:05d}.parquet")
+        rows = scan.filter(pl.col("chrom") == batch[0]) if len(batch) == 1 else scan.filter(pl.col("chrom").is_in(batch))
+        canonical_order(rows).collect().write_parquet(part, row_group_size=SPILL_ROW_GROUP)
+        parts.append(part)
+    return parts
 
 
 def _multi_facet_loaded(
@@ -830,17 +884,15 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
             part_warnings += row_warnings
 
             calls_frame, blocks_frame = vcf.to_frames(calls, blocks, facet_id)
-            # A global sort holds every column in memory (11 GB for a 6.4M-call VCF). The rows are spilled
-            # unsorted in one streaming pass instead, and read back one contig at a time in canonical order.
-            calls_path, blocks_path = _spill_files(facet_id, calls_frame, blocks_frame, origin)
+            # Spilled in canonical order a part at a time, never with a global sort (`_spill_files`).
+            calls_paths, blocks_paths = _spill_files(facet_id, calls_frame, blocks_frame, origin)
         if stats.get("unsourced"):
             # The file's, not a caller's: no caller prefix (Decision 8).
             warnings.append(
                 f"{stats['unsourced']} record(s) whose INFO/SF names no caller of the merge (no SF, or no "
                 "##sourceFiles index) left out: they belong to no caller's facet"
             )
-        contigs = [canonical_chrom(name) for name in stats["chroms"]]
-        spilled = pl.scan_parquet(calls_path)
+        spilled = pl.scan_parquet(calls_paths)
         flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
         part_warnings += vcf.split_warnings(flagged, marker_rows, header)
         if source.callset_type:
@@ -899,9 +951,9 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 "gl_source": likelihoods.value if likelihoods else None,
             }
         )
-        # The flagged positions join above the per-contig sort, so a filter still reaches the parquet scan.
-        calls_parts.append(vcf.with_split_groups(canonical_order_per_contig(spilled, contigs), flagged))
-        blocks_parts.append(canonical_order_per_contig(pl.scan_parquet(blocks_path), contigs))
+        # The flagged positions join above the scan, so a filter still reaches the parquet files.
+        calls_parts.append(vcf.with_split_groups(spilled, flagged))
+        blocks_parts.append(pl.scan_parquet(blocks_paths))
         if part.sf_alone:
             shared = facet_stats[0].get("shared_sources", 0)
             part_warnings.append(

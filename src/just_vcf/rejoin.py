@@ -73,7 +73,8 @@ def rejoin_split(loaded: Loaded) -> Loaded:
 
     if flagged.height:
         # Re-sorting the parent's lazy frame per contig would replay every contig's sort for each one.
-        # The rows are spilled once instead, as `load` does, and read back one contig at a time.
+        # The rows are spilled once instead, and read back one contig at a time (`load` now writes its
+        # spill sorted, F27; this one still sorts on every read).
         rest = loaded.calls.filter(pl.col("split_signal").is_null())
         rebuilt = pl.DataFrame(kept + joined, schema=CALLS).lazy()
         entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"

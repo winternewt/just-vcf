@@ -14,7 +14,7 @@ import pytest
 from just_vcf import MultiSampleError, NoSampleError, load, rejoin_split, vcf_samples, write_vcf
 from just_vcf.loaders.text import GT_INDEX_MAX, PAST_GT_WARNING
 from just_vcf.loaders.vcf import FORMAT_KEYS, HeaderRefused, undo_resave
-from just_vcf.schema import BLOCKS, CALLS
+from just_vcf.schema import BLOCKS, CALLS, canonical_order
 
 FORMAT_LINES = {
     "GT": '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
@@ -345,6 +345,8 @@ def test_real_vcf_upload(pgp_participants: Path) -> None:
     loaded = load(found, sample=vcf_samples(found)[0] if vcf_samples(found) else None)
     calls, blocks = pl.collect_all([loaded.calls, loaded.blocks])
     assert calls.height + blocks.height == data_lines
+    # The spill is written in canonical order, and read back as it is (F27).
+    assert calls.equals(canonical_order(calls.lazy()).collect()) and blocks.equals(canonical_order(blocks.lazy()).collect())
     assert_gt_consistent(calls)
     assert calls.filter(pl.col("end_pos") < pl.col("pos")).height == 0
 

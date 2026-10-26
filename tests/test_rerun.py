@@ -432,7 +432,7 @@ def test_loading_again_reuses_the_spill_and_touches_no_file(name: str, tmp_path:
         again = manifests(cache.FRAMES_SPILL)[f"frames/{entry.name}"]
         assert again.created == made[entry.name].created and again.last_used > made[entry.name].last_used
         assert again.size_bytes == size_on_disk(entry)
-        assert again.versions == {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": str(cache.SPILL_LAYOUT)}
+        assert again.versions == {"SCHEMA_VERSION": SCHEMA_VERSION, "SPILL_LAYOUT": str(cache.SPILL_LAYOUT), "FRAMES_LAYOUT": str(loading_module.FRAMES_LAYOUT)}
 
 
 def test_a_load_spill_in_the_layout_before_generations_is_swept(tmp_path: Path) -> None:

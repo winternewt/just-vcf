@@ -3162,7 +3162,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   (Decision 7), from NCBI's NCBI36 assembly report, as GRCh37's and GRCh38's do. **Values change**
   on files that already load: a contig named by one reads as `1`…`Y` in `calls.chrom` and
   `contig_map`, where it kept its accession, and a header naming its chromosomes so gets
-  `assembly_label = GRCh36` from their lengths, where it was null. Additive: minor.
+  `assembly_label = GRCh36` from their lengths, where it was null. The `chrom` change is a known
+  value replaced, not an unknown filled, so it is a rule change on existing files, not an additive
+  one; the load spill is keyed by its rows' bytes, so a cached load of such a file is written again,
+  never read back with the accession.
 
 - **No version change** (2026-10-26, RM6: symbolic SVs lifted): no column changes. `liftover` lifts
   symbolic SVs and copy-number segments by both ends ("Lifting symbolic SVs" above), where it left

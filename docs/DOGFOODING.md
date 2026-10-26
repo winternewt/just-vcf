@@ -126,6 +126,12 @@ or match a header contig by its stated length when exactly one scaffold of the
 assembly has it, which is a new matching rule. Low: 3% of this file, and only its breakends and SVs
 touching scaffolds.
 
+*Updated 2026-10-26 (breakends in a lift):* the same names hold breakends back on both ends: 163
+breakend records on these scaffolds stay `ref_unread`, and 20 records elsewhere whose mate lies on one
+stay `breakend_mate_not_lifted` (the mate's contig is read with `canonical_chrom`, which does not know
+this spelling either, so the chain's `chr`-named scaffold is not found; whether the chain would place
+those mates once the name matched was not checked).
+
 ## F26 — Loading a WGS gVCF holds gigabytes
 
 Severity: low · Found 2026-10-26 dogfooding RM6's block lift on the PGP-HMS gVCFs.
@@ -139,3 +145,20 @@ counting over the frames is inside the figure, so `load`'s share there is not me
 into: where in `load` the memory goes (the per-contig spill is meant to bound it, PREVIOUS_ISSUES has
 the 6.4-million-call DeepVariant file at 3.6 GB), and why a load whose frames are cached still takes
 89 s at the same peak. Blocks nothing yet; a 30x Isaac gVCF is near the edge of this machine.
+
+## F30 — `write_vcf`'s contig names do not reach a breakend's mate inside ALT
+
+Severity: low · Found 2026-10-26 dogfooding RM6's breakend lift on hu1C1368's Manta file.
+
+`write_vcf(..., contig_names="chr")` writes CHROM as `chr1` but leaves each breakend ALT's mate as
+the frame holds it, here `2` (both store collections name contigs without `chr`): all 1,216 lifted
+breakend ALTs, and all 1,228 of the loaded facet's, name a mate contig the written header does not
+declare. With the default `stored` names, one lifted ALT of 1,216 names a contig no row stands on,
+which the header leaves out too. A tool reading the mate against the header (or joining by name)
+misses it; `load` and `concordance` read it back, since they canonicalise the mate. Not new with the
+lift: a loaded facet whose source spelled `chr2` inside ALT writes it so under `stored`. Repairs:
+rewrite the mate contig inside a breakend ALT by the same mode as CHROM, and declare every contig an
+ALT names in the header (a writer change, with its own test of the round trip); or have the lift
+write the mate by its canonical name, which only moves the mismatch to the `source` and `chr` modes
+and gives up "named as the target collection names it". Surfaced, not fixed: it is the writer's rule,
+outside the lift's slice.

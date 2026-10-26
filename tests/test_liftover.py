@@ -175,7 +175,7 @@ EXPECTED_REASON = {
     "minus_mixed": None,
     "minus_edge": None,
     "source_mismatch": "source_ref_mismatch",
-    "breakend": "breakend_not_lifted",
+    "breakend": "breakend_mate_not_lifted",  # its mate, 2:20, is on a contig the chain does not cover
     "star": "allele_not_sequence",
     "unknown_target": "target_contig_unmatched",
     "contig_2": "contig_not_in_chain",

@@ -133,3 +133,26 @@ counting over the frames is inside the figure, so `load`'s share there is not me
 into: where in `load` the memory goes (the per-contig spill is meant to bound it, PREVIOUS_ISSUES has
 the 6.4-million-call DeepVariant file at 3.6 GB), and why a load whose frames are cached still takes
 89 s at the same peak. Blocks nothing yet; a 30x Isaac gVCF is near the edge of this machine.
+
+## F27 — Reading blocks over a facet with hundreds of contigs exhausts memory
+
+Severity: medium · Found 2026-10-26 dogfooding RM282's breakends on the PGP-HMS Manta files.
+
+`concordance` of hu416394's Manta file (GRCh38, its calls on 942 contigs: alts, decoys, HLA) against
+itself with the records at odd positions dropped grew past 36 GB resident before it was stopped; the
+same probe on hu1C1368's file (24 contigs) finishes in 3 s. The memory goes to `_block_reading`, which
+reads the other facet's blocks under each one-sided sequence allele through `intervals.covering`, and
+the file has no blocks at all. `covering` builds one range-join branch per contig of its probes, each
+over the facet's lazily scanned blocks, and that facet's spill is 942 per-contig parquet files. Over
+hu416394's calls as probes, `covering` takes 0.5 s for one contig and fails to allocate under a 30 GB
+address-space cap for all 942. On hu1C1368's (24 contigs, 24 files) it takes 2.7 s for all of them,
+0.24 s for 8 and 0.01 s with the blocks as an empty in-memory frame: the cost grows with branches
+times files. Manta against Canvas (a 22-file spill) ran; a file against itself never reads blocks,
+since every sequence allele meets its twin.
+
+Surfaced, not fixed: `covering` is shared with `genotype_evidence_at` and `reference_support`, and
+its plan was chosen for gVCF blocks. A candidate repair is to collect the intervals that reach their
+successor once and run the per-contig range join only on contigs that have any; whether collecting is
+safe for a lifted 30x gVCF's overlapping blocks (hundreds of thousands) is the measurement it needs
+first. Not measured: whether a GRCh38 gVCF with alt contigs (its blocks spilled per contig too) meets
+the same wall in `genotype_evidence_at`.

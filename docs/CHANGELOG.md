@@ -4,6 +4,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- docs/ROADMAP.md, RM6: a dated correction under the blocks-in-a-lift entry, whose "Not run on a real
+  gVCF yet" the same day's dogfood on two PGP-HMS gVCFs had made untrue. No code changes.
+
 - `liftover` keeps a precise end precise on the minus strand. There the new POS is the old END's image
   and the new END the old POS's, so CIPOS and CIEND swap and mirror; a source SV with CIEND and no
   CIPOS (a precise POS, an imprecise END) was lifted with `ciend` null, which VCF 4.5's fallback (a

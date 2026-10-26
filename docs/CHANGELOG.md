@@ -4,6 +4,18 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- NCBI36's RefSeq accessions name contigs (RM4). A build-36 VCF whose chromosomes are named
+  `NC_000001.9` … `NC_000024.8` reads them as `1`…`Y` in `calls.chrom` and `contig_map`, and its
+  `##contig` lengths name `GRCh36`, as GRCh37's and GRCh38's accessions already did. The names come
+  from NCBI's NCBI36 assembly report, already carried in `assets/`, through
+  `scripts/contig_names.py` into `contig_names.tsv` (123 rows). That report is RefSeq only: every row
+  has GenBank `na` and Relationship `<>`, so the script now carries a RefSeq accession where the row
+  names no GenBank sequence for it to differ from, and still refuses one beside a GenBank accession
+  it is not. `NamedSequence.genbank` can be None. A test checks that no assembled molecule's accession
+  is in two builds' reports except the rCRS's, and that each chromosome's RefSeq version differs per
+  build. **Values change** on files that already load with such names (they kept the accession and
+  had no label). No version constant changes.
+
 - An opt-in test of VRS ids on a real assembly (RM271): `tests/test_vrs.py` mints on the refget
   store `JUST_VCF_TEST_REFERENCE_DIR` names, GRCh37 and GRCh38, and compares every allele with
   vrs-python's id on the same store. Synthetic alleles of every kind placed on real chromosome 22 and

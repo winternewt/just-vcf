@@ -1,8 +1,8 @@
 """The frames every loader emits: `facets`, `calls` and `blocks`, and the `links` between facets (docs/SCHEMA.md).
 
 This module is the contract in code: column names, dtypes, the closed vocabularies, contig naming
-(SCHEMA.md Decision 7) and the canonical row order (Decision 11). It does no I/O of its own (GRCh37's and
-GRCh38's accessions come from the package table `just_vcf.contig_names` reads). A test compares the
+(SCHEMA.md Decision 7) and the canonical row order (Decision 11). It does no I/O of its own (NCBI36's, GRCh37's
+and GRCh38's accessions come from the package table `just_vcf.contig_names` reads). A test compares the
 column lists here with the tables in docs/SCHEMA.md, so the two cannot drift apart silently.
 
 Closed vocabularies are `str` enums with a matching `pl.Enum` dtype. Vocabularies that grow
@@ -349,8 +349,8 @@ CHM13_ACCESSIONS: dict[str, str] = {
 }
 """T2T-CHM13v2.0's sequence accessions → canonical `chrom`, versions verbatim, from NCBI's assembly
 report for GCA_009914755.4 (docs/PROVENANCE.md). An accession names one sequence of one assembly, so
-mapping it is safe in a way a bare `chr` strip is not. GRCh37's and GRCh38's assembled molecules map
-the same way (`just_vcf.contig_names.PRIMARY_ACCESSIONS`, F19); their scaffolds keep their source
+mapping it is safe in a way a bare `chr` strip is not. NCBI36's, GRCh37's and GRCh38's assembled
+molecules map the same way (`just_vcf.contig_names.PRIMARY_ACCESSIONS`, F19, RM4); their scaffolds keep their source
 name and are matched against a reference store by `contig_names.scaffold_names`."""
 
 CONTIG_ALIASES.update(CHM13_ACCESSIONS)

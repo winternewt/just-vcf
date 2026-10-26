@@ -186,7 +186,9 @@ both sides (so `chr1`/`1` and `chrM`/`MT` meet; array code `25` reads X). A GRCh
 also meets the reference under the other names NCBI's assembly reports give it (UCSC's
 `chr1_KI270706v1_random`, GenBank's and Ensembl's `KI270706.1`, RefSeq's `NT_187361.1`; F19,
 `ReferenceStore.contigs_by_chrom`), only where the reference contig's length is the report's and the
-reference holds no contig of that name itself; the row keeps its source spelling in `chrom`:
+reference holds no contig of that name itself; the row keeps its source spelling in `chrom`. NCBI36's
+report names its scaffolds by RefSeq accession only, so it adds no other name for one (those GRCh37
+kept, such as `NT_113878.1`, already meet GRCh37's names):
 
 - the facet stated the contig's length (`header_contigs`): the reference's length must equal it, and
   its md5 too where the header gives one;
@@ -1419,7 +1421,7 @@ same rule as the package: a new nullable column is minor, and a rename or retype
 | Option | Cost |
 |---|---|
 | A. Verbatim per source (`chr1`, `1`, `23`) | Every cross-facet join has to know every spelling |
-| **B. One canonical spelling in `chrom`, the mapping recorded per facet in `contig_map`** | A mapping table to maintain. Canonical: `1`–`22`, `X`, `Y`, `MT`. `chrM`/`M`/`MT` are mapped explicitly, never with a `^chr` strip. Array codes `23`→`X`, `24`→`Y`, `26`→`MT`. T2T-CHM13v2.0's GenBank and RefSeq accessions (`CP068277.2`→`1`, `NC_060948.1`→`Y`, `CP068254.1`→`MT`; RM286), and GRCh37.p13's and GRCh38.p14's assembled molecules' (`CM000663.1`, `NC_000001.11`→`1`; F19) map by the NCBI assembly reports, versions verbatim. Other contigs (alts, decoys, `chrUn_*`, scaffolds by any name) keep their source name |
+| **B. One canonical spelling in `chrom`, the mapping recorded per facet in `contig_map`** | A mapping table to maintain. Canonical: `1`–`22`, `X`, `Y`, `MT`. `chrM`/`M`/`MT` are mapped explicitly, never with a `^chr` strip. Array codes `23`→`X`, `24`→`Y`, `26`→`MT`. T2T-CHM13v2.0's GenBank and RefSeq accessions (`CP068277.2`→`1`, `NC_060948.1`→`Y`, `CP068254.1`→`MT`; RM286), and GRCh37.p13's and GRCh38.p14's assembled molecules' (`CM000663.1`, `NC_000001.11`→`1`; F19) and NCBI36's RefSeq ones (`NC_000001.9`→`1`; NCBI36 has no GenBank accessions; RM4) map by the NCBI assembly reports, versions verbatim. Other contigs (alts, decoys, `chrUn_*`, scaffolds by any name) keep their source name |
 | C. The seqcol's own names | Needs the seqcol at load time, and it is not always known then |
 
 **Recommendation: B.** Array code `25` (the X pseudo-autosomal region) is kept as its own contig, `XY`
@@ -3154,6 +3156,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   knows NCBI36's primary-chromosome lengths, so a VCF, or a coverage facet, whose `##contig` or BAM
   header lengths are build 36's gets `assembly_label = GRCh36`, basis `inferred`, where it was null.
   A value that was unknown becomes known; no known value changes. Additive: minor.
+
+- **No version change** (2026-10-26, RM4's NCBI36 accessions): no column changes. NCBI36's
+  assembled molecules' RefSeq accessions (`NC_000001.9` … `NC_000024.8`) map to canonical `chrom`
+  (Decision 7), from NCBI's NCBI36 assembly report, as GRCh37's and GRCh38's do. **Values change**
+  on files that already load: a contig named by one reads as `1`…`Y` in `calls.chrom` and
+  `contig_map`, where it kept its accession, and a header naming its chromosomes so gets
+  `assembly_label = GRCh36` from their lengths, where it was null. Additive: minor.
 
 - **No version change** (2026-10-26, RM6: symbolic SVs lifted): no column changes. `liftover` lifts
   symbolic SVs and copy-number segments by both ends ("Lifting symbolic SVs" above), where it left

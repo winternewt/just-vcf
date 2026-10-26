@@ -1,19 +1,20 @@
-"""GRCh37's and GRCh38's sequence names, from NCBI's assembly reports (F19).
+"""NCBI36's, GRCh37's and GRCh38's sequence names, from NCBI's assembly reports (F19, RM4).
 
 One sequence goes by several names. UCSC calls GRCh38's unlocalized, unplaced, alt and patch scaffolds
 `chr1_KI270706v1_random`, `chrUn_KI270302v1`, `chr1_KI270762v1_alt`, `chr1_KN196472v1_fix`, and
 GRCh37's `chr1_gl000191_random`, `chr6_apd_hap1`; Ensembl and GenBank call the same sequences by their
 GenBank accession (`KI270706.1`), RefSeq by its own (`NT_187361.1`). The package's `contig_names.tsv`
-holds every sequence of NCBI's GRCh37.p13 and GRCh38.p14 assembly reports, one row each, with these
-names and the sequence's length, as the reports write them (`scripts/contig_names.py`,
-docs/PROVENANCE.md). No name is derived from another by its pattern: a name the reports do not list
+holds every sequence of NCBI's GRCh37.p13, GRCh38.p14 and NCBI36 assembly reports, one row each, with
+these names and the sequence's length, as the reports write them (`scripts/contig_names.py`,
+docs/PROVENANCE.md). NCBI36's report is RefSeq only: its rows name no GenBank sequence, and no UCSC
+name for a scaffold. No name is derived from another by its pattern: a name the reports do not list
 stays unmatched.
 
 Two uses, kept apart on purpose:
 
 - `PRIMARY_ACCESSIONS`: the assembled molecules' GenBank and RefSeq accessions (`CM000663.2`,
-  `NC_000001.11`) → their canonical `chrom`. An accession with its version names one sequence, so
-  `schema.CONTIG_ALIASES` maps them as it maps T2T-CHM13's.
+  `NC_000001.11`, NCBI36's `NC_000001.9`) → their canonical `chrom`. An accession with its version
+  names one sequence, so `schema.CONTIG_ALIASES` maps them as it maps T2T-CHM13's.
 - `scaffold_names(name, length)`: the other names of a scaffold a reference contig holds, used only
   where a contig name is matched against a reference store. A scaffold's `chrom` keeps the source's
   spelling (docs/SCHEMA.md, Decision 7); the alias is taken only where the reference contig's length is
@@ -25,8 +26,8 @@ from importlib import resources
 
 COLUMNS = ("assembly", "role", "molecule", "genbank", "refseq", "ucsc", "length")
 """The table's columns: the assembly label, NCBI's `Sequence-Role`, `Assigned-Molecule`, `GenBank-Accn`,
-`RefSeq-Accn` (only where the report says it is the same sequence), `UCSC-style-name` and
-`Sequence-Length`. An empty cell is the report's `na`."""
+`RefSeq-Accn` (only where the report says it is the same sequence, or names no GenBank sequence for
+it to differ from), `UCSC-style-name` and `Sequence-Length`. An empty cell is the report's `na`."""
 
 ASSEMBLED_MOLECULE = "assembled-molecule"
 
@@ -38,7 +39,7 @@ class NamedSequence:
     assembly: str
     role: str
     molecule: str | None
-    genbank: str
+    genbank: str | None
     refseq: str | None
     ucsc: str | None
     length: int
@@ -55,12 +56,13 @@ def _read() -> tuple[NamedSequence, ...]:
     found = []
     for line in lines[1:]:
         assembly, role, molecule, genbank, refseq, ucsc, length = line.split("\t")
-        found.append(NamedSequence(assembly, role, molecule or None, genbank, refseq or None, ucsc or None, int(length)))
+        found.append(NamedSequence(assembly, role, molecule or None, genbank or None, refseq or None, ucsc or None, int(length)))
     return tuple(found)
 
 
 SEQUENCES: tuple[NamedSequence, ...] = _read()
-"""Every sequence of the GRCh37.p13 and GRCh38.p14 assembly reports, in the reports' order."""
+"""Every sequence of the GRCh37.p13, GRCh38.p14 and NCBI36 assembly reports, in the table's order (the
+reports one after another, each in its own order)."""
 
 PRIMARY_ACCESSIONS: dict[str, str] = {
     name: sequence.molecule
@@ -69,9 +71,11 @@ PRIMARY_ACCESSIONS: dict[str, str] = {
     for name in (sequence.genbank, sequence.refseq)
     if name
 }
-"""GRCh37's and GRCh38's assembled molecules: GenBank (`CM000663.1`, `CM000663.2`) and RefSeq
-(`NC_000001.10`, `NC_000001.11`) accessions, versions verbatim → canonical `chrom` (`1`…`22`, `X`, `Y`,
-`MT`). The UCSC-style names of these rows are not taken from here: `chr1` is canonical already, and the
+"""NCBI36's, GRCh37's and GRCh38's assembled molecules: GenBank (`CM000663.1`, `CM000663.2`; NCBI36 has
+none) and RefSeq (`NC_000001.9`, `NC_000001.10`, `NC_000001.11`) accessions, versions verbatim →
+canonical `chrom` (`1`…`22`, `X`, `Y`, `MT`; NCBI36's report lists no mitochondrion). No accession is
+shared between builds except the rCRS (`J01415.2`, `NC_012920.1`), which GRCh37 and GRCh38 both carry.
+The UCSC-style names of these rows are not taken from here: `chr1` is canonical already, and the
 reports' `chrM` for GRCh37 is not hg19's chrM (the Yoruba sequence, 16,571 bases)."""
 
 _SCAFFOLDS_BY_NAME: dict[str, list[NamedSequence]] = {}

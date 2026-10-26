@@ -2,14 +2,20 @@
 
 One row per sequence of each report: the assembly label, the sequence's role, the molecule it is
 assigned to, its GenBank and RefSeq accessions, its UCSC-style name and its length, every value as
-the report writes it. A RefSeq accession is carried only where the report says it is the same sequence
-as the GenBank one (`Relationship` `=`); `na` becomes an empty cell. The reports are carried verbatim
-in `assets/ncbi_assembly_reports/`; docs/PROVENANCE.md names them and their sha256.
+the report writes it. A RefSeq accession is carried where the report says it is the same sequence as
+the GenBank one (`Relationship` `=`), or where the report names no GenBank sequence for it to differ
+from (`GenBank-Accn` `na`: NCBI36's report is RefSeq only, every row `<>`, so its RefSeq accession is
+the sequence's one accession). A RefSeq accession beside a GenBank one it is not (`<>`) is refused.
+`na` becomes an empty cell. The reports are carried verbatim in `assets/ncbi_assembly_reports/`;
+docs/PROVENANCE.md names them and their sha256.
 
     uv run python scripts/contig_names.py \\
         --report GRCh37=assets/ncbi_assembly_reports/GCA_000001405.14_GRCh37.p13_assembly_report.txt \\
         --report GRCh38=assets/ncbi_assembly_reports/GCA_000001405.29_GRCh38.p14_assembly_report.txt \\
+        --report GRCh36=assets/ncbi_assembly_reports/GCF_000001405.12_NCBI36_assembly_report.txt \\
         --out src/just_vcf/contig_names.tsv
+
+The label is `just_vcf.assembly`'s (`GRCh36` for NCBI36); the header line records the report's own name.
 """
 
 import logging
@@ -36,7 +42,7 @@ def table_rows(assembly: str, rows: list[dict[str, str]]) -> list[list[str]]:
     """The table's rows for one report, in the report's order."""
     found = []
     for row in rows:
-        same = row["Relationship"] == "="
+        same = row["Relationship"] == "=" or row["GenBank-Accn"] == "na"
         if not same and row["RefSeq-Accn"] != "na":
             raise ValueError(f"{row['Sequence-Name']}: a RefSeq accession that is not the GenBank sequence")
         cells = [

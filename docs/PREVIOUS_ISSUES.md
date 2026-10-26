@@ -3,6 +3,31 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F32 — `write_vcf_zarr` leaves a breakend's mate as held and declares none
+
+Severity: low · Found 2026-10-26 in an audit of F30's repair; until now only the CHANGELOG said so.
+
+F30's repair taught `write_vcf` to name a breakend mate's contig inside ALT as it names CHROM and to
+declare every mate contig; `write_vcf_zarr` shares its contig mapping (`writing._contig_names`) but
+not the mate handling. A one-row synthetic VCF, `1 100 A[2:500[` with only contig 1 declared, written
+with `contig_names="chr"`: `contig_id` is `['chr1']`, and `scan_vcf_zarr` reads the row back as
+`chr1`, ALT `A[2:500[`. The mate is on a contig the store's `contig_id` does not list, under a name
+the style would not give it, the shape F30 was about. Repairs: write `variant_allele` through
+`breakends.mate_renamed` with the same mapping and add the mates (`writing._mate_chroms`, angle
+bracketed ones left out) to `contig_id`, as `write_vcf` does; or refuse breakends under `chr` and
+`source` until it does. Not fixed here: it is the zarr export's slice, logged so it is not lost.
+
+**Resolved 2026-10-26.** `write_vcf_zarr` takes the first repair: after the rows are read it finds the
+written rows' mates with `writing._mate_chroms` (assembly mates and rows `resolved_only` leaves out
+excluded), passes them to `writing._contig_names` beside the rows' contigs, and writes
+`variant_allele` through `breakends.mate_renamed` with the mapping that gives CHROM its name. The
+repro now stores `chr1`, ALT `A[chr2:500[`, and `contig_id` `['chr1', 'chr2']`. Refusing breakends
+under `chr` and `source` was rejected: the writer's rule already existed, and sharing its helpers keeps
+the two exports from drifting. Tested by writing every source shape and style of
+`tests/test_write_breakends.py` to a store and reading it back with polars-bio, `contig_id` from the
+bytes (`tests/test_vcf_zarr.py`); the expectations come from the same `written_name` rule. Code:
+`vcf_zarr.write_vcf_zarr`; docs/SCHEMA.md, "VCF Zarr export".
+
 ## F26 — Loading a WGS gVCF holds gigabytes
 
 Severity: low · Found 2026-10-26 dogfooding RM6's block lift on the PGP-HMS gVCFs.

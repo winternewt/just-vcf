@@ -1142,7 +1142,8 @@ breakend (`t.`, `.t`), with a REF of one base, is lifted by its own position and
    breakend's POS is part of the joined sequence, not a padding base before an event as a symbolic
    SV's is, so it is compared on both strands, as an SNV's is.
 2. Each ALT's mate position `p` lifts as one base through the chain blocks of the contig the ALT names
-   (read with `canonical_chrom`), whichever contig that is. A mate with no single target (in no block,
+   (read with `canonical_chrom`), whichever contig that is, except a contig of the `##assembly` file
+   (step 7). A mate with no single target (in no block,
    in several, on a contig the chain does not cover or whose size it states differently, or landing
    on a contig the target collection lacks) leaves the row behind as `breakend_mate_not_lifted`; a
    warning counts the mates by their own position's reason.
@@ -1164,6 +1165,22 @@ breakend (`t.`, `.t`), with a REF of one base, is lifted by its own position and
 6. `end_pos` is the new POS; `gt_alleles` and `source_alleles` take the new REF and ALTs where they
    held the old; `gt`, `sv_type`, `dosage` and the rest carry, the phase cleared on another contig as
    for any row. The lifted facet's `contig_map` lists every contig an ALT names, rows or none.
+7. **A mate in angle brackets** (`C[<ctg1>:7[`, `]<ctg1>:214]A`; 2026-10-26, `LIFT_VERSION` 12, the
+   lead's call) is not lifted, and does not hold the row back. VCF 4.3 §5.4.2 gives a large insertion
+   as a join into "a contig from the assembly file", and §1.6.1 says an angle-bracketed ID points "to
+   a contig in the assembly file (cf. the ##assembly line in the header)", a file of its own, not the
+   reference. No chain covers it, and it is the same sequence on any reference, so step 2 places
+   nothing: the contig, the position and the mate's side stay as written, and only POS lifts. The
+   form then turns by POS's strand alone (the strand table below with the mate on a plus strand:
+   `t[p[` on a minus POS becomes `[p[t`, `]p]t` becomes `t]p]`), `t` reverse-complemented as
+   in step 4, `ciend` unmirrored. This is consistent with §5.4's four sentences: read through them, the
+   lifted ALT on the target and the source ALT on the source describe one molecule, in one direction
+   or the other, given the contig's sequence on both sides (checked per form and strand, and with
+   inserted bases, in `tests/test_liftover_bnd.py`); a lift and its inverse give the row back. So the
+   fallback the lead allowed, leaving such a row behind as `breakend_mate_in_assembly`, is not needed
+   and no such reason exists. The contig is not in the lifted facet's `contig_map`, and the writers
+   never declare it. A record whose own CHROM is such a contig (§5.4.2's circular insertion) is not
+   on the reference either and stays behind as `contig_not_in_chain`.
 
 Written back out, a breakend's mate is a contig of the file like CHROM (F30): `write_vcf` reads the
 mate's contig canonically and writes it under the `contig_names` style's one canonical → written
@@ -2565,6 +2582,16 @@ beside it and renamed into place.
   but declares an Integer field Float. `variant_CN` holds `alt_copy_numbers`, `<f4` on `alt_alleles`
   (the spec's `Number=A` dimension), a fractional value as it is, where `write_vcf`'s VCF 4.3 leaves it
   out. polars-bio reads all three back as lists, sentinels as stored.
+- **Breakend mates** (2026-10-26, F32) follow `write_vcf`'s rule ("Lifting breakends" above): the
+  mate's contig inside a breakend ALT in `variant_allele` is read canonically and written under the
+  `contig_names` style CHROM is written under, and every contig a written row's ALT names is listed
+  in `contig_id`, rows or none (no `contig_length` for one the header does not state, written
+  missing). Under `source` a mate keeps the source's spelling, and a contig only ALTs name, spelled
+  two ways by them (`chr3`, `3`), is refused with a `ValueError` before anything is written, as
+  `write_vcf` refuses it, where the store wrote both as held. A mate in angle brackets (`<ctg1>`, a
+  contig of the `##assembly` file) is written as held and listed nowhere, and a row `resolved_only`
+  leaves out lists no mate. The writer's own helpers do it (`writing._mate_chroms`,
+  `writing._contig_names`, `breakends.mate_renamed`), so the two exports cannot drift apart.
 - **Missing and padding** are the spec's: `-1` and `-2` for integers, the NaNs `0x7F800001` and
   `0x7F800002` for floats, `"."` and `""` for strings. The last chunk is padded whole, as Zarr v2
   stores it. polars-bio hands the integer sentinels back as they are.
@@ -2877,7 +2904,14 @@ What differs from truvari, each with its reason:
 
 - **Mate contigs by canonical name.** truvari compares the ALT's contig text; here it is read with
   `canonical_chrom`, as `chrom` is, so Ensembl `2` and UCSC `chr2` are one contig, and a mate on a
-  contig the two collections do not share is `contig_not_shared`.
+  contig the two collections do not share is `contig_not_shared`. A mate in angle brackets
+  (`C[<ctg1>:7[`, VCF 4.3 §5.4.2) is the exception: it names a contig of the `##assembly` file, not of
+  the reference (§1.6.1), so it has no canonical name and is on neither collection. It is compared as
+  truvari compares it, by its text as written (5.5's `bnd_position` reads `<ctg1>`, brackets and all,
+  with `[^\[\]:]+`) and its position, on facets of one collection or of two, never `contig_not_shared`.
+  Whether two facets' `<ctg1>` hold one sequence is not checked: their assembly files are not read.
+  Left alone, such an adjacency reads `unknown`, never `reference`: a facet could state a join into
+  another file's assembly contig only with that file, so its silence there says nothing (2026-10-26).
 - **A contig name may hold `:`.** truvari's `[^\[\]:]+` refuses `HLA-A*01:01:01:01`; here the name
   runs to the last `:` before the digits.
 - **Brackets must pair.** truvari reads `A[2:100]` as a right-direct join (it tests the first and last
@@ -3158,6 +3192,18 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **No version change** (2026-10-26, F32: a breakend's mate in the Zarr export): no column changes.
+  `write_vcf_zarr` names a breakend mate inside `variant_allele` as `write_vcf` names it and lists
+  every mate contig in `contig_id` ("VCF Zarr export" above). **Values change** in the store only:
+  under `stored` a mate the source spelled `chr2` is stored `2`, under `chr` a `2` is stored `chr2`,
+  and `contig_id` gains an entry per mate contig no row stands on.
+- **No version change** (2026-10-26, assembly mates lifted and compared): no column changes.
+  `liftover` lifts a breakend whose mate is in angle brackets (`C[<ctg1>:7[`, a contig of the
+  `##assembly` file) by its own position, keeping the mate as written and turning the form by POS's
+  strand alone ("Lifting breakends", step 7), where it left the row behind as
+  `breakend_mate_not_lifted`. Lifted facets get a new `facet_id` (`LIFT_VERSION` 12). `concordance`
+  compares such a mate by its text as written and no longer leaves it out as `contig_not_shared` when
+  the two collections differ ("Breakends"). **Values change**: such rows are lifted, and compared.
 - **No version change** (2026-10-26, F30's `source` mates): no column changes. Under
   `contig_names="source"`, `write_vcf` writes a breakend mate on a contig the facet does not know as
   the ALT spelled it, where it wrote the canonical name, and refuses one ALTs spelled two ways; a

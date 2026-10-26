@@ -15,9 +15,14 @@ is needed. polars-bio's reader takes `gzip` (and no compressor); it refuses `zli
 
 What is written:
 
-- `contig_id` (and `contig_length` where the facet's header gave every length), `variant_contig`,
+- `contig_id` (and `contig_length` where the facet's header gave any length): the contigs the rows
+  stand on, the facet's header declares, and the written rows' breakend ALTs name as mates, as
+  `write_vcf` declares them (F30, F32); `variant_contig`,
   `variant_position` (1-based), `variant_length` (`end_pos - pos + 1`, so a symbolic ALT keeps its
-  span), `variant_allele` (REF then ALTs, padded with `""`), `variant_id` with `variant_id_mask`,
+  span), `variant_allele` (REF then ALTs, padded with `""`; a breakend's mate named as `write_vcf`
+  names it, under the `contig_names` style CHROM is written under, `breakends.mate_renamed`, and a
+  mate on a contig of the `##assembly` file, `<ctg1>`, written as held and listed nowhere),
+  `variant_id` with `variant_id_mask`,
   `variant_quality`, `filter_id` (`PASS` first) and `variant_filter`;
 - `sample_id`, `call_genotype` (`-1` an uncalled haplotype, `-2` past the row's ploidy) and
   `call_genotype_phased` (true where every separator after the first slot is `|`, as `write_vcf`
@@ -60,6 +65,7 @@ from pathlib import Path
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
+from just_vcf.breakends import mate_renamed
 from just_vcf.loaders.vcf import SPLIT_INFO_KEY
 from just_vcf.loading import Loaded
 from just_vcf.schema import SCHEMA_VERSION
@@ -69,9 +75,11 @@ from just_vcf.writing import (
     UnwritableRowsError,
     VCF_VERSION,
     VCF_VERSION_PSL,
+    _bracketed,
     _contig_names,
     _has_haplink,
     _has_psl,
+    _mate_chroms,
     _Names,
     _ps_text,
     _unwritable,
@@ -167,7 +175,15 @@ def write_vcf_zarr(
     _check_order(rows)
     block_count = loaded.blocks.select(pl.len()).collect().item()
 
-    names = _contig_names(contig_names, facet, rows["chrom"].unique().to_list())
+    # A breakend's mate is a contig of the store too: named inside `variant_allele` as CHROM is, and
+    # listed in `contig_id`, as `write_vcf` names and declares it (F32). `_mate_chroms` reads the rows
+    # written, and leaves out a mate on a contig of the assembly file, which `mate_renamed` keeps as held.
+    brackets = rows.select(pl.col("_alleles").list.eval(_bracketed(pl.element())).list.any().any()).item()
+    mates = _mate_chroms(calls) if brackets else []
+    chroms = sorted({*rows["chrom"].unique().to_list(), *(chrom for chrom, _ in mates)})
+    names = _contig_names(contig_names, facet, chroms, mates)
+    if mates:
+        rows = rows.with_columns(pl.col("_alleles").list.eval(mate_renamed(pl.element(), names.mapping)))
     # By written name: two canonical names written as one share one `contig_id` entry (`_contig_names`).
     position = {contig["name"]: index for index, contig in enumerate(names.contigs)}
     contig_index = {chrom: position[name] for chrom, name in names.mapping.items()}

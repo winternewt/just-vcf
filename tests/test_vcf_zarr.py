@@ -15,11 +15,12 @@ import polars as pl
 import polars_bio as pb
 import pytest
 
-from just_vcf import UnsortedRowsError, UnwritableRowsError, load, write_vcf
+from just_vcf import ContigNames, UnsortedRowsError, UnwritableRowsError, load, write_vcf
 from just_vcf.loading import Loaded
 from just_vcf.vcf_zarr import write_vcf_zarr
 from test_load_cgi import LINKED, master_var_text
 from test_load_cgi import write as write_cgi
+from test_write_breakends import ASSEMBLY, ASSEMBLY_RECORDS, SOURCES, mates, others, record, source_text, written_name
 from test_write_vcf import HQ_RECORDS, RICH, RICH_FORMAT, hq_loaded, loaded_from, psl_loaded
 
 GVCF = [
@@ -373,3 +374,73 @@ def test_sv_intervals_and_per_alt_copy_numbers_are_written(tmp_path: Path) -> No
     # A facet with none of them writes none of these arrays.
     rich = write_vcf_zarr(loaded_from(tmp_path, RICH, fmt=RICH_FORMAT), tmp_path / "rich.vcz")
     assert not {"variant_CIPOS", "variant_CIEND", "variant_CN"} & set(rich.arrays)
+
+
+def contig_ids(root: Path) -> list[str]:
+    return vlen(gzip.decompress((root / "contig_id" / "0").read_bytes()))
+
+
+@pytest.mark.parametrize("source", sorted(SOURCES))
+@pytest.mark.parametrize("style", list(ContigNames))
+def test_a_mate_is_named_as_chrom_is_and_listed_in_contig_id(tmp_path: Path, source: str, style: ContigNames) -> None:
+    """F32: `write_vcf`'s rule for a breakend mate (test_write_breakends), in the store. The expected
+    names come from the source's records and header through `written_name`; the rows are read back by
+    polars-bio, and `contig_id` from the bytes, since a contig only an ALT names has no row to show it."""
+    contigs, records = SOURCES[source]
+    path = tmp_path / "in.vcf"
+    path.write_text(source_text(contigs, records))
+    root = write_vcf_zarr(load(path), tmp_path / "out.vcz", contig_names=style).path
+
+    back = read_back(root)
+    assert back.height == len(records)
+    for given, (chrom, alt) in zip(records, back.select("chrom", "alt").iter_rows(), strict=True):
+        fields = given.split("\t")
+        assert chrom == written_name(style, fields[0], contigs, records)
+        given_alts, alts = fields[4].split(","), alt.split(",")
+        expected = [(form, bases, written_name(style, mate, contigs, records), pos) for form, bases, mate, pos in mates(given_alts)]
+        assert mates(alts) == expected, given
+        assert others(alts) == others(given_alts)
+
+    # `contig_id` is the source's contigs, the rows' and the mates', each named once by the style.
+    spelled = [*contigs, *(line.split("\t")[0] for line in records)]
+    spelled += [mate for line in records for _, _, mate, _ in mates(line.split("\t")[4].split(","))]
+    ids = contig_ids(root)
+    assert len(ids) == len(set(ids))
+    assert set(ids) == {written_name(style, name, contigs, records) for name in spelled}
+
+
+@pytest.mark.parametrize("style", list(ContigNames))
+def test_an_assembly_mate_is_written_verbatim_and_listed_nowhere(tmp_path: Path, style: ContigNames) -> None:
+    path = tmp_path / "in.vcf"
+    path.write_text("\n".join([*ASSEMBLY, *ASSEMBLY_RECORDS]) + "\n")
+    root = write_vcf_zarr(load(path), tmp_path / "out.vcz", contig_names=style).path
+    given = [line.split("\t") for line in ASSEMBLY_RECORDS]
+    assert read_back(root)["alt"].to_list() == [fields[4] for fields in given]
+    assert contig_ids(root) == [written_name(style, "13", ["13"], ASSEMBLY_RECORDS)]
+
+
+def test_source_refuses_a_contig_only_alts_name_spelled_two_ways(tmp_path: Path) -> None:
+    # As `write_vcf` refuses it: contig 3 has no row and no header line, and the ALTs spell it `chr3`
+    # and `3`, so which spelling the source meant cannot be told. The other styles write it.
+    records = [record("1", 100, "A[chr3:500["), record("1", 200, "A[3:600[")]
+    path = tmp_path / "in.vcf"
+    path.write_text(source_text(["1"], records))
+    loaded = load(path)
+    with pytest.raises(ValueError, match="spelled 3 more than one way"):
+        write_vcf_zarr(loaded, tmp_path / "source.vcz", contig_names=ContigNames.SOURCE)
+    assert not (tmp_path / "source.vcz").exists()
+    root = write_vcf_zarr(loaded, tmp_path / "chr.vcz", contig_names=ContigNames.CHR).path
+    assert read_back(root)["alt"].to_list() == ["A[chr3:500[", "A[chr3:600["]
+    assert contig_ids(root) == ["chr1", "chr3"]
+
+
+def test_a_skipped_rows_mate_is_not_listed(tmp_path: Path) -> None:
+    # The second record's GT names an ALT it does not have, so `resolved_only` leaves it out; its mate's
+    # contig (7: no row, not in the source header) must not reach `contig_id`.
+    records = [record("1", 100, "A[2:500["), record("1", 200, "A[7:500[").replace("0/1", "0/2")]
+    path = tmp_path / "in.vcf"
+    path.write_text(source_text(["1"], records))
+    written = write_vcf_zarr(load(path), tmp_path / "out.vcz", resolved_only=True)
+    assert written.rows_skipped == {"genotype_index_past_alts": 1}
+    assert read_back(written.path)["alt"].to_list() == ["A[2:500["]
+    assert contig_ids(written.path) == ["1", "2"]

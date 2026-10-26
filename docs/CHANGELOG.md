@@ -23,6 +23,31 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   blocks), frames cached, library only, under a 40 GB cap: 85.0 / 86.7 s → 47.4 / 48.4 s, peak 2.0 GiB
   both; the first load on this version still counts (88.9 s); warnings, facet row and row counts the
   same (hashed). Nothing changes in the frames.
+- `write_vcf_zarr` names a breakend's mate as `write_vcf` does (F32). It stored `variant_allele` as
+  the frame held it and listed only the rows' contigs in `contig_id`: `A[2:500[` written with
+  `contig_names="chr"` read back as CHROM `chr1` beside a mate `2` that `contig_id` did not list. The
+  mate's contig is now written under the style CHROM is written under (`breakends.mate_renamed`, under
+  `source` the source's spelling), and every contig a written ALT names is listed in `contig_id`, rows
+  or none; a mate in angle brackets (`<ctg1>`, a contig of the `##assembly` file) is written as held
+  and listed nowhere, and a row `resolved_only` leaves out lists no mate. It reuses the writer's
+  helpers (`_mate_chroms`, `_contig_names`). **Values change** in the store: under `stored` a mate
+  spelled `chr2` is stored `2`, under `chr` a `2` is stored `chr2`, and `contig_id` gains the mate
+  contigs no row stands on. Under `source`, a contig only ALTs name, spelled two ways by them
+  (`chr3`, `3`), is now refused with a `ValueError`, as `write_vcf` refuses it, where the store
+  wrote both spellings as held. No version constant changes.
+
+- A breakend mate in angle brackets (`C[<ctg1>:7[`, VCF 4.3 §5.4.2's large insertion) is read as a
+  contig of the `##assembly` file, not of the reference, by `liftover` and `concordance` too (the
+  writer already did). `liftover` left every such row behind as `breakend_mate_not_lifted`, the
+  contig being in no chain; it now lifts the record's own position, keeps the mate as written, and
+  turns the form by POS's strand alone (`t[p[` on a minus-strand block becomes `[p[t`), `ciend`
+  unmirrored; the lifted facet's `contig_map` does not list the contig (the lead's call; docs/SCHEMA.md,
+  "Lifting breakends", step 7, which derives it from §5.4's four sentences). `concordance` compares
+  such a mate by its text as written, as truvari 5.5's `bnd_position` does, and no longer leaves it
+  out as `contig_not_shared` when the two facets' collections differ; a lone one reads `unknown`,
+  never `reference`. `breakend_parts` keeps the name verbatim, and `breakends` gains
+  `is_assembly_contig` and `Breakend.mate_in_assembly`. `LIFT_VERSION` 12, so lifted facets get a
+  new `facet_id`. **Values change**: such rows are lifted, and compared.
 
 - `resolve_ref`, `normalize` and `liftover` work and spill a group of whole contigs at a time (F24),
   where each contig with rows cost a filtered scan, a pass and a parquet file. The groups are the ones

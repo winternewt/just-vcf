@@ -365,6 +365,39 @@ def test_mate_contigs_are_read_by_their_canonical_name_and_must_be_shared(tmp_pa
     assert {(r["facet"], r["reason"]): r["alleles"] for r in result.excluded.iter_rows(named=True)} == {("a", "contig_not_shared"): 1}
 
 
+def test_an_assembly_mate_is_compared_by_its_name_as_written(tmp_path: Path, store: ReferenceStore) -> None:
+    """VCF 4.3 §5.4.2's large insertion names its mate on a contig of the `##assembly` file, `<ctg1>`,
+    not of the reference (§1.6.1). truvari 5.5's `bnd_position` reads it as the ALT spells it (its
+    `[^\\[\\]:]+` takes `<ctg1>`, brackets and all), and so it is here: on facets of two collections, as
+    on one, it is no contig either collection must share, and two such mates meet only by that name."""
+    t5, t9 = base("1", 5000), base("1", 9000)
+    a = facet(tmp_path, "a", [raw("1", 5000, f"{t5}[<ctg1>:7["), raw("1", 9000, f"]<ctg2>:214]{t9}")], store)
+    ucsc = {"chr1": SEQ["1"], "chrX": SEQ["X"]}
+    digest = store.add_fasta(write_fasta(tmp_path / "ucsc.fa", ucsc))
+    b_records = [raw("chr1", 5000, f"{t5}[<ctg1>:7["), raw("chr1", 9000, f"]<ctg3>:214]{t9}")]
+    b = resolve_ref(load(write(tmp_path / "b.vcf", b_records, contigs={k: len(v) for k, v in ucsc.items()})), store, collection=digest)
+    stated_a = [("1", 5000, "t[p[", "<ctg1>", 7, 0, 0), ("1", 9000, "]p]t", "<ctg2>", 214, 0, 0)]
+    stated_b = [("1", 5000, "t[p[", "<ctg1>", 7, 0, 0), ("1", 9000, "]p]t", "<ctg3>", 214, 0, 0)]
+    expected = [(x[1], "match") for x in stated_a if any(meets(x, y) for y in stated_b)]
+    expected += [(x[1], "only_a") for x in stated_a if not any(meets(x, y) for y in stated_b)]
+    expected += [(y[1], "only_b") for y in stated_b if not any(meets(x, y) for x in stated_a)]
+    result = concordance(a, b, reference=store)
+    assert result.excluded.is_empty()
+    rows = result.sites.collect()
+    assert sorted(rows.select("pos", "agreement").rows()) == sorted(expected) == [(5000, "match"), (9000, "only_a"), (9000, "only_b")]
+    assert rows.filter(pl.col("agreement") == "match")["key"].to_list() == ["breakend"]
+
+
+def test_a_lone_adjacency_into_the_assembly_file_reads_unknown(tmp_path: Path, store: ReferenceStore) -> None:
+    """A whole-genome callset that called SVs reads as reference where it declared both ends' contigs.
+    No caller declares a contig of another file's `##assembly`: it could state a join into one only
+    with an assembly file of its own, so its silence on such an adjacency is unknown, not reference."""
+    a = facet(tmp_path, "a", [bnd("1", 5000, "t[p[", "2", 8000), raw("1", 15_000, f"{base('1', 15_000)}[<ctg1>:7[")], store)
+    b = with_facet(resolve_ref(load(write(tmp_path / "b.vcf", [bnd("1", 25_000, "t]p]", "2", 20_000)])), store), absence_means="weak_reference")
+    rows = concordance(a, b).sites.collect().filter(pl.col("agreement") == "only_a")
+    assert rows.select("pos", "absence").sort("pos").rows() == [(5000, "reference"), (15_000, "unknown")]
+
+
 def _rss() -> int:
     for line in Path("/proc/self/status").read_text().splitlines():
         if line.startswith("VmRSS:"):

@@ -15,6 +15,8 @@ A pair of mates written as two records is one adjacency, counted once (docs/SCHE
 """
 
 import random
+import threading
+import time
 from pathlib import Path
 
 import polars as pl
@@ -361,3 +363,39 @@ def test_mate_contigs_are_read_by_their_canonical_name_and_must_be_shared(tmp_pa
     assert result.sites.collect().select("chrom", "pos", "key").rows() == [("1", 5000, "breakend")]
     # a's join into contig 2, which b's collection does not hold, is not compared.
     assert {(r["facet"], r["reason"]): r["alleles"] for r in result.excluded.iter_rows(named=True)} == {("a", "contig_not_shared"): 1}
+
+
+def _rss() -> int:
+    for line in Path("/proc/self/status").read_text().splitlines():
+        if line.startswith("VmRSS:"):
+            return int(line.split()[1]) * 1024
+    raise AssertionError("/proc/self/status carries no VmRSS line, so the peak cannot be measured")
+
+
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="the peak is read from /proc/self/status (Linux)")
+def test_breakends_crowded_on_one_contig_compare_within_a_bounded_peak(tmp_path: Path, store: ReferenceStore) -> None:
+    """1,500 breakend records on one contig compared with themselves stay within 1 GB above the start.
+    The near pairs are a range join per contig; a contig equality beside the range made polars hold
+    every pair of records on the contig at once. Measured 2026-10-26 with 2,000 records on one contig:
+    5.7 GB that way, 29 MB as a range join; this test's 1,500 took 3 GB that way."""
+    rng = random.Random(1500)
+    positions = sorted(rng.sample(range(100, len(SEQ["1"]) - 100), 1500))
+    records = [raw("1", pos, f"{base('1', pos)}[1:{rng.randrange(100, len(SEQ['1']) - 100)}[") for pos in positions]
+    one = facet(tmp_path, "a", records, store)
+    peak = [0]
+    done = threading.Event()
+
+    def sample() -> None:
+        while not done.is_set():
+            peak[0] = max(peak[0], _rss())
+            time.sleep(0.02)
+
+    before = _rss()
+    sampler = threading.Thread(target=sample, daemon=True)
+    sampler.start()
+    sites = concordance(one, one).sites.collect()
+    done.set()
+    sampler.join()
+    # Each record meets itself and is taken once.
+    assert sites.select("pos", "agreement").unique()["pos"].sort().to_list() == positions
+    assert peak[0] - before < 2**30, f"peak {(peak[0] - before) / 2**20:.0f} MB above the start"

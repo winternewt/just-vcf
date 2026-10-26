@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `concordance` pairs breakend records by one range join per contig (`intervals.contig_join`), where
+  one `join_where` with the contig equality beside the two window inequalities made polars join on
+  the contig and filter after, holding every pair of records on a contig at once. Same rows, order
+  and ties (the join tested against the old one on seeded random frames). On the audit's probe of
+  20,000 breakend records on 22 contigs compared with themselves: peak 26.2 GB → 0.6 GB, 6.0 s → 0.3 s
+  (2026-10-26, auditor's measurement 25.7 GB). A test holds 1,500 records on one contig under 1 GB
+  above the start; the old join took 3.2 GB there.
+
 - `load` reads a Complete Genomics `var` or `masterVarBeta` one locus range at a time
   (`loaders.cgi.locus_ranges`, `range_frames`), so a whole file no longer holds every haplotype in
   memory. The payload is first written as a typed parquet copy of its rows; then each range of whole

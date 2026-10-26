@@ -332,6 +332,11 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
   eager frame (which carries `List(Null)` in its own schema), still sink. A `list.contains` on the
   result fails in every case, eager or lazy, zero rows or all null, and in a filter predicate even
   where only some index lists are null. The guard gives the typed list in all of them.
+- **Polars `join_where` with an equality beside inequalities is a filtered cross join** in polars 1.44:
+  the plan is an inner join on the equality with the inequalities as a filter after it, so every pair
+  of rows sharing the key is held at once (26 GB for 20,000 breakend records on 22 contigs, met
+  2026-10-26). Split by the equality key and range-join each part with the inequalities alone, which
+  polars runs as an IEJoin: `intervals.contig_join`. Check a new `join_where` with `.lazy().explain()`.
 - **Heed terminal warnings, deprecations especially.** A deprecation in code you touched is a
   **blocker**: find the current upstream API, fix it, and update this file.
 - **Refactor internals aggressively** — no dead code, no old API kept for nostalgia. The contract —

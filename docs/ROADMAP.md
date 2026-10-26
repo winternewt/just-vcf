@@ -1077,7 +1077,8 @@ in a liftover, left-aligning lifted indels (`normalize` skips rows with no `ref_
 symbolic SVs, anchoring across a small gap of one chain, and T2T (UCSC hs1 chains).
 *Corrected 2026-10-26:* three of these shipped, and the SVLEN item's reason is gone. The loader reads
 END and SVLEN for symbolic SVs (merge ec95596, 2026-10-22), and SV rows round-trip through `write_vcf`
-with their `end_pos` (RM282, merge 04c5db3), though the writer still writes END only, no SVLEN. PSL sets are read and written back under
+with their `end_pos` (RM282, merge 04c5db3); the writer writes SVLEN beside END since 2026-10-26, as
+`end_pos - pos` (docs/SCHEMA.md, "Structural variants"). PSL sets are read and written back under
 VCF 4.5 (RM284, merge 8b72a46, 2026-10-23). `normalize` re-aligns a `liftover_to` facet's rows (merge
 6ce13b0, 2026-10-23; the liftover decisions above say so). The hs1 chains lift T2T-CHM13 to GRCh38
 (RM286, merge 795874f, tested in `tests/test_chm13.py`). Still open: strand, blocks and symbolic SVs in

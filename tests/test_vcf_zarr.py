@@ -370,8 +370,6 @@ def test_sv_intervals_and_per_alt_copy_numbers_are_written(tmp_path: Path) -> No
     got_cn = [[v for v in row if v == v] or None for row in back["CN"].to_list()]
     assert got_cn == [value or None for value in calls["alt_copy_numbers"].to_list()]
     assert 2.5 in calls["alt_copy_numbers"].explode(empty_as_null=False).to_list()
-
-
-def test_a_facet_without_sv_fields_writes_no_sv_arrays(tmp_path: Path) -> None:
-    written = write_vcf_zarr(loaded_from(tmp_path, RICH, fmt=RICH_FORMAT), tmp_path / "rich.vcz")
-    assert not {"variant_CIPOS", "variant_CIEND", "variant_CN"} & set(written.arrays)
+    # A facet with none of them writes none of these arrays.
+    rich = write_vcf_zarr(loaded_from(tmp_path, RICH, fmt=RICH_FORMAT), tmp_path / "rich.vcz")
+    assert not {"variant_CIPOS", "variant_CIEND", "variant_CN"} & set(rich.arrays)

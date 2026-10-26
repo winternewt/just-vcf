@@ -22,13 +22,19 @@ from just_vcf.assembly import (
     sample_snv_rows,
     sorted_name_length_pairs_digest,
 )
+from just_vcf.reference import CHR1_LENGTHS
 from just_vcf.schema import CHM13_ACCESSIONS, canonical_chrom
 
-# Domain constants: the first three chromosomes and the mitochondrion of each assembly, as UCSC's
-# chrom.sizes give them (hg19, hg38, hs1), typed here independently of `ASSEMBLY_LENGTHS`.
+# Domain constants: the first three chromosomes of each assembly, as UCSC's chrom.sizes give them
+# (hg18, hg19, hg38, hs1), typed here independently of `ASSEMBLY_LENGTHS`.
+GRCH36 = {"1": 247249719, "2": 242951149, "3": 199501827}
 GRCH37 = {"1": 249250621, "2": 243199373, "3": 198022430}
 GRCH38 = {"1": 248956422, "2": 242193529, "3": 198295559}
 T2T = {"1": 248387328, "2": 242696752, "3": 201105948}
+
+ASSETS = Path(__file__).resolve().parent.parent / "assets"
+NCBI36_REPORT = ASSETS / "ncbi_assembly_reports" / "GCF_000001405.12_NCBI36_assembly_report.txt"
+HG18_SIZES = ASSETS / "ucsc_hg18" / "hg18.chrom.sizes"
 
 COMPLIANCE = Path(refget.__file__).parent / "compliance_data" / "test_fasta_digests.json"
 
@@ -38,7 +44,7 @@ def contigs(lengths: dict[str, int], prefix: str = "") -> list[dict]:
 
 
 @pytest.mark.parametrize(
-    ("lengths", "expected"), [(GRCH37, "GRCh37"), (GRCH38, "GRCh38"), (T2T, "T2T-CHM13")]
+    ("lengths", "expected"), [(GRCH36, "GRCh36"), (GRCH37, "GRCh37"), (GRCH38, "GRCh38"), (T2T, "T2T-CHM13")]
 )
 @pytest.mark.parametrize("prefix", ["", "chr"])
 def test_three_primary_lengths_name_the_assembly(lengths: dict[str, int], expected: str, prefix: str) -> None:
@@ -97,9 +103,75 @@ def test_no_lengths_is_its_own_answer() -> None:
 def test_assembly_tables_share_no_length_but_the_mitochondrion() -> None:
     for (a, table_a), (b, table_b) in combinations(ASSEMBLY_LENGTHS.items(), 2):
         shared = {chrom for chrom in table_a if table_a[chrom] & table_b[chrom]}
-        assert shared == {"MT"}, (a, b, shared)
-    for lengths, name in ((GRCH37, "GRCh37"), (GRCH38, "GRCh38"), (T2T, "T2T-CHM13")):
+        assert shared <= {"MT"}, (a, b, shared)
+        # No primary length of one assembly is any primary length of another, on any chromosome.
+        primary_a = {n for chrom, lengths in table_a.items() if chrom != "MT" for n in lengths}
+        primary_b = {n for chrom, lengths in table_b.items() if chrom != "MT" for n in lengths}
+        assert not primary_a & primary_b, (a, b)
+    for lengths, name in ((GRCH36, "GRCh36"), (GRCH37, "GRCh37"), (GRCH38, "GRCh38"), (T2T, "T2T-CHM13")):
         assert all(ASSEMBLY_LENGTHS[name][chrom] == {length} for chrom, length in lengths.items())
+    # hg19 and hg18 kept the Yoruba chrM (16,571); GRCh37, GRCh38 and T2T carry 16,569-base sequences.
+    assert {name: table["MT"] for name, table in ASSEMBLY_LENGTHS.items()} == {
+        "GRCh36": {16571}, "GRCh37": {16569, 16571}, "GRCh38": {16569}, "T2T-CHM13": {16569}
+    }
+
+
+def assembly_report(path: Path) -> list[dict[str, str]]:
+    """An NCBI assembly report's sequence rows, keyed by its own column names."""
+    lines = path.read_text().splitlines()
+    columns = next(line for line in lines if line.startswith("# Sequence-Name")).removeprefix("# ").split("\t")
+    return [dict(zip(columns, line.split("\t"), strict=True)) for line in lines if line and not line.startswith("#")]
+
+
+def test_grch36_lengths_are_ncbi36s_assembly_report_and_hg18s_chrom_sizes() -> None:
+    """NCBI's report (GCF_000001405.12) for the chromosomes; it lists no mitochondrion, so MT is hg18's."""
+    report = {
+        row["Assigned-Molecule"]: int(row["Sequence-Length"])
+        for row in assembly_report(NCBI36_REPORT)
+        if row["Sequence-Role"] == "assembled-molecule"
+    }
+    sizes = dict(line.split("\t") for line in HG18_SIZES.read_text().splitlines())
+    hg18 = {canonical_chrom(name): int(length) for name, length in sizes.items() if canonical_chrom(name) in ASSEMBLY_LENGTHS["GRCh36"]}
+    assert set(report) == set(ASSEMBLY_LENGTHS["GRCh36"]) - {"MT"}
+    assert {chrom: {length} for chrom, length in report.items()} == {c: n for c, n in ASSEMBLY_LENGTHS["GRCh36"].items() if c != "MT"}
+    assert hg18 == {**report, "MT": 16571}
+    assert ASSEMBLY_LENGTHS["GRCh36"]["MT"] == {hg18["MT"]}
+
+
+def test_contig_1_names_the_same_assembly_in_both_tables() -> None:
+    """`reference.CHR1_LENGTHS` labels a FASTA by its contig 1; the header side must agree."""
+    assert {length: label for label, table in ASSEMBLY_LENGTHS.items() for length in table["1"]} == CHR1_LENGTHS
+
+
+def test_grch36_and_grch37_are_never_confused_on_a_thin_header() -> None:
+    """The only length the two share is the Yoruba chrM's, which never supports a label."""
+    only_mt = infer_assembly([{"name": "chrM", "length": 16571, "md5": None}])
+    assert only_mt.label is None and only_mt.outcome is AssemblyOutcome.TOO_FEW and only_mt.matched == {}
+    two = dict(list(GRCH36.items())[: MIN_MATCHING_CONTIGS - 1])
+    for header in (contigs(two, "chr"), contigs(two, "chr") + [{"name": "chrM", "length": 16571, "md5": None}]):
+        inferred = infer_assembly(header)
+        assert inferred.label is None and inferred.outcome is AssemblyOutcome.TOO_FEW
+        assert inferred.matched == {"GRCh36": MIN_MATCHING_CONTIGS - 1}
+    # One build-36 length beside GRCh37's: a conflict, never the side with more votes.
+    mixed = contigs({"1": GRCH36["1"]}) + contigs({k: GRCH37[k] for k in ("2", "3")}) + contigs({"4": 191154276})
+    inferred = infer_assembly(mixed)
+    assert inferred.label is None and inferred.outcome is AssemblyOutcome.CONFLICTING
+    assert inferred.matched == {"GRCh36": 1, "GRCh37": 3}
+    # A build-36 header with rCRS (16,569) in place of the chrM NCBI36 carries: unknown, not GRCh37.
+    rcrs = infer_assembly(contigs(GRCH36, "chr") + [{"name": "chrM", "length": 16569, "md5": None}])
+    assert rcrs.label is None and rcrs.outcome is AssemblyOutcome.CONFLICTING
+
+
+def test_an_ncbi36_report_shaped_header_names_grch36(tmp_path: Path) -> None:
+    """Every chromosome of the report, by its UCSC name, plus hg18's chrM: an hg18-aligned VCF's header."""
+    rows = [row for row in assembly_report(NCBI36_REPORT) if row["Sequence-Role"] == "assembled-molecule"]
+    header = [{"name": row["UCSC-style-name"], "length": int(row["Sequence-Length"]), "md5": None} for row in rows]
+    header.append({"name": "chrM", "length": 16571, "md5": None})
+    inferred = infer_assembly(header)
+    assert inferred.label == "GRCh36" and inferred.matched == {"GRCh36": 24}
+    row, warnings = facet(tmp_path, vcf_with_contigs(header))
+    assert (row["assembly_label"], row["assembly_label_basis"]) == ("GRCh36", "inferred")
+    assert not [w for w in warnings if "assembl" in w or "states" in w]
 
 
 @pytest.mark.parametrize("case", sorted(json.loads(COMPLIANCE.read_text())))
@@ -134,7 +206,7 @@ def facet(tmp_path: Path, text: str) -> tuple[dict, tuple[str, ...]]:
     return loaded.facets.collect().row(0, named=True), loaded.warnings
 
 
-@pytest.mark.parametrize(("lengths", "expected"), [(GRCH37, "GRCh37"), (GRCH38, "GRCh38"), (T2T, "T2T-CHM13")])
+@pytest.mark.parametrize(("lengths", "expected"), [(GRCH36, "GRCh36"), (GRCH37, "GRCh37"), (GRCH38, "GRCh38"), (T2T, "T2T-CHM13")])
 def test_load_infers_the_label_from_contig_lengths(tmp_path: Path, lengths: dict[str, int], expected: str) -> None:
     header = contigs(lengths, "chr")
     row, warnings = facet(tmp_path, vcf_with_contigs(header))
@@ -182,9 +254,7 @@ CHM13_REPORT = Path(__file__).resolve().parent.parent / "assets" / "ncbi_assembl
 
 def chm13_report() -> list[dict[str, str]]:
     """The report's sequence rows, keyed by its own column names."""
-    lines = CHM13_REPORT.read_text().splitlines()
-    columns = next(line for line in lines if line.startswith("# Sequence-Name")).removeprefix("# ").split("\t")
-    return [dict(zip(columns, line.split("\t"), strict=True)) for line in lines if line and not line.startswith("#")]
+    return assembly_report(CHM13_REPORT)
 
 
 def test_chm13_accessions_are_the_assembly_reports() -> None:
@@ -248,11 +318,12 @@ def test_vcf_build_hints_name_t2t_and_only_t2t(tmp_path: Path, line: str, build:
 # F9: an array's build from its own rows. The scorer is a pure function over sampled rows and bases.
 
 
-def calls_frame(rows: list[tuple[str, int, list[str | None] | None, str | None]]) -> pl.LazyFrame:
-    """`(chrom, pos, gt_alleles, source_ref)` rows, the only columns the sampler reads."""
-    return pl.LazyFrame(
-        rows, schema={"chrom": pl.String, "pos": pl.UInt32, "gt_alleles": pl.List(pl.String), "source_ref": pl.String}, orient="row"
-    )
+def calls_frame(rows: list[tuple]) -> pl.LazyFrame:
+    """`(chrom, pos, gt_alleles, source_ref[, end_pos])` rows, the only columns the sampler reads.
+    `end_pos` defaults to `pos`, as an array loader writes it for a call of single bases."""
+    full = [(*row, row[1]) if len(row) == 4 else row for row in rows]
+    schema = {"chrom": pl.String, "pos": pl.UInt32, "gt_alleles": pl.List(pl.String), "source_ref": pl.String, "end_pos": pl.UInt32}
+    return pl.LazyFrame(full, schema=schema, orient="row")
 
 
 def test_the_sample_keeps_scorable_array_snvs_only() -> None:
@@ -260,7 +331,7 @@ def test_the_sample_keeps_scorable_array_snvs_only() -> None:
         ("1", 10, ["G", "A"], None),  # het, kept as the sorted distinct alleles
         ("1", 11, ["C", None], None),  # half-call: the called base is enough
         ("1", 12, [None, None], None),  # whole no-call
-        ("1", 13, ["I", "D"], None),  # indel codes
+        ("1", 13, ["I", "D"], None, None),  # indel codes: span unknown
         ("1", 14, ["A", "A"], "A"),  # a VCF row: it has a source REF
         ("MT", 15, ["A"], None),  # MT is never scored
         ("XY", 16, ["A", "A"], None),  # the PAR code, not a primary chromosome
@@ -269,6 +340,35 @@ def test_the_sample_keeps_scorable_array_snvs_only() -> None:
     ]
     sample = sample_snv_rows(calls_frame(rows))
     assert sample.rows() == [("1", 10, ["A", "G"]), ("1", 11, ["C"]), ("X", 17, ["T"])]
+
+
+def test_the_sample_leaves_out_rows_that_are_not_one_base() -> None:
+    """A row is scored at `pos` only when its span is that one base. A Genos insertion site (`end_pos`
+    null, its alleles the inserted bases) sits at the anchor before it, and a spanned row whose alleles
+    happen to be single letters (`AG` read as `A/A`) covers two bases: neither is an SNV at `pos`."""
+    rows = [
+        ("1", 20, ["G", "G"], None, None),  # Genos: one G inserted after pos
+        ("1", 21, ["A", "A"], None, 22),  # Genos or GET-Evidence: two bases called as one
+        ("1", 23, ["G", "GG"], "", None),  # CGI or CASAVA insertion point: an empty source REF
+        ("1", 24, ["C", "T"], None, 24),  # Genos SNV, a one-base span
+    ]
+    assert sample_snv_rows(calls_frame(rows)).rows() == [("1", 24, ["C", "T"])]
+
+
+def test_a_loaded_genos_facet_samples_only_its_one_base_rows(tmp_path: Path) -> None:
+    head = "##FileFormat=Genos\n##ReferenceGenome=UCSC.hg19\n##Columns=CHROM\tBEGIN\tEND\tID\tGENOTYPE\n"
+    body = (
+        "chr1\t99\t100\trs1\tA/G\n"  # one base: the SNV the sample keeps
+        "chr1\t199\t201\trs2\tA/A\n"  # two bases, called as one
+        "chr1\t300\t300\trs3\tG/G\n"  # an insertion site: G inserted after the anchor
+        "chr1\t400\t400\trs4\t-/T\n"  # an insertion site with the empty allele
+        "chr1\t499\t500\trs5\tC/-\n"  # a one-base deletion
+    )
+    path = tmp_path / "genos.tsv"
+    path.write_text(head + body)
+    calls = load(path).calls
+    assert calls.filter(pl.col("end_pos").is_null()).collect().height == 2
+    assert sample_snv_rows(calls).rows() == [("1", 100, ["A", "G"])]
 
 
 def test_the_sample_is_spread_bounded_and_order_independent() -> None:

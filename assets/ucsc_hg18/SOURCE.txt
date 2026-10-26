@@ -1,0 +1,5 @@
+UCSC hg18 (NCBI36) chromosome sizes, https://hgdownload.soe.ucsc.edu/goldenPath/hg18/bigZips/hg18.chrom.sizes
+(sha256 8b35ae05acbea68e53cc5fdc00e1e3862042ca857527418075e0e188349b4097, md5 7a00094cfc38f3e66282279c5be802a2;
+UCSC's bigZips/md5sum.txt lists no checksum for it; Last-Modified 2005-12-07), downloaded 2026-10-26, verbatim.
+Its chrM (16,571) is the length ASSEMBLY_LENGTHS["GRCh36"]["MT"] holds: NCBI's NCBI36 assembly report
+lists no mitochondrion. See docs/PROVENANCE.md.

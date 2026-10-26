@@ -4,6 +4,25 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `resolve_ref`'s row sample for the build inference and the strand check (F9, F13;
+  `assembly.sample_snv_rows`) keeps only rows over one base (`end_pos == pos`). It sampled a Genos
+  insertion site, `G/G` inserted after a `G` at the anchor with `end_pos` null, as an SNV at the anchor
+  base, and would have sampled a Genos or GET-Evidence row called over two bases whose alleles are
+  single letters. Every other array format already wrote `end_pos = pos` exactly where the sample
+  took a row, and CGI's and CASAVA's insertion points have a source REF, so only those two change.
+  `RESOLVE_VERSION` 12: the strand is not in the spill key, so a cached result could hold rows a
+  mixed strand withheld under the old sample. **Values change** where such rows tipped a facet's
+  inferred `assembly_label` or `strand_check` (docs/SCHEMA.md, "Changes since sign-off").
+
+- A VCF or a coverage facet whose header lengths are NCBI36's (hg18) gets `assembly_label = GRCh36`,
+  basis `inferred` (RM4). `assembly.ASSEMBLY_LENGTHS` held GRCh37, GRCh38 and T2T-CHM13 only, so a
+  build-36 header's lengths named no assembly and the label stayed null. The lengths come from NCBI's
+  assembly report for GCF_000001405.12, MT from hg18's chrom.sizes (the report lists none), both
+  carried in `assets/` (docs/PROVENANCE.md). No primary length is shared with another assembly, and
+  the one shared mitochondrion length never supports a label, so a header with only chrM or two
+  chromosomes stays unknown. **Values change**: null to `GRCh36` for those facets
+  (docs/SCHEMA.md, "Changes since sign-off").
+
 - A facet records the rule that read its REF, and the store refuses a held facet given again in
   another REF state (schema 0.0.20). `resolve_ref` keeps a facet's `facet_id`, so `Store.add` of the
   facet resolved under a newer `RESOLVE_VERSION`, or of the loaded facet once its resolved twin was

@@ -23,7 +23,23 @@ from test_rerun import generations
 
 from just_vcf import cache, load
 from just_vcf import loading as loading_module
-from just_vcf.schema import SCHEMA_VERSION, canonical_order, canonical_order_per_contig
+from just_vcf.schema import CONTIG_RANK, SCHEMA_VERSION, canonical_order
+
+
+def canonical_order_per_contig(frame: pl.LazyFrame, contigs: list[str]) -> pl.LazyFrame:
+    """The read every spill had before F27, kept here as the oracle: `canonical_order` for one facet,
+    one contig at a time, each a filtered scan and a sort. `contigs` are the canonical `chrom` values to
+    read; a row on any other contig is left out. Equals `canonical_order(frame)` row for row
+    (`tests/test_schema.py`). It left `schema.py` once `rejoin_split`, its last caller, wrote its
+    spill sorted."""
+    ordered = sorted(set(contigs), key=lambda name: (CONTIG_RANK.get(name, len(CONTIG_RANK)), name))
+    names = frame.collect_schema().names()
+    keys: list[pl.Expr] = [pl.col("pos"), pl.col("end_pos")]
+    if "source_ref" in names:
+        keys += [pl.col("source_ref"), pl.col("alts").list.join(",")]
+    parts = [frame.filter(pl.col("chrom") == name).sort(keys, nulls_last=True, maintain_order=True) for name in ordered]
+    return pl.concat(parts, how="vertical", parallel=False) if parts else frame.clear()
+
 
 DECOYS = [f"chrUn_JTFH0100{index:04d}v1_decoy" for index in range(60)]
 CONTIGS = ["1", "2", "10", "X", "Y", "MT", "chrUn_KI270302v1", "GL000192.1", *DECOYS]
@@ -75,7 +91,7 @@ SOURCES = {
 def staged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
     """Copies of every unsorted file the loader stages, taken just before it sorts them into parts."""
     copies: list[Path] = []
-    real = loading_module._canonical_parts
+    real = loading_module.canonical_parts
 
     def spying(path: Path, name: str) -> list[Path]:
         copy = tmp_path / "staged" / f"{len(copies):03d}-{name}.parquet"
@@ -84,7 +100,7 @@ def staged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[Path]:
         copies.append(copy)
         return real(path, name)
 
-    monkeypatch.setattr(loading_module, "_canonical_parts", spying)
+    monkeypatch.setattr(loading_module, "canonical_parts", spying)
     return copies
 
 

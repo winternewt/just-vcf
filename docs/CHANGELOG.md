@@ -4,6 +4,18 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `rejoin_split` writes its spill in canonical order once, as `load` does, so the rejoined `calls`
+  are one scan of the spill's part files with no sort when they are read (F27). Before, every read
+  ran one filtered scan and sort per contig of the parent's `contig_map`. Same rows, row order, ties
+  and dtypes. On PGP-HMS hu416394's bcftools gVCF (2,179 contigs, 70,115 sites re-joined):
+  `select(pl.len())` 17.2 s → under 0.01 s, the calls collected 80.9 s at 20.5 GB → 0.75 s;
+  `rejoin_split` itself takes 10 s longer for its one sort pass (measurements under RM6). A rejoin
+  spill's manifest and generation key carry a new `REJOIN_LAYOUT` (1): an older version's generation is
+  never read, and the sweep removes an older entry once it is unused past the grace period.
+  `REJOIN_VERSION` and the derived `facet_id` do not change. `loading._canonical_parts` is now
+  `loading.canonical_parts`; `schema.canonical_order_per_contig`, with no caller left, is gone from
+  the library (internal, never in `__all__`).
+
 - `load` writes a facet's spill in canonical order once, so `calls` and `blocks` are one scan of the
   spill's part files with no sort when they are read (F27). Before, each frame was a union of one
   filtered scan and sort per contig with rows, re-run on every read: 2,179 of them on PGP-HMS

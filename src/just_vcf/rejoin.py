@@ -16,8 +16,8 @@ import polars as pl
 
 from just_vcf import cache
 from just_vcf.links import SPLIT_REJOINED, derived_links
-from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir
-from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck, canonical_order_per_contig
+from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_parts
+from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck
 
 REJOIN_VERSION = 5
 """Part of the derived `facet_id`: bumped whenever the join rule changes what it emits (2: the SV
@@ -73,8 +73,8 @@ def rejoin_split(loaded: Loaded) -> Loaded:
 
     if flagged.height:
         # Re-sorting the parent's lazy frame per contig would replay every contig's sort for each one.
-        # The rows are spilled once instead, and read back one contig at a time (`load` now writes its
-        # spill sorted, F27; this one still sorts on every read).
+        # The rows are spilled once instead, then written again in canonical order a part at a time, as
+        # `load`'s spill is (F27), so the calls are one scan with no sort when they are read.
         rest = loaded.calls.filter(pl.col("split_signal").is_null())
         rebuilt = pl.DataFrame(kept + joined, schema=CALLS).lazy()
         entry = cache_dir() / "frames" / f"{facet_id}-{SCHEMA_VERSION}"
@@ -84,10 +84,13 @@ def rejoin_split(loaded: Loaded) -> Loaded:
                 staged, row_group_size=SPILL_ROW_GROUP
             )
             # Keyed by what it holds: the join is cheap next to the sink, so the result itself is the key.
-            key = cache.content_key([staged], facet)
-            done = spill.find(key) or spill.commit(key, {"calls": [staged]}, warnings)
-        contigs = [item["chrom"] for item in facet["contig_map"] or []]
-        calls = canonical_order_per_contig(pl.scan_parquet(done.files("calls")[0]), contigs)
+            key = cache.content_key([staged], {**facet, "REJOIN_LAYOUT": REJOIN_LAYOUT})
+            done = spill.find(key)
+            if done is None:
+                parts = canonical_parts(staged, "calls")
+                staged.unlink()
+                done = spill.commit(key, {"calls": parts}, warnings)
+        calls = pl.scan_parquet(done.files("calls"))
     else:
         calls = loaded.calls.with_columns(pl.lit(facet_id).alias("facet_id"))
     facets = parent.lazy().with_columns(
@@ -105,7 +108,17 @@ def rejoin_split(loaded: Loaded) -> Loaded:
     )
 
 
-_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": REJOIN_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
+REJOIN_LAYOUT = 1
+"""How a rejoin spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
+rows in canonical order, in parts of whole contigs (`loading.canonical_parts`), which the calls read as
+they are (F27). A spill without the key held the rows unsorted in one file, sorted one contig at a time
+on every read: its manifest lacks the key, so the sweep judges it older, and its generation key lacks
+it, so no run of this version finds it. Not a `REJOIN_VERSION` bump: the rows are the same, and that
+version is part of the derived `facet_id`, so bumping it would rename the facet and orphan every spill
+made from it (resolve, normalize, VRS). Not `cache.SPILL_LAYOUT` either, which every other step's spill
+carries too."""
+
+_VERSIONS = {"SCHEMA_VERSION": SCHEMA_VERSION, "REJOIN_VERSION": REJOIN_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT, "REJOIN_LAYOUT": REJOIN_LAYOUT}
 """The version keys of a rejoin spill, in its cache manifest."""
 
 

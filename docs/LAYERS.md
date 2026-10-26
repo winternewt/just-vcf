@@ -134,6 +134,14 @@ meanwhile. The desk carries the ones filed there.
   `migrate_store` deletes the old version's files once the verified swap commits (`keep_previous=True` keeps them);
   on a migrated VCF facet a null `method_steps` or `gl_source` means "not read", told apart from "not a VCF" or "no
   likelihoods" only by the manifest and the `loaded()` warnings, which now carry the migration caveats too.
+- **Layer 1, the lead's calls on whole-genome cost (built, listed for veto):** `reference_support` and
+  `genotype_evidence_at` collect the covering records in memory instead of joining the lazy frames (a whole-genome
+  gVCF answers 1M sites within 6 GB; grading stays lazy). `load` writes its spill in canonical order once, in parts
+  of whole contigs up to 1M rows, so the frames read as one scan with no sort (F27; 1M lookups on hu416394's gVCF
+  249 s to 4 s, load peak unchanged at 7.8 GB). The layout change is keyed by a new `loading.FRAMES_LAYOUT`, not by
+  bumping `cache.SPILL_LAYOUT`, so the resolve, lift, VRS and coverage spills are not retired with it (alternative
+  rejected: one `SPILL_LAYOUT` bump, which recomputes all of them). Left: `rejoin_split`'s spill still sorts per
+  contig on read; hu80855C's 138M-block load not re-measured.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

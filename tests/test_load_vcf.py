@@ -1,9 +1,11 @@
 import csv
 import gzip
 import io
+import itertools
 import re
 import struct
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 import polars as pl
@@ -1413,6 +1415,32 @@ def test_a_genotype_past_the_alts_is_counted_from_the_gt_text(tmp_path: Path, ve
     assert by_pos[400]["gt_alleles"] == ["G", "T"]
 
 
+WIDE_INDEX_WARNING = (
+    "genotype(s) hold an allele index past what gt can hold (255), though the row has that allele; "
+    "gt and gt_alleles have a null there, as an uncalled slot does"
+)
+THREE_HUNDRED_ALTS = [alt for alt in ("".join(bases) for bases in itertools.product("ACGT", repeat=5)) if alt != "AAAAA"][:300]
+"""Three hundred distinct ALTs: more than a `u8` index reaches."""
+
+
+@pytest.mark.parametrize("version", ["VCFv4.2", "VCFv4.4"])
+def test_an_index_gt_cannot_hold_is_counted_under_its_own_reason(tmp_path: Path, version: str) -> None:
+    """`gt` is a `u8` list, so on a row with 300 ALTs `0/300` names an allele the row has, yet reads
+    `gt [0, null]`, the frame of the half-call `0/.`; it was counted nowhere, since it is not past the
+    ALTs. It has its own warning now. `0/255` fits, and `0/301` or `300/301` is past the ALTs and counted
+    as that alone, so the two counts add up to the genotypes they name."""
+    alts = ",".join(THREE_HUNDRED_ALTS)
+    genotypes = {100: ("0/255", None), 200: ("0/256", "wide"), 300: ("0/300", "wide"), 400: ("0/301", "past"), 500: ("300/301", "past")}
+    records = [f"1\t{pos}\t.\tA\t{alts}\t.\t.\t.\tGT\t{gt}" for pos, (gt, _) in genotypes.items()]
+    calls, _, warnings = frames(write(tmp_path, vcf_text(records, version=version)))
+    counts = Counter(why for _, why in genotypes.values() if why)
+    assert [w for w in warnings if WIDE_INDEX_WARNING in w] == [f"{counts['wide']} {WIDE_INDEX_WARNING}"], warnings
+    assert [w for w in warnings if PAST_ALTS_WARNING in w] == [f"{counts['past']} {PAST_ALTS_WARNING}"], warnings
+    by_pos = {row["pos"]: row for row in calls.iter_rows(named=True)}
+    assert (by_pos[100]["gt"], by_pos[100]["gt_alleles"]) == ([0, 255], ["A", THREE_HUNDRED_ALTS[254]])
+    assert (by_pos[300]["gt"], by_pos[300]["gt_alleles"]) == ([0, None], ["A", None])
+
+
 @pytest.mark.parametrize(("neighbour", "value"), [
     ('##INFO=<ID=SVTYPE,Number=1,Type=String,Description="x">', "SVTYPE=SNV"),
     ('##INFO=<ID=OLD_MULTIALLELIC,Number=1,Type=String,Description="x">', "OLD_MULTIALLELIC=1:200:A/G/T"),
@@ -1468,3 +1496,38 @@ def test_a_reserved_key_never_carried_is_skipped_unread(
     reference, refused = loaded_with(whole, "whole.vcf"), loaded_with(other, "other.vcf")
     assert refused.calls.collect().drop("facet_id").equals(reference.calls.collect().drop("facet_id"))
     assert f"{namespace}/{key}" in refused.facets.collect()["dropped_fields"][0]
+
+
+SVTYPE_LINE = '##INFO=<ID=SVTYPE,Number=1,Type=String,Description="x">'
+
+
+@pytest.mark.parametrize(("key", "line"), [
+    # The file's own line makes `DB=1` a valid value, yet the copy leaves DB out, as every key it does not carry.
+    ("DB", '##INFO=<ID=DB,Number=1,Type=Integer,Description="x">'),
+    ("DB", '##INFO=<ID=DB,Number=0,Type=Flag,Description="x">'),
+    ("DB", None),
+    ("SOMATIC", '##INFO=<ID=SOMATIC,Number=1,Type=Integer,Description="x">'),
+])
+def test_a_flag_written_with_a_value_is_refused_naming_the_key(tmp_path: Path, key: str, line: str | None) -> None:
+    """A key VCF 4.3+ reserves as a Flag (INFO DB, SOMATIC) written with a value fails the read whatever
+    the file declares: the structural copy leaves the file's line out, and polars-bio's reader then reads
+    the key under its reserved Flag, which holds no value ("invalid flag"). Its error named no key; the
+    refusal now names the key from the records read ahead. The same records under VCF 4.2, whose reader
+    holds no definitions, load, and `DB` written bare loads under 4.3 too."""
+    meta = tuple(m for m in (line, SVTYPE_LINE) if m)
+    records = [f"1\t{pos}\t.\tA\tG\t50\t.\t{key}=1;SVTYPE=SNV\tGT\t0/1" for pos in (100, 200)]
+    with pytest.raises(HeaderRefused, match=rf"INFO/{key} written with a value: VCF 4\.3 reserves {key} as a Flag") as refused:
+        load(write(tmp_path, vcf_text(records, version="VCFv4.3", extra_meta=meta)))
+    assert refused.value.key == f"INFO/{key}" and refused.value.reason == "invalid flag"
+    assert load(write(tmp_path, vcf_text(records, version="VCFv4.2", extra_meta=meta), "v42.vcf")).calls.collect().height == 2
+    bare = [r.replace(f"{key}=1;", f"{key};") for r in records]
+    assert load(write(tmp_path, vcf_text(bare, version="VCFv4.3", extra_meta=meta), "bare.vcf")).calls.collect().height == 2
+
+
+def test_a_flag_with_a_value_past_the_rows_read_ahead_is_refused_as_such(tmp_path: Path) -> None:
+    """The key is named from the records read ahead of the scan; where none of them writes a Flag with a
+    value, the refusal says so and names the version's Flags, never a key it did not see."""
+    records = [f"1\t{pos}\t.\tA\tG\t50\t.\tSVTYPE=SNV\tGT\t0/1" for pos in range(100, 100 + 1000)] + ["1\t5000\t.\tA\tG\t50\t.\tDB=1;SVTYPE=SNV\tGT\t0/1"]
+    with pytest.raises(HeaderRefused, match=r"none of the first 1000 records writes one") as refused:
+        load(write(tmp_path, vcf_text(records, version="VCFv4.3", extra_meta=(SVTYPE_LINE,))))
+    assert refused.value.key is None and "DB" in str(refused.value)

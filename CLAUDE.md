@@ -319,6 +319,11 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
   case rather than asserting a message.
 - **Polars `explode` on a list column that can be empty:** pass `empty_as_null=False` where an empty list
   must stay empty (the bare call is deprecated and turns `[]` into a null row; met 2026-10-22).
+- **Polars `list.slice` at a column offset inside `when/then`:** on a frame of one row whose predicate is
+  false, polars 1.44 takes the offset for a scalar after the mask nulled it and raises "could not extract
+  number from any-value of dtype: 'Null'". Read fixed-width pieces with `list.get` and `concat_list`
+  instead (`list.get`, `list.head` and `list.gather` at a column argument survive the case; met
+  2026-10-26, a contig's one `X,<*>` site in `normalize`).
 - **Polars `list.gather` indexed by a column that can be null:** guard it,
   `pl.when(pl.col("gt").is_not_null()).then(alleles.list.gather(pl.col("gt"), null_on_oob=True))`. Over
   index lists that are all null, and over zero rows, polars 1.44 makes a list of a Null inner type

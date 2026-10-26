@@ -20,6 +20,27 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   genotypes: a parent and child read from facets as noisy as PGP's merges can read `full_siblings`
   (docs/RELATEDNESS.md, Limits).
 
+- `normalize` no longer fails on a contig whose one multi-allelic site to split is an ALT beside `<*>`
+  (`2 60 . A C,<*> 0/1`), which DeepVariant writes on every variant record, so a contig with one variant
+  met it: the split's pieces were a frame of one row, where polars 1.44's `list.slice` at a column
+  offset inside `when/then` raised `ComputeError` ("could not extract number from any-value of dtype:
+  'Null'") on the `cipos`/`ciend` slice. Those two values are read with `list.get` now. The output of
+  every input that normalized before is unchanged (`NORMALIZE_VERSION` stays 8).
+
+- The VCF, key=value and Nirvana loaders count a genotype whose allele index the row has but `gt`
+  cannot hold (`0/300` over 300 ALTs: `gt` is a `u8` list), with its own warning (`… genotype(s) hold
+  an allele index past what gt can hold (255), though the row has that allele; gt and gt_alleles have
+  a null there, as an uncalled slot does`). It read `gt [0, null]`, the frame of the half-call `0/.`,
+  counted nowhere, since it is not past the ALTs. A genotype past the ALTs is counted as that alone.
+  The frame does not change; widening `gt` to `u16`, a retype, is left to the person.
+
+- A VCF 4.3+ refused because a key the version reserves as a Flag (INFO DB, SOMATIC) is written with a
+  value (`DB=1`) now names the key: `HeaderRefused` says `INFO/DB written with a value: VCF 4.3 reserves
+  DB as a Flag…`, with `key` set, where polars-bio's error ("invalid flag") named none. Where no record
+  read ahead writes one, it says so and lists the version's Flags. The file is still refused, also when
+  its own line declares the key otherwise (`Number=1,Type=Integer`), which the docs had said it was not:
+  the reader refuses that line and the copy leaves it out, so the key is read as its Flag.
+
 - A VCF 4.3+ key its version reserves and the loader never carries (FORMAT MQ, NQ, INFO DP, AN, and
   the rest of the reader's table) is skipped unread in the retry whatever its values, declared in the
   file or not: the structural copy left its line out, polars-bio's reader parsed it under the
@@ -75,7 +96,9 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   the row holds: a null in `gt` and `gt_alleles` for each slot that is not an index, and the text in
   `source_gt`. It said "gt and gt_alleles null", but `gt` is a list of one slot per haplotype the text
   separates (`N/A` reads `[null, null]`), and a slot that is an index is read (`0/x` reads `[0, null]`).
-  Wording only.
+  Wording only. **Superseded within this release** by the entry above that withholds such a genotype
+  whole: `N/A` and `0/x` both read `gt` null now, with the text in `source_gt`, and the warning says so.
+  This entry records the wording in between; neither frame it describes ships.
 
 - A VCF read through a copy that declares its `Float` integer keys `Type=String` (`retyped_whole`)
   says so: one load warning names each key so read and its declared Type (`FORMAT/DP (Type=Float)`),

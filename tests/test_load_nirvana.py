@@ -7,6 +7,7 @@ genotypes `0/1`, `1/1`, `1/2`, haploid `1` and `0` on chrM, `0/0` reference reco
 """
 
 import json
+from collections import Counter
 from pathlib import Path
 
 import polars as pl
@@ -17,7 +18,7 @@ from just_vcf.formats import get_spec
 from just_vcf.loaders.vcf import MultiSampleError
 from just_vcf.schema import CALLS, canonical_chrom
 from just_vcf.sniff import Sniffed, sniff
-from test_load_vcf import assert_gt_consistent
+from test_load_vcf import THREE_HUNDRED_ALTS, WIDE_INDEX_WARNING, assert_gt_consistent
 
 HEADER = {"annotator": "Illumina Annotation Engine 1.5.1.0", "creationTime": "2016-12-02 12:36:47", "schemaVersion": 4,
           "dataVersion": "84.22.36", "samples": ["S1"]}
@@ -165,6 +166,25 @@ def test_an_index_past_the_alts_is_counted_from_the_text(tmp_path: Path) -> None
         f"{counts['past']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there",
         f"{counts['unreadable']} genotype(s) {UNREADABLE}",
     ]), found
+
+
+def test_an_index_gt_cannot_hold_is_counted_under_its_own_reason(tmp_path: Path) -> None:
+    """On a position with 300 ALTs `0/300` names an allele the row has, yet `gt`, a `u8` list, reads it
+    `[0, null]`; it was counted nowhere. It has its own warning, apart from the past-ALT one."""
+    genotypes = {"0/255": None, "0/256": "wide", "0/300": "wide", "0/301": "past", "300/301": "past"}
+    positions = [
+        _position("chr1", 100 + i, "A", THREE_HUNDRED_ALTS, [{"totalDepth": 10, "genotype": gt}]) for i, gt in enumerate(genotypes)
+    ]
+    loaded = load(_write(tmp_path / "s1.json", positions))
+    counts = Counter(why for why in genotypes.values() if why)
+    found = [w for w in loaded.warnings if WIDE_INDEX_WARNING in w or "past the row's ALT list" in w]
+    assert sorted(found) == sorted([
+        f"{counts['wide']} {WIDE_INDEX_WARNING}",
+        f"{counts['past']} genotype(s) index an allele past the row's ALT list; gt_alleles has a null there",
+    ]), found
+    by_gt = {r["source_gt"]: r for r in loaded.calls.collect().iter_rows(named=True)}
+    assert (by_gt["0/300"]["gt"], by_gt["0/300"]["gt_alleles"]) == ([0, None], ["A", None])
+    assert by_gt["0/255"]["gt_alleles"] == ["A", THREE_HUNDRED_ALTS[254]]
 
 
 def test_real_nirvana_json(pgp_participants: Path) -> None:

@@ -370,12 +370,23 @@ loader never reaches the case: polars-bio parses GT itself and refuses the whole
 Each genotype is counted under one reason at most: one not readable is counted as that
 alone, and only a readable one is checked against the row's ALT list. So `1:2` or `x/5` on a one-ALT
 row is unreadable, never also past the ALTs, though its digits name an allele the row lacks. The
-indices are read from the text's digits, never from `gt`: `gt` is a `u8` list, so `1/300` reads
-`[1, null]` there and is still counted past the ALTs, and an index too long for 64 bits is past them
-too (it failed the key=value table's load). The VCF loader counts the same, with the same warning, from
-the GT text polars-bio hands back (2026-10-26; `0/300` loaded as `gt [0, null]` unwarned), and its
-frame is the other loaders' (`gt [0, null]`, `gt_alleles` null there). In a VCF 4.4+ file, which has no
-`source_gt` (P4), that row looks like the half-call `0/.`, and only the warning's count says otherwise.
+indices are read from the text's digits, never from `gt`: `gt` is a `u8` list, so `1/300` on a row
+with fewer than 300 ALTs reads `[1, null]` there and is still counted past the ALTs, and an index too
+long for 64 bits is past them too (it failed the key=value table's load). The VCF loader counts the
+same, with the same warning, from the GT text polars-bio hands back (2026-10-26; `0/300` loaded as
+`gt [0, null]` unwarned), and its frame is the other loaders' (`gt [0, null]`, `gt_alleles` null
+there). In a VCF 4.4+ file, which has no `source_gt` (P4), that row looks like the half-call `0/.`, and
+only the warning's count says otherwise.
+
+An index the row has but `gt` cannot hold (2026-10-26) is a third reason, counted apart in all three
+loaders: on a row with 300 ALTs `0/300` names an allele that exists, yet `gt` reads `[0, null]` and
+`gt_alleles` `[REF, null]`, the frame of `0/.` again, and it was counted nowhere, since it is not past
+the ALTs. Its warning says `gt` cannot hold the index (255) though the row has the allele. A genotype
+past the ALTs (`0/301`, `300/301` over 300 ALTs) is counted as that alone, so each genotype still
+falls under one reason at most. Not done: widening `gt` to `u16`, which would hold
+the index; that retypes a column every consumer reads, which §8 of CLAUDE.md makes a major change (a
+retype, like a rename), allowed before 1.0 when the changelog says so. It is the person's call, and
+the warning stands until it is made.
 
 ## Decision 3: graded evidence (charter 7)
 
@@ -1246,8 +1257,16 @@ declares every key the version reserves and the copy does not declare otherwise 
 reserved Type (`READER_DEFINITIONS`, the pinned noodles fork's own table; `REWRITE_VERSION` 17), every
 one, not only those the rows read ahead use, since a later record may use another and a declared key
 no record uses costs nothing. Two are not declared: GT, which the reader parses as a genotype whatever
-its line says, and a Flag (INFO DB, SOMATIC), which the reader holds under no Number but 0, so a Flag
-written with a value (`DB=1`) still fails the read, as it does under the file's own line.
+its line says, and a Flag (INFO DB, SOMATIC), which the reader holds under no Number but 0. So under
+4.3+ the reader holds a reserved Flag as one whatever the file declares, and a Flag written with a
+value (`DB=1`) fails every read with `HeaderRefused`, even where the file's own line makes the value
+valid (`##INFO=<ID=DB,Number=1,Type=Integer>`): the reader refuses that line, the copy leaves it out
+like any key not carried, and the reader reads `DB` as its Flag ("invalid flag"). polars-bio's error
+names no key, so the refusal names it from the records read ahead (2026-10-26): `INFO/DB written with a
+value`, with `HeaderRefused.key` set where it is one key; where no record read ahead writes a Flag with
+a value, it says so and lists the version's Flags. Under 4.2, whose reader holds no definitions, the
+copy reads such a key as text and the file loads. Rejected: dropping the value from the copy's records,
+which rewrites the data polars-bio reads, as for the keys above.
 
 GT is never left out (2026-10-25): a facet without genotypes is not a calls facet, and GT's values are
 genotype text whatever its line says. Declared `Integer`, `Float` or `Character`, it is read as written
@@ -2474,6 +2493,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   (or the reverse) is `disagrees`, where it was `agrees`. Rejected: a separate nullable column (say
   `first_degree_kind`) beside an unchanged `band`, strictly additive but a second column every reader
   must join to the first to know what a pair is.
+
+- **No version change** (2026-10-26, an allele index `gt` cannot hold): the VCF, key=value and Nirvana
+  loaders count a genotype whose index names an allele of the row past 255 (`0/300` over 300 ALTs)
+  under its own warning; the frame is as before (`gt [0, null]`). Widening `gt` to `u16` is left to
+  the person (Decision 2, "Genotype text that is not allele indices").
 
 - **No version change** (2026-10-25, genotype text that is not allele indices): the key=value table
   and Nirvana JSON withhold such a genotype whole (`gt`, `gt_alleles`, `phased` null, `source_gt`

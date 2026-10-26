@@ -11,7 +11,7 @@ import pytest
 
 from just_vcf import ReferenceMismatchError, ReferenceStore, load, normalize, rejoin_split, resolve_ref, sniff, write_vcf
 from just_vcf.loading import Loaded
-from just_vcf.normalize import RELATION, _left_align
+from just_vcf.normalize import RELATION, _left_align, _split
 from just_vcf.schema import BLOCKS, CALLS
 from test_load_cgi import Locus, Seg, var_text
 from test_load_cgi import write as write_cgi
@@ -201,6 +201,33 @@ def test_the_unspecified_allele_is_dropped_from_split_rows(tmp_path: Path, store
     assert not any("<*>" in row["alts"] for row in calls.iter_rows(named=True) if row["pos"] != r)
     assert any(w.startswith("3 site(s) held `<*>` beside their ALTs: `<*>` dropped") for w in out.warnings), out.warnings
     assert any("1 multi-allelic row(s) left as written: the genotype calls `<*>`" in w for w in out.warnings), out.warnings
+
+
+def test_a_contig_whose_one_split_site_is_an_alt_beside_the_unspecified_allele(tmp_path: Path, store: ReferenceStore) -> None:
+    """DeepVariant writes `<*>` beside the ALT of every variant record, so a contig holding one variant
+    reaches the split with one `X,<*>` row, and its pieces are a frame of one row. There polars 1.44's
+    `list.slice` with a column offset inside `when/then` raised under a false predicate (`cipos` null:
+    "could not extract number from any-value of dtype: 'Null'"), and normalize failed. The row is an
+    ordinary biallelic row, as on a contig with more."""
+    p = 60
+    ref, alt = at("2", p), other(at("2", p))
+    records = [record("1", 50, at("1", 50), other(at("1", 50)), "0/1", vectors=False), record("2", p, ref, f"{alt},<*>", "0/1", vectors=False)]
+    _, out = normalized(tmp_path, store, records)
+    contig = out.calls.filter(pl.col("chrom") == "2").collect()
+    assert contig.select("pos", "ref", "alts", "gt", "split_signal", "cipos").rows() == [(p, ref, [alt], [0, 1], None, None)]
+    assert any(w.startswith("1 site(s) held `<*>` beside their ALTs") for w in out.warnings), out.warnings
+
+
+@pytest.mark.parametrize("cipos", [None, [-5, 5, -2, 2]])
+def test_one_split_piece_keeps_its_per_alt_columns(cipos: list[int] | None) -> None:
+    """The split at frame level, on the one-row frame the contig above reaches it with: the `<*>` piece
+    is dropped and the one left keeps the interval values of its ALT, or none."""
+    row = {name: None for name in CALLS} | {
+        "chrom": "1", "pos": 10, "source_ref": "A", "alts": ["C", "<*>"], "gt": [0, 1], "gt_alleles": ["A", "C"], "cipos": cipos,
+    }
+    out = _split(pl.DataFrame([row], schema=CALLS), Counter())
+    assert out.schema == CALLS
+    assert out.select("alts", "gt", "cipos").rows() == [(["C"], [0, 1], None if cipos is None else cipos[:2])]
 
 
 def test_a_contig_without_genotypes_splits_with_the_genotype_unknown(tmp_path: Path, store: ReferenceStore) -> None:

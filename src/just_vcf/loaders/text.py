@@ -3,7 +3,7 @@ allele indices (the key=value table, Nirvana JSON)."""
 
 import polars as pl
 
-from just_vcf.schema import canonical_chrom_expr
+from just_vcf.schema import CALLS, canonical_chrom_expr
 
 ALLELE_LETTERS = "ACGTDI"
 """Letters an array allele may be written with: bases, and the D/I codes of indel probes."""
@@ -106,23 +106,41 @@ READABLE_GT = r"^(\d+|\.)([/|](\d+|\.))*$"
 """Genotype text readable as allele indices: each slot an index or `.`, separated by `/` or `|`."""
 
 
+GT_INDEX_MAX: int = CALLS["gt"].inner.max()
+"""The largest allele index `gt` can hold (255: `gt` is a `u8` list, SCHEMA.md Decision 6)."""
+
+
+def _text_indices(genotype: pl.Expr) -> pl.Expr:
+    """The genotype text's allele indices, read from its digits; one too long for 64 bits as the largest."""
+    biggest = pl.lit(2**63 - 1, dtype=pl.Int64)
+    return genotype.str.extract_all(r"\d+").list.eval(pl.element().cast(pl.Int64, strict=False).fill_null(biggest))
+
+
 def past_alts(genotype: pl.Expr, alts: pl.Expr) -> pl.Expr:
     """True on a genotype readable as allele indices (`READABLE_GT`) with an index past the row's `alts`
-    ALT alleles, read from the text's digits: `1/300` is past where `gt`, a UInt8 list, nulls the 300,
-    and an index too long for 64 bits is past too. An unreadable genotype is counted as that alone, so
-    `1:2` is never also past (SCHEMA.md, the unreadable genotype)."""
-    biggest = pl.lit(2**63 - 1, dtype=pl.Int64)
-    indices = genotype.str.extract_all(r"\d+").list.eval(pl.element().cast(pl.Int64, strict=False).fill_null(biggest))
-    return genotype.str.contains(READABLE_GT) & (indices.list.max() > alts)
+    ALT alleles, read from the text's digits: `1/300` over fewer than 300 ALTs is past where `gt`, a
+    UInt8 list, nulls the 300, and an index too long for 64 bits is past too. An unreadable genotype is
+    counted as that alone, so `1:2` is never also past (SCHEMA.md, the unreadable genotype)."""
+    return genotype.str.contains(READABLE_GT) & (_text_indices(genotype).list.max() > alts)
+
+
+def past_gt(genotype: pl.Expr, alts: pl.Expr) -> pl.Expr:
+    """True on a genotype readable as allele indices whose every index names an allele of the row, one of
+    them past what `gt` can hold (`GT_INDEX_MAX`): `0/300` over 300 ALTs, which `gt` reads `[0, null]`,
+    the frame of the half-call `0/.`. A genotype past the row's ALTs is counted by `past_alts` alone, so
+    each is counted under one reason at most."""
+    biggest = _text_indices(genotype).list.max()
+    return genotype.str.contains(READABLE_GT) & (biggest <= alts) & (biggest > GT_INDEX_MAX)
 
 
 def genotype_indices(text: pl.Expr) -> pl.Expr:
     """`gt` from genotype text of allele indices (`0/1`, `1|2`, `./.`): one slot per haplotype the text
-    separates, null per `.` and per index past 255 (counted by `past_alts`). Null where the text is not
-    readable as allele indices (`READABLE_GT`): the genotype is unknown, so no slot is read, not the `0`
-    of `0/x` either, which would read as the half-call `0/.` the file did not write (SCHEMA.md
-    Decision 2). Gather `gt_alleles` behind a `gt` null guard: a batch whose every `gt` is null gathers a
-    list of a Null inner type, which the spill's parquet sink cannot write."""
+    separates, null per `.` and per index past `GT_INDEX_MAX` (counted by `past_alts` where it is past
+    the row's ALTs, by `past_gt` where the row has the allele). Null where the text is not readable as
+    allele indices (`READABLE_GT`): the genotype is unknown, so no slot is read, not the `0` of `0/x`
+    either, which would read as the half-call `0/.` the file did not write (SCHEMA.md Decision 2).
+    Gather `gt_alleles` behind a `gt` null guard: a batch whose every `gt` is null gathers a list of a
+    Null inner type, which the spill's parquet sink cannot write."""
     slots = text.str.replace_all(r"\|", "/").str.split("/").list.eval(
         pl.when(pl.element() == ".").then(None).otherwise(pl.element()).cast(pl.UInt8, strict=False)
     )
@@ -145,3 +163,9 @@ UNREADABLE_WARNING = (
 
 PAST_ALTS_WARNING = "genotype(s) index an allele past the row's ALT list; gt_alleles has a null there"
 """The warning, after its count, for genotypes `past_alts` counts, in every loader that reads allele indices."""
+
+PAST_GT_WARNING = (
+    f"genotype(s) hold an allele index past what gt can hold ({GT_INDEX_MAX}), though the row has that allele; "
+    "gt and gt_alleles have a null there, as an uncalled slot does"
+)
+"""The warning, after its count, for genotypes `past_gt` counts, in every loader that reads allele indices."""

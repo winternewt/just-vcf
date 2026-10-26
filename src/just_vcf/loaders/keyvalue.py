@@ -20,7 +20,16 @@ from typing import BinaryIO
 
 import polars as pl
 
-from just_vcf.loaders.text import PAST_ALTS_WARNING, READABLE_GT, UNREADABLE_WARNING, genotype_indices, genotype_phase, past_alts
+from just_vcf.loaders.text import (
+    PAST_ALTS_WARNING,
+    PAST_GT_WARNING,
+    READABLE_GT,
+    UNREADABLE_WARNING,
+    genotype_indices,
+    genotype_phase,
+    past_alts,
+    past_gt,
+)
 from just_vcf.schema import CALLS, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
@@ -130,8 +139,8 @@ def caller_rows(rows: pl.LazyFrame, prefix: str) -> pl.LazyFrame:
 
 def stats(rows: pl.LazyFrame) -> dict:
     """Counts the warnings need, over every row: malformed rows, genotypes per caller, genotypes not
-    readable as allele indices, and readable ones indexing past a row's ALT list; each genotype in one
-    of the last two at most."""
+    readable as allele indices, readable ones indexing past a row's ALT list, and readable ones naming an
+    allele of the row past what `gt` can hold; each genotype in one of the last three at most."""
     alts = pl.col("alt").str.split(",").list.len()
     exprs = [malformed(rows).sum().alias("malformed")]
     for _, prefix, _ in CALLERS:
@@ -140,6 +149,7 @@ def stats(rows: pl.LazyFrame) -> dict:
         exprs += [
             (genotype.is_not_null() & ~malformed(rows)).sum().alias(f"{prefix}_rows"),
             (past_alts(genotype, alts) & ~malformed(rows)).fill_null(False).sum().alias(f"{prefix}_past_alts"),
+            (past_gt(genotype, alts) & ~malformed(rows)).fill_null(False).sum().alias(f"{prefix}_past_gt"),
             (genotype.is_not_null() & ~readable & ~malformed(rows)).fill_null(False).sum().alias(f"{prefix}_unreadable"),
         ]
     exprs.append(pl.col("chromosome").filter(~malformed(rows)).unique().sort().alias("chroms").implode())
@@ -151,6 +161,8 @@ def warnings_for(counts: dict, prefix: str) -> list[str]:
     found = []
     if counts[f"{prefix}_past_alts"]:
         found.append(f"{counts[f'{prefix}_past_alts']} {PAST_ALTS_WARNING}")
+    if counts[f"{prefix}_past_gt"]:
+        found.append(f"{counts[f'{prefix}_past_gt']} {PAST_GT_WARNING}")
     if counts[f"{prefix}_unreadable"]:
         found.append(f"{counts[f'{prefix}_unreadable']} {UNREADABLE_WARNING}")
     return found

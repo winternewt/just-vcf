@@ -22,7 +22,16 @@ from typing import BinaryIO
 
 import polars as pl
 
-from just_vcf.loaders.text import PAST_ALTS_WARNING, READABLE_GT, UNREADABLE_WARNING, genotype_indices, genotype_phase, past_alts
+from just_vcf.loaders.text import (
+    PAST_ALTS_WARNING,
+    PAST_GT_WARNING,
+    READABLE_GT,
+    UNREADABLE_WARNING,
+    genotype_indices,
+    genotype_phase,
+    past_alts,
+    past_gt,
+)
 from just_vcf.loaders.vcf import MultiSampleError, NoSampleError
 from just_vcf.schema import CALLS, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
 
@@ -168,13 +177,15 @@ def calls_rows(positions: pl.LazyFrame, index: int) -> pl.LazyFrame:
 
 
 def stats(rows: pl.LazyFrame) -> dict:
-    """Counts the warnings need; a genotype is counted as unreadable or past the ALTs, never both."""
+    """Counts the warnings need; a genotype is counted as unreadable, past the ALTs or past what `gt` can
+    hold, one of them at most."""
     return (
         rows.select(
             pl.len().alias("rows"),
             pl.col("source_gt").is_null().sum().alias("no_genotype"),
             # From the text, as the key=value table counts it: `gt` is UInt8, so `1/300` reads `[1, null]` there.
             past_alts(pl.col("source_gt"), pl.col("alts").list.len()).fill_null(False).sum().alias("past_alts"),
+            past_gt(pl.col("source_gt"), pl.col("alts").list.len()).fill_null(False).sum().alias("past_gt"),
             (pl.col("source_gt").is_not_null() & ~pl.col("source_gt").str.contains(READABLE_GT)).sum().alias("unreadable"),
             pl.col("chrom").is_null().sum().alias("no_chrom"),
         )
@@ -193,6 +204,8 @@ def warnings_for(counts: dict, other_lines: int) -> list[str]:
         found.append(f"{counts['unreadable']} {UNREADABLE_WARNING}")
     if counts["past_alts"]:
         found.append(f"{counts['past_alts']} {PAST_ALTS_WARNING}")
+    if counts["past_gt"]:
+        found.append(f"{counts['past_gt']} {PAST_GT_WARNING}")
     return found
 
 

@@ -213,6 +213,11 @@ def test_mates_on_two_records_count_once(tmp_path: Path, store: ReferenceStore) 
         result = concordance(facet(tmp_path / f"self{copies}", "a", [fold] * copies, store), facet(tmp_path / f"self{copies}", "b", [], store))
         assert result.sites.collect().height == 1
         assert any("repeat an end" in line for line in result.warnings) is repeated, result.warnings
+    # Two foldbacks a few bases apart within their intervals are one adjacency, each record at its own end.
+    near = [bnd("1", 5000, "t]p]", "1", 5000, CIPOS="-3,3"), bnd("1", 5002, "t]p]", "1", 5002, CIPOS="-3,3")]
+    result = concordance(facet(tmp_path / "near", "a", near, store), facet(tmp_path / "near", "b", [], store))
+    assert result.sites.collect().height == 1
+    assert not any("repeat an end" in line for line in result.warnings), result.warnings
 
 
 def test_mates_written_apart_within_their_intervals_count_once(tmp_path: Path, store: ReferenceStore) -> None:

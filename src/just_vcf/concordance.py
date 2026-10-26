@@ -1121,11 +1121,13 @@ def _bnd_side(side: pl.DataFrame, name: str, bnddist: int, warnings: list[str]) 
     frame = frame.with_columns(
         (pl.int_range(pl.len()).over("_adj") == 0).alias("_rep"),
         # Records beyond one per end; an adjacency joining an end to itself (a foldback, `t]p]` at its
-        # own position) has two mates standing at one end.
-        (
-            pl.len().over("_adj")
-            - pl.struct("chrom", "_p", "_side").n_unique().over("_adj")
-            - (pl.col("_self").all().over("_adj") & (pl.len().over("_adj") > 1)).cast(pl.UInt32)
+        # own position) has two mates standing at one end. Two foldbacks folded within their
+        # intervals stand at two ends already, hence the floor at 0.
+        pl.max_horizontal(
+            pl.len().over("_adj").cast(pl.Int64)
+            - pl.struct("chrom", "_p", "_side").n_unique().over("_adj").cast(pl.Int64)
+            - (pl.col("_self").all().over("_adj") & (pl.len().over("_adj") > 1)).cast(pl.Int64),
+            pl.lit(0, dtype=pl.Int64),
         ).alias("_repeats"),
         (pl.struct(*read).n_unique().over("_adj") > 1).alias("_split"),
     ).drop(*read)

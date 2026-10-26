@@ -156,6 +156,13 @@ meanwhile. The desk carries the ones filed there.
   `breakend_not_lifted` narrowed to ALTs the lift cannot read (pre-1.0 break); new `breakend_*` reasons for the rest.
   Left: F30 (`write_vcf`'s `contig_names` does not reach a mate inside ALT); an imprecise breakend landing on a minus
   strand is not moved to the left of its CIPOS interval.
+- **Layer 4, the lead's calls on audit 10 (built, listed for veto):** every step's spill key now covers its step
+  versions and its set of file groups, and a generation found with other groups is rewritten (a lift generation
+  missing `mate_contigs` had crashed `liftover`). The cost is one-time: each step's next run writes its result once
+  more (a WGS load sorts again, `alignment_coverage` reads its BAM again), the old copy kept until `clear_cache`.
+  Alternative rejected: keying the lift alone, which leaves the other six steps one forgotten bump from the same
+  crash. Superseded generations are not deleted on a run (an older session may still read one within the grace);
+  the docstrings now say so. F30 resolved (merge 0bc11c1); F31 logged, the lift's naming rule, not decided.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

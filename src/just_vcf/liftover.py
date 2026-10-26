@@ -80,12 +80,13 @@ from just_vcf.schema import BLOCKS, CALLS, CONTIG_RANK, FACETS, SCHEMA_VERSION, 
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 9
+LIFT_VERSION = 10
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
 row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
 `phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
 6: the lifted facet's `reference` is null, since it named the source's file; 7: schema 0.0.19's `hq` carried;
-8: the `blocks` frame lifted; 9: symbolic SVs and copy-number segments lifted by both ends)."""
+8: the `blocks` frame lifted; 9: symbolic SVs and copy-number segments lifted by both ends; 10: on a
+minus strand, a source SV with CIEND and no CIPOS gets `ciend = [0, 0]`, its precise POS, not null)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -842,7 +843,9 @@ def _lifted_sv_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts
         if minus:
             # The new POS is the image of the old END and the reverse: a missing CIEND is CIPOS (VCF 4.5).
             columns["cipos"].append(_mirrored(ciend if ciend is not None else cipos))
-            columns["ciend"].append(_mirrored(cipos))
+            # A source POS left precise (no CIPOS) beside an imprecise END becomes the new END, and a null
+            # there would read as the new CIPOS: it is written precise, `[0, 0]` per ALT.
+            columns["ciend"].append(_mirrored(cipos) if cipos is not None or ciend is None else [0] * len(ciend))
         else:
             columns["cipos"].append(cipos)
             columns["ciend"].append(ciend)

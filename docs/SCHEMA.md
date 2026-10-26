@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.20.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.21.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -86,7 +86,10 @@ every facet would then stay `not_run` for ever and its checked twin would be a s
 same calls. A facet already read is refused rather than read again. Since the id stays, the facet
 records the rule that read it: `facets.resolve_version` is the `RESOLVE_VERSION` (0.0.20), so a rule
 change that rewrites rows is visible on the facet, and the durable store refuses to take the same
-facet in another REF state as `present`. Rejected: digesting `RESOLVE_VERSION` into the `facet_id`,
+facet in another REF state as `present`. The rows also depend on the chip manifests an array's `I`/`D`
+codes and a mixed strand's withheld rows are read with (`JUST_VCF_MANIFESTS_DIR`), which the rule's
+version does not fix: `facets.resolve_inputs` (0.0.21) digests the ones that read rows, so the same
+array resolved without manifests and then with them is two states too. Rejected: digesting `RESOLVE_VERSION` into the `facet_id`,
 as `normalize`, `liftover` and `rejoin_split` digest theirs, which would make every resolved facet the
 second identity rejected above.
 
@@ -610,8 +613,10 @@ hom-ref restoration from absence that just-vcf grows must ask it, and refuse a f
 decided it (`AbsenceReason`, just-vcf's own vocabulary), so a refusal says why. It reads as reference
 under `whole_genome_silence` (`weak_reference`), `omitted_called_reference` (`reference`) and
 `content_filter_forced` (either, on a filtered genome, for the kept class, with `force=True`). It is
-unknown under `outside_blocks` (`blocks`); under `array`, `targeted` (an exome or a panel), `imputed`
-or `callset_type_unknown`, from the facet's `callset_type`, when `absence_means` is `unknown`; and
+unknown under `outside_blocks` (`blocks`); under `array`, `targeted` (an exome or a panel), `imputed`,
+`callset_type_unknown` (a null type) or `absence_not_carried` (a whole genome: a derived facet whose
+producer withheld what its absence means, as `liftover` and `consensus` do), from the facet's
+`callset_type`, when `absence_means` is `unknown`; and
 under `class_not_counted`, `class_not_called`, `content_filter_held` (the kept class, without
 `force`) and `class_cut_by_filter`, which a class the filter cut gets even where the facet wrote none
 of it (the cut is why). `absence_is_reference` is its `reads_reference`, so the two cannot drift.
@@ -696,7 +701,8 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `seqcol_digest` | refget Sequence Collection digest (charter 3). Null until computed; the label never stands in for it. No VCF header can give it (below) |
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
-| `resolve_version` | the `RESOLVE_VERSION` of the `resolve_ref` that read REF (u32). Null until REF is read, and on a facet a store migrated from before 0.0.20 whose REF was read (not recorded). A derived facet keeps its parent's; a consensus its parents' where they share one, else null. `resolve_ref` keeps the `facet_id`, so this column and `ref_seqcol_digest` are what tell two REF states of one facet apart (the durable store refuses an add that meets a held facet in another). just-vcf's own shape |
+| `resolve_version` | the `RESOLVE_VERSION` of the `resolve_ref` that read REF (u32). Null until REF is read, and on a facet a store migrated from before 0.0.20 whose REF was read (not recorded). A derived facet keeps its parent's; a consensus its parents' where they share one, else null. `resolve_ref` keeps the `facet_id`, so this column, `ref_seqcol_digest` and `resolve_inputs` are what tell two REF states of one facet apart (the durable store refuses an add that meets a held facet in another). just-vcf's own shape |
+| `resolve_inputs` | what else `resolve_ref` read rows with: a 16-hex digest over the chip manifests whose indel probes read an array's `I`/`D` codes and whose SNV allele pairs read a mixed strand's withheld rows (`probes.catalog_digest` of each, so the manifests' bytes and `PROBES_VERSION`). Null until REF is read, where no manifest read a row (a VCF, an array with no code row and no strand withheld, or none configured), and on an array or consensus facet a store migrated from before 0.0.21 whose REF was read (not recorded). A derived facet keeps its parent's. A consensus has a digest of its parents' REF states instead (each parent's `facet_id`, `ref_seqcol_digest`, `resolve_version` and `resolve_inputs`), always set, since its `resolve_version` is null wherever they differ. With `ref_seqcol_digest` and `resolve_version` it is the facet's REF state (`store.REF_STATE`). just-vcf's own shape |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
 | `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele; null = not counted (a genotype table, which writes no REF or ALT). just-vcf's own shape |
@@ -1108,7 +1114,9 @@ ends rather than its REF span, with one base of REF:
 5. `cipos` and `ciend` carry on a plus-strand block. On a minus-strand block the new POS is the old
    END's image and the new END the old POS's, so each pair `[lo, hi]` mirrors to `[-hi, -lo]` and the
    two swap; where the source wrote no CIEND, VCF 4.5's rule (assume CIPOS) supplies the old END's
-   interval, so both are set.
+   interval, so both are set. Where it wrote CIEND and no CIPOS, its POS is precise and its END is
+   not: the new END, the old POS's image, gets `ciend = [0, 0]` per ALT, since a null there would read
+   as the new CIPOS by the same rule (`LIFT_VERSION` 10). Neither written stays neither.
 6. Breakends (`N[2:123[`, `]2:123]N`, `.N`) are left behind as `breakend_not_lifted`. Lifting one
    needs its mate position lifted through the chain on whatever contig it names, the mate's contig
    name rewritten inside the ALT, and the brackets turned for each end that lands on a minus strand,
@@ -1137,7 +1145,9 @@ more than one target, on a target contig the collection lacks, or on a source co
 not cover or covers at another size stays behind with the row reason of the same name, and is counted
 in bases: `Lifted.block_reasons` (bases per reason) and a warning line per reason with the pieces and
 bases. Lifted pieces are sorted into canonical order per target contig. Two source regions the chain
-sends to one place give overlapping lifted blocks; both are kept and counted (charter 8). The lifted
+sends to one place give overlapping lifted blocks; both are kept and counted (charter 8), and every
+reader of blocks finds both where they cover a position (`reference_support`, `genotype_evidence_at`,
+`concordance`, `consensus`; one answers where one must, by `reference_support`'s order). The lifted
 facet's `absence_means` stays `unknown`: a position no lifted block or row covers says nothing, which
 is what `blocks` would say too (`absence_is_reference` answers `None` for both), and `unknown` keeps
 one rule for every lifted facet. Checked against pyliftover base by base on synthetic blocks over the
@@ -2062,10 +2072,15 @@ positive sum. Otherwise the row falls to the next basis; nothing is patched.
 `loaded` at each `chrom, pos` (`GENOTYPE_EVIDENCE_AT`): one row per record that covers the site (a
 `calls` row from `pos` to `end_pos`, or its `pos` alone where the span is unknown; a `blocks` row over
 its span), graded as above, with the record's span as `record_pos`, `record_end_pos`. A site inside a
-called deletion is not absent. A facet's blocks are taken not to overlap one another (a gVCF's and
-CGI's tile the genome; none of 10.8M CGI `var` blocks or 14.6M DeepVariant blocks overlaps its
-predecessor), so the block over a site is the last one starting at or before it; only the
-matched records are graded, so a panel's answer does not grade a genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:
+called deletion is not absent. Every block over a site is found, overlapping ones included: a
+gVCF's and CGI's blocks tile the genome (none of 10.8M CGI `var` blocks or 14.6M DeepVariant blocks
+overlaps its predecessor), so the block over a site is the last one starting at or before it, an
+as-of join; a lifted facet's do not (two source regions a chain sends to one place give overlapping
+blocks, "Lifting blocks"), and a block that reaches its successor goes through a range join instead
+(`intervals.covering`). A site's rows come by record start, origin and end, then by what each states
+(block kind, basis, confidence, alleles, genotype), so records over one span come out in one order
+whatever the file's. Only the matched records are graded, so a panel's answer does not grade a
+genome's every row. A site nothing covers gets one row, `evidence_basis = absence`:
 `absent_reference` (asserted, no number, `genotype_index` 0) where `absence_is_reference(facet,
 variant_class, force=force)` is True, else `absent_unknown`; `force` lifts a content filter's hold for
 the class it kept, as there. Decision 3 rejected a made-up number for an
@@ -2125,7 +2140,7 @@ position, what that answer rests on, and why:
 | `call` | a `calls` row covers the position (from `pos` to `end_pos`, both inclusive) | as `genotype_evidence`: `genotype_index` 0 states hom-ref, any other an ALT on some haplotype, null none; on a row with a `split_signal` a `0` may be another ALT (Decision 2), so `rejoin_split` first | `call_at_position`, `call_spans_position` |
 | `block` | a `blocks` row covers it (both ends inclusive) | a `ref` block by `block_grade`, `genotype_index` 0; a `no_call` block by its likelihoods, else `no_call` | `ref_block`, `no_call_block` |
 | `absence` | nothing covers it, and `absence_support` reads the silence as reference | `absent_reference`, asserted, `genotype_index` 0, no number | `whole_genome_silence`, `omitted_called_reference`, `content_filter_forced` |
-| `none` | nothing covers it, and the silence says nothing | `absent_unknown`, unknown, no genotype | the `AbsenceReason` (Decision 4): `outside_blocks`, `array`, `targeted`, `imputed`, `callset_type_unknown`, `class_not_counted`, `class_not_called`, `content_filter_held`, `class_cut_by_filter` |
+| `none` | nothing covers it, and the silence says nothing | `absent_unknown`, unknown, no genotype | the `AbsenceReason` (Decision 4): `outside_blocks`, `array`, `targeted`, `imputed`, `callset_type_unknown`, `absence_not_carried`, `class_not_counted`, `class_not_called`, `content_filter_held`, `class_cut_by_filter` |
 
 `absence_means` comes along on every row, so a producer's reference call by omission (`reference`) and
 a caller's silence (`weak_reference`) stay apart on an `absence` row. That is the absence's own grade,
@@ -2133,8 +2148,8 @@ below every record's: Decision 3 makes up no number for an unquantified statemen
 one. A number would have to come from the method's own false-negative rate per region (RM279's atlas),
 not from a constant; until the person asks for one, none is given. `records` counts the records
 covering the position (0 for `absence` and `none`). Where several do, one answers: a call starting at
-the position, else the call starting nearest before it, else the block (a facet's blocks do not
-overlap one another, so there is at most one); among calls of one span, one stating an ALT before one
+the position, else the call starting nearest before it, else the block starting nearest before it
+(a lifted facet's blocks can overlap), the shortest first, a `no_call` block before a `ref` one; among calls of one span, one stating an ALT before one
 stating nothing before one stating hom-ref, then a quantified one before an unquantified one, the
 least `confidence` first, then by allele list (and, past that, the genotype, the basis and the
 vector), so no tie depends on the order a join emits rows. A GATK gVCF does start a
@@ -2257,9 +2272,9 @@ a load warning may quote a sample or a file name.
 - **Facets accumulate (charter 5).** A facet's directory is written once and never rewritten or
   removed, except by a migration, which rewrites every facet's files with the same facets and rows;
   adding a facet the store holds, by `facet_id`, is a no-op that writes nothing, when its REF state is
-  the held one's (`store.REF_STATE`: `ref_seqcol_digest` and `resolve_version`). One in another state
-  (held as loaded and given resolved, or the reverse, or read by another `RESOLVE_VERSION` or from
-  another collection) is refused with `StoreConflictError`, naming the facet and both states, before
+  the held one's (`store.REF_STATE`: `ref_seqcol_digest`, `resolve_version` and `resolve_inputs`). One
+  in another state (held as loaded and given resolved, or the reverse, or read by another
+  `RESOLVE_VERSION`, from another collection or with other chip manifests) is refused with `StoreConflictError`, naming the facet and both states, before
   anything is written: `resolve_ref` keeps the `facet_id`, and a `present` there kept the held rows
   while the caller thought the new ones stored. A held facet's files are never rewritten, so the other
   state goes into a new store. Rejected: replacing the held facet (charter 5; a replace is the
@@ -2307,6 +2322,7 @@ a step fails it.
 | 0.0.17 → 0.0.18 | facets | adds `gl_source` (null) after `split_marker` | VCF facets: null means not recorded, not "no likelihoods" |
 | 0.0.18 → 0.0.19 | calls | adds `hq` (null) after `gq` | CGI native facets, and facets whose `dropped_fields` list FORMAT `HQ`: `hq` null for not read, so their rows grade `gt_only` |
 | 0.0.19 → 0.0.20 | facets | adds `resolve_version` (null) after `ref_seqcol_digest` | facets whose REF was read (`ref_seqcol_digest` set): null means not recorded, not "REF not read", so the store refuses the same facet resolved today as another state of it |
+| 0.0.20 → 0.0.21 | facets | adds `resolve_inputs` (null) after `resolve_version` | array facets (`family = genotype_table`) whose REF was read: null means not recorded, not "no manifest", so the store refuses the same facet resolved today with manifests as another state of it; consensus facets: null means the parents' REF states were not recorded, so the store refuses the same consensus built today |
 
 A step never invents a value: an added column is null, and where that null (or a value an older loader
 left) reads differently from what a load of the same source gives today, the facets it applies to are
@@ -2848,8 +2864,14 @@ it had.
 **The facet.** `facets`: `caller = "just-vcf consensus"`, `caller_version = CONSENSUS_VERSION`, one
 `merge` step in `method_steps`, `derivation_inputs` one `error_rates` entry whose `sha256` digests
 `Consensus.rates` (and a `prior` entry under a population prior), `absence_means = unknown`, `variant_classes` counted from its rows, the parents'
-`assembly_label`, `ref_seqcol_digest`, `callset_type` and `subject` where they share one. `facet_id`
-digests the sorted parent ids, `CONSENSUS_VERSION`, the options and the rates. `calls`, one row per
+`assembly_label`, `ref_seqcol_digest`, `resolve_version`, `callset_type` and `subject` where they share one,
+and `resolve_inputs` a digest of every parent's REF state (its `facet_id`, `ref_seqcol_digest`,
+`resolve_version` and `resolve_inputs`, in `facet_id` order). `facet_id`
+digests the sorted parent ids, `CONSENSUS_VERSION`, the options and the rates. A parent keeps its id
+when `resolve_ref` reads it, so the id does not change with the parents' REF states, and
+`resolve_version` is null where they differ: `resolve_inputs` is what lets the durable store tell two
+builds over parents in other states apart. Rejected: digesting the parents' states into the
+`facet_id`, which would change the id of every consensus already made. `calls`, one row per
 allele in canonical order: `alts = [alt]`, `source_alleles = [REF, ALT]`, `source_ref` the REF,
 `ref` the same where a parent read it from the reference (charter 10), `ref_check = not_run`, `gp` the
 posterior (VCF genotype order over `[REF, ALT]`), `gt` and `gt_alleles` its most probable genotype
@@ -3221,6 +3243,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   the rule above is a minor bump, 0.0.10. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.21** (2026-10-26, the manifests that read REF): `facets.resolve_inputs` (`str` or null), a
+  digest of the chip manifests `resolve_ref` read an array's rows with, inherited by derived facets;
+  on a consensus, a digest of its parents' REF states. Additive. A store of 0.0.20 migrates with it
+  null, named as not recorded on its resolved array facets and its consensus facets. Rule change in
+  the store: `REF_STATE` gains it, so the same array resolved without and then with manifests, or a
+  consensus rebuilt over parents in other REF states, is refused (`StoreConflictError`) where it was
+  reported `present`.
 
 - **0.0.20** (2026-10-26, the rule that read REF): `facets.resolve_version` (`u32` or null), the
   `RESOLVE_VERSION` that read the facet's REF, inherited by derived facets. Additive. A store of

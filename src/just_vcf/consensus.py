@@ -45,6 +45,7 @@ from just_vcf.atlas import ALL, ALL_BANDS, CI_Z, CONFIDENCE_BANDS, NO_CONFIDENCE
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
 from just_vcf.concordance import _covered, _declared_contigs
 from just_vcf.evidence import BlockGrade, GradeBasis, _calls_evidence, _ref_block_grade
+from just_vcf.intervals import covering, nearest_block
 from just_vcf.links import CONSENSUS, LINEAGE_RELATIONS, canonical_links, links_frame
 from just_vcf.loading import Loaded
 from just_vcf.person import Person, SubjectError, _pieces
@@ -839,18 +840,16 @@ def _readings(
     )
     probe = silent.sort("_at").join_asof(spans.select("_start", "_reach"), left_on="_at", right_on="_start", strategy="backward", allow_exact_matches=False)
     probe = probe.with_columns((pl.col("_reach").is_not_null() & (pl.col("_reach") >= pl.col("_at"))).alias("_covered"))
-    blocks = (
-        piece.blocks.filter(pl.col("chrom") == chrom)
-        .select(pl.col("pos").cast(pl.Int64).alias("_bstart"), pl.col("end_pos").cast(pl.Int64).alias("_bend"), pl.col("kind").cast(pl.String).alias("_kind"), pl.col("gl").cast(pl.List(pl.Float64)).alias("_gl"),
-                pl.col("gq").cast(pl.Float64).alias("_gq"))
-        .sort("_bstart")
-        .collect()
+    # Every block over the position (a lifted facet keeps overlapping ones), then the one
+    # `reference_support` answers with, its GQ and likelihoods breaking what ties remain.
+    blocks = piece.blocks.select(
+        "chrom", pl.col("pos").cast(pl.Int64).alias("_bstart"), pl.col("end_pos").cast(pl.Int64).alias("_bend"), pl.col("kind").cast(pl.String).alias("_kind"),
+        pl.col("gl").cast(pl.List(pl.Float64)).alias("_gl"), pl.col("gq").cast(pl.Float64).alias("_gq"),
     )  # fmt: skip
-    if blocks.height:
-        probe = probe.join_asof(blocks, left_on="_at", right_on="_bstart", strategy="backward")
-        probe = probe.with_columns(pl.when(pl.col("_bend") >= pl.col("_at")).then(pl.col("_kind")).alias("_kind"))
-    else:
-        probe = probe.with_columns(pl.lit(None, dtype=pl.String).alias("_kind"), pl.lit(None, dtype=pl.List(pl.Float64)).alias("_gl"), pl.lit(None, dtype=pl.Float64).alias("_gq"))
+    hits = covering(probe.select("_site", "_at").with_columns(pl.lit(chrom).alias("chrom")).lazy(), blocks, [chrom], at="_at", start="_bstart", end="_bend").collect()
+    hits = hits.with_columns(pl.col("_gl").list.eval(pl.element().cast(pl.String)).list.join(",").alias("_gl_text"))
+    chosen = nearest_block(hits, "_site", start="_bstart", end="_bend", kind="_kind", then=("_gq", "_gl_text")).select("_site", "_kind", "_gl", "_gq")
+    probe = probe.join(chosen, on="_site", how="left", maintain_order="left")
     reads_reference = [cls for cls in _SMALL if absence_is_reference(facet, cls, force=force) is True] if chrom in declared else []
     gl = pl.col("_gl")
     usable = (gl.list.len().is_between(2, 3) & gl.list.eval(pl.element().is_finite() | (pl.element() == float("-inf"))).list.all() & gl.list.max().is_finite()).fill_null(False)
@@ -1253,6 +1252,15 @@ def _calls(done: pl.DataFrame, facet_id: str) -> pl.DataFrame:
     return frame.select([pl.col(name).cast(dtype) if name in frame.columns else pl.lit(None, dtype=dtype).alias(name) for name, dtype in CALLS.items()])
 
 
+def parents_ref_states(rows: list[dict]) -> str:
+    """A consensus facet's `resolve_inputs`: one digest of every parent's REF state (`store.REF_STATE`,
+    with its `facet_id`), in `facet_id` order. The consensus's REF and rows come from its parents', and
+    neither its `facet_id` (the parents' ids, which `resolve_ref` keeps) nor `resolve_version` (null
+    where the parents differ) tells two builds over parents in other states apart; this does."""
+    states = sorted([row["facet_id"], row["ref_seqcol_digest"], row["resolve_version"], row["resolve_inputs"]] for row in rows)
+    return hashlib.sha256(json.dumps(states).encode()).hexdigest()[:16]
+
+
 def _facet_row(facet_id: str, rows: list[dict], label: str | None, digest: str | None, calls: pl.DataFrame, rates_digest: str,
                prior_input: dict | None = None) -> pl.DataFrame:  # fmt: skip
     """The consensus facet's `facets` row."""
@@ -1275,6 +1283,7 @@ def _facet_row(facet_id: str, rows: list[dict], label: str | None, digest: str |
         assembly_label_basis=shared("assembly_label_basis") if label is not None else None,
         ref_seqcol_digest=digest,
         resolve_version=shared("resolve_version"),
+        resolve_inputs=parents_ref_states(rows),
         callset_type=shared("callset_type"),
         absence_means=AbsenceMeans.UNKNOWN.value,
         variant_classes=classes,

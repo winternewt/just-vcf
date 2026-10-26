@@ -107,6 +107,7 @@ NULL_REASONS: dict[tuple[str, str], str] = {
     ("*", "ref_seqcol_digest"): "Null until `resolve_ref` reads REF from a reference collection; `load` reads none.",
     ("*", "strand_check"): "Null until `resolve_ref` compares an array's heterozygous rows with the reference; `load` does not run it.",
     ("*", "resolve_version"): "Null until `resolve_ref` reads REF; `load` reads none.",
+    ("*", "resolve_inputs"): "Null until `resolve_ref` reads an array's rows with chip manifests; `load` reads none.",
     ("*", "derived_from"): (
         "A facet read from a file has no parent. A caller split's and an appended export's facets have none "
         "either: they are kin, linked in `links` (SCHEMA Decision 5, 12)."

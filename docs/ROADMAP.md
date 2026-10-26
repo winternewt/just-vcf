@@ -1200,6 +1200,9 @@ Time, Isaac: `liftover` 422 s, `write_vcf` 338 s, `resolve_ref` 143 s, `load` 1,
 bcftools file per phase: `load` 7.7 GB, `resolve_ref`, `liftover` and `write_vcf` add nothing above it
 (F26).
 
+*Corrected 2026-10-26 (audit 9):* "Not run on a real gVCF yet", above, no longer holds: the dogfood
+paragraph just before this line ran the block lift on two real PGP-HMS gVCFs the same day.
+
 **Shipped 2026-10-26: symbolic SVs in a lift** (rules in docs/SCHEMA.md, "Lifting symbolic SVs";
 `LIFT_VERSION` 9). POS and `end_pos` lifted as two points; kept on one contig and strand, in order,
 length within 5%. Copy-number segments (`ALT .` with END and CN) take the same path; they had lifted

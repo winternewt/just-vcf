@@ -17,7 +17,7 @@ import polars as pl
 from just_vcf.contig_names import PRIMARY_ACCESSIONS
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.20"
+SCHEMA_VERSION = "0.0.21"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -224,6 +224,7 @@ FACETS = pl.Schema(
         "sorted_name_length_pairs_digest": pl.String,
         "ref_seqcol_digest": pl.String,
         "resolve_version": pl.UInt32,
+        "resolve_inputs": pl.String,
         "callset_type": enum_dtype(CallsetType),
         "absence_means": enum_dtype(AbsenceMeans),
         "variant_classes": pl.List(pl.Struct({"variant_class": enum_dtype(VariantClass), "alleles": pl.UInt64})),

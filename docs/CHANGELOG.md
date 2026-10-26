@@ -4,6 +4,52 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `genotype_evidence_at` orders a site's records over one span by what they state (block kind, basis,
+  confidence, alleles, genotype) after start, origin and end, so blocks two source regions sent to one
+  identical target span come out in one order whatever the file's. Before, their order was the file's.
+
+- docs/ROADMAP.md, RM6: a dated correction under the blocks-in-a-lift entry, whose "Not run on a real
+  gVCF yet" the same day's dogfood on two PGP-HMS gVCFs had made untrue. No code changes.
+
+- `liftover` keeps a precise end precise on the minus strand. There the new POS is the old END's image
+  and the new END the old POS's, so CIPOS and CIEND swap and mirror; a source SV with CIEND and no
+  CIPOS (a precise POS, an imprecise END) was lifted with `ciend` null, which VCF 4.5's fallback (a
+  missing CIEND is CIPOS) reads as the imprecise interval. It gets `ciend = [0, 0]` per ALT now.
+  `LIFT_VERSION` 10, so lifted facets get a new `facet_id` (docs/SCHEMA.md, "Lifting symbolic SVs").
+
+- `absence_support` names a withheld absence meaning: a facet whose `callset_type` is known (`wgs`) but
+  whose `absence_means` is `unknown`, as a lifted or consensus whole genome has, was given
+  `callset_type_unknown`. It now gets `absence_not_carried` (new `AbsenceReason` member, so
+  `REFERENCE_SUPPORT_REASON` gains it); the answer stays unknown. `callset_type` is also read as a
+  `CallsetType` member, which matched no type and gave `callset_type_unknown` for an array or an exome.
+
+- Overlapping blocks are read whole. `liftover` keeps the overlapping blocks two source regions sent
+  to one place give (a lifted WGS gVCF carries hundreds of thousands), but `genotype_evidence_at`,
+  `reference_support`, `concordance` and `consensus` took the block over a position to be the last one
+  starting at or before it. Past an inner block's end the outer block was missed: `reference_support`
+  answered `none`, `concordance` read the absence `unknown` and `consensus` counted the facet silent,
+  and `records` undercounted inside both. Every covering block is found now (`intervals.covering`: an
+  as-of join where blocks tile, a range join only for blocks that reach their successor), and where
+  one block must answer it is the nearest-starting, then the shortest, then a `no_call` before a `ref`.
+  **Values change** on facets with overlapping blocks; a tiled gVCF's answers do not.
+
+- A consensus facet records its parents' REF states (`facets.resolve_inputs`, schema 0.0.21). Its
+  `facet_id` digests its parents' ids, which `resolve_ref` keeps, and its `resolve_version` is null
+  wherever the parents differ, so two builds over parents read by other `RESOLVE_VERSION`s had the same
+  id and the same null, and `Store.add` reported the second `present` and kept the first's rows.
+  `resolve_inputs` is now a digest of each parent's `facet_id`, `ref_seqcol_digest`, `resolve_version`
+  and `resolve_inputs`, and the store refuses the other build with `StoreConflictError`. The id is
+  unchanged. `migrate_store` names a 0.0.20 store's consensus facets as not recorded.
+
+- A facet records the chip manifests that read its rows, and the store tells the states apart (schema
+  0.0.21). `resolve_ref` reads an array's `I`/`D` codes, and a mixed strand's withheld rows, with the
+  manifests `JUST_VCF_MANIFESTS_DIR` holds, which neither the `facet_id` nor `resolve_version` records:
+  the same array resolved without manifests and then with them was reported `present`, and the store
+  kept the unread rows. `facets.resolve_inputs` is new (a digest of the manifests that read rows, null
+  where none did, inherited by derived facets), `store.REF_STATE` includes it, and such an add is now
+  refused with `StoreConflictError`. `migrate_store` adds the column to a 0.0.20 store, null and named
+  as not recorded on resolved array facets (docs/SCHEMA.md, "The durable store" and "Store migration").
+
 - `reference_support(loaded, sites, variant_class=…)` materialises reference-supported positions
   (RM3): per asked position of a one-facet `loaded`, one row (`REFERENCE_SUPPORT`) saying what the
   facet states about the reference allele there and on what it rests: `support` `call` or `block`

@@ -458,6 +458,10 @@ class AbsenceReason(str, Enum):
     """Imputed content: its sites are a reference panel's, so its silence says nothing about others."""
     CALLSET_TYPE_UNKNOWN = "callset_type_unknown"
     """`absence_means = unknown` and RM4 could not name the callset type."""
+    ABSENCE_NOT_CARRIED = "absence_not_carried"
+    """`absence_means = unknown` on a callset whose type is known and says nothing of its own (a whole
+    genome): a derived facet whose producer withheld what its absence means. A lifted facet does
+    (the rows a lift dropped are absent too), and so does a consensus."""
     CLASS_NOT_COUNTED = "class_not_counted"
     """The facet's `variant_classes` were not counted (a genotype table writes no REF/ALT to count)."""
     CLASS_NOT_CALLED = "class_not_called"
@@ -496,14 +500,19 @@ def absence_support(facet: Mapping[str, object], variant_class: VariantClass | s
     """`absence_is_reference` with its reason: the gates below, in that order, each with its own reason.
 
     A facet whose `absence_means` is `unknown` (or missing) is answered by its `callset_type`: `array`,
-    `targeted` (an exome or a panel), `imputed`, else `callset_type_unknown`.
+    `targeted` (an exome or a panel), `imputed`; `callset_type_unknown` where the type is null; and
+    `absence_not_carried` for a whole genome, whose absence meaning a derived facet's producer withheld.
+    `callset_type` and `absence_means` may be the enum members or their values.
     """
     asked = VariantClass(variant_class)
     means = facet.get("absence_means")
     if means == AbsenceMeans.BLOCKS.value:
         return AbsenceSupport(reads_reference=None, reason=AbsenceReason.OUTSIDE_BLOCKS)
     if means not in (AbsenceMeans.WEAK_REFERENCE.value, AbsenceMeans.REFERENCE.value):
-        unknown = _UNKNOWN_BY_CALLSET.get(str(facet.get("callset_type")), AbsenceReason.CALLSET_TYPE_UNKNOWN)
+        stated = facet.get("callset_type")
+        if stated is None:
+            return AbsenceSupport(reads_reference=None, reason=AbsenceReason.CALLSET_TYPE_UNKNOWN)
+        unknown = _UNKNOWN_BY_CALLSET.get(CallsetType(stated).value, AbsenceReason.ABSENCE_NOT_CARRIED)
         return AbsenceSupport(reads_reference=None, reason=unknown)
     counted = facet.get("variant_classes")
     if not isinstance(counted, list):

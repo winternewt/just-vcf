@@ -1114,7 +1114,9 @@ ends rather than its REF span, with one base of REF:
 5. `cipos` and `ciend` carry on a plus-strand block. On a minus-strand block the new POS is the old
    END's image and the new END the old POS's, so each pair `[lo, hi]` mirrors to `[-hi, -lo]` and the
    two swap; where the source wrote no CIEND, VCF 4.5's rule (assume CIPOS) supplies the old END's
-   interval, so both are set.
+   interval, so both are set. Where it wrote CIEND and no CIPOS, its POS is precise and its END is
+   not: the new END, the old POS's image, gets `ciend = [0, 0]` per ALT, since a null there would read
+   as the new CIPOS by the same rule (`LIFT_VERSION` 10). Neither written stays neither.
 6. Breakends (`N[2:123[`, `]2:123]N`, `.N`) are left behind as `breakend_not_lifted`. Lifting one
    needs its mate position lifted through the chain on whatever contig it names, the mate's contig
    name rewritten inside the ALT, and the brackets turned for each end that lands on a minus strand,

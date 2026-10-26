@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `liftover` keeps a precise end precise on the minus strand. There the new POS is the old END's image
+  and the new END the old POS's, so CIPOS and CIEND swap and mirror; a source SV with CIEND and no
+  CIPOS (a precise POS, an imprecise END) was lifted with `ciend` null, which VCF 4.5's fallback (a
+  missing CIEND is CIPOS) reads as the imprecise interval. It gets `ciend = [0, 0]` per ALT now.
+  `LIFT_VERSION` 10, so lifted facets get a new `facet_id` (docs/SCHEMA.md, "Lifting symbolic SVs").
+
 - `absence_support` names a withheld absence meaning: a facet whose `callset_type` is known (`wgs`) but
   whose `absence_means` is `unknown`, as a lifted or consensus whole genome has, was given
   `callset_type_unknown`. It now gets `absence_not_carried` (new `AbsenceReason` member, so

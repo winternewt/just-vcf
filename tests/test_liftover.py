@@ -843,6 +843,24 @@ def one_contig_lift(tmp_path: Path, source_seq: str, target_seq: str, chain: str
     return liftover(resolve_ref(load(vcf), store, collection=source), path, store, target=target)
 
 
+def test_a_minus_strand_sv_keeps_a_precise_end_precise(tmp_path: Path) -> None:
+    """On a minus-strand block the new POS is the old END's image and the new END the old POS's, so the
+    confidence intervals swap and mirror. A source with CIEND and no CIPOS has an imprecise END and a
+    precise POS; lifted, the new END is that precise POS. Writing it null made VCF 4.5's fallback (a
+    missing CIEND reads as CIPOS) give the new END the imprecise interval. It is written `[0, 0]`."""
+    source_seq = random_bases(200)
+    chain = "chain 100 1 200 + 0 200 1 200 - 0 200 1\n200\n\n"
+    end_only = f"1\t100\tend_only\t{source_seq[99]}\t<DEL>\t50\tPASS\tEND=150;CIEND=-5,7\tGT\t0/1"
+    pos_only = f"1\t110\tpos_only\t{source_seq[109]}\t<DEL>\t50\tPASS\tEND=160;CIPOS=-3,4\tGT\t0/1"
+    precise = f"1\t120\tprecise\t{source_seq[119]}\t<DEL>\t50\tPASS\tEND=170\tGT\t0/1"
+    lifted = one_contig_lift(tmp_path, source_seq, revcomp(source_seq), chain, [end_only, pos_only, precise])
+    calls = by_case(lifted.loaded.calls.collect())
+    assert (calls["end_only"]["cipos"], calls["end_only"]["ciend"]) == (mirrored([-5, 7]), [0, 0])
+    # A missing CIEND is CIPOS at the source, so both lifted ends get its mirror; nothing stated stays nothing.
+    assert calls["pos_only"]["cipos"] == calls["pos_only"]["ciend"] == mirrored([-3, 4])
+    assert (calls["precise"]["cipos"], calls["precise"]["ciend"]) == (None, None)
+
+
 def test_an_sv_whose_ends_swap_order_stays_behind(tmp_path: Path) -> None:
     """Two plus-strand chains swap the source's halves: an SV across the middle has its END land before its POS."""
     source_seq = random_bases(300)

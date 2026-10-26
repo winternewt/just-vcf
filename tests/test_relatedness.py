@@ -34,6 +34,7 @@ from just_vcf.relatedness import (
     RelationBand,
     SitePanel,
     band_of,
+    first_degree_kind,
     interval_band,
     king_robust,
     packaged_assemblies,
@@ -427,8 +428,9 @@ def test_a_pedigree_is_checked_against_measured_bands(family_on_panel, tmp_path:
         found = relatedness(*(loaded[with_facets.index(x)] for x in (row["individual_id"][-1], row["relative_id"][-1])), panel)
         assert (row["kinship"], row["band"]) == (found.kinship, found.band.value)
         low, high = (BAND_ORDER.index(band_of(found.kinship + side * 2 * found.kinship_se)) for side in (-1, 1))
-        # First degree is two bands at one kinship: the measured one where IBS0 told it, both where not.
-        told = {found.band.value} & FIRST_DEGREE_KINDS
+        # First degree is two bands at one kinship: the one the IBS0 count tells (whatever the kinship's
+        # interval says), both where it tells neither.
+        told = {first_degree_kind(found.n_ibs0, found.n_sites).value} & FIRST_DEGREE_KINDS or FIRST_DEGREE_KINDS
         reached = set().union(*(_finest(band.value, told) for band in BAND_ORDER[low : high + 1]))
         allowed = set().union(*(_finest(value) for value in row["expected_bands"]))
         if reached <= allowed:

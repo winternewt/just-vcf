@@ -210,6 +210,8 @@ def test_a_store_of_each_older_version_migrates_to_this_one(tmp_path: Path, vers
         assert got[name].equals(expected[name]), name
     assert not list(root.glob(".migrating-*")) and not list(root.glob(".previous-*")), "the old files go once verified"
     assert store.manifest.migrations == (report,)
+    held = sources[0].facets.collect()["facet_id"].item()
+    assert store.add(sources[0]).present == (held,), "the migrated store takes adds again"
 
     again = migrate_store(root)
     assert again.steps == () and again.from_version == SCHEMA_VERSION, "a current store is left as it is"

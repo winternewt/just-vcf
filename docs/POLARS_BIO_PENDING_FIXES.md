@@ -595,6 +595,14 @@ failing key with `get` (cost only on a bad record); if it has no column, skip it
 fail naming it. The GT case is their stated choice; at most a wish for an opt-in lenient read that nulls
 an undecodable value and counts it. Not worth filing on its own.
 
+*Filing P15, P21 and P22(a) (2026-10-27).* The person's answer on desk #140, which covers P21
+and P22(a): draft first and wait for the person to vet, as for P17–P19. Two drafts are on desk #140
+(comment of 2026-10-27): P21 with P22(a) as one issue, and P15 as a second, since #140's recommended
+option files it with them (P15's own question, desk #69, is unanswered). Code is linked at dbf main
+`6af1fa1` and the noodles fork `42a3c01`, both unchanged for these paths; the repros were rerun as
+written on 0.36.0 with synthetic VCFs, and the trackers searched again: no duplicates. P22(b), the GT
+`0/x` case, is named in the draft as not asked. Nothing is posted until the person says so.
+
 ## P23 — `replace` with a mapping holds every column of a streaming sink
 
 Not polars-bio's: polars itself, which polars-bio and just-vcf both build on. Found by the lead seat as

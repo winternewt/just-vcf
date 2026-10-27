@@ -4,6 +4,14 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- The source distribution is an allow-list (`[tool.hatch.build.targets.sdist] only-include`): the
+  package, `pyproject.toml`, `README.md` and `LICENSE`, with the `PKG-INFO` and `.gitignore` hatchling
+  adds. It took every file git does not ignore, 237 of them, among them all of `docs/` (documents
+  derived from private genomes), `tests/`, `scripts/`, `assets/` and the agent and team files at the
+  root, so a PyPI upload would have published them. `tests/test_package.py` builds both artifacts with
+  `uv build` (about a second) and fails on any other sdist member, on any wheel member outside the
+  package and its dist-info, and on an sdist whose package files differ from the wheel's; it failed on
+  the old selection with 161 stray files. The wheel did not change: 75 files.
 - `ReferenceStore.fetch` no longer scans every text it returns for lowercase. Case is settled where a
   sequence enters the store: a collection `add_fasta` added came in through gtars' FASTA import, which
   uppercases every sequence line (gtars 0.10.0, `FastaReader::next_record`, the only version `uv.lock`

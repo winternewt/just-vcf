@@ -45,6 +45,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/just_vcf"]
 
+# An allow-list, never hatchling's default (every file git does not ignore): docs/ holds documents
+# derived from private genomes and the root holds agent and team files, none of which may reach PyPI.
+# tests/test_package.py builds both artifacts and fails on anything else.
+[tool.hatch.build.targets.sdist]
+only-include = ["src/just_vcf", "pyproject.toml", "README.md", "LICENSE"]
+
 [dependency-groups]
 # httpx is dev-only: the PGP-HMS sample leecher is a script in scripts/, not a library feature.
 dev = [

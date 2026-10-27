@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+## 0.1.0 (prepared 2026-10-27, not yet published)
+
+The first release. It loads 32 formats (consumer array and table exports, VCF, BCF and gVCF, and the
+older sequencing outputs PGP-HMS carries) into the facets, calls, blocks and links frames (schema
+0.0.21), with build, callset type, vendor, caller and chip described per facet; reads REF from a refget
+store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; compares facets
+(concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
+which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
+
 - `README.md` is the PyPI page: what the library loads and writes, install with the `ancestry` extra,
   a Python example, the command line with its exit codes, and the configuration variables. It said
   nothing was implemented. It links nothing under `docs/`, which neither artifact ships. `pyproject.toml`

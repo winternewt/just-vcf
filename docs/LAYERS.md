@@ -177,6 +177,12 @@ meanwhile. The desk carries the ones filed there.
   modules' source as well as `STATS_VERSION`, so a forgotten bump costs one pass, never stale counts (accepted
   cost: any edit to `loaders/vcf.py` or `loaders/text.py` re-counts each file once); a second session waits on the
   entry's lock rather than counting twice.
+- **Layer 2, the lead's call on F23's bounds (built 2026-10-27, listed for veto):** desk #151 decided that a source
+  REF of only `N` states no base (`ref_check = unstated`, lifted like `match`). Built only where the reference
+  reads a base: an `N` REF over an `N` in the reference (an assembly gap) stays `match`, as before, because the
+  letters do agree and VRS ids minted over gap bases rest on it. A public CNV upload holds 36 such rows. Rejected:
+  `unstated` over gaps too, which takes `match` away from rows whose letters agree. An SNV whose REF is `N` keeps
+  its ALT unminted (`ref_unstated`); no file in hand has one.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

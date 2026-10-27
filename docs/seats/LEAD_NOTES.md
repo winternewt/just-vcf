@@ -15,7 +15,12 @@ each reset.
    through Codex (`codex exec -m gpt-6.1-sol -s read-only -p secrets-denied`), each on a `git archive HEAD`
    copy of the tracked files after the kit's `repo-prep`, never the working tree. The lead checks every
    finding against the code before a fix builder gets it. Both runs together count as the one item at a time.
-0. **Queued next** (one at a time): loosen `test_pca_panels_place_their_own_reference_samples` for regions on a
+0. **0.1 release prep is decided** (desk #86, the person, 2026-10-26 23:51Z: "A: 1, 2, 3 / 0.1 release after 2,
+   pt 2 interview goes to 0.2 and doesn't block 2 and 3"). Option 2, the CLI, shipped as f00bb1f; the Part 2
+   interview was held 2026-10-23. Option 3 is the prep: CHANGELOG's Unreleased cut as 0.1.0, a README pass,
+   and a check that the built sdist and wheel carry no private-derived document. The publish, and the
+   `v0.1.0` tag that would mark it, stay the person's.
+0. **Queued next** (one at a time, done 2026-10-26): loosen `test_pca_panels_place_their_own_reference_samples` for regions on a
    cline (the person chose option 1 for the AADR panel's own-sample failure, 2026-10-26).
 0. **Audit 12's fix builder carries** (the person, 2026-10-26: "keep numbered AADR groups, fix the stats
    sweep"): AADR rule 5 keeps numbered groups (`Kumyk-1`, `Uzbek-2`, about 22 people), excluding only

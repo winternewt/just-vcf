@@ -58,7 +58,7 @@ source of the Sirius chip's site alleles appears.
 
 ## F23 — A CNV caller's `N` REF reads as a mismatch, so no CNV facet lifts
 
-Severity: medium · Found 2026-10-26 dogfooding RM6's SV lift on the PGP-HMS CNV files.
+Severity: medium · Found 2026-10-26 dogfooding RM6's SV lift on the PGP-HMS CNV files. Decided 2026-10-27 (desk #151, the person: "1"): a new `RefCheck` value for a source REF that states no base, lifted like `match`.
 
 DRAGEN's and Canvas's copy-number VCFs write REF `N` on every record: the caller never reads the
 reference. `resolve_ref` compares that `N` with the base it reads and sets `ref_check = mismatch`

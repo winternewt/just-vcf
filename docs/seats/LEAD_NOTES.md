@@ -20,6 +20,9 @@ each reset.
    interview was held 2026-10-23. Option 3 is the prep: CHANGELOG's Unreleased cut as 0.1.0, a README pass,
    and a check that the built sdist and wheel carry no private-derived document. The publish, and the
    `v0.1.0` tag that would mark it, stay the person's.
+0. **F23 is decided** (desk #151, the person, 2026-10-27 20:33Z: "1"): a source REF of `N` gets its own
+   `RefCheck` value ("the file stated no base"), not `match` and not `mismatch`; `liftover` reads the base
+   from the reference and lifts it as it does `match`. A schema change with a changelog note. Next builder.
 0. **Queued next** (one at a time, done 2026-10-26): loosen `test_pca_panels_place_their_own_reference_samples` for regions on a
    cline (the person chose option 1 for the AADR panel's own-sample failure, 2026-10-26).
 0. **Audit 12's fix builder carries** (the person, 2026-10-26: "keep numbered AADR groups, fix the stats

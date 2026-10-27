@@ -4,6 +4,27 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **Schema 0.0.22, a breaking change pre-1.0: `ref_check` gains a fourth value, `unstated`** (F23).
+  A source REF made only of `N` (any case) where the reference reads a base states no base:
+  DRAGEN's and Canvas's copy-number VCFs write it on every record. `resolve_ref` wrote `mismatch` there
+  and `liftover` left every such row behind, so no copy-number facet lifted; it now writes `unstated`
+  (`RESOLVE_VERSION` 13) and counts those rows apart in its warning. A consumer matching on
+  `not_run`/`match`/`mismatch` will meet the new value, and `calls.ref_check`'s `pl.Enum` dtype
+  changes. A partial `N` (`AN`) is compared as before, and an `N` over a reference gap stays `match`.
+  Per reader: `liftover`, `write_vcf` and `write_vcf_zarr` take the row as a `match`, REF the
+  reference's base; `mint_vrs_ids` mints its REF slot and withholds a sequence ALT as `ref_unstated`
+  (`MINT_VERSION` 4); `normalize` leaves it as written, counted; `query` answers `stated` for an ALT
+  the row spells but never `site_genotyped` from it (the source said nothing about the base); the
+  CLI's `check` counts it. On the PGP-HMS copy-number files F23 measured (hu6ABACE and hu1C1368
+  DRAGEN, GRCh37 → 38; hu416394 Canvas, GRCh38 → 37): 1,324 rows, all `mismatch` and 0 lifted before,
+  all `unstated` and 568 + 538 + 118 = 1,224 lifted after, the rest behind for chain reasons
+  (`no_chain_block`, `sv_*`, `target_contig_unmatched`), none for its REF. `migrate_store` widens a
+  0.0.21 store's enum and keeps its values: the facets holding all-`N` `mismatch` rows are named
+  (a migration caveat may now select rows, `Caveat.rows`), and the store refuses the same facet
+  resolved today as another REF state. Code: `reference._resolve_rows`, `vrs._slot_reason`,
+  `query._presence`, `store_migration.MIGRATIONS`; tests in `tests/test_unstated_ref.py` and
+  `tests/test_store_migration.py`; docs/SCHEMA.md Decision 2.
+
 ## 0.1.0 (prepared 2026-10-27, not yet published)
 
 The first release. It loads 32 formats (consumer array and table exports, VCF, BCF and gVCF, and the

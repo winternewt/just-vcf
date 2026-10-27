@@ -4,7 +4,9 @@
 gtars `RefgetStore`, and returns the same facet with the slots SCHEMA.md leaves open until then filled:
 
 - a VCF row (it has `source_ref`): `ref` is the reference's bases over the same span, and `ref_check`
-  says whether the source agreed (`match`, `mismatch`). `source_ref` is never touched;
+  says whether the source agreed (`match`, `mismatch`), or stated no base to compare (`unstated`: a
+  source REF made only of `N` over bases the reference reads, as a copy-number caller writes it, F23).
+  `source_ref` is never touched;
 - an array row (no `source_ref`, single-base alleles): `ref` is the reference base, `alts` are the
   observed alleles other than REF, sorted, and `gt` indexes `[ref] + alts`. REF is never taken from
   the genotype; the genotype only decides which of its alleles are not REF;
@@ -54,13 +56,14 @@ from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_rea
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 12
+RESOLVE_VERSION = 13
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes (10: an insertion
 point's anchor base, and REF over a Genos row's stated span; 11: a point whose every called haplotype is
 the empty allele is left unread, not anchored as a hom-ref call at the base before it; 12: the row sample
 the build inference and the strand check score leaves out rows not over one base, a Genos insertion site
 among them, so a facet's inferred label and `strand_check`, and the rows a mixed strand withholds, can
-change; the strand is not in the spill key)."""
+change; the strand is not in the spill key; 13: a source REF made only of `N` over bases the reference
+reads is `ref_check = unstated`, not `mismatch`, F23)."""
 
 RESOLVE_LAYOUT = 1
 """How a resolve spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
@@ -747,7 +750,13 @@ def _resolve_rows(
         # `ref` is null on input (a facet already read is refused) but on an anchored insertion point.
         pl.coalesce("_bases", "_split_ref", "ref").alias("ref"),
         pl.when(pl.col("_vcf") & pl.col("_bases").is_not_null())
-        .then(pl.when(agree).then(pl.lit(RefCheck.MATCH.value)).otherwise(pl.lit(RefCheck.MISMATCH.value)))
+        .then(
+            pl.when(agree)
+            .then(pl.lit(RefCheck.MATCH.value))
+            .when(_states_no_base(pl.col("source_ref")))
+            .then(pl.lit(RefCheck.UNSTATED.value))
+            .otherwise(pl.lit(RefCheck.MISMATCH.value))
+        )
         .otherwise(pl.col("ref_check").cast(pl.String))
         .cast(CALLS["ref_check"])
         .alias("ref_check"),
@@ -1109,13 +1118,24 @@ def _resolve_code_rows(
             found[name].append(value)
 
 
+_NO_BASE = r"^[Nn]+$"
+"""A source REF made only of `N`, any case: it states no base (F23)."""
+
+
+def _states_no_base(source_ref: pl.Expr) -> pl.Expr:
+    """A source REF made only of `N`: the source stated no base. `AN` states one, and is compared."""
+    return source_ref.str.contains(_NO_BASE)
+
+
 def _count_vcf(vcf: pl.DataFrame, counts: Counter[str]) -> None:
     read = vcf.filter(pl.col("_bases").is_not_null())
     counts["vcf_rows"] += vcf.height
     counts["vcf_outside"] += vcf.height - read.height
-    agree = read.filter(pl.col("source_ref").str.to_uppercase() == pl.col("_bases"))
+    same = pl.col("source_ref").str.to_uppercase() == pl.col("_bases")
+    agree = read.filter(same)
     counts["vcf_match"] += agree.height
-    mismatched = read.filter(pl.col("source_ref").str.to_uppercase() != pl.col("_bases"))
+    counts["vcf_unstated"] += read.filter(~same & _states_no_base(pl.col("source_ref"))).height
+    mismatched = read.filter(~same & ~_states_no_base(pl.col("source_ref")))
     counts["vcf_mismatch"] += mismatched.height
     for source, ref in mismatched.select("source_ref", "_bases").iter_rows():
         if _iupac_explains(source.upper(), ref):
@@ -1231,12 +1251,17 @@ def _row_warnings(counts: Counter[str], digest: str, codes: _Codes | None = None
     lines = []
     if counts["vcf_rows"]:
         line = (
-            f"REF read from collection {digest} for {counts['vcf_match'] + counts['vcf_mismatch']} of "
+            f"REF read from collection {digest} for {counts['vcf_match'] + counts['vcf_mismatch'] + counts['vcf_unstated']} of "
             f"{counts['vcf_rows']} row(s) with a source REF on readable contigs: {counts['vcf_match']} match, "
             f"{counts['vcf_mismatch']} mismatch"
         )
         if counts["vcf_mismatch_iupac"]:
             line += f" ({counts['vcf_mismatch_iupac']} of them against an IUPAC ambiguity code, which VCF writes as a concrete base)"
+        if counts["vcf_unstated"]:
+            line += (
+                f", {counts['vcf_unstated']} with a source REF of only N, which states no base to compare "
+                "(ref_check unstated, as a copy-number caller writes REF)"
+            )
         lines.append(line)
     if counts["vcf_outside"]:
         lines.append(f"{counts['vcf_outside']} row(s) with a source REF reaching past their contig, or at POS 0: REF left unread")

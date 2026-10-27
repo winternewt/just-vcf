@@ -43,8 +43,10 @@ from just_vcf.schema import CALLS, SCHEMA_VERSION, RefCheck, empty
 
 logger = logging.getLogger(__name__)
 
-MINT_VERSION = 3
-"""Part of the spill key: bumped whenever the rule changes what `mint_vrs_ids` writes."""
+MINT_VERSION = 4
+"""Part of the spill key: bumped whenever the rule changes what `mint_vrs_ids` writes (4: a row whose
+source REF states no base, `ref_check = unstated`, has its REF slot minted and a sequence ALT withheld
+as `ref_unstated`, F23)."""
 
 VRS_LAYOUT = 1
 """How a VRS spill's id files hold the ids, a key in its manifest and in its generation's key: 1 is one
@@ -74,6 +76,8 @@ WITHHELD_REASONS: frozenset[str] = frozenset(
         "ref_unresolved",
         "ref_unchecked",
         "ref_mismatch",
+        # A sequence ALT spelled against a source REF that states no base (`ref_check = unstated`).
+        "ref_unstated",
         # Nothing forbids minting, and it has not run.
         "not_run",
     }
@@ -141,6 +145,14 @@ def _row_reason() -> pl.Expr:
     )
 
 
+def _slot_reason() -> pl.Expr:
+    """Why one ALT slot cannot have an id though its row may mint; null when none. A sequence ALT on a
+    row whose source REF states no base (`ref_check = unstated`, F23) was spelled against that `N`, not
+    against `ref`: `N` → `NAC` read as `C` → `NAC` would mint a delins the source never wrote. The REF
+    slot is the reference's own allele, read from the sequence, and mints."""
+    return pl.when((pl.col("_slot") > 0) & (pl.col("ref_check") == RefCheck.UNSTATED.value)).then(pl.lit("ref_unstated")).otherwise(None)
+
+
 def _slots(calls: pl.LazyFrame) -> pl.LazyFrame:
     """One row per allele slot of `[ref] + alts`, from a frame with a `_row` index: `_slot`,
     `_allele`, and why nothing could mint it before minting runs (`_static`, null when it may try)."""
@@ -148,7 +160,7 @@ def _slots(calls: pl.LazyFrame) -> pl.LazyFrame:
         calls.with_columns(_alleles().alias("_allele"), _row_reason().alias("_row_reason"))
         .with_columns(pl.int_ranges(0, pl.col("_allele").list.len(), dtype=pl.UInt32).alias("_slot"))
         .explode("_allele", "_slot", empty_as_null=False)  # never empty: the REF slot is always there
-        .with_columns(pl.coalesce(_allele_kind(pl.col("_allele")), pl.col("_row_reason")).alias("_static"))
+        .with_columns(pl.coalesce(_allele_kind(pl.col("_allele")), pl.col("_row_reason"), _slot_reason()).alias("_static"))
     )
 
 
@@ -158,9 +170,10 @@ def vrs_withheld(calls: pl.LazyFrame) -> pl.LazyFrame:
     Null where the id exists. The first reason that applies wins, in this order: what the allele is
     (`sv_no_vrs_model`, `symbolic`, `unspecified`, `spanning_deletion`, `array_code`, `partial_call`,
     `not_sequence`),
-    the row's state (`telomere`, `ref_unresolved`, `ref_unchecked`, `ref_mismatch`), what minting
-    reported (the `vrs_errors` element), else `not_run`. A computed column, never stored: RM3 fills
-    `ref`, and a stored reason would still say "unchecked".
+    the row's state (`telomere`, `ref_unresolved`, `ref_unchecked`, `ref_mismatch`), an ALT spelled
+    against a source REF that states no base (`ref_unstated`), what minting reported (the `vrs_errors`
+    element), else `not_run`. A computed column, never stored: RM3 fills `ref`, and a stored reason
+    would still say "unchecked".
     """
     indexed = calls.with_row_index("_row")
     slots = _slots(indexed).with_columns(
@@ -182,8 +195,9 @@ def mint_vrs_ids(loaded: Loaded, reference: "ReferenceStore | Path | str | None"
     `loaded` must have been through `resolve_ref`: its `facets.ref_seqcol_digest` names the
     collection REF was read from, and `reference` (a `ReferenceStore`, a store directory, or None for
     `reference_dir()`) must hold it. Only an allele whose row has `ref` read and not contradicted by
-    the source (`ref_check` is not `mismatch`) is minted. The result is the same facet, its rows in
-    the same order; the input is not changed. Withheld alleles are counted per reason in the
+    the source (`ref_check` is not `mismatch`) is minted; on a row whose source REF states no base
+    (`unstated`) only the REF slot is, since its ALTs were spelled against that `N`. The result is the
+    same facet, its rows in the same order; the input is not changed. Withheld alleles are counted per reason in the
     warnings (`vrs_withheld`).
 
     The input is spilled to parquet once, then read a group of whole runs of one contig at a time, in
@@ -301,6 +315,7 @@ _EXPLAIN = {
     "ref_unresolved": "no REF: the source wrote none and the reference was not read",
     "ref_unchecked": "REF not read from the reference (a contig it could not match, or a span past the contig's end)",
     "ref_mismatch": "the source REF disagrees with the reference",
+    "ref_unstated": "an ALT spelled against a source REF of only N, which states no base (ref_check unstated)",
     "no_contig": "the collection has no single sequence for the contig",
     "refused": "gtars refused the allele",
     "not_run": "not minted",

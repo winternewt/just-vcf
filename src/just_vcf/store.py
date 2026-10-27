@@ -497,7 +497,9 @@ def _migrate_facets(where: Path, stage: Path, manifest: StoreManifest, chain: tu
         for at, step in enumerate(chain):
             # A caveat reads the facet row as the step finds it.
             for which, caveat in enumerate(step.caveats):
-                if frames["facets"].filter(caveat.applies).select(pl.len()).collect().item():
+                if frames["facets"].filter(caveat.applies).select(pl.len()).collect().item() and (
+                    caveat.rows is None or frames[caveat.frame].filter(caveat.rows).select(pl.len()).collect().item()
+                ):
                     applies.setdefault((at, which), []).append(entry.facet_id)
             frames = {name: step.apply(name, frame) for name, frame in frames.items()}
         target = stage / _FACETS_DIR / entry.facet_id

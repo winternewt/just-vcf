@@ -28,10 +28,13 @@ The rules are in docs/SCHEMA.md ("Normalizing"); in short:
    described the representation the source wrote, at the position it wrote it, and keeping
    `ref_check = match` on bases read from the very sequence it checks would be a check agreeing with
    itself. `ref` holds the new REF, read from the reference. Rows whose REF was not shown to match
-   pass through unchanged, counted. A deletion written without its anchor base, as the empty ALT
-   `""` (F12's `-`, which the loader reads so; CGI's native deletions and Genos's `-`: the REF bases at
-   POS deleted), is anchored on the base before, then aligned like any deletion; at a contig's first
-   base there is none, and VCF's rule anchors it on the base after its REF span instead.
+   pass through unchanged, counted; a row whose source REF states no base (`ref_check = unstated`, a
+   REF of only `N`, F23) among them, since its ALT was spelled against that `N` and trimming it
+   against the reference's base would rewrite an allele the source never wrote. A deletion written
+   without its anchor base, as the empty ALT `""` (F12's `-`, which the loader reads so; CGI's native
+   deletions and Genos's `-`: the REF bases at POS deleted), is anchored on the base before, then
+   aligned like any deletion; at a contig's first base there is none, and VCF's rule anchors it on the
+   base after its REF span instead.
 3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
    but the ones a move clears (`_POSITIONAL`), so a moved indel and its unmoved twin with the same
    genotype and evidence are one row, the unmoved one. Rows for the same allele at the same position
@@ -583,6 +586,7 @@ def _warnings(counts: Counter[str]) -> list[str]:
     reasons = {
         "unaligned_not_run": "REF not compared with the reference (ref_check not_run)",
         "unaligned_mismatch": "REF differs from the reference (ref_check mismatch)",
+        "unaligned_unstated": "the source REF states no base (ref_check unstated)",
         "unaligned_unchecked": "no source REF was checked",
         "unaligned_no_ref": "no REF at all",
         "unaligned_unindexed": "a genotype that is not indexed",

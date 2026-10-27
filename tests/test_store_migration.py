@@ -18,10 +18,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import load
+from just_vcf import ReferenceStore, load, resolve_ref
 from just_vcf import store as store_module
 from just_vcf.loaders.cgi import FORMATS as CGI_FORMATS
 from just_vcf.loading import Loaded
+from just_vcf.reference import RESOLVE_VERSION
 from just_vcf.schema import BLOCKS, CALLS, FACETS, LINKS, SCHEMA_VERSION
 from just_vcf.store import FRAMES, Store, StoreConflictError, StoreError, StoreVersionError, migrate_store
 from just_vcf.store_migration import MIGRATIONS, STORE_FIRST_VERSION, migration_chain, version_key
@@ -31,8 +32,11 @@ from test_load_vcf import vcf_text
 from test_load_vcf import write as write_vcf_text
 from test_person import _array_file
 from test_store import GVCF, SUBJECT, _files, _resolved_cgi
+from test_unstated_ref import RECORDS
+from test_unstated_ref import vcf as unstated_vcf
+from test_unstated_ref import write_fasta as unstated_fasta
 
-VERSIONS = ("0.0.14", "0.0.15", "0.0.16", "0.0.17", "0.0.18", "0.0.19", "0.0.20", "0.0.21")
+VERSIONS = ("0.0.14", "0.0.15", "0.0.16", "0.0.17", "0.0.18", "0.0.19", "0.0.20", "0.0.21", "0.0.22")
 """Every schema version a store can have been written under: the store shipped under 0.0.14 (merge
 6830fb7, 2026-10-23, between 0.0.14's merge 04c5db3 and 0.0.15's 8b72a46)."""
 
@@ -48,6 +52,9 @@ ADDED: dict[str, dict[str, tuple[str, ...]]] = {
 
 KINDS_BEFORE_0017 = pl.List(pl.Enum(["ps", "psl"]))
 """`calls.phase_set_kinds` before 0.0.17 added `cgi_haplink`."""
+
+REF_CHECK_BEFORE_0022 = pl.Enum(["not_run", "match", "mismatch"])
+"""`calls.ref_check` before 0.0.22 added `unstated`."""
 
 SCHEMAS = dict(zip(FRAMES, (FACETS, CALLS, BLOCKS, LINKS)))
 
@@ -110,6 +117,8 @@ def _shaped(name: str, frame: pl.DataFrame, version: str) -> pl.DataFrame:
             frame = frame.drop(frames.get(name, ()))
     if name == "calls" and _key(version) < _key("0.0.17"):
         frame = frame.with_columns(pl.col("phase_set_kinds").cast(KINDS_BEFORE_0017))
+    if name == "calls" and _key(version) < _key("0.0.22"):
+        frame = frame.with_columns(pl.col("ref_check").cast(REF_CHECK_BEFORE_0022))
     return frame
 
 
@@ -266,6 +275,42 @@ def test_a_resolved_facet_migrated_to_0020_has_its_resolve_version_named_unknown
     assert all(got[name].equals(expected[name]) for name in FRAMES)
     with pytest.raises(StoreConflictError, match="unrecorded RESOLVE_VERSION"):
         Store.open(root).add(resolved)
+
+
+def test_a_facet_with_an_all_n_ref_migrated_to_0022_keeps_mismatch_and_is_named(tmp_path: Path) -> None:
+    """A 0.0.21 store's rows whose source REF is only N were compared as bases (RESOLVE_VERSION 12:
+    `mismatch`). The step to 0.0.22 widens the enum and keeps those values, never rewrites them: it
+    names the facets that hold such rows, and only those, and the store then refuses the facet resolved
+    today (`unstated`, RESOLVE_VERSION 13) as another REF state of it."""
+    reference = ReferenceStore.open(tmp_path / "unstated-store")
+    reference.add_fasta(unstated_fasta(tmp_path / "unstated.fa"))
+    cnv = resolve_ref(load(unstated_vcf(tmp_path, RECORDS), subject=SUBJECT), reference)
+    all_n = pl.col("source_ref").str.contains(r"^[Nn]+$").fill_null(False)
+    # As RESOLVE_VERSION 12 left the facet: the all-N rows compared as bases.
+    left = cnv.model_copy(
+        update={
+            "calls": cnv.calls.with_columns(
+                pl.when(pl.col("ref_check") == "unstated").then(pl.lit("mismatch")).otherwise(pl.col("ref_check").cast(pl.String)).cast(CALLS["ref_check"]).alias("ref_check")
+            ),
+            "facets": cnv.facets.with_columns(pl.lit(RESOLVE_VERSION - 1, dtype=pl.UInt32).alias("resolve_version")),
+        }
+    )
+    left_mismatch = left.calls.filter(all_n & (pl.col("ref_check") == "mismatch")).select(pl.len()).collect().item()
+    assert left_mismatch == cnv.calls.filter(pl.col("ref_check") == "unstated").select(pl.len()).collect().item() > 0
+    _, cgi, _ = _resolved_cgi(tmp_path)
+    root = tmp_path / "store"
+    _old_store(root, "0.0.21", [left, cgi])
+    facet_id = cnv.facets.collect()["facet_id"].item()
+
+    report = migrate_store(root)
+    assert [(entry.version, entry.frame, entry.columns, entry.facet_ids) for entry in report.filled_unknown] == [
+        ("0.0.22", "calls", ("ref_check",), (facet_id,))
+    ], "the CGI facet holds no all-N REF, so it is not named"
+    got = Store.open(root).loaded().calls.filter(pl.col("facet_id") == facet_id).collect()
+    assert got["ref_check"].dtype == CALLS["ref_check"]
+    assert got.filter(all_n & (pl.col("ref_check") == "mismatch")).height == left_mismatch, "kept, not rewritten"
+    with pytest.raises(StoreConflictError, match=f"RESOLVE_VERSION {RESOLVE_VERSION - 1}"):
+        Store.open(root).add(cnv)
 
 
 def test_a_newer_store_is_refused_never_downgraded(tmp_path: Path) -> None:

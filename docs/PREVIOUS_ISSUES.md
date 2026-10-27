@@ -3,6 +3,56 @@
 Findings from [DOGFOODING.md](DOGFOODING.md) resolved in this repo, each with its resolution and a
 code pointer. Check here before re-investigating something that looks fixed.
 
+## F23 — A CNV caller's `N` REF reads as a mismatch, so no CNV facet lifts
+
+Severity: medium · Found 2026-10-26 dogfooding RM6's SV lift on the PGP-HMS CNV files.
+
+DRAGEN's and Canvas's copy-number VCFs write REF `N` on every record: the caller never reads the
+reference. `resolve_ref` compares that `N` with the base it reads and sets `ref_check = mismatch`
+on every row, and `liftover` leaves every `mismatch` row behind as `source_ref_mismatch`. Measured
+with the library: hu6ABACE's DRAGEN 3.2.8 `.cnv.` (586 rows, GRCh37), hu1C1368's DRAGEN 3.4.5
+`.cnv.` (556 rows, GRCh37) and hu416394's Canvas `.cnv.` (182 rows, 92 copy-number calls and 90
+copy-neutral segments, GRCh38): 0 match, 100% mismatch, 0 rows lifted through `hg19ToHg38` or
+`hg38ToHg19`. So the copy-number half of RM6's SV lift has never run on a real file; the 31 `N` rows
+of hu416394's Manta file sit on decoys and are unread anyway.
+
+The IUPAC note in the resolve warning does not cover it: `_iupac_explains` counts an ambiguity code on
+the reference side (a gap base) against a concrete source base, not a source `N` against a concrete
+reference base. The SV lift itself needs nothing new: on a plus strand `_place_sv` compares the
+target's base with `ref`, the base read from the source assembly, not with `source_ref`. Only the
+`ref_check` gate stops these rows. Each candidate repair needs a decision:
+
+- *Read a source `N` as matching any base (`match`):* the row moves from honestly unverified to
+  apparently verified, a check that never ran reported as passed (§5, Kleene).
+- *A new `RefCheck` value for a source REF that states no base (`unstated` or similar), lifted like
+  `match`:* the honest reading, but `RefCheck` is a `pl.Enum` in the wire schema, so a new value is a
+  schema change, and `mint_vrs_ids`, `write_vcf(resolved_only=True)` and `normalize` each have to say
+  what they do with it.
+- *`not_run` for an all-`N` source REF, with `ref` read:* no schema change, but `not_run` today means
+  the comparison did not happen for want of a reference, and the two causes would share one value.
+- *Special-case symbolic rows in `liftover`:* makes SVs the one row kind whose unstated REF passes,
+  and leaves `resolve_ref`'s counts calling 1,324 public rows mismatched.
+
+Blocks: lifting any CNV facet (every one in hand); also any QC that reads `ref_check` on them.
+
+**Resolved 2026-10-27** (desk #151, the person's choice: the second repair above). `RefCheck` gains
+`unstated` (schema 0.0.22): `resolve_ref` writes it for a source REF made only of `N`, any case, where
+the reference reads a base, counts those rows apart in its warning (never as mismatches, never as
+IUPAC), and records `RESOLVE_VERSION` 13. `liftover` gates on `mismatch` only, so an `unstated` row
+lifts as a `match` one, the target's base compared with `ref`. A partial `N` (`AN`) states a base and
+stays `mismatch`; an `N` over a reference gap stays `match` (the letters agree, and RM271's ids over
+`N` bases stand). Readers that carry the alleles as written take it as `match` (`write_vcf`,
+`write_vcf_zarr`); readers that compute a new representation withhold (`mint_vrs_ids` mints the REF
+slot and withholds a sequence ALT as `ref_unstated`; `normalize` leaves the row as written); `query`
+never answers `site_genotyped` from a REF the source did not state. Measured with the library after:
+hu6ABACE 586 of 586 rows `unstated`, 568 lifted through `hg19ToHg38`; hu1C1368 556 `unstated`, 538
+lifted; hu416394 182 `unstated` (90 segments, 92 symbolic), 118 lifted through `hg38ToHg19`; the rest
+behind for chain reasons, none as `source_ref_mismatch` or `ref_mismatch_after_lift`. Code:
+`reference._resolve_rows` and `_count_vcf`, `vrs._slot_reason`, `normalize._align`'s reasons,
+`query._presence`, `store_migration.MIGRATIONS` (0.0.21 → 0.0.22); tests in
+`tests/test_unstated_ref.py` (synthetic, and an opt-in count over every PGP-HMS `.cnv.` upload);
+docs/SCHEMA.md Decision 2 says what each reader does with the value.
+
 ## F32 — `write_vcf_zarr` leaves a breakend's mate as held and declares none
 
 Severity: low · Found 2026-10-26 in an audit of F30's repair; until now only the CHANGELOG said so.

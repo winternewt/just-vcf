@@ -11,7 +11,9 @@ silently on write, P13).
 What is written, and the rules it follows:
 
 - **REF** is `ref` (read from the assembly sequence) when there is one, else `source_ref` (what the
-  file wrote). It is never taken from the genotype (charter 10). A row with neither, or with the
+  file wrote). It is never taken from the genotype (charter 10). A row whose source REF states no
+  base (`ref_check = unstated`, a copy-number caller's `N`, F23) is written with `ref`, the base the
+  reference holds there, and its ALTs as the source wrote them. A row with neither, or with the
   empty REF `""` (an insertion point whose anchor base `resolve_ref` did not read), a row without
   `alts` (an array row before RM3, or one RM3 withheld in a mixed-strand facet, F13), a row whose
   `ref_check` is `mismatch`, a row with an ALT that is no VCF allele (the empty allele `""` of a

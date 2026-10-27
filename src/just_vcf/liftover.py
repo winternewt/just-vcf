@@ -26,7 +26,10 @@ short:
    REF is then read from the target sequence over the lifted span (charter 10: never carried over).
    Where it equals the parent's REF the row keeps its alleles; where it equals one of the ALTs, REF
    and that ALT swap and the genotype indices follow (`bcftools +liftover`'s and Picard's swap);
-   where it equals none, the row is unlifted (`ref_mismatch_after_lift`).
+   where it equals none, the row is unlifted (`ref_mismatch_after_lift`). "The parent's REF" is
+   `ref`, the bases read from the source assembly: a row whose source REF contradicts them
+   (`ref_check = mismatch`) is not lifted at all (`source_ref_mismatch`), and one whose source REF
+   states no base (`unstated`: a copy-number caller's `N`, F23) lifts as a `match` row does.
 4. **Blocks.** A reference or no-call block's span is cut wherever the chain's mapping changes
    (the same axis as step 2): each piece inside one block with one target lifts, with the block's
    `kind`, `gq`, `dp_min` and `gl` unchanged; the pieces in no block, in more than one target, or on

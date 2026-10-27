@@ -35,11 +35,11 @@ Status: **shipped**, **partial**, or **not started**.
 | 15 | Write VCF back out | minimal shape (export) | shipped | `write_vcf`: VCF 4.3, BGZF, tabix index, gVCF blocks; deterministic bytes | PSL phase sets (no loader reads PSL yet) |
 | 16 | Liftover with a `liftover_to` link | inv. 5 | shipped | `liftover` (RM6): chain read in Polars, REF re-read, swaps, minus-strand indels re-anchored, and `normalize` left-aligns lifted rows on the target; anton: all lifted positions in CrossMap's output | blocks and symbolic SVs are not lifted |
 | 17 | Deterministic output | inv. 12 | shipped | canonical order per contig; `write_vcf` gives the same bytes for the same frames (tested) | — |
-| 18 | CLI | (CLAUDE.md §4) | not started | no `[project.scripts]` | Typer |
+| 18 | CLI | (CLAUDE.md §4) | shipped | `just-vcf sniff/load/check/convert`, counts only (f00bb1f) | Typer |
 | 19 | Cache eviction | — | shipped | RM268: index, stale-version sweep, `clear_cache(source=...)`; every step writes generations, so reruns never break a live frame | — |
 | 20 | Population inference | — | partial | `just_vcf.ancestry` (RM5): reference-PCA projection, neighbour vote, proportions, consensus, Privé's 21-group proportions with standard errors; gated on the facet's assembly and `absence_means`; run on PGP-HMS genomes and arrays against Privé | GRCh37 only for Privé; no reference-PCA panel on this machine; no liftover (RM6) |
 | 21 | Charter signed | RM1 | not started | `CHARTER_DRAFT.md`, the person's call | — |
-| 22 | First PyPI release | — | not started | 0.1.0 in `pyproject.toml`, absent from PyPI | a release is the person's |
+| 22 | First PyPI release | — | prepared | 0.1.0 prepared 2026-10-27 (d92a1f4: sdist allow-list, README, CHANGELOG), absent from PyPI | the publish is the person's |
 
 What an MVP needs, at the least: rows 3, 5–9 and 14–15, so a consumer can hand in an array or a VCF
 and get back a REF-checked, build-known, VRS-keyed frame and a VCF. just-prs and just-dna-lite each

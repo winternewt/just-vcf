@@ -4,6 +4,29 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+## 0.1.0 (prepared 2026-10-27, not yet published)
+
+The first release. It loads 32 formats (consumer array and table exports, VCF, BCF and gVCF, and the
+older sequencing outputs PGP-HMS carries) into the facets, calls, blocks and links frames (schema
+0.0.21), with build, callset type, vendor, caller and chip described per facet; reads REF from a refget
+store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; compares facets
+(concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
+which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
+
+- `README.md` is the PyPI page: what the library loads and writes, install with the `ancestry` extra,
+  a Python example, the command line with its exit codes, and the configuration variables. It said
+  nothing was implemented. It links nothing under `docs/`, which neither artifact ships. `pyproject.toml`
+  gains keywords and classifiers (no License classifier: the SPDX `license` replaces it) and a
+  description that names what is loaded; no project URLs while the repository is private.
+  `twine check` passes on both artifacts.
+- The source distribution is an allow-list (`[tool.hatch.build.targets.sdist] only-include`): the
+  package, `pyproject.toml`, `README.md` and `LICENSE`, with the `PKG-INFO` and `.gitignore` hatchling
+  adds. It took every file git does not ignore, 237 of them, among them all of `docs/` (documents
+  derived from private genomes), `tests/`, `scripts/`, `assets/` and the agent and team files at the
+  root, so a PyPI upload would have published them. `tests/test_package.py` builds both artifacts with
+  `uv build` (about a second) and fails on any other sdist member, on any wheel member outside the
+  package and its dist-info, and on an sdist whose package files differ from the wheel's; it failed on
+  the old selection with 161 stray files. The wheel did not change: 75 files.
 - `ReferenceStore.fetch` no longer scans every text it returns for lowercase. Case is settled where a
   sequence enters the store: a collection `add_fasta` added came in through gtars' FASTA import, which
   uppercases every sequence line (gtars 0.10.0, `FastaReader::next_record`, the only version `uv.lock`

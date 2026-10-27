@@ -17,7 +17,7 @@ import polars as pl
 from just_vcf.contig_names import PRIMARY_ACCESSIONS
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.21"
+SCHEMA_VERSION = "0.0.22"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -38,6 +38,10 @@ class RefCheck(str, Enum):
     NOT_RUN = "not_run"
     MATCH = "match"
     MISMATCH = "mismatch"
+    UNSTATED = "unstated"
+    """`source_ref` is made only of `N` (any case) where the reference reads a base: the source stated
+    none to compare (a copy-number caller's REF, F23). Neither a match nor a mismatch; `ref` is read.
+    Where the reference reads `N` too (a gap) the letters agree, and the row is `match`."""
 
 
 class EvidenceBasis(str, Enum):

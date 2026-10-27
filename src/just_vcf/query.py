@@ -265,7 +265,8 @@ class PresenceBasis(str, Enum):
     ROWS_DISAGREE = "rows_disagree"
     """Several rows state the allele and their genotypes disagree (charter 8)."""
     SITE_GENOTYPED = "site_genotyped"
-    """A row at the same position and REF states other alleles only."""
+    """A row at the same position and REF states other alleles only. A row whose source REF states no
+    base (`ref_check = unstated`) never answers so: the site then reads `overlapping_call`."""
     REF_MISMATCH = "ref_mismatch"
     """A row at the position, but the file's REF there contradicts the reference (`ref_check`)."""
     ALLELES_UNRESOLVED = "alleles_unresolved"
@@ -729,7 +730,9 @@ def _presence(facet: Mapping, calls: list[dict], blocks: list[dict], asked: _Ask
         return Presence(facet_id=facet_id, carried=None, basis=PresenceBasis.ALLELES_UNRESOLVED, rows=len(at_site), absence_means=absence_means)
     if any(row["ref_check"] == RefCheck.MISMATCH.value for row in at_site):
         return Presence(facet_id=facet_id, carried=None, basis=PresenceBasis.REF_MISMATCH, rows=len(at_site), absence_means=absence_means)
-    same_ref = [row for row in at_site if _row_ref(row) == asked.ref]
+    # A source REF of only N (`unstated`, F23) says nothing about which base the site holds: its row
+    # answers for an ALT it spells (above), never for the site.
+    same_ref = [row for row in at_site if _row_ref(row) == asked.ref and row["ref_check"] != RefCheck.UNSTATED.value]
     if same_ref and len(same_ref) == len(calls):
         # Every row the span reaches is at this site with this REF, and none states the allele.
         fully_called = all(row["gt"] and all(g is not None for g in row["gt"]) and row["split_signal"] is None for row in same_ref)

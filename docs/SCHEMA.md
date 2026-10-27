@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.21.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.22.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -66,7 +66,44 @@ records the comparison in `ref_check`:
 - `not_run`: `source_ref` is there and has not been compared yet;
 - `match` and `mismatch`: the outcome. A mismatch keeps both values side by side, and neither is
   overwritten;
+- `unstated` (0.0.22, F23): `source_ref` is made only of `N` (any case) where the reference reads a
+  base. The source stated no base: DRAGEN's and Canvas's copy-number VCFs write REF `N` on every record,
+  since the caller never reads the reference. `ref` is read as for any row; nothing was compared, so it
+  is neither `match` (a check that never ran reported as passed) nor `mismatch` (a contradiction the
+  source never made). A real base beside an `N` (`AN`, `NA`) states that base and is compared as
+  usual. Where the reference reads `N` too (a gap), the letters agree and the row is `match`, as
+  before: the id minted there is the one vrs-python mints over `N` bases (RM271);
 - null: there is no `source_ref` to compare (arrays).
+
+What each reader does with `unstated`, by what it does with the REF/ALT pair. Those that carry the
+alleles as written treat it as `match`, with `ref` standing in for the base the source left out; those
+that compute a new representation from the pair withhold, since an ALT is spelled against the `N`:
+
+- `liftover` lifts it as a `match` row (the target's base is compared with `ref`, read from the
+  source assembly; on a plus strand an SV's padding base must still agree, `ref_mismatch_after_lift`).
+  Only `mismatch` is `source_ref_mismatch`.
+- `write_vcf` and `write_vcf_zarr` write it, REF the base `ref` holds, ALTs as written; only `mismatch`
+  is unwritable (`ref_mismatch`). Its `gl`, `gp` and `ad` are left out as on any row whose
+  `source_alleles` are not the written `[REF] + ALTs` (the source's REF slot is the `N`).
+- `mint_vrs_ids` mints the REF slot (the reference's own allele) and withholds every sequence ALT as
+  `ref_unstated`: `N` → `NAC` read as `C` → `NAC` would be a delins the source never wrote. A symbolic
+  ALT keeps its own reason (`sv_no_vrs_model`).
+- `normalize` leaves it as written, counted ("the source REF states no base"): trimming an ALT spelled
+  against `N` against the reference's base would rewrite an allele.
+- `query` answers `stated` for an ALT the row spells, but never `site_genotyped`: a REF the source did
+  not state says nothing about which base the site holds, so an allele asked at its POS that it does
+  not spell is `overlapping_call` (carried unknown). `counts` by `ref_check` lists it, as does the
+  CLI's `check` (`ref_check` counts, `--json` included), which groups by the column.
+- `resolve_ref` counts it apart in its warning ("… with a source REF of only N, which states no base
+  to compare"), never among the mismatches, and never as an IUPAC ambiguity.
+- No other reader: `concordance` compares `ref` (or `source_ref` where `ref` is null) and never reads
+  `ref_check`; loaders, `rejoin_split` and `consensus` write `not_run` or null; `liftover` and
+  `normalize` null it on a row they move or re-derive; the facet guard (`tests/test_load_seams.py`)
+  reads `facets` columns only.
+
+A store written before 0.0.22 keeps its rows' `mismatch` on such a REF (the step to 0.0.22 never
+rewrites a value; it names the facets holding those rows, "Store migration"), and the facet records
+`RESOLVE_VERSION` 12, so the same facet resolved today (13) is another REF state of it.
 
 RM3 never fills `ref` from `source_ref` or the reverse. That would be filling a value from the source
 that checks it.
@@ -800,7 +837,7 @@ With Decisions 1–5 as recommended:
 | `ids` | `list[str]` | the source had no id. rsids, 23andMe `i` ids and VCF `ID` split on `;` |
 | `ref` | `str` | the assembly sequence has not been read yet (charter 10). Only ever filled from the sequence |
 | `source_ref` | `str` | the source wrote no REF (arrays). What the file wrote, as written |
-| `ref_check` | `Enum` | there is no `source_ref` to compare, or it is the empty REF of an insertion point whose anchor `resolve_ref` read (no base to compare). `not_run`, `match` or `mismatch` (Decision 2) |
+| `ref_check` | `Enum` | there is no `source_ref` to compare, or it is the empty REF of an insertion point whose anchor `resolve_ref` read (no base to compare). `not_run`, `match`, `mismatch` or `unstated` (a source REF of only `N` over bases the reference reads, Decision 2) |
 | `alts` | `list[str]` | the source did not say (a non-VCF row before RM3), or RM3 withheld it: an array row of a `strand_check = mixed` facet whose genotype reads differently on the two strands keeps `ref` and has `alts` and `gt` null (Decision 2). `[]` = a stated monomorphic record (ALT `.`). Symbolic alleles and `*` kept verbatim, except `<NON_REF>`, which is written `<*>` |
 | `source_alleles` | `list[str]` | the source gave no vector to index (Decision 2) |
 | `vrs_allele_ids` | `list[str]` | parallel to `[ref] + alts`, gnomAD's convention: the REF slot first, then one per ALT in `alts` order. An element is null when it was withheld (charter 4); the whole list is null when nothing was minted. Minting rule below ("When an id is minted") |
@@ -1078,7 +1115,8 @@ holding that collection and the target.
    below).
 
 Not lifted, each counted in the warnings and named in the report's `lift_reason` (an open vocabulary,
-`UNLIFTED_REASONS`): `ref_unread`, `source_ref_mismatch`, `allele_not_sequence` (the empty allele of
+`UNLIFTED_REASONS`): `ref_unread`, `source_ref_mismatch` (`ref_check = mismatch`; an `unstated` row
+lifts as a `match` one, Decision 2), `allele_not_sequence` (the empty allele of
 an unanchored deletion, which `normalize` anchors first; `*`, `<*>` and symbolic alleles the SV rule
 below does not read, such as Delly's `<TRA>` or a symbolic SV beside a sequence ALT; an SV or segment
 whose REF is longer than its padding base), `split_flagged` (run
@@ -1400,8 +1438,9 @@ span; an insertion or deletion is rolled over its whole region of ambiguity and 
 stays 1-based, and `reference._span` is the one conversion (charter 13).
 
 An allele is minted only when its row's `ref` was read from the sequence (`resolve_ref`) and the
-source did not contradict it (`ref_check` is `match`, or null on an array row). Substitutions too:
-`mint_vrs_ids` refuses a facet whose REF was never read. The rule the draft had, minting a
+source did not contradict it (`ref_check` is `match`, or null on an array row). On a row whose source
+REF states no base (`unstated`) only the REF slot is minted; its sequence ALTs are `ref_unstated`.
+Substitutions too: `mint_vrs_ids` refuses a facet whose REF was never read. The rule the draft had, minting a
 substitution from a table of contig accessions per assembly without reading bases, was not built:
 no such table exists, and a contig `resolve_ref` could not match has no accession that was shown to
 be the facet's own. Array rows mint once `resolve_ref` has derived their `alts`. Minting has been
@@ -1430,7 +1469,8 @@ It checks in this fixed order and the first hit wins:
 2. **Pipeline state**, read from the row: `array_code` (an array row with an `I`/`D` genotype, whose
    REF stays unread), `telomere` (`pos` 0), `ref_unresolved` (`ref` and `source_ref` both null),
    `ref_unchecked` (a source REF, but `ref` not read: a contig the reference could not match, or a
-   span past the contig's end), `ref_mismatch` (`ref_check = mismatch`).
+   span past the contig's end), `ref_mismatch` (`ref_check = mismatch`); then, per ALT slot,
+   `ref_unstated` (a sequence ALT on a row whose `ref_check` is `unstated`: spelled against an `N`).
 3. **What minting reported**, the `vrs_errors` element: `no_contig` (the collection has no single
    sequence for the contig) or `refused` (gtars refused the allele; its message is counted in the
    warnings). After `resolve_ref` neither is expected: `ref` was read from that very sequence.
@@ -2529,6 +2569,7 @@ a step fails it.
 | 0.0.18 → 0.0.19 | calls | adds `hq` (null) after `gq` | CGI native facets, and facets whose `dropped_fields` list FORMAT `HQ`: `hq` null for not read, so their rows grade `gt_only` |
 | 0.0.19 → 0.0.20 | facets | adds `resolve_version` (null) after `ref_seqcol_digest` | facets whose REF was read (`ref_seqcol_digest` set): null means not recorded, not "REF not read", so the store refuses the same facet resolved today as another state of it |
 | 0.0.20 → 0.0.21 | facets | adds `resolve_inputs` (null) after `resolve_version` | array facets (`family = genotype_table`) whose REF was read: null means not recorded, not "no manifest", so the store refuses the same facet resolved today with manifests as another state of it; consensus facets: null means the parents' REF states were not recorded, so the store refuses the same consensus built today |
+| 0.0.21 → 0.0.22 | calls | casts `ref_check` to the enum with `unstated` | facets whose REF was read and that hold a row with a source REF of only `N` and `ref_check = mismatch`: kept as `mismatch` where today's rule reads `unstated`, so `liftover` leaves those rows behind; the facet records `RESOLVE_VERSION` 12, so the store refuses it resolved today. A caveat may name rows as well as facets (`Caveat.rows`), and this is the first that does |
 
 A step never invents a value: an added column is null, and where that null (or a value an older loader
 left) reads differently from what a load of the same source gives today, the facets it applies to are
@@ -3207,6 +3248,18 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **An enum member, landed in 0.0.22** (2026-10-27, F23: a source REF that states no base):
+  `RefCheck.UNSTATED` (`unstated`), a source REF made only of `N` where the reference reads a base,
+  the REF DRAGEN's and Canvas's copy-number VCFs write on every record. Adding a member changes the
+  `pl.Enum` dtype of `calls.ref_check`, a schema change; pre-1.0, it breaks a consumer that matches on
+  the three values. Rule changes (Decision 2): `resolve_ref` writes `unstated` where it wrote
+  `mismatch` (`RESOLVE_VERSION` 13); `liftover`, `write_vcf` and `write_vcf_zarr` take such a row as
+  they take a `match`; `mint_vrs_ids` mints its REF slot and withholds a sequence ALT as `ref_unstated`
+  (`MINT_VERSION` 4); `normalize` leaves it as written, counted; `query` never answers
+  `site_genotyped` from it. **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
+  F23 measured were all `mismatch` and none lifted; all are `unstated`, and 1,224 lift. A store of
+  0.0.21 migrates with the enum widened and its values kept, its facets holding such rows named.
+
 - **No version change** (2026-10-26, F32: a breakend's mate in the Zarr export): no column changes.
   `write_vcf_zarr` names a breakend mate inside `variant_allele` as `write_vcf` names it and lists
   every mate contig in `contig_id` ("VCF Zarr export" above). **Values change** in the store only:
@@ -3603,6 +3656,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   the rule above is a minor bump, 0.0.10. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.22** (2026-10-27, F23): `RefCheck.UNSTATED`, a member of `calls.ref_check`'s enum (the entry
+  at the top of this list).
 
 - **0.0.21** (2026-10-26, the manifests that read REF): `facets.resolve_inputs` (`str` or null), a
   digest of the chip manifests `resolve_ref` read an array's rows with, inherited by derived facets;

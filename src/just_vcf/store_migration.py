@@ -86,12 +86,14 @@ class StoreMigration(BaseModel):
 @dataclass(frozen=True)
 class Caveat:
     """A null a step fills, or an older value it keeps, that reads differently from a load today, on
-    the facets `applies` selects (an expression over that version's `facets` frame)."""
+    the facets `applies` selects (an expression over that version's `facets` frame) and, when `rows` is
+    given, only those of them holding a row it selects (an expression over that version's `frame`)."""
 
     frame: str
     columns: tuple[str, ...]
     applies: pl.Expr
     reason: str
+    rows: pl.Expr | None = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +162,7 @@ _METHOD_STEP_0016 = pl.Struct(
 )
 _PHASE_SET_KINDS_0017 = pl.List(pl.Enum(["ps", "psl", "cgi_haplink"]))
 _GL_SOURCE_0018 = pl.Enum(["gl", "pl", "gl_over_pl"])
+_REF_CHECK_0022 = pl.Enum(["not_run", "match", "mismatch", "unstated"])
 
 _RELOAD = "load the source again to read them"
 _READ = pl.col("ref_seqcol_digest").is_not_null()
@@ -296,6 +299,25 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
                 "which REF states these consensus facets' parents were in was not recorded before 0.0.21: resolve_inputs "
                 "null here means not recorded, so the store takes the same consensus built today for another state of "
                 "it; build it again into a new store",
+            ),
+        ),
+    ),
+    MigrationStep(
+        "0.0.21",
+        "0.0.22",
+        "a source REF that states no base: RefCheck gains unstated, widening calls.ref_check",
+        frames={"calls": _cast("ref_check", _REF_CHECK_0022)},
+        retyped=("calls.ref_check",),
+        caveats=(
+            Caveat(
+                "calls",
+                ("ref_check",),
+                _READ,
+                "a source REF of only N was compared as bases before 0.0.22 (RESOLVE_VERSION 12 and earlier): these rows keep "
+                "ref_check mismatch where today's rule reads unstated (the source stated no base), so liftover leaves "
+                "them behind and the store refuses the same facet resolved today as another state of it; "
+                f"{_RELOAD} and resolve them into a new store",
+                rows=pl.col("source_ref").str.contains(r"^[Nn]+$").fill_null(False) & (pl.col("ref_check") == "mismatch"),
             ),
         ),
     ),

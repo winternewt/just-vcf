@@ -505,6 +505,13 @@ Mitigation: per-base mode (`coverage.py`, the comment at `:596-598`). Not filed.
 chunking that block mode now uses, but not streaming. **File at datafusion-bio-functions**, together
 with P18 if it is filed: emit block-mode batches contig by contig, as per-base mode does.
 
+*Filing P17–P19 (2026-10-27).* The person's answer on desk #104: file all three at
+datafusion-bio-functions, but draft them first and wait for the person to vet the drafts. The three
+drafts are on desk #104 (comment of 2026-10-27), with the code linked at main `ea47537`, where the
+pileup crate (`datafusion/bio-function-pileup/`) is unchanged since `v0.22.2` but for its Cargo.toml.
+The repros for P17 and P18 were rerun as written on 0.36.0 with synthetic BAMs, and the trackers were
+searched again: no duplicates. Nothing is posted until the person says so; record `Filed:` here then.
+
 ## P20 — An indexed BAM `depth()` scan reads the file twice
 
 Found by the lead seat on real 30x BAMs: the bytes read come to about twice the file's size when it has

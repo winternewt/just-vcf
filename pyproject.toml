@@ -1,7 +1,7 @@
 [project]
 name = "just-vcf"
 version = "0.1.0"
-description = "Polars-bio based conversion of consumer and personal genomics files into VCF"
+description = "Load consumer and personal genomics files (array exports, genotype tables, VCF and gVCF) and write them as VCF, on polars-bio"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -9,6 +9,18 @@ authors = [
     { name = "winternewt", email = "isoutthere@gmail.com" }
 ]
 requires-python = ">=3.13"
+keywords = ["vcf", "gvcf", "genomics", "genotype", "23andme", "polars", "polars-bio", "vrs", "liftover"]
+# No License classifier: `license` is an SPDX expression (PEP 639), which replaces it.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Typing :: Typed",
+]
 dependencies = [
     "gtars>=0.10.0",
     "platformdirs>=4.11",

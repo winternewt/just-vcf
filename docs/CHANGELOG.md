@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- `README.md` is the PyPI page: what the library loads and writes, install with the `ancestry` extra,
+  a Python example, the command line with its exit codes, and the configuration variables. It said
+  nothing was implemented. It links nothing under `docs/`, which neither artifact ships. `pyproject.toml`
+  gains keywords and classifiers (no License classifier: the SPDX `license` replaces it) and a
+  description that names what is loaded; no project URLs while the repository is private.
+  `twine check` passes on both artifacts.
 - The source distribution is an allow-list (`[tool.hatch.build.targets.sdist] only-include`): the
   package, `pyproject.toml`, `README.md` and `LICENSE`, with the `PKG-INFO` and `.gitignore` hatchling
   adds. It took every file git does not ignore, 237 of them, among them all of `docs/` (documents

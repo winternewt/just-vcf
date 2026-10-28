@@ -4,6 +4,16 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`liftover` cuts each source contig's chain axis once per lift.** `_segments` was not slow per call:
+  the lift cut a contig's axis anew for its sequence rows, for each end of its SVs and for its gVCF
+  blocks, beside the cached copy its breakends already read (four cuts per contig on a Manta file).
+  Every caller now takes the chain's cached axis (`_contig_segments`), and `_place` requires it. On hu416394's Manta file through
+  hg38ToHg19, the lift took 2.8 s with 0.98 s in 96 `_segments` calls (35%); it now takes 2.1 s with
+  0.25 s in 24 calls (12%). Its gVCF (9.65M rows, 8.4M blocks) spent 0.47 s of a 63 s lift there in 50
+  calls and now 0.23 s in 25; the rest of that lift is polars collects, partitioning and target reads.
+  `_segments` itself is unchanged, and so is every lifted row, report row and warning on both files,
+  so neither `LIFT_VERSION` nor the spill key moves. Test: `test_a_lift_cuts_each_source_contigs_axis_once`.
+
 - **Schema 0.0.22, a breaking change pre-1.0: `ref_check` gains a fourth value, `unstated`** (F23).
   A source REF made only of `N` (any case) where the reference reads a base states no base:
   DRAGEN's and Canvas's copy-number VCFs write it on every record. `resolve_ref` wrote `mismatch` there

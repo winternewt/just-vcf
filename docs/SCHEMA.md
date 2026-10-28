@@ -75,31 +75,42 @@ records the comparison in `ref_check`:
   before: the id minted there is the one vrs-python mints over `N` bases (RM271);
 - null: there is no `source_ref` to compare (arrays).
 
-What each reader does with `unstated`, by what it does with the REF/ALT pair. Those that carry the
-alleles as written treat it as `match`, with `ref` standing in for the base the source left out; those
-that compute a new representation from the pair withhold, since an ALT is spelled against the `N`:
+What each reader does with `unstated` follows one rule: **a sequence ALT on an `unstated` row is not
+read** (`schema.unstated_sequence_alt`). It was spelled against the `N`, not against `ref`, so set
+beside the reference's base it would be an allele the source never wrote (`N` → `NAC` read as `C` →
+`NAC`). A symbolic ALT (`<DEL>`, `<CN0>`, ...), no ALT, and the REF slot are read as on a `match` row,
+with `ref` standing in for the base the source left out. Every copy-number file in hand has only
+those (merge audit 13, 2026-10-28, found liftover, the writers and `query` reading the sequence ALT):
 
 - `liftover` lifts it as a `match` row (the target's base is compared with `ref`, read from the
-  source assembly; on a plus strand an SV's padding base must still agree, `ref_mismatch_after_lift`).
-  Only `mismatch` is `source_ref_mismatch`.
-- `write_vcf` and `write_vcf_zarr` write it, REF the base `ref` holds, ALTs as written; only `mismatch`
-  is unwritable (`ref_mismatch`). Its `gl`, `gp` and `ad` are left out as on any row whose
-  `source_alleles` are not the written `[REF] + ALTs` (the source's REF slot is the `N`).
+  source assembly; on a plus strand an SV's padding base must still agree, `ref_mismatch_after_lift`),
+  unless an ALT is a sequence allele: then it stays behind as `source_ref_unstated`. Lifted, that ALT
+  would be compared with the target's base and could swap with it, re-indexing the genotype (`N` → `G`,
+  `0/0`, over `A` where the target reads `G`, would become `G` → `A`, `1/1`), and the lifted row,
+  whose `ref_check` is null, would mint an id `mint_vrs_ids` withholds on the parent.
+  `mismatch` is `source_ref_mismatch`.
+- `write_vcf` and `write_vcf_zarr` write it, REF the base `ref` holds, ALTs as written, unless an
+  ALT is a sequence allele: that row is unwritable (`ref_unstated`; `resolved_only=True` skips it,
+  counted), since `N` → `NAC` written as `C` → `NAC` would load back as a stated `match`. `mismatch`
+  is unwritable as `ref_mismatch`. A written row's `gl`, `gp` and `ad` are left out as on any row
+  whose `source_alleles` are not the written `[REF] + ALTs` (the source's REF slot is the `N`).
 - `mint_vrs_ids` mints the REF slot (the reference's own allele) and withholds every sequence ALT as
   `ref_unstated`: `N` → `NAC` read as `C` → `NAC` would be a delins the source never wrote. A symbolic
   ALT keeps its own reason (`sv_no_vrs_model`).
 - `normalize` leaves it as written, counted ("the source REF states no base"): trimming an ALT spelled
   against `N` against the reference's base would rewrite an allele.
-- `query` answers `stated` for an ALT the row spells, but never `site_genotyped`: a REF the source did
-  not state says nothing about which base the site holds, so an allele asked at its POS that it does
-  not spell is `overlapping_call` (carried unknown). `counts` by `ref_check` lists it, as does the
+- `query` never answers from it for a sequence allele, neither `stated` nor `site_genotyped`: its
+  sequence ALTs were spelled against the `N`, and a REF the source did not state says nothing about
+  which base the site holds. An allele asked at its POS, spelled by it or not, is `overlapping_call`
+  (carried unknown); read as stated, `N` → `G` with GT `0/0` would answer `hom_ref` for a base the
+  source never named. `counts` by `ref_check` lists it, as does the
   CLI's `check` (`ref_check` counts, `--json` included), which groups by the column.
 - `resolve_ref` counts it apart in its warning ("… with a source REF of only N, which states no base
   to compare"), never among the mismatches, and never as an IUPAC ambiguity.
 - No other reader: `concordance` compares `ref` (or `source_ref` where `ref` is null) and never reads
   `ref_check`; loaders, `rejoin_split` and `consensus` write `not_run` or null; `liftover` and
-  `normalize` null it on a row they move or re-derive; the facet guard (`tests/test_load_seams.py`)
-  reads `facets` columns only.
+  `normalize` null it on a row they move or re-derive (`liftover` moves none with a sequence ALT); the
+  facet guard (`tests/test_load_seams.py`) reads `facets` columns only.
 
 A store written before 0.0.22 keeps its rows' `mismatch` on such a REF (the step to 0.0.22 never
 rewrites a value; it names the facets holding those rows, "Store migration"), and the facet records
@@ -1116,7 +1127,8 @@ holding that collection and the target.
 
 Not lifted, each counted in the warnings and named in the report's `lift_reason` (an open vocabulary,
 `UNLIFTED_REASONS`): `ref_unread`, `source_ref_mismatch` (`ref_check = mismatch`; an `unstated` row
-lifts as a `match` one, Decision 2), `allele_not_sequence` (the empty allele of
+lifts as a `match` one, Decision 2), `source_ref_unstated` (`ref_check = unstated` with a sequence ALT,
+spelled against the `N`, `LIFT_VERSION` 13), `allele_not_sequence` (the empty allele of
 an unanchored deletion, which `normalize` anchors first; `*`, `<*>` and symbolic alleles the SV rule
 below does not read, such as Delly's `<TRA>` or a symbolic SV beside a sequence ALT; an SV or segment
 whose REF is longer than its padding base), `split_flagged` (run
@@ -3254,9 +3266,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `pl.Enum` dtype of `calls.ref_check`, a schema change; pre-1.0, it breaks a consumer that matches on
   the three values. Rule changes (Decision 2): `resolve_ref` writes `unstated` where it wrote
   `mismatch` (`RESOLVE_VERSION` 13); `liftover`, `write_vcf` and `write_vcf_zarr` take such a row as
-  they take a `match`; `mint_vrs_ids` mints its REF slot and withholds a sequence ALT as `ref_unstated`
-  (`MINT_VERSION` 4); `normalize` leaves it as written, counted; `query` never answers
-  `site_genotyped` from it. **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
+  they take a `match` when no ALT is a sequence allele, and leave it behind (`source_ref_unstated`,
+  `LIFT_VERSION` 13) or refuse it (`ref_unstated`) when one is (merge audit 13, 2026-10-28);
+  `mint_vrs_ids` mints its REF slot and withholds a sequence ALT as `ref_unstated` (`MINT_VERSION` 4);
+  `normalize` leaves it as written, counted; `query` answers from it neither `stated` for a sequence
+  ALT nor `site_genotyped`. **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
   F23 measured were all `mismatch` and none lifted; all are `unstated`, and 1,224 lift. A store of
   0.0.21 migrates with the enum widened and its values kept, its facets holding such rows named.
 

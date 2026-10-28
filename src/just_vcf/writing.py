@@ -13,10 +13,12 @@ What is written, and the rules it follows:
 - **REF** is `ref` (read from the assembly sequence) when there is one, else `source_ref` (what the
   file wrote). It is never taken from the genotype (charter 10). A row whose source REF states no
   base (`ref_check = unstated`, a copy-number caller's `N`, F23) is written with `ref`, the base the
-  reference holds there, and its ALTs as the source wrote them. A row with neither, or with the
+  reference holds there, and its ALTs as the source wrote them when none is a sequence allele (a
+  symbolic ALT, or none). A row with neither, or with the
   empty REF `""` (an insertion point whose anchor base `resolve_ref` did not read), a row without
   `alts` (an array row before RM3, or one RM3 withheld in a mixed-strand facet, F13), a row whose
-  `ref_check` is `mismatch`, a row with an ALT that is no VCF allele (the empty allele `""` of a
+  `ref_check` is `mismatch`, an `unstated` row with a sequence ALT (`ref_unstated`: spelled against the
+  `N`, it would read back as a stated `match`), a row with an ALT that is no VCF allele (the empty allele `""` of a
   deletion written without its anchor base, F12's `-` among them, until `normalize` anchors it), a row with a genotype that
   is not indexed (`gt` null beside `gt_alleles`) and a row whose `gt` points past its ALTs cannot be
   written as valid VCF. The writer refuses them with `UnwritableRowsError`, counted per reason, unless
@@ -109,7 +111,7 @@ from just_vcf.breakends import assembly_mate, breakend_parts, mate_contig, mate_
 from just_vcf.loaders.vcf import _SV_PATTERN, FORMAT_KEYS, INFO_KEYS, SPLIT_INFO_KEY, V43_RESERVED_TYPES
 from just_vcf.loading import Loaded
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore, _store_for
-from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, BlockKind, PhaseSetKind, RefCheck, canonical_chrom
+from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, SCHEMA_VERSION, BlockKind, PhaseSetKind, RefCheck, canonical_chrom, unstated_sequence_alt
 from just_vcf.tabix import TabixIndexer
 
 logger = logging.getLogger(__name__)
@@ -234,6 +236,7 @@ def _sv_info_values(v45: bool = False) -> dict[str, pl.Expr]:
 _UNWRITABLE_REASONS = (
     "ref_unresolved",
     "ref_mismatch",
+    "ref_unstated",
     "alts_unresolved",
     "alt_not_an_allele",
     "genotype_unindexed",
@@ -551,6 +554,10 @@ def _unwritable() -> pl.Expr:
         .then(pl.lit("ref_unresolved"))
         .when(pl.col("ref_check") == RefCheck.MISMATCH.value)
         .then(pl.lit("ref_mismatch"))
+        # A sequence ALT spelled against a source REF of only `N` (F23): written beside the reference's
+        # base, `N` → `NAC` would read back as a stated `C` → `NAC`, `ref_check = match`.
+        .when(unstated_sequence_alt())
+        .then(pl.lit("ref_unstated"))
         .when(pl.col("alts").is_null())
         .then(pl.lit("alts_unresolved"))
         .when(~pl.col("alts").list.eval(pl.element().str.contains(_VCF_ALLELE)).list.all())

@@ -14,12 +14,14 @@ import polars as pl
 import pytest
 
 from just_vcf import ReferenceStore, liftover, load, mint_vrs_ids, normalize, query, resolve_ref, vrs_withheld, write_vcf
+from just_vcf.liftover import UNLIFTED_REASONS
 from just_vcf.loading import Loaded
 from just_vcf.schema import CALLS
 from just_vcf.vcf_zarr import write_vcf_zarr
 from just_vcf.vrs import WITHHELD_REASONS
+from just_vcf.writing import UnwritableRowsError
 from test_cli import report, run
-from test_liftover import TARGET, by_case, expected_sv, expected_target, s1, setup, sv  # noqa: F401 (setup is a fixture)
+from test_liftover import MULTI_BASE, MULTI_SWAP_POS, TARGET, by_case, expected_sv, s1, setup, sv  # noqa: F401 (setup is a fixture)
 from test_liftover import SV_HEADER, other as lift_other
 from test_vcf_zarr import read_back
 
@@ -75,6 +77,7 @@ RECORDS = [
     (90, "unstated_two_bases", "NN", ".", "0/0"),
     (120, "unstated_snv", "N", other(base(120)), "0/1"),
     (150, "unstated_insertion", "N", "NAC", "0/1"),
+    (240, "unstated_snv_hom_ref", "N", other(base(240)), "0/0"),
     (180, "partial_after", base(180) + "N", "<DEL>", "0/1"),
     (210, "partial_before", "N" + base(211), "<DEL>", "0/1"),
     (N_RUN + 2, "gap", "N", "A", "0/1"),
@@ -87,12 +90,17 @@ EXPECTED = {
     "unstated_two_bases": "unstated",
     "unstated_snv": "unstated",
     "unstated_insertion": "unstated",
+    "unstated_snv_hom_ref": "unstated",
     # A real base beside an N states that base: compared as before, and the reference has no N there.
     "partial_after": "mismatch",
     "partial_before": "mismatch",
     # Over a gap the reference reads N too: the letters agree, so the comparison ran and matched.
     "gap": "match",
 }
+
+
+UNSTATED_SEQUENCE_ALT = {case for _, case, _, alt, _ in RECORDS if EXPECTED[case] == "unstated" and alt != "." and not alt.startswith("<")}
+"""Unstated rows with a sequence ALT, spelled against the `N`: no reader takes that ALT as stated."""
 
 
 def resolved(tmp_path: Path, store: ReferenceStore) -> Loaded:
@@ -154,41 +162,59 @@ def test_normalize_leaves_an_unstated_row_as_written_and_says_why(tmp_path: Path
     assert any(w == "1 row(s) not left-aligned or trimmed: the source REF states no base (ref_check unstated)" for w in out.warnings)
 
 
-def test_write_vcf_writes_an_unstated_row_with_the_reference_base(tmp_path: Path, store: ReferenceStore) -> None:
+def unwritable() -> dict[str, int]:
+    """What the writers leave out of `RECORDS`: a mismatch, and an unstated row's sequence ALT, which
+    written beside the reference's base would read back as a stated `match` (`N` → `NAC` as `C` → `NAC`)."""
+    return {"ref_mismatch": sum(1 for v in EXPECTED.values() if v == "mismatch"), "ref_unstated": len(UNSTATED_SEQUENCE_ALT)}
+
+
+def written_cases() -> set[str]:
+    return {case for case, value in EXPECTED.items() if value != "mismatch" and case not in UNSTATED_SEQUENCE_ALT}
+
+
+def test_write_vcf_writes_an_unstated_row_with_the_reference_base_unless_it_spells_a_sequence_alt(tmp_path: Path, store: ReferenceStore) -> None:
     source = resolved(tmp_path, store)
-    mismatched = sum(1 for v in EXPECTED.values() if v == "mismatch")
+    with pytest.raises(UnwritableRowsError) as refused:
+        write_vcf(source, tmp_path / "refused.vcf", compress=False)
+    assert refused.value.counts == unwritable()
     written = write_vcf(source, tmp_path / "out.vcf", compress=False, resolved_only=True)
-    assert written.rows_skipped == {"ref_mismatch": mismatched}
+    assert written.rows_skipped == unwritable()
     back = by_id(load(written.path).calls.collect())
-    assert set(back) == {case for case, value in EXPECTED.items() if value != "mismatch"}
+    assert set(back) == written_cases()
     for pos, case, ref, alt, _ in RECORDS:
         if case in back:
             assert back[case]["source_ref"] == base(pos, len(ref)), case
             assert back[case]["alts"] == ([] if alt == "." else [alt]), case
 
 
-def test_write_vcf_zarr_keeps_the_unstated_rows(tmp_path: Path, store: ReferenceStore) -> None:
+def test_write_vcf_zarr_keeps_the_unstated_rows_without_a_sequence_alt(tmp_path: Path, store: ReferenceStore) -> None:
     source = resolved(tmp_path, store)
-    mismatched = sum(1 for v in EXPECTED.values() if v == "mismatch")
+    with pytest.raises(UnwritableRowsError) as refused:
+        write_vcf_zarr(source, tmp_path / "refused.vcz")
+    assert refused.value.counts == unwritable()
     written = write_vcf_zarr(source, tmp_path / "out.vcz", resolved_only=True)
-    assert written.rows_skipped == {"ref_mismatch": mismatched}
+    assert written.rows_skipped == unwritable()
     sites = read_back(tmp_path / "out.vcz")
-    kept = sorted(pos for pos, case, *_ in RECORDS if EXPECTED[case] != "mismatch")
+    kept = sorted(pos for pos, case, *_ in RECORDS if case in written_cases())
     assert sites["start"].to_list() == kept
     refs = dict(zip(sites["start"].to_list(), sites["ref"].to_list()))
     assert all(refs[pos] == base(pos, len(ref)) for pos, case, ref, *_ in RECORDS if pos in refs)
 
 
-def test_query_counts_unstated_and_reads_no_site_from_an_unstated_ref(tmp_path: Path, store: ReferenceStore) -> None:
-    """An unstated row states its ALT as written, so it answers for that allele; it never says which
-    base the site holds, so an SNV at its POS that it does not spell is not answered `site_genotyped`."""
+def test_query_counts_unstated_and_reads_neither_site_nor_alt_from_an_unstated_ref(tmp_path: Path, store: ReferenceStore) -> None:
+    """An unstated row never says which base the site holds, so an SNV at its POS that it does not spell
+    is not answered `site_genotyped`; and its sequence ALT was spelled against the `N`, not against the
+    reference's base, so the same SNV that it does spell is not `stated` either (a `0/0` there would read
+    `hom_ref`, a base the source never named). Both are `overlapping_call`, carried unknown."""
     q = query(resolved(tmp_path, store))
     (table,) = q.counts(by=["ref_check"])
     assert {group.values[0]: group.count for group in table.groups} == {
         value: sum(1 for v in EXPECTED.values() if v == value) for value in set(EXPECTED.values())
     }
-    (stated,) = q.carries(chrom="1", pos=120, ref=base(120), alt=other(base(120)))
-    assert (stated.basis.value, stated.carried) == ("stated", True)
+    (spelled,) = q.carries(chrom="1", pos=120, ref=base(120), alt=other(base(120)))
+    assert (spelled.basis.value, spelled.carried, spelled.genotype_class) == ("overlapping_call", None, None)
+    (hom_ref,) = q.carries(chrom="1", pos=240, ref=base(240), alt=other(base(240)))
+    assert (hom_ref.basis.value, hom_ref.carried, hom_ref.genotype_class) == ("overlapping_call", None, None)
     elsewhere = next(b for b in "ACGT" if b not in (base(120), other(base(120))))
     (unstated,) = q.carries(chrom="1", pos=120, ref=base(120), alt=elsewhere)
     assert (unstated.basis.value, unstated.carried) == ("overlapping_call", None)
@@ -211,11 +237,18 @@ LIFT_CASES = {
     # The lift's own check still runs: on a plus strand the target's base must be the base read at the source.
     "cnv_anchor_changed": (sv("cnv_anchor_changed", 251, "<DEL>", 280, ref="N"), "ref_mismatch_after_lift"),
     "cnv_partial": (sv("cnv_partial", 340, "<DEL>", 360, ref=s1(340) + "N"), "source_ref_mismatch"),
-    "unstated_snv": (f"1\t205\tunstated_snv\tN\t{lift_other(s1(205))}\t50\tPASS\t.\tGT\t0/1", None),
+    # A sequence ALT on an unstated row was spelled against the `N`: the lift would compare the target's
+    # base with it, swap, and re-index the genotype on an allele the source never set against a base.
+    "unstated_snv": (f"1\t205\tunstated_snv\tN\t{lift_other(s1(205))}\t50\tPASS\t.\tGT\t0/1", "source_ref_unstated"),
+    # REF N, ALT G, GT 0/0 over source base A where the target reads G (a base the target changes;
+    # `cnv_anchor_changed` holds the other such position): lifted, it would be REF G ALT A GT 1/1, an
+    # allele the source never called.
+    "unstated_swap": (f"1\t{MULTI_SWAP_POS}\tunstated_swap\tN\t{MULTI_BASE}\t50\tPASS\t.\tGT\t0/0", "source_ref_unstated"),
 }
 
 
-def test_liftover_lifts_unstated_rows_like_matching_ones(tmp_path: Path, setup) -> None:  # noqa: F811
+def test_liftover_lifts_unstated_rows_like_matching_ones_unless_they_spell_a_sequence_alt(tmp_path: Path, setup) -> None:  # noqa: F811
+    assert "source_ref_unstated" in UNLIFTED_REASONS
     store, _, _, chain = setup
     lines = sorted((line for line, _ in LIFT_CASES.values()), key=lambda line: int(line.split("\t")[1]))
     path = tmp_path / "cnv.vcf"
@@ -228,15 +261,16 @@ def test_liftover_lifts_unstated_rows_like_matching_ones(tmp_path: Path, setup) 
     lifted = liftover(source, chain, store)
     report_rows = by_case(lifted.report.collect())
     assert {case: r["lift_reason"] for case, r in report_rows.items()} == {case: reason for case, (_, reason) in LIFT_CASES.items()}
+    assert report_rows["unstated_swap"]["lift_swapped"] is None, "never compared with the target, so never swapped"
+    unstated_alts = sum(1 for _, reason in LIFT_CASES.values() if reason == "source_ref_unstated")
+    assert lifted.reasons["source_ref_unstated"] == unstated_alts
+    assert any(w.startswith(f"{unstated_alts} row(s) not lifted:") and w.endswith("[source_ref_unstated]") for w in lifted.loaded.warnings)
     calls = by_case(lifted.loaded.calls.collect())
     assert set(calls) == {case for case, (_, reason) in LIFT_CASES.items() if reason is None}
     for case, r in calls.items():
         p = parent[case]
-        if case == "unstated_snv":
-            chrom, pos, _ = expected_target(p["pos"])
-        else:
-            chrom, pos, end, _ = expected_sv(p["pos"], p["end_pos"], padded=bool(p["alts"]))
-            assert r["end_pos"] == end, case
+        chrom, pos, end, _ = expected_sv(p["pos"], p["end_pos"], padded=bool(p["alts"]))
+        assert r["end_pos"] == end, case
         # REF is the target's base at the new POS; what the source wrote is not carried (a lifted row's
         # source_ref and ref_check are null); the ALTs stay as written.
         assert (r["chrom"], r["pos"]) == (chrom, pos), case

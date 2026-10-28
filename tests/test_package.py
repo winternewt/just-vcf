@@ -10,11 +10,37 @@ import pytest
 import just_vcf
 
 ROOT = Path(__file__).resolve().parents[1]
+PACKAGE = ROOT / "src" / "just_vcf"
 
 # What a source distribution may carry besides the package itself. The repository's docs/ hold
 # documents derived from private genomes, and its root holds agent and team files: an sdist built from
 # hatchling's default selection (every file git does not ignore) would publish them with the package.
 SDIST_EXTRA = frozenset({"pyproject.toml", "README.md", "LICENSE", "PKG-INFO", ".gitignore"})
+
+
+def symlinks(root: Path) -> list[str]:
+    """Every symlink under `root`, file or directory, relative to it; a linked directory is not entered."""
+    found = []
+    for directory, dirnames, filenames in root.walk(follow_symlinks=False):
+        found += [str((directory / name).relative_to(root)) for name in (*dirnames, *filenames) if (directory / name).is_symlink()]
+    return sorted(found)
+
+
+def test_symlinks_are_found_whether_they_name_a_file_or_a_directory(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "NOTES.md").write_text("private")
+    package = tmp_path / "src" / "pkg"
+    (package / "sub").mkdir(parents=True)
+    (package / "internal_docs").symlink_to(docs, target_is_directory=True)
+    (package / "sub" / "notes.md").symlink_to(docs / "NOTES.md")
+    assert symlinks(package) == ["internal_docs", "sub/notes.md"]
+
+
+def test_the_package_holds_no_symlink() -> None:
+    """hatchling follows a symlink under the package: `internal_docs -> ../../docs` would ship docs/ in
+    the wheel and the sdist under the package's own prefix, past the allow-lists the tests below read."""
+    assert symlinks(PACKAGE) == []
 
 
 def test_version_comes_from_distribution_metadata() -> None:

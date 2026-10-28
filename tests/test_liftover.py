@@ -7,6 +7,7 @@ pyliftover (the `[liftover]` extra) is a second, independent reading of the chai
 
 import gzip
 import hashlib
+import importlib
 import random
 from collections import Counter
 from pathlib import Path
@@ -476,6 +477,32 @@ def test_segments_count_targets_not_blocks() -> None:
         (30, 1, 2),
         (40, 0, None),
     ]
+
+
+def test_a_lift_cuts_each_source_contigs_axis_once(tmp_path: Path, setup, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rows, SV ends, breakend mates and gVCF blocks on one contig all read one axis (`_contig_segments`):
+    on a Manta file the axis was cut four times per contig, a third of the lift's time."""
+    module = importlib.import_module("just_vcf.liftover")
+    original = module._segments
+    cut: Counter = Counter()
+
+    def counted(blocks: pl.DataFrame) -> pl.DataFrame:
+        cut.update(set(blocks["t_chrom"].to_list()))
+        return original(blocks)
+
+    monkeypatch.setattr(module, "_segments", counted)
+    store, _, _, chain = setup
+    covered = set(read_chain(chain).blocks["t_chrom"].to_list())
+    for name, lift in (("sv", sv_lifted), ("gvcf", gvcf_lifted), ("cases", lifted_from_cases)):
+        cut.clear()
+        (tmp_path / name).mkdir()
+        resolved, lifted = lift(tmp_path / name, store, chain)
+        lifted.report.collect()
+        source = set(resolved.calls.collect()["chrom"].to_list()) | set(resolved.blocks.collect()["chrom"].to_list())
+        # Every source contig the chain covers had its axis cut, and none twice.
+        assert source & covered, name
+        assert set(cut) == source & covered, name
+        assert set(cut.values()) == {1}, (name, cut)
 
 
 def test_a_chain_listing_its_blocks_twice_lifts_as_once(tmp_path: Path, setup) -> None:

@@ -657,7 +657,7 @@ def _lift_block_contig(
         counts["blocks_left"] += rows.height
         behind = work.select(pl.lit(reason).alias("lift_reason"), (pl.col("_e0") - pl.col("_s0")).alias("_length"))
         return pl.DataFrame(schema=BLOCKS), behind
-    segments = _segments(chain_blocks).with_columns(pl.col("seg_start").shift(-1).fill_null(_FAR).alias("seg_end"))
+    segments = _contig_segments(chain, chrom).with_columns(pl.col("seg_start").shift(-1).fill_null(_FAR).alias("seg_end"))
     first = (
         work.select("_b", "_s0")
         .sort("_s0")
@@ -838,8 +838,11 @@ def _lift_contig(
     placed_columns = ["_row", "_reason2", "_q_chrom", "_q0", "_minus", "_reanchor", "_t_ref", "_swap", "_new_end", *_BND_PLACED]
     if candidates.height and blocks.height:
         sequence = candidates.filter(~pl.col("_sv") & ~pl.col("_bnd"))
-        sequence = _with_nulls(_read_target(_place(sequence, blocks, targets), store, targets).with_columns(pl.lit(None, dtype=pl.Int64).alias("_new_end")), _BND_PLACED)
-        svs = _with_nulls(_place_sv(candidates.filter(pl.col("_sv")), blocks, store, targets), _BND_PLACED)
+        segments = _contig_segments(chain, chrom)
+        sequence = _with_nulls(
+            _read_target(_place(sequence, blocks, targets, segments), store, targets).with_columns(pl.lit(None, dtype=pl.Int64).alias("_new_end")), _BND_PLACED
+        )
+        svs = _with_nulls(_place_sv(candidates.filter(pl.col("_sv")), blocks, segments, store, targets), _BND_PLACED)
         bnds = _place_bnd(candidates.filter(pl.col("_bnd")), chrom, blocks, chain, store, targets, counts, mates)
         placed = pl.concat([part.select(placed_columns) for part in (sequence, svs, bnds)], how="vertical")
         work = work.join(placed, on="_row", how="left", maintain_order="left")
@@ -1103,7 +1106,7 @@ def _lifted_bnd_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, count
 
 
 
-def _place_sv(rows: pl.DataFrame, blocks: pl.DataFrame, store: ReferenceStore, targets: dict[str, Contig]) -> pl.DataFrame:
+def _place_sv(rows: pl.DataFrame, blocks: pl.DataFrame, segments: pl.DataFrame, store: ReferenceStore, targets: dict[str, Contig]) -> pl.DataFrame:
     """Each SV row's target from its two ends, lifted as points, or why it has none (`_reason2`); the
     new 0-based start (`_q0`), the new 1-based `end_pos` (`_new_end`) and the target's REF base.
 
@@ -1126,8 +1129,8 @@ def _place_sv(rows: pl.DataFrame, blocks: pl.DataFrame, store: ReferenceStore, t
         )
     start_s0, start_e0 = _span(pl.col("pos"), pl.lit(1))
     end_s0, end_e0 = _span(pl.col("end_pos"), pl.lit(1))
-    at_pos = _place(rows.select("_row", start_s0.alias("_s0"), start_e0.alias("_e0")), blocks, targets)
-    at_end = _place(rows.select("_row", end_s0.alias("_s0"), end_e0.alias("_e0")), blocks, targets).select(
+    at_pos = _place(rows.select("_row", start_s0.alias("_s0"), start_e0.alias("_e0")), blocks, targets, segments)
+    at_end = _place(rows.select("_row", end_s0.alias("_s0"), end_e0.alias("_e0")), blocks, targets, segments).select(
         "_row", pl.col("_reason2").alias("_end_reason"), pl.col("_q_chrom").alias("_end_chrom"), pl.col("_q0").alias("_end_q0"), pl.col("_minus").alias("_end_minus")
     )
     rows = rows.join(at_pos.select("_row", "_reason2", "_q_chrom", pl.col("_q0").alias("_pos_q0"), "_minus"), on="_row", how="left", maintain_order="left")
@@ -1229,10 +1232,9 @@ def _lifted_sv_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts
     return out.select(CALLS.names())
 
 
-def _place(rows: pl.DataFrame, blocks: pl.DataFrame, targets: dict[str, Contig], segments: pl.DataFrame | None = None) -> pl.DataFrame:
+def _place(rows: pl.DataFrame, blocks: pl.DataFrame, targets: dict[str, Contig], segments: pl.DataFrame) -> pl.DataFrame:
     """Each row's block, target contig and 0-based target start, or why it has none (`_reason2`).
-    `segments` is `_segments(blocks)` where the caller holds it already."""
-    segments = _segments(blocks) if segments is None else segments
+    `segments` is `_segments(blocks)`, the contig's axis the chain holds once (`_contig_segments`)."""
     by_start = rows.select("_row", "_s0", "_e0").sort("_s0")
     first = by_start.join_asof(
         segments.rename({"seg": "seg_s", "depth": "depth_s", "seg_block": "block_s", "covered_cum": "cov_s", "multi_cum": "multi_s"}),

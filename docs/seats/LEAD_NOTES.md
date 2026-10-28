@@ -23,6 +23,12 @@ each reset.
 0. **F23 is decided** (desk #151, the person, 2026-10-27 20:33Z: "1"): a source REF of `N` gets its own
    `RefCheck` value ("the file stated no base"), not `match` and not `mismatch`; `liftover` reads the base
    from the reference and lifts it as it does `match`. A schema change with a changelog note. Next builder.
+0. **Audit 13 done** (2026-10-28, 6eed88a..b58f033, Sol via Codex and Grok via Cursor on a repo-prep copy): four
+   findings checked and fixed in merge 4724e35 (an `unstated` row's sequence ALT is not read by the lift, the
+   writers or `query`; the package test refuses a symlink). Next builder, after the quota resets 2026-10-30
+   (95% used on 2026-10-28): the same rule in `concordance._alleles` and `consensus._stated_alleles`, which key
+   on `coalesce(ref, source_ref)` plus the ALT and so compare `N->G` over `T` as `T->G` (the fix builder's open
+   question; the lead's call, the F23 rule applied to the two readers left).
 0. **Queued next** (one at a time, done 2026-10-26): loosen `test_pca_panels_place_their_own_reference_samples` for regions on a
    cline (the person chose option 1 for the AADR panel's own-sample failure, 2026-10-26).
 0. **Audit 12's fix builder carries** (the person, 2026-10-26: "keep numbered AADR groups, fix the stats

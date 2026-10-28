@@ -25,6 +25,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   ALTs or none. Tests:
   `tests/test_unstated_ref.py`, each watched failing on the code before.
 
+- **The packaging test refuses a symlink under `src/just_vcf`** (merge audit 13). hatchling follows
+  one, so `internal_docs -> ../../docs` would ship docs/ inside the package's own prefix, past the
+  allow-lists the sdist and wheel tests read. `test_the_package_holds_no_symlink` walks the package
+  without following links and lists every file or directory symlink; the walk is itself tested on a
+  temporary tree holding both kinds.
+
 - **`liftover` cuts each source contig's chain axis once per lift.** `_segments` was not slow per call:
   the lift cut a contig's axis anew for its sequence rows, for each end of its SVs and for its gVCF
   blocks, beside the cached copy its breakends already read (four cuts per contig on a Manta file).

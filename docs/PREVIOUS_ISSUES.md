@@ -53,6 +53,13 @@ behind for chain reasons, none as `source_ref_mismatch` or `ref_mismatch_after_l
 `tests/test_unstated_ref.py` (synthetic, and an opt-in count over every PGP-HMS `.cnv.` upload);
 docs/SCHEMA.md Decision 2 says what each reader does with the value.
 
+**Amended 2026-10-28** (merge audit 13): `liftover`, `write_vcf`, `write_vcf_zarr` and `query` still
+read an `unstated` row's sequence ALT, which minting already withheld. One rule now holds in every
+reader, `schema.unstated_sequence_alt`: such a row stays behind in a lift (`source_ref_unstated`,
+`LIFT_VERSION` 13), is unwritable (`ref_unstated`), and answers `overlapping_call` in `query`, never
+`stated`. Symbolic and ALT-less rows are unaffected: the three files above lift 568, 538 and 118 rows
+as before, none left behind as `source_ref_unstated`.
+
 ## F32 — `write_vcf_zarr` leaves a breakend's mate as held and declares none
 
 Severity: low · Found 2026-10-26 in an audit of F30's repair; until now only the CHANGELOG said so.

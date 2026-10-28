@@ -261,7 +261,8 @@ class PresenceBasis(str, Enum):
     """What a `Presence` answer rests on."""
 
     STATED = "stated"
-    """A `calls` row states the asked allele; its genotype decides."""
+    """A `calls` row states the asked allele; its genotype decides. Never a row whose source REF states
+    no base (`ref_check = unstated`): an ALT spelled against an `N` is not stated against the site."""
     ROWS_DISAGREE = "rows_disagree"
     """Several rows state the allele and their genotypes disagree (charter 8)."""
     SITE_GENOTYPED = "site_genotyped"
@@ -273,7 +274,9 @@ class PresenceBasis(str, Enum):
     """A row at the position whose REF is not read (an array before `resolve_ref`): its alleles cannot be
     set against the asked ones without strand and REF."""
     OVERLAPPING_CALL = "overlapping_call"
-    """Rows overlap the asked span without starting at it with the same REF (an indel nearby, an MNV)."""
+    """Rows overlap the asked span without starting at it with the same REF (an indel nearby, an MNV), or
+    the row at it has a source REF that states no base (`ref_check = unstated`): its ALTs were spelled
+    against an `N`, so it states neither the asked allele nor the site's base."""
     REF_BLOCK = "ref_block"
     """A reference block covers the asked span."""
     NO_CALL_BLOCK = "no_call_block"
@@ -669,12 +672,20 @@ def _row_ref(row: Mapping) -> str | None:
 
 
 def _allele_index(row: Mapping, asked: _Asked) -> int | None:
-    """The asked allele's index in the row's `[REF] + alts`, when the row states it."""
+    """The asked allele's index in the row's `[REF] + alts`, when the row states it.
+
+    A row whose source REF states no base (`ref_check = unstated`, F23) states none of its sequence ALTs:
+    each was spelled against the `N`, not against `ref` (`schema.unstated_sequence_alt`). Read beside
+    the reference's base, `N` → `G` with GT `0/0` would answer `hom_ref` for a base the source never
+    named. The asked allele is always a sequence, so such a row states nothing asked here.
+    """
+    unstated = row["ref_check"] == RefCheck.UNSTATED.value
     if asked.vrs_id is not None and row["vrs_allele_ids"]:
         for index, value in enumerate(row["vrs_allele_ids"][1:], start=1):
-            if value == asked.vrs_id:
+            if value == asked.vrs_id and not (unstated and SEQUENCE_ALLELE.match(row["alts"][index - 1].upper())):
                 return index
-    if asked.by_position and row["pos"] == asked.pos and row["alts"] and _row_ref(row) == asked.ref and row["ref_check"] != RefCheck.MISMATCH.value:
+    stated_ref = row["ref_check"] not in (RefCheck.MISMATCH.value, RefCheck.UNSTATED.value)
+    if asked.by_position and row["pos"] == asked.pos and row["alts"] and _row_ref(row) == asked.ref and stated_ref:
         for index, value in enumerate(row["alts"], start=1):
             if value.upper() == asked.alt:
                 return index
@@ -730,8 +741,9 @@ def _presence(facet: Mapping, calls: list[dict], blocks: list[dict], asked: _Ask
         return Presence(facet_id=facet_id, carried=None, basis=PresenceBasis.ALLELES_UNRESOLVED, rows=len(at_site), absence_means=absence_means)
     if any(row["ref_check"] == RefCheck.MISMATCH.value for row in at_site):
         return Presence(facet_id=facet_id, carried=None, basis=PresenceBasis.REF_MISMATCH, rows=len(at_site), absence_means=absence_means)
-    # A source REF of only N (`unstated`, F23) says nothing about which base the site holds: its row
-    # answers for an ALT it spells (above), never for the site.
+    # A source REF of only N (`unstated`, F23) says nothing about which base the site holds, and its
+    # sequence ALTs were spelled against that N (above): its row answers neither for an ALT nor for the
+    # site, so the asked allele reads `overlapping_call`, carried unknown.
     same_ref = [row for row in at_site if _row_ref(row) == asked.ref and row["ref_check"] != RefCheck.UNSTATED.value]
     if same_ref and len(same_ref) == len(calls):
         # Every row the span reaches is at this site with this REF, and none states the allele.

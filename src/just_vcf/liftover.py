@@ -29,7 +29,11 @@ short:
    where it equals none, the row is unlifted (`ref_mismatch_after_lift`). "The parent's REF" is
    `ref`, the bases read from the source assembly: a row whose source REF contradicts them
    (`ref_check = mismatch`) is not lifted at all (`source_ref_mismatch`), and one whose source REF
-   states no base (`unstated`: a copy-number caller's `N`, F23) lifts as a `match` row does.
+   states no base (`unstated`: a copy-number caller's `N`, F23) lifts as a `match` row does when no
+   ALT is a sequence allele (a symbolic SV, a segment, no ALT). One with a sequence ALT stays behind
+   (`source_ref_unstated`): that ALT was spelled against the `N`, so comparing the target's base with
+   it, swapping and re-indexing the genotype would set an allele the source never placed against a
+   base (`N` → `G`, `0/0`, over `A` where the target reads `G`, would lift as `G` → `A`, `1/1`).
 4. **Blocks.** A reference or no-call block's span is cut wherever the chain's mapping changes
    (the same axis as step 2): each piece inside one block with one target lifts, with the block's
    `kind`, `gq`, `dp_min` and `gl` unchanged; the pieces in no block, in more than one target, or on
@@ -91,11 +95,11 @@ from just_vcf.links import LIFTOVER_TO, derived_links
 from just_vcf.loaders.vcf import _SV_LENGTH_TYPES
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_batches, canonical_parts
 from just_vcf.reference import PRIMARY, Contig, ReferenceMismatchError, ReferenceStore, _derive_array_alleles, _span, _store_for
-from just_vcf.schema import BLOCKS, CALLS, FACETS, SCHEMA_VERSION, AbsenceMeans, AssemblyLabelBasis, RefCheck, canonical_chrom, empty
+from just_vcf.schema import BLOCKS, CALLS, FACETS, SCHEMA_VERSION, AbsenceMeans, AssemblyLabelBasis, RefCheck, canonical_chrom, empty, unstated_sequence_alt
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 12
+LIFT_VERSION = 13
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
 row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
 `phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
@@ -104,7 +108,8 @@ row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: s
 minus strand, a source SV with CIEND and no CIPOS gets `ciend = [0, 0]`, its precise POS, not null;
 11: breakends lifted by both ends, the mate rewritten inside ALT and the brackets turned per strand;
 12: a breakend whose mate is a contig of the `##assembly` file, `<ctg1>`, lifted by POS alone, the mate
-kept as written)."""
+kept as written; 13: a row whose source REF states no base, `ref_check = unstated`, with a sequence ALT
+left behind as `source_ref_unstated`)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -114,6 +119,7 @@ UNLIFTED_REASONS: frozenset[str] = frozenset(
         # What the parent row is.
         "ref_unread",
         "source_ref_mismatch",
+        "source_ref_unstated",
         "allele_not_sequence",
         "split_flagged",
         # What the chain says about its position.
@@ -144,6 +150,7 @@ UNLIFTED_REASONS: frozenset[str] = frozenset(
 REASON_TEXT: dict[str, str] = {
     "ref_unread": "REF was not read from the source assembly (resolve_ref left it unread)",
     "source_ref_mismatch": "the source REF disagrees with the source assembly (ref_check mismatch)",
+    "source_ref_unstated": "the source REF states no base (ref_check unstated) and an ALT is a base sequence, spelled against that N",
     "allele_not_sequence": (
         "an allele that is not a base sequence and no symbolic SV the lift reads (`*`, `<*>`, `<TRA>`, a symbolic SV beside a sequence ALT), "
         "or an SV or segment whose REF is longer than its one padding base"
@@ -817,6 +824,8 @@ def _lift_contig(
         .then(pl.lit("ref_unread"))
         .when((pl.col("ref_check") == RefCheck.MISMATCH.value).fill_null(False))
         .then(pl.lit("source_ref_mismatch"))
+        .when(unstated_sequence_alt())
+        .then(pl.lit("source_ref_unstated"))
         .when(breakend & ~liftable_breakend)
         .then(pl.lit("breakend_not_lifted"))
         .when((not_sequence & ~symbolic_sv & ~liftable_breakend) | (extent & (ref_length != 1)))

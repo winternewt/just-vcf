@@ -182,7 +182,8 @@ meanwhile. The desk carries the ones filed there.
   reads a base: an `N` REF over an `N` in the reference (an assembly gap) stays `match`, as before, because the
   letters do agree and VRS ids minted over gap bases rest on it. A public CNV upload holds 36 such rows. Rejected:
   `unstated` over gaps too, which takes `match` away from rows whose letters agree. An SNV whose REF is `N` keeps
-  its ALT unminted (`ref_unstated`); no file in hand has one.
+  its ALT unminted (`ref_unstated`); no file in hand has one. Since merge audit 13 (2026-10-28) the same ALT is
+  also left unlifted, unwritten and unanswered by `query` (`schema.unstated_sequence_alt`).
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

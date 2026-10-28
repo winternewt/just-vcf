@@ -44,6 +44,21 @@ class RefCheck(str, Enum):
     Where the reference reads `N` too (a gap) the letters agree, and the row is `match`."""
 
 
+SEQUENCE_ALLELE = r"^[ACGTN]*$"
+"""A sequence allele, matched against the uppercased string: bases only, the empty allele included
+(VRS's zero-length literal). Not `*`, `<*>`, a symbolic allele, a breakend or an ambiguity code."""
+
+
+def unstated_sequence_alt() -> pl.Expr:
+    """True where a `calls` row's source REF states no base (`ref_check = unstated`, F23) and one of its
+    ALTs is a sequence allele: that ALT was spelled against the `N`, not against `ref`, so no reader
+    takes it as stated (Decision 2). `N` → `NAC` read beside the reference's `C` would be `C` → `NAC`, an
+    allele the source never wrote. A symbolic ALT, no ALT and the REF slot are not affected. False
+    where `ref_check` is null (an array row) or `alts` is."""
+    sequence = pl.col("alts").list.eval(pl.element().str.to_uppercase().str.contains(SEQUENCE_ALLELE)).list.any()
+    return ((pl.col("ref_check") == RefCheck.UNSTATED.value) & sequence).fill_null(False)
+
+
 class EvidenceBasis(str, Enum):
     """Where a row's evidence came from. Which quantities it has is said by `gl`, `gp` and `dosage`."""
 

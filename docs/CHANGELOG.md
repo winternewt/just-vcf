@@ -4,6 +4,27 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **An `unstated` row's sequence ALT is read by no reader** (merge audit 13, two outside models, each
+  finding checked against the code). F23 made `mint_vrs_ids` withhold a sequence ALT on a row whose
+  source REF is only `N` (`ref_check = unstated`): it was spelled against the `N`, not against the
+  reference's base. Three readers still read it, and now keep the rule (`schema.unstated_sequence_alt`);
+  a symbolic ALT, no ALT and the REF slot are read as before.
+  - `liftover` leaves such a row behind as `source_ref_unstated`, counted in its warnings
+    (`LIFT_VERSION` 13). It lifted it as a `match` row: `REF=N ALT=G GT=0/0` over source base `A`,
+    where the target reads `G`, swapped into `REF=G ALT=A GT=1/1`, an allele the source never called,
+    and an unswapped row lost `ref_check` on the way, so minting the lifted facet gave the id the
+    parent withheld.
+  - `write_vcf` and `write_vcf_zarr` refuse it as `ref_unstated` (`resolved_only=True` skips it,
+    counted). `N` → `NAC` over `C` was written `C` → `NAC` and loaded back as `match`.
+  - `query.carries` no longer answers `stated` from it: `N` → `G` with GT `0/0` answered `carried =
+    False`, `hom_ref`, for a base the source never named. The asked allele now reads
+    `overlapping_call`, carried unknown, as an allele the row does not spell already did.
+  No schema change, no new wire value: the reasons are open vocabularies. The writers and `query` key
+  no cached result, so no other version moves. The three PGP-HMS copy-number files lift as before
+  (568, 538 and 118 rows, none left behind as `source_ref_unstated`): DRAGEN and Canvas write symbolic
+  ALTs or none. Tests:
+  `tests/test_unstated_ref.py`, each watched failing on the code before.
+
 - **`liftover` cuts each source contig's chain axis once per lift.** `_segments` was not slow per call:
   the lift cut a contig's axis anew for its sequence rows, for each end of its SVs and for its gVCF
   blocks, beside the cached copy its breakends already read (four cuts per contig on a Manta file).
@@ -22,9 +43,10 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   `not_run`/`match`/`mismatch` will meet the new value, and `calls.ref_check`'s `pl.Enum` dtype
   changes. A partial `N` (`AN`) is compared as before, and an `N` over a reference gap stays `match`.
   Per reader: `liftover`, `write_vcf` and `write_vcf_zarr` take the row as a `match`, REF the
-  reference's base; `mint_vrs_ids` mints its REF slot and withholds a sequence ALT as `ref_unstated`
-  (`MINT_VERSION` 4); `normalize` leaves it as written, counted; `query` answers `stated` for an ALT
-  the row spells but never `site_genotyped` from it (the source said nothing about the base); the
+  reference's base, when no ALT is a sequence allele (the entry above for one that is);
+  `mint_vrs_ids` mints its REF slot and withholds a sequence ALT as `ref_unstated`
+  (`MINT_VERSION` 4); `normalize` leaves it as written, counted; `query` never answers
+  `site_genotyped` from it (the source said nothing about the base), nor `stated` (the entry above); the
   CLI's `check` counts it. On the PGP-HMS copy-number files F23 measured (hu6ABACE and hu1C1368
   DRAGEN, GRCh37 → 38; hu416394 Canvas, GRCh38 → 37): 1,324 rows, all `mismatch` and 0 lifted before,
   all `unstated` and 568 + 538 + 118 = 1,224 lifted after, the rest behind for chain reasons

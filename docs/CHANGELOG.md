@@ -4,6 +4,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **Phase blocks keep the `unstated` rule as genotype evidence does** (the lead's call).
+  `cis_phased_blocks(reference_alleles=True)` took the minted REF slot of a `REF=N ALT=G` row as a
+  member, so `0|0` joined both haplotypes' blocks, and `0|1` haplotype 0's, stating the reference's
+  base where the GT indexed `[N, G]`, while `genotype_evidence` grades no genotype on that row. Now no
+  slot of such a row joins a block, and a block it would have joined is withheld `ref_unstated`,
+  `withheld_allele` naming the slot as `gt_alleles` holds it (`N` on a REF slot). The default
+  (`reference_alleles=False`) does not move: a REF slot joins nothing there, and the sequence ALT was
+  already withheld by `mint_vrs_ids`. An unstated row with only a symbolic ALT is read as before.
+  Computed on request, stored nowhere, no version constant (`MINT_VERSION` keys the ids, which do not
+  change); `write_vcf` writes PS/PSL/PSO/PSQ from the columns, not the blocks, and refuses such a row
+  anyway (`ref_unstated`), so nothing written moves. Test: `tests/test_unstated_ref.py`, watched
+  failing on the code before (`reference_alleles=True`; the default case passed before and after).
+
 - **The panel-site reading behind relatedness and ancestry keeps the `unstated` rule** (its last
   reader; the lead's call). `site_genotypes.read_site_genotypes` matched a row's `gt_alleles` letters
   against the panel's two alleles without reading `ref_check`, so `REF=N ALT=G GT=1/1` at a site whose

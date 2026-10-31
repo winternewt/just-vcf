@@ -15,6 +15,7 @@ import pytest
 
 from just_vcf import (
     ReferenceStore,
+    cis_phased_blocks,
     concordance,
     consensus,
     genotype_evidence,
@@ -41,6 +42,7 @@ from just_vcf.vcf_zarr import write_vcf_zarr
 from just_vcf.vrs import WITHHELD_REASONS
 from just_vcf.writing import UnwritableRowsError
 from test_cli import report, run
+from test_phasing import Record, phased_vcf
 from test_liftover import MULTI_BASE, MULTI_SWAP_POS, TARGET, by_case, expected_sv, s1, setup, sv  # noqa: F401 (setup is a fixture)
 from test_liftover import SV_HEADER, other as lift_other
 from test_vcf_zarr import read_back
@@ -597,3 +599,65 @@ def test_site_genotypes_read_no_genotype_spelled_against_an_unstated_ref(tmp_pat
     assert {p: read_sites(stated)[p] for p in (300, 400, 500)} == {300: (2, "observed"), 400: (1, "observed"), 500: (0, "observed")}
     # Before `resolve_ref` no REF was compared: the row is read as written.
     assert read_sites(with_facet(load(path), absence_means="weak_reference"))[300] == (2, "observed")
+
+
+PHASED_RECORDS: list[Record] = [
+    # PS 100: an unstated SNV, heterozygous, among stated rows.
+    ("1", 700, base(700), other(base(700)), "0|1", 100),
+    ("1", 710, base(710), other(base(710)), "1|0", 100),
+    ("1", 720, base(720), other(base(720)), "1|1", 100),
+    ("1", 730, "N", other(base(730)), "0|1", 100),
+    # PS 200: an unstated SNV called hom-ref.
+    ("1", 800, base(800), other(base(800)), "1|0", 200),
+    ("1", 810, base(810), other(base(810)), "0|1", 200),
+    ("1", 820, base(820), other(base(820)), "1|1", 200),
+    ("1", 830, "N", other(base(830)), "0|0", 200),
+    # PS 300, the control: an unstated row whose only ALT is symbolic.
+    ("1", 900, base(900), other(base(900)), "1|1", 300),
+    ("1", 910, base(910), other(base(910)), "1|1", 300),
+    ("1", 920, "N", "<DEL>", "0|1", 300),
+]
+"""Three PS sets on contig 1, each with one row whose source REF is `N`."""
+
+
+def phased_blocks(tmp_path: Path, store: ReferenceStore, records: list[Record], name: str, reference_alleles: bool) -> dict[tuple[int, int], dict]:
+    loaded = mint_vrs_ids(resolve_ref(load(phased_vcf(tmp_path, records, {"1": len(SEQ["1"])}, name=name)), store), store)
+    frame = cis_phased_blocks(loaded, reference_alleles=reference_alleles).collect()
+    return {(int(r["phase_set"]), r["haplotype"]): r for r in frame.iter_rows(named=True)}
+
+
+def withheld_by(row: dict) -> tuple:
+    return (row["withheld"], row["withheld_chrom"], row["withheld_pos"], row["withheld_allele"])
+
+
+@pytest.mark.parametrize("reference_alleles", [False, True])
+def test_phase_blocks_take_no_haplotype_of_a_row_spelled_against_an_unstated_ref(tmp_path: Path, store: ReferenceStore, reference_alleles: bool) -> None:
+    """A genotype on `N` → `X` indexes `[N, X]`: its slot 0 names a base the source never stated, as
+    much as its slot 1 does, which is why `genotype_evidence` grades none of it. A phase block follows:
+    no haplotype of such a row joins one, REF slot included, and a block it would have joined is
+    withheld `ref_unstated`, named by that slot (its allele as `gt_alleles` holds it, the source's
+    `N` on a REF slot). Read as written, `reference_alleles=True` took the REF slot's minted id as a
+    member, a block stating the reference's base on that haplotype. By default a REF slot joins no
+    block anyway, so nothing changes there. An unstated row with only a symbolic ALT is read as before:
+    its REF slot joins with `reference_alleles=True`, its `<DEL>` withholds its own reason. The twin
+    writes the reference's base where the source wrote `N`: its blocks are what the stated rows give."""
+    got = phased_blocks(tmp_path, store, PHASED_RECORDS, "unstated.vcf", reference_alleles)
+    twin = phased_blocks(tmp_path, store, [(c, p, base(p) if r == "N" else r, a, g, s) for c, p, r, a, g, s in PHASED_RECORDS], "twin.vcf", reference_alleles)
+    assert set(got) == set(twin) == {(s, h) for s in (100, 200, 300) for h in (0, 1)}
+    assert all(row["cpb_id"] is not None for key, row in twin.items() if key != (300, 1))
+    assert all(got[key]["sites"] == twin[key]["sites"] for key in got)
+    # The ALT slot of the heterozygous row withholds its block either way (`mint_vrs_ids` withholds the ALT).
+    assert withheld_by(got[(100, 1)]) == ("ref_unstated", "1", 730, other(base(730)))
+    # The control: `<DEL>` has no VRS model, and the REF slot reads as on the twin.
+    assert withheld_by(got[(300, 1)]) == withheld_by(twin[(300, 1)]) == ("sv_no_vrs_model", "1", 920, "<DEL>")
+    assert got[(300, 0)]["cpb_id"] == twin[(300, 0)]["cpb_id"] is not None
+    if reference_alleles:
+        assert withheld_by(got[(100, 0)]) == ("ref_unstated", "1", 730, "N")
+        assert withheld_by(got[(200, 0)]) == withheld_by(got[(200, 1)]) == ("ref_unstated", "1", 830, "N")
+        assert all(got[key]["members"] is None and got[key]["cpb_id"] is None for key in [(100, 0), (200, 0), (200, 1)])
+        assert len(got[(300, 0)]["members"]) == 3  # 900's and 910's ALT, 920's REF slot
+    else:
+        # A REF slot joins no block by default: the hom-ref row and the het row's slot 0 change nothing.
+        stated = [(100, 0), (200, 0), (200, 1)]
+        assert {key: got[key]["cpb_id"] for key in stated} == {key: twin[key]["cpb_id"] for key in stated}
+        assert len(got[(300, 0)]["members"]) == 2

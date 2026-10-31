@@ -82,7 +82,7 @@ beside the reference's base it would be an allele the source never wrote (`N` �
 with `ref` standing in for the base the source left out. Every copy-number file in hand has only
 those (merge audit 13, 2026-10-28, found liftover, the writers and `query` reading the sequence ALT;
 `concordance` and `consensus` followed on 2026-10-31, then the graded-evidence readers,
-`sex_chromosome_evidence` and the panel-site reading behind relatedness and ancestry):
+`sex_chromosome_evidence`, the panel-site reading behind relatedness and ancestry, and phase blocks):
 
 - `liftover` lifts it as a `match` row (the target's base is compared with `ref`, read from the
   source assembly; on a plus strand an SV's padding base must still agree, `ref_mismatch_after_lift`),
@@ -145,6 +145,15 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   `AncestryEstimate.n_sites_ref_unstated`); `relatedness` reads only sites with a count, as it does for
   every unknown. A symbolic ALT is read as before (it is no panel allele, so `unusable`); before
   `resolve_ref` the row is read as written (`not_run`).
+- `cis_phased_blocks` takes no slot of it into a block, its REF slot included: the GT indexes
+  `[N] + alts`, so a `0` names no base either, as `genotype_evidence` reads it (2026-10-31; before,
+  `reference_alleles=True` took the REF slot's minted id, so `N` → `G`, `0|0`, joined both blocks
+  stating the reference's base). A slot that would be a member withholds its block `ref_unstated`,
+  `withheld_allele` naming it as `gt_alleles` holds it (`N` on the REF slot). By default a REF slot
+  joins nothing and the sequence ALT is already withheld (`mint_vrs_ids`), so the default blocks do
+  not move. A row with only a symbolic ALT is read as before: its REF slot joins with
+  `reference_alleles=True`, and its ALT withholds the block under its own reason (`sv_no_vrs_model`).
+  `write_vcf` reads the phase columns, not the blocks, so what it writes does not move.
 - `facets.variant_classes` (`callset.variant_class_counts`) cannot keep the rule: it is counted at
   load, before any REF is read, when every row's `ref_check` is `not_run`, and `resolve_ref` keeps the
   count. `N` → `G` counts as the `snv` its lengths make it, a reading that holds whatever base the `N`
@@ -2152,7 +2161,9 @@ a stored block table, which every load would pay for and every change to an alle
   reason for the whole block: `phase_unknown` (the slot's `phased` is null, as on slot 0 of every VCF
   4.4+ record, P4, and its allele would be a member: a REF slot by default is not), `uncalled`,
   `not_indexed` (no `gt` index), or the allele's own `vrs_withheld` reason (`not_run` before
-  `mint_vrs_ids`, `symbolic`, …). Then `too_few_members`: VRS requires two members. The vocabulary is
+  `mint_vrs_ids`, `symbolic`, …; `ref_unstated` on every slot of a row whose source REF states no
+  base and which spells a sequence ALT, its REF slot included, Decision 2). Then `too_few_members`:
+  VRS requires two members. The vocabulary is
   `phasing.CPB_WITHHELD_REASONS`, open like `vrs.WITHHELD_REASONS`. On a whole imputed genome this
   bites: an implicit set is a chromosome, and one symbolic ALT on it withholds the haplotype's block
   (a phased Genes for Good upload: 45 of 46 blocks withheld `symbolic`).
@@ -3341,7 +3352,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `sex_chromosome_evidence` counts no ALT on it (2026-10-31), and `read_site_genotypes`, behind
   relatedness and ancestry, reads no genotype from it at a panel site, `basis = ref_unstated` (a new
   `SiteBasis` member in that computed frame, counted by ancestry as `n_sites_ref_unstated`, none
-  stored; 2026-10-31); `facets.variant_classes`, counted at
+  stored; 2026-10-31); `cis_phased_blocks` takes no slot of it into a block, REF included, and
+  withholds a block it would join as `ref_unstated`, which moves only `reference_alleles=True`
+  (2026-10-31); `facets.variant_classes`, counted at
   load before any REF is read, cannot apply the rule and counts such an ALT by its lengths. **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
   F23 measured were all `mismatch` and none lifted; all are `unstated`, and 1,224 lift. A store of
   0.0.21 migrates with the enum widened and its values kept, its facets holding such rows named.

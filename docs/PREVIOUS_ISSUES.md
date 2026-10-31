@@ -72,7 +72,9 @@ still meets by type and extent. Tests in `tests/test_unstated_ref.py`.
 indexed GT into `[N] + alts` without `ref_check`, so `genotype_evidence` and `reference_support` read
 `N` → `G`, `0/0`, as hom-ref. Such a row now grades nothing (`GradeBasis.REF_UNSTATED`, unknown), and
 still covers its position, so `reference_support` answers `call`, never absence. A symbolic ALT on
-such a row is graded as before. Tests in `tests/test_unstated_ref.py`.
+such a row is graded as before. `karyotype.measure` counted such a row's GT as an ALT call (`N` →
+`G`, `0/1`, a het on X); it now carries no ALT there, its ploidy as written still counted. Tests in
+`tests/test_unstated_ref.py`.
 
 ## F32 — `write_vcf_zarr` leaves a breakend's mate as held and declares none
 

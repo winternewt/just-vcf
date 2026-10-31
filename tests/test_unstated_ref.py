@@ -31,6 +31,7 @@ from just_vcf import (
 )
 from just_vcf.concordance import EXCLUDED_REASONS
 from just_vcf.evidence import GradeBasis
+from just_vcf.karyotype import measure
 from just_vcf.liftover import UNLIFTED_REASONS
 from just_vcf.loading import Loaded
 from just_vcf.schema import CALLS
@@ -492,3 +493,35 @@ def test_genotype_evidence_grades_no_genotype_spelled_against_an_unstated_ref(tm
     # Before `resolve_ref` no REF was compared (`not_run`): the rule cannot apply, and the row is graded as written.
     raw = {r["pos"]: r for r in genotype_evidence(with_facet(load(path), **WGS_SNV)).collect().iter_rows(named=True)}
     assert (raw[300]["grade_basis"], raw[300]["genotype_alleles"], raw[300]["genotype_index"]) == ("gp", ["N", other(base(300))], 0)
+
+
+KARYOTYPE_RECORDS = [
+    (300, "unstated_het", "N", other(base(300)), "0/1:30"),
+    (400, "unstated_hom", "N", other(base(400)), "1/1:30"),
+    (500, "unstated_haploid", "N", other(base(500)), "1:30"),
+    (600, "unstated_hom_ref", "N", other(base(600)), "0/0:30"),
+    (700, "unstated_del", "N", "<DEL>", "0/1:30"),
+    (800, "stated_het", base(800), other(base(800)), "0/1:30"),
+]
+_ALT_COUNTS = ("diploid_alt", "het", "haploid_alt", "depth_sites", "median_dp", "reference_sites")
+_PLOIDY_COUNTS = ("rows", "one", "two", "more")
+
+
+def test_sex_chromosome_measures_read_no_alt_spelled_against_an_unstated_ref(tmp_path: Path, store: ReferenceStore) -> None:
+    """`measure` counts the ALT-carrying calls its het share and depth lines read. An unstated row's
+    sequence ALT was spelled against the `N` (`N` → `X`, `0/1`, says nothing of which two bases the
+    site holds), so it carries no ALT there: its counts are those of the rows without it. The ploidy as
+    written is the caller's and counts as before. A symbolic ALT of such a row (`<DEL>`, `0/1`) counts
+    as it always has, as any symbolic call does; before `resolve_ref` the rule cannot apply."""
+
+    def counts(records: list[tuple[int, str, str, str, str]], name: str, resolved_ref: bool = True) -> dict:
+        loaded = load(vcf_with(tmp_path, name, "GT:DP", records))
+        return measure((resolve_ref(loaded, store) if resolved_ref else loaded).calls, None)["groups"]["autosomes"]
+
+    unstated = counts(KARYOTYPE_RECORDS, "unstated")
+    read = counts([r for r in KARYOTYPE_RECORDS if r[1] in ("unstated_del", "stated_het", "unstated_hom_ref")], "read")
+    twin = counts([(p, i, base(p) if ref == "N" else ref, alt, s) for p, i, ref, alt, s in KARYOTYPE_RECORDS], "twin")
+    assert {k: unstated[k] for k in _ALT_COUNTS} == {k: read[k] for k in _ALT_COUNTS}
+    assert {k: unstated[k] for k in _PLOIDY_COUNTS} == {k: twin[k] for k in _PLOIDY_COUNTS}
+    assert (unstated["diploid_alt"], unstated["het"], unstated["haploid_alt"]) == (2, 2, 0), "the <DEL> and the stated het"
+    assert {k: counts(KARYOTYPE_RECORDS, "raw", resolved_ref=False)[k] for k in _ALT_COUNTS} == {k: twin[k] for k in _ALT_COUNTS}

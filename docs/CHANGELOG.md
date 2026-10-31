@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`sex_chromosome_evidence` keeps the `unstated` rule.** `karyotype.measure` counted any row's GT
+  index past 0 as an ALT, so `REF=N ALT=G GT=0/1` on non-PAR X was a het, and fed the het share, the
+  allele balance and the depth line, from two bases the source never named. Such a row now carries no
+  ALT there; its ploidy as written still counts (the caller's statement of how many haplotypes it
+  saw). A symbolic ALT on such a row counts as any symbolic call does, as before. Before `resolve_ref`
+  the rule cannot apply (`ref_check = not_run`). Computed on request, stored nowhere, no version
+  constant. The PGP-HMS copy-number files write symbolic ALTs or none, so their measures do not move.
+  Test: `tests/test_unstated_ref.py`, watched failing on the code before.
+
 - **The graded-evidence readers keep the `unstated` rule** (the last readers of an `unstated` row's
   ALT; the lead's call). `genotype_evidence`, `genotype_evidence_at` and `reference_support` indexed
   GT into `[N] + alts` without reading `ref_check`, so `REF=N ALT=G GT=0/0` was graded hom-ref and

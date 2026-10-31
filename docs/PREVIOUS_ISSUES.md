@@ -78,6 +78,13 @@ such a row is graded as before. `karyotype.measure` counted such a row's GT as a
 apply there: `N` → `G` counts as `snv` by its lengths, and `resolve_ref` keeps the count (written down
 in Decision 2, pinned by a test). Tests in `tests/test_unstated_ref.py`.
 
+**Amended 2026-10-31, last reader** (the panel-site reading): `site_genotypes.read_site_genotypes`,
+which `relatedness` and `ancestry.sites` read, matched `gt_alleles` letters against a panel's two
+alleles without `ref_check`, so `N` → `G`, `1/1`, read two copies of an effect allele `G`. Such a
+row is no longer usable, and a site whose every row is one is unknown, `SiteBasis.REF_UNSTATED`,
+still a row at its position, so the absence rule is not read there. `ancestry` counts those sites
+apart (`n_sites_ref_unstated`). Tests in `tests/test_unstated_ref.py` and `tests/test_ancestry.py`.
+
 ## F32 — `write_vcf_zarr` leaves a breakend's mate as held and declares none
 
 Severity: low · Found 2026-10-26 in an audit of F30's repair; until now only the CHANGELOG said so.

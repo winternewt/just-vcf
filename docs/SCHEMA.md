@@ -81,8 +81,8 @@ beside the reference's base it would be an allele the source never wrote (`N` �
 `NAC`). A symbolic ALT (`<DEL>`, `<CN0>`, ...), no ALT, and the REF slot are read as on a `match` row,
 with `ref` standing in for the base the source left out. Every copy-number file in hand has only
 those (merge audit 13, 2026-10-28, found liftover, the writers and `query` reading the sequence ALT;
-`concordance` and `consensus` followed on 2026-10-31, then the graded-evidence readers and
-`sex_chromosome_evidence`):
+`concordance` and `consensus` followed on 2026-10-31, then the graded-evidence readers,
+`sex_chromosome_evidence` and the panel-site reading behind relatedness and ancestry):
 
 - `liftover` lifts it as a `match` row (the target's base is compared with `ref`, read from the
   source assembly; on a plus strand an SV's padding base must still agree, `ref_mismatch_after_lift`),
@@ -135,6 +135,16 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   caller's statement of how many haplotypes it saw, not an allele. A symbolic ALT on such a row counts
   as any symbolic call does, as before: a called `<DEL>` with GT `0/1` is one more diploid ALT call
   and a het. On a facet not yet through `resolve_ref` the rule cannot apply (`not_run`).
+- `site_genotypes.read_site_genotypes`, the panel-site reading `relatedness` and `ancestry` share,
+  reads no genotype from it at a panel site: the row is not usable, and a site whose every row is
+  such a row is unknown, `basis = ref_unstated` (2026-10-31; before, `N` → `G`, `1/1`, at a site whose
+  effect allele is `G` read two copies, `observed`, as a stated `C` → `G` does, while its `0/1` and
+  `0/0` were `unusable` only because the letter `N` is neither panel allele). It is still a row at the
+  position, so the facet's absence rule is not read there; a stated row beside it at the same
+  position is the one usable row. `ancestry` counts such sites apart (`SiteDosages.n_ref_unstated`,
+  `AncestryEstimate.n_sites_ref_unstated`); `relatedness` reads only sites with a count, as it does for
+  every unknown. A symbolic ALT is read as before (it is no panel allele, so `unusable`); before
+  `resolve_ref` the row is read as written (`not_run`).
 - `facets.variant_classes` (`callset.variant_class_counts`) cannot keep the rule: it is counted at
   load, before any REF is read, when every row's `ref_check` is `not_run`, and `resolve_ref` keeps the
   count. `N` → `G` counts as the `snv` its lengths make it, a reading that holds whatever base the `N`
@@ -3328,7 +3338,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   it and is silent there as `ref_unstated` (`CONSENSUS_VERSION` 5; 2026-10-31); `genotype_evidence`,
   `genotype_evidence_at` and `reference_support` grade no genotype on it, `grade_basis = ref_unstated`
   (a new `GradeBasis` member in those computed frames, none stored; 2026-10-31), and
-  `sex_chromosome_evidence` counts no ALT on it (2026-10-31); `facets.variant_classes`, counted at
+  `sex_chromosome_evidence` counts no ALT on it (2026-10-31), and `read_site_genotypes`, behind
+  relatedness and ancestry, reads no genotype from it at a panel site, `basis = ref_unstated` (a new
+  `SiteBasis` member in that computed frame, counted by ancestry as `n_sites_ref_unstated`, none
+  stored; 2026-10-31); `facets.variant_classes`, counted at
   load before any REF is read, cannot apply the rule and counts such an ALT by its lengths. **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
   F23 measured were all `mismatch` and none lifted; all are `unstated`, and 1,224 lift. A store of
   0.0.21 migrates with the enum widened and its values kept, its facets holding such rows named.

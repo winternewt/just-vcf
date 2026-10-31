@@ -4,6 +4,27 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **The panel-site reading behind relatedness and ancestry keeps the `unstated` rule** (its last
+  reader; the lead's call). `site_genotypes.read_site_genotypes` matched a row's `gt_alleles` letters
+  against the panel's two alleles without reading `ref_check`, so `REF=N ALT=G GT=1/1` at a site whose
+  effect allele is `G` read two copies, `observed`, the same as a stated `C` → `G`, at a site whose
+  base the source never named; its `0/1` and `0/0` were unknown only because the letter `N` matches
+  neither panel allele. Such a row is now never usable, and a site whose every row is one reads
+  unknown with `basis = ref_unstated`, a new `SiteBasis` member. `unusable` did not fit: it says a
+  row's alleles could not be read against the panel's (a no-call, a haploid call, another allele),
+  while here they were never read, and with it the `0/1` and `0/0` cases would still say the letter
+  `N` is the reason, as they did before. It is still a row at its position, so a whole-genome facet's absence rule is not read
+  there; a stated row beside it at the same position is the one usable row (two rows had made that
+  site `unusable`). A symbolic ALT reads as before; before `resolve_ref` the row is read as written
+  (`not_run`). Pre-1.0 this widens the `basis` values of a returned frame, and adds
+  `SiteDosages.n_ref_unstated` and `AncestryEstimate.n_sites_ref_unstated` (optional, default null),
+  counted apart from `n_sites_unusable` and entering neither `n_sites_used` nor the absence count;
+  the ancestry log lines name it. `relatedness` reads only sites with a count, so these drop out of
+  its shared sites as every unknown does. Nothing stored, no schema change, no version constant:
+  relatedness and ancestry are computed on request and key no cached result (`PANEL_VERSION` is the
+  packaged site file's layout). Tests: `tests/test_unstated_ref.py` and `tests/test_ancestry.py`,
+  watched failing on the code before.
+
 - **`sex_chromosome_evidence` keeps the `unstated` rule.** `karyotype.measure` counted any row's GT
   index past 0 as an ALT, so `REF=N ALT=G GT=0/1` on non-PAR X was a het, and fed the het share, the
   allele balance and the depth line, from two bases the source never named. Such a row now carries no

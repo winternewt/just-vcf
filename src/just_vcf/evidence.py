@@ -24,7 +24,7 @@ from just_vcf.callset import AbsenceReason, absence_is_reference, absence_suppor
 from just_vcf.coverage import Coverage, callable_sites
 from just_vcf.intervals import covering
 from just_vcf.loading import Loaded
-from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, BlockKind, EvidenceBasis, GlSource, VariantClass, enum_dtype
+from just_vcf.schema import CONTIG_RANK, EMPTY_ALLELE, BlockKind, EvidenceBasis, GlSource, VariantClass, enum_dtype, unstated_sequence_alt
 
 __all__ = [
     "GENOTYPE_EVIDENCE",
@@ -70,6 +70,12 @@ class GradeBasis(str, Enum):
     `gq_on_reference` asks for it, a GQ; under another rule, a block lacking what that rule needs."""
     NO_CALL = "no_call"
     """The source wrote that it looked and called nothing (`./.`, a `no_call` block), with no vector."""
+    REF_UNSTATED = "ref_unstated"
+    """A row whose source REF states no base and which spells a sequence ALT (`ref_check = unstated`,
+    `schema.unstated_sequence_alt`, F23): its genotype, and any vector, was spelled against the `N`,
+    so it grades no genotype, unknown. `N` → `G` with GT `0/0` read as written would be hom-ref at a
+    base the source never named. The row still stands at its position, so absence is not read there.
+    A row with only symbolic ALTs, or none, is graded as any other."""
     ABSENT_REFERENCE = "absent_reference"
     """No row covers the position, and the facet's silence reads as reference (`absence_is_reference`)."""
     ABSENT_UNKNOWN = "absent_unknown"
@@ -130,6 +136,7 @@ _KIND = {
     GradeBasis.GT_ONLY: ConfidenceKind.ASSERTED,
     GradeBasis.BLOCK: ConfidenceKind.ASSERTED,
     GradeBasis.NO_CALL: ConfidenceKind.UNKNOWN,
+    GradeBasis.REF_UNSTATED: ConfidenceKind.UNKNOWN,
     GradeBasis.ABSENT_REFERENCE: ConfidenceKind.ASSERTED,
     GradeBasis.ABSENT_UNKNOWN: ConfidenceKind.UNKNOWN,
 }
@@ -298,11 +305,14 @@ def _calls_evidence(calls: pl.LazyFrame, gq_on_reference: bool, facets: pl.LazyF
         called_any.alias("_called_any"),
         gq_applies.alias("_gq_applies"),
         pl.when(hq_applies).then(hq.list.min().cast(pl.Float64)).alias("_hq_min"),
+        unstated_sequence_alt().alias("_ref_unstated"),
     )  # fmt: skip
     gp_ok = _usable(pl.col("_gp"), pl.col("_vector_genotypes"), probabilities=True)
     gl_ok = _usable(pl.col("_gl"), pl.col("_vector_genotypes"), probabilities=False)
+    # Before every quantity: a vector over `[N, G]` was spelled against the `N` as much as the GT was (F23).
     basis = (
-        pl.when(gp_ok).then(pl.lit(GradeBasis.GP.value))
+        pl.when(pl.col("_ref_unstated")).then(pl.lit(GradeBasis.REF_UNSTATED.value))
+        .when(gp_ok).then(pl.lit(GradeBasis.GP.value))
         .when(gl_ok).then(pl.lit(GradeBasis.GL.value))
         .when(pl.col("_gq_applies")).then(pl.lit(GradeBasis.GQ.value))
         .when(pl.col("_hq_min").is_not_null()).then(pl.lit(GradeBasis.HQ.value))
@@ -395,6 +405,10 @@ def genotype_evidence(loaded: Loaded, *, gq_on_reference: bool = False, block_gr
 
     Per row, the first basis that applies (docs/SCHEMA.md, "Graded genotype evidence"):
 
+    - `ref_unstated`: a row whose source REF states no base and which spells a sequence ALT
+      (`ref_check = unstated`, F23). Its genotype and any vector were spelled against the `N`, so
+      nothing is graded: unknown, no genotype, no vector. A row not yet through `resolve_ref` has
+      `ref_check = not_run` and is graded below;
     - `gp`: the posterior vector as written, `prior = source`;
     - `gl`: the likelihoods (GL or PL) normalized with a flat prior, `prior = flat`. `gl_source` names
       the key the facet read them from (`facets.gl_source`), and is null on every row of another basis;
@@ -627,7 +641,9 @@ def reference_support(
     - `call`: a `calls` row covers the position, graded as `genotype_evidence` grades it.
       `genotype_index` 0 states hom-ref; any other states an ALT on at least one haplotype; null, none.
       On a row with a `split_signal` (one ALT of a multi-allelic site per row) a `0` may be another
-      ALT, not REF (docs/SCHEMA.md Decision 2): `rejoin_split` first.
+      ALT, not REF (docs/SCHEMA.md Decision 2): `rejoin_split` first. A row whose source REF states no
+      base and which spells a sequence ALT (`grade_basis = ref_unstated`, F23) states none: still a
+      call at its position, so the facet's absence rule is not read there.
     - `block`: a `blocks` row covers it. A `ref` block is reference (`genotype_index` 0) graded by
       `block_grade` (`BlockGrade`); a `no_call` block is graded by its likelihoods, or is `no_call`.
     - `absence`: nothing covers it and `absence_support(facet, variant_class, force=force)` reads the

@@ -22,6 +22,9 @@ is VCF's "filters not applied"; FORMAT `FT` likewise; `evidence_basis = assay`):
 3. **Depth from the calls' own FORMAT DP**: the median DP of ALT-carrying calls on non-PAR X and on
    the X-degenerate male-specific Y (`X_DEGENERATE_Y`), each divided by the same median on chr20.
 
+A row whose source REF states no base and which spells a sequence ALT (`ref_check = unstated`, F23)
+carries no ALT for 2 and 3: its genotype was spelled against the `N`. Its ploidy counts in 1.
+
 The estimate:
 
 - **X copies** (one, or two or more) from two independent lines, the het share and the X depth ratio.
@@ -105,7 +108,7 @@ from just_vcf.coverage import Coverage
 from just_vcf.links import LIFTOVER_TO
 from just_vcf.loading import Loaded
 from just_vcf.person import Person
-from just_vcf.schema import AssemblyLabelBasis, CallsetType
+from just_vcf.schema import AssemblyLabelBasis, CallsetType, unstated_sequence_alt
 
 # --- Regions -----------------------------------------------------------------------------------
 # Derived from GIAB genome stratifications v3.6, `XY` group, and for T2T-CHM13's X-degenerate Y from the
@@ -882,13 +885,17 @@ def measure(calls: pl.LazyFrame, assembly_label: str | None) -> dict:
             & _not_failed("filters")
             & _not_failed("sample_filters")
         )
-        .select("chrom", "pos", "gt", "gt_alleles", "dp", "ad", "alts", "source_alleles", "split_signal")
+        .select("chrom", "pos", "gt", "gt_alleles", "dp", "ad", "alts", "source_alleles", "split_signal", unstated_sequence_alt().alias("_unstated"))
         .with_columns(_group(assembly_label).alias("group"))
         .filter(pl.col("group").is_not_null())
     )
     n_haplotypes = pl.col("gt_alleles").list.len()
     gt0, gt1 = pl.col("gt").list.get(0, null_on_oob=True), pl.col("gt").list.get(1, null_on_oob=True)
-    has_alt = pl.col("gt").list.eval(pl.element() >= 1).list.any().fill_null(False)
+    # A row whose source REF states no base and which spells a sequence ALT (F23) carries no ALT here:
+    # `N` → `G`, `0/1`, was spelled against the `N` and says nothing of which bases the site holds, so
+    # it feeds neither the het share, the balance nor the depth line. Its ploidy as written still counts.
+    # Before `resolve_ref` its `ref_check` is `not_run` and the rule cannot apply.
+    has_alt = pl.col("gt").list.eval(pl.element() >= 1).list.any().fill_null(False) & ~pl.col("_unstated")
     diploid_called = (pl.col("gt").list.len() == 2) & gt0.is_not_null() & gt1.is_not_null()
     diploid_alt = diploid_called & has_alt & pl.col("split_signal").is_null()
     het = diploid_alt & (gt0 != gt1)

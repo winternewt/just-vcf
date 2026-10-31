@@ -13,8 +13,25 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceStore, concordance, consensus, liftover, load, mint_vrs_ids, normalize, query, resolve_ref, vrs_withheld, write_vcf
+from just_vcf import (
+    ReferenceStore,
+    concordance,
+    consensus,
+    genotype_evidence,
+    genotype_evidence_at,
+    liftover,
+    load,
+    mint_vrs_ids,
+    normalize,
+    query,
+    reference_support,
+    resolve_ref,
+    vrs_withheld,
+    write_vcf,
+)
 from just_vcf.concordance import EXCLUDED_REASONS
+from just_vcf.evidence import GradeBasis
+from just_vcf.karyotype import measure
 from just_vcf.liftover import UNLIFTED_REASONS
 from just_vcf.loading import Loaded
 from just_vcf.schema import CALLS
@@ -236,12 +253,7 @@ def third(b: str) -> str:
 
 def facet_of(tmp_path: Path, store: ReferenceStore, name: str, records: list[tuple[int, str, str, str, str]], **columns: object) -> Loaded:
     """`records` loaded with REF read, and any `facets` column set as given."""
-    loaded = resolve_ref(load(vcf(tmp_path, records, f"{name}.vcf")), store)
-    if not columns:
-        return loaded
-    schema = loaded.facets.collect_schema()
-    facets = loaded.facets.with_columns(*[pl.lit(value, dtype=schema[key]).alias(key) for key, value in columns.items()])
-    return Loaded(facets=facets, calls=loaded.calls, blocks=loaded.blocks, links=loaded.links)
+    return with_facet(resolve_ref(load(vcf(tmp_path, records, f"{name}.vcf")), store), **columns)
 
 
 def test_concordance_compares_no_alt_spelled_against_an_unstated_ref(tmp_path: Path, store: ReferenceStore) -> None:
@@ -405,3 +417,125 @@ def test_cnv_files_on_pgp_hms_resolve_unstated_and_lift(pgp_participants: Path, 
             lifted_unstated += lifted_rows
     assert unstated_rows > 0, "no CNV file with a source REF of only N"
     assert lifted_unstated > 0, "no row of an all-N CNV file lifted"
+
+
+def vcf_with(tmp_path: Path, name: str, keys: str, records: list[tuple[int, str, str, str, str]]) -> Path:
+    """`vcf` with FORMAT `keys` (`GT:GP`, `GT:DP`) and each record's sample column written as given."""
+    declared = {
+        "GT": '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+        "GP": '##FORMAT=<ID=GP,Number=G,Type=Float,Description="Genotype posteriors">',
+        "DP": '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">',
+    }
+    meta = [
+        "##fileformat=VCFv4.2",
+        f"##contig=<ID=1,length={len(SEQ['1'])}>",
+        '##INFO=<ID=END,Number=1,Type=Integer,Description="End">',
+        *(declared[k] for k in keys.split(":")),
+    ]
+    header = "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "S1"])
+    body = [f"1\t{p}\t{i}\t{r}\t{a}\t50\tPASS\t{'END=' + str(p + 20) if a.startswith('<') else '.'}\t{keys}\t{s}" for p, i, r, a, s in records]
+    path = tmp_path / f"{name}.vcf"
+    path.write_text("\n".join([*meta, header, *body]) + "\n")
+    return path
+
+
+def with_facet(loaded: Loaded, **columns: object) -> Loaded:
+    """`loaded` with any `facets` column set as given."""
+    if not columns:
+        return loaded
+    schema = loaded.facets.collect_schema()
+    facets = loaded.facets.with_columns(*[pl.lit(value, dtype=schema[key]).alias(key) for key, value in columns.items()])
+    return Loaded(facets=facets, calls=loaded.calls, blocks=loaded.blocks, links=loaded.links)
+
+
+WGS_SNV = {"absence_means": "weak_reference", "variant_classes": [{"variant_class": "snv", "alleles": 4}, {"variant_class": "sv", "alleles": 1}]}
+"""A whole-genome facet's absence columns: its silence reads as reference for an SNV."""
+
+EVIDENCE_RECORDS = [
+    (300, "unstated_hom_ref", "N", other(base(300)), "0/0:0.9,0.08,0.02"),
+    (400, "unstated_het", "N", other(base(400)), "0/1:."),
+    (500, "unstated_del", "N", "<DEL>", "0/1:."),
+    (600, "stated_hom_ref", base(600), other(base(600)), "0/0:."),
+]
+
+
+def test_genotype_evidence_grades_no_genotype_spelled_against_an_unstated_ref(tmp_path: Path, store: ReferenceStore) -> None:
+    """`N` → `X` with GT `0/0` names no base at the site: its genotype (and its GP vector, which is over
+    `[N, X]`) was spelled against the `N`. Read as written it would grade hom-ref at a base the source
+    never named. It is `ref_unstated`: no genotype, no vector, unknown, and still a row at its position,
+    so `reference_support` answers `call` there and never reads the whole-genome silence as reference.
+    A symbolic ALT of such a row is graded as before; a row loaded but not resolved carries
+    `ref_check = not_run`, so the rule cannot apply to it yet."""
+    path = vcf_with(tmp_path, "evidence", "GT:GP", EVIDENCE_RECORDS)
+    loaded = with_facet(resolve_ref(load(path), store), **WGS_SNV)
+    pos_of = {case: pos for pos, case, *_ in EVIDENCE_RECORDS}
+    graded = {r["pos"]: r for r in genotype_evidence(loaded).collect().iter_rows(named=True)}
+    ungraded = {"grade_basis": "ref_unstated", "confidence_kind": "unknown", "genotype_alleles": None, "genotype_probabilities": None,
+                "prior": None, "genotype_index": None, "confidence": None}  # fmt: skip
+    for case in ("unstated_hom_ref", "unstated_het"):
+        assert {k: graded[pos_of[case]][k] for k in ungraded} == ungraded, case
+    assert (graded[500]["grade_basis"], graded[500]["genotype_alleles"], graded[500]["genotype_index"]) == ("gt_only", ["N", "<DEL>"], 1)
+    assert (graded[600]["grade_basis"], graded[600]["genotype_index"]) == ("gt_only", 0)
+
+    asked = pl.DataFrame({"chrom": ["1"] * 5, "pos": [300, 400, 510, 600, 700]})
+    support = {r["pos"]: r for r in reference_support(loaded, asked, variant_class="snv").collect().iter_rows(named=True)}
+    assert {p: (r["support"], r["reason"], r["grade_basis"], r["genotype_index"]) for p, r in support.items()} == {
+        300: ("call", "call_at_position", "ref_unstated", None),
+        400: ("call", "call_at_position", "ref_unstated", None),
+        510: ("call", "call_spans_position", "gt_only", 1),
+        600: ("call", "call_at_position", "gt_only", 0),
+        700: ("absence", "whole_genome_silence", "absent_reference", 0),
+    }
+    at = genotype_evidence_at(loaded, asked.filter(pl.col("pos") == 300), variant_class="snv")
+    assert at.select("evidence_basis", "grade_basis", "genotype_index").rows() == [("assay", "ref_unstated", None)], "a row there, never absence"
+    assert GradeBasis("ref_unstated") is GradeBasis.REF_UNSTATED
+
+    # Before `resolve_ref` no REF was compared (`not_run`): the rule cannot apply, and the row is graded as written.
+    raw = {r["pos"]: r for r in genotype_evidence(with_facet(load(path), **WGS_SNV)).collect().iter_rows(named=True)}
+    assert (raw[300]["grade_basis"], raw[300]["genotype_alleles"], raw[300]["genotype_index"]) == ("gp", ["N", other(base(300))], 0)
+
+
+KARYOTYPE_RECORDS = [
+    (300, "unstated_het", "N", other(base(300)), "0/1:30"),
+    (400, "unstated_hom", "N", other(base(400)), "1/1:30"),
+    (500, "unstated_haploid", "N", other(base(500)), "1:30"),
+    (600, "unstated_hom_ref", "N", other(base(600)), "0/0:30"),
+    (700, "unstated_del", "N", "<DEL>", "0/1:30"),
+    (800, "stated_het", base(800), other(base(800)), "0/1:30"),
+]
+_ALT_COUNTS = ("diploid_alt", "het", "haploid_alt", "depth_sites", "median_dp", "reference_sites")
+_PLOIDY_COUNTS = ("rows", "one", "two", "more")
+
+
+def test_sex_chromosome_measures_read_no_alt_spelled_against_an_unstated_ref(tmp_path: Path, store: ReferenceStore) -> None:
+    """`measure` counts the ALT-carrying calls its het share and depth lines read. An unstated row's
+    sequence ALT was spelled against the `N` (`N` → `X`, `0/1`, says nothing of which two bases the
+    site holds), so it carries no ALT there: its counts are those of the rows without it. The ploidy as
+    written is the caller's and counts as before. A symbolic ALT of such a row (`<DEL>`, `0/1`) counts
+    as it always has, as any symbolic call does; before `resolve_ref` the rule cannot apply."""
+
+    def counts(records: list[tuple[int, str, str, str, str]], name: str, resolved_ref: bool = True) -> dict:
+        loaded = load(vcf_with(tmp_path, name, "GT:DP", records))
+        return measure((resolve_ref(loaded, store) if resolved_ref else loaded).calls, None)["groups"]["autosomes"]
+
+    unstated = counts(KARYOTYPE_RECORDS, "unstated")
+    read = counts([r for r in KARYOTYPE_RECORDS if r[1] in ("unstated_del", "stated_het", "unstated_hom_ref")], "read")
+    twin = counts([(p, i, base(p) if ref == "N" else ref, alt, s) for p, i, ref, alt, s in KARYOTYPE_RECORDS], "twin")
+    assert {k: unstated[k] for k in _ALT_COUNTS} == {k: read[k] for k in _ALT_COUNTS}
+    assert {k: unstated[k] for k in _PLOIDY_COUNTS} == {k: twin[k] for k in _PLOIDY_COUNTS}
+    assert (unstated["diploid_alt"], unstated["het"], unstated["haploid_alt"]) == (2, 2, 0), "the <DEL> and the stated het"
+    assert {k: counts(KARYOTYPE_RECORDS, "raw", resolved_ref=False)[k] for k in _ALT_COUNTS} == {k: twin[k] for k in _ALT_COUNTS}
+
+
+def test_variant_classes_are_counted_at_load_before_any_ref_is_read(tmp_path: Path, store: ReferenceStore) -> None:
+    """`variant_classes` is counted at load, where every row's `ref_check` is `not_run`: an unstated
+    row's sequence ALT is not known to be one yet, so `N` → `X` counts as the SNV its lengths make it,
+    and `resolve_ref` keeps the facet's count (Decision 2: the rule cannot apply to a reader that runs
+    before the REF is read). Pinned, so a recount is a decision and not an accident."""
+    records = [(300, "unstated_snv", "N", other(base(300)), "0/1"), (500, "unstated_del", "N", "<DEL>", "0/1")]
+    loaded = load(vcf(tmp_path, records, "classes.vcf"))
+    at_load = loaded.facets.collect()["variant_classes"].item().to_list()
+    assert at_load == [{"variant_class": "snv", "alleles": 1}, {"variant_class": "sv", "alleles": 1}]
+    resolved_facet = resolve_ref(loaded, store)
+    assert resolved_facet.calls.collect()["ref_check"].to_list() == ["unstated", "unstated"]
+    assert resolved_facet.facets.collect()["variant_classes"].item().to_list() == at_load

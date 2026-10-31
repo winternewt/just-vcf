@@ -4,6 +4,36 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`sex_chromosome_evidence` keeps the `unstated` rule.** `karyotype.measure` counted any row's GT
+  index past 0 as an ALT, so `REF=N ALT=G GT=0/1` on non-PAR X was a het, and fed the het share, the
+  allele balance and the depth line, from two bases the source never named. Such a row now carries no
+  ALT there; its ploidy as written still counts (the caller's statement of how many haplotypes it
+  saw). A symbolic ALT on such a row counts as any symbolic call does, as before. Before `resolve_ref`
+  the rule cannot apply (`ref_check = not_run`). Computed on request, stored nowhere, no version
+  constant. The PGP-HMS copy-number files write symbolic ALTs or none, so their measures do not move.
+  Test: `tests/test_unstated_ref.py`, watched failing on the code before.
+
+- **`facets.variant_classes` and the `unstated` rule, written down** (no code change). The count runs
+  at load, where every row's `ref_check` is `not_run`, so it cannot know a row's REF states no base;
+  `N` → `G` counts as `snv` by its lengths, and `resolve_ref` keeps the count. Decision 2 says so, and
+  what it would cost (a whole-genome facet whose only SNV-shaped rows are spelled against `N` reads
+  its silence as reference for SNVs; no file in hand has one). A test pins the count, so a recount at
+  `resolve_ref` is a decision; it passes on the code before, since nothing changed.
+
+- **The graded-evidence readers keep the `unstated` rule** (the last readers of an `unstated` row's
+  ALT; the lead's call). `genotype_evidence`, `genotype_evidence_at` and `reference_support` indexed
+  GT into `[N] + alts` without reading `ref_check`, so `REF=N ALT=G GT=0/0` was graded hom-ref and
+  `reference_support` answered reference at a base the source never named, the case `query` already
+  refused. Such a row now grades no genotype: `grade_basis = ref_unstated`, a new `GradeBasis` member,
+  `confidence_kind = unknown`, no `genotype_index`, alleles, vector or confidence (its GP and
+  likelihoods are over `[N] + alts` too). It still covers its position, so `reference_support` answers
+  `call` there and never the facet's absence rule. A row with only symbolic ALTs, or none, is graded
+  as before; a row not yet through `resolve_ref` (`not_run`) is graded as written. Pre-1.0 this widens
+  the `grade_basis` enum of three returned frames, so a consumer that matches on every member breaks;
+  nothing stored changes, no schema change. `consensus` already read no such row (its output is
+  unchanged, `CONSENSUS_VERSION` stays 5); the atlas's confidence bands read no confidence from it,
+  and key no cached result. Test: `tests/test_unstated_ref.py`, watched failing on the code before.
+
 - **`concordance` and `consensus` keep the `unstated` rule too** (the two readers audit 13 left; the
   lead's call). Both keyed an allele on `ref`, else `source_ref`, plus the ALT, and never read
   `ref_check`, so `REF=N ALT=G` over a reference `T` was compared and counted as `T` → `G`.

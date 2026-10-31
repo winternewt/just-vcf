@@ -339,7 +339,7 @@ gtars, seqcol through refget. The user keeps it as a draft; planning of RM2–RM
 Surveys: docs/SIBLING_SURVEY.md, docs/LANDSCAPE.md.
 
 ## RM2 — Loading consumer formats
-Severity: high · Status: in progress (32 of the 39 declared formats load since 2026-10-23: the array side, merge 53600af, and the VCF side, merge bd5c02e, 2026-10-22; CGI `var`/masterVarBeta and PGP's key=value table, merge aa095fd; the CGI leftovers, merge 01fca0b; the CASAVA SNP and indel tables, SOAPsnp, FTDNA Big Y, Color's variant set, GET-Evidence GFF and Nirvana JSON, merge 98a476e. Waiting on the person: `oxford_gen`'s chromosome, desk #93; Deflate64 zips, desk #83 (refused meanwhile); a build CASAVA, SOAPsnp, Big Y and Nirvana do not state, desk #92 (they load, but get no REF check or VRS ids). Waiting for data: Geno 2.0 and the headerless Final Report need chip manifests not on disk (HumanOmni2.5-8v1_A for the one PGP Final Report). Not loadable by nature: `promethease_tab_genotype` (no positions), `cgi_summary` and `decodeme_info` (not facets). Buildable now: GET-Evidence copies named `<assembly>.tsv.bz2` are unchecked) · Owner: lead
+Severity: high · Status: in progress (32 of the 39 declared formats load since 2026-10-23: the array side, merge 53600af, and the VCF side, merge bd5c02e, 2026-10-22; CGI `var`/masterVarBeta and PGP's key=value table, merge aa095fd; the CGI leftovers, merge 01fca0b; the CASAVA SNP and indel tables, SOAPsnp, FTDNA Big Y, Color's variant set, GET-Evidence GFF and Nirvana JSON, merge 98a476e. Waiting on the person: `oxford_gen`'s chromosome, desk #93; Deflate64 zips, desk #83 (refused meanwhile); a build CASAVA, SOAPsnp, Big Y and Nirvana do not state, desk #92 (they load, but get no REF check or VRS ids). Waiting for data: Geno 2.0 and the headerless Final Report need chip manifests not on disk (HumanOmni2.5-8v1_A for the one PGP Final Report). Not loadable by nature: `promethease_tab_genotype` (no positions), `cgi_summary` and `decodeme_info` (not facets). GET-Evidence copies named `<assembly>.tsv.bz2` checked 2026-10-31: all 12 sniff and the 4 loaded load as `cgi_var`, GRCh37 from the header) · Owner: lead
 
 **Shipped 2026-10-23: the site tables** (`loaders/site_tables.py`): CASAVA SNP and indel tables,
 SOAPsnp, Big Y, Color's variant set and GET-Evidence GFFs; then Nirvana JSON (`loaders/nirvana.py`),
@@ -487,7 +487,19 @@ The 1.x layout (formats 1.6 and 1.7: `totalScore`, no filter column) loads as it
 takes columns by name; two PGP-HMS files have it (GET-Evidence collections), and a whole 1.6 file
 loads as a `wgs` genome with no row dropped (tested, opt-in).
 
-**Left for CGI:** GET-Evidence copies named `<assembly>.tsv.bz2`, not checked. Memory is done
+**Checked 2026-10-31: GET-Evidence copies named `<assembly>.tsv.bz2`.** The name is CGI's assembly id
+(`GS…-ASM`, or `GS00253-DNA_<well>_200_37`), not a build. 12 are on disk (Krypton copy), one per
+participant: the two 1.x files above (1.6, 1.7) and ten at format 2.0 (CGA 2.0.1.5 on nine, 2.0.2.11
+on one), none with a `#TITLE`. All 12 sniff as `cgi_var` under one `bz2` layer, GRCh37 from
+`#GENOME_REFERENCE\tNCBI build 37`; nothing reads the file name, so the build is the header's, and it
+agrees with the `_37` that the nine `DNA_<well>` names end in (whether that suffix is CGI's build marker was
+not checked). Four loaded whole under a 16 GB cap (1.7, 2.0.2.11, two 2.0.1.5; 137 to 236 s, peaks
+3.3 to 4.6 GB, no kill): each a `wgs` facet from its rows' spread, `absence_means = blocks`, 25
+contigs, 4.7M to 7.0M calls, both block kinds, no row dropped. The warnings are the known ones by
+reason: 2 chrY stretches called on chrX kept as no-call blocks on every file, and on the 2.0 files
+the haplotypes whose varScoreVAF differs from the EAF read into `hq` (3.8M to 4.6M) and scores outside
+0..65535 left out (70K to 115K). Tested opt-in on the smallest 2.0 copy
+(`test_a_real_get_evidence_copy_named_by_its_assembly_loads`). Nothing is left for CGI. Memory is done
 (2026-10-26): a file is read one locus range of about 2M rows at a time (`cgi.locus_ranges`), each
 range's haplotypes made once in memory. Measured on hu1B2689's GS000039664 (233 MB `var`, 18.9M rows,
 and its 243 MB `masterVarBeta`) under a 30 GB cap: `var` 17.3 GB peak, 493 s → 3.3 GB, 85 to 120 s;

@@ -4,6 +4,12 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **GET-Evidence's CGI copies named by their assembly id are checked** (RM4's last CGI item). The
+  12 PGP-HMS `var` files served as `<assembly>.tsv.bz2`, without the `var-` prefix (two at format 1.x,
+  ten at 2.0 with no `#TITLE`), all sniff as `cgi_var` with the build from `#GENOME_REFERENCE`; four
+  loaded whole as `wgs` genomes with no row dropped. No code changed: detection never read the name.
+  New opt-in test: `tests/test_load_cgi.py::test_a_real_get_evidence_copy_named_by_its_assembly_loads`.
+
 - **Phase blocks keep the `unstated` rule as genotype evidence does** (the lead's call).
   `cis_phased_blocks(reference_alleles=True)` took the minted REF slot of a `REF=N ALT=G` row as a
   member, so `0|0` joined both haplotypes' blocks, and `0|1` haplotype 0's, stating the reference's

@@ -3290,7 +3290,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `LIFT_VERSION` 13) or refuse it (`ref_unstated`) when one is (merge audit 13, 2026-10-28);
   `mint_vrs_ids` mints its REF slot and withholds a sequence ALT as `ref_unstated` (`MINT_VERSION` 4);
   `normalize` leaves it as written, counted; `query` answers from it neither `stated` for a sequence
-  ALT nor `site_genotyped`. **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
+  ALT nor `site_genotyped`; `concordance` leaves a sequence ALT out (`excluded`, `ref_unstated`) and
+  reads no such row for another facet's allele at its position, and `consensus` states no allele from
+  it and is silent there as `ref_unstated` (`CONSENSUS_VERSION` 5; 2026-10-31). **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
   F23 measured were all `mismatch` and none lifted; all are `unstated`, and 1,224 lift. A store of
   0.0.21 migrates with the enum widened and its values kept, its facets holding such rows named.
 

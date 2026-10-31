@@ -183,7 +183,12 @@ meanwhile. The desk carries the ones filed there.
   letters do agree and VRS ids minted over gap bases rest on it. A public CNV upload holds 36 such rows. Rejected:
   `unstated` over gaps too, which takes `match` away from rows whose letters agree. An SNV whose REF is `N` keeps
   its ALT unminted (`ref_unstated`); no file in hand has one. Since merge audit 13 (2026-10-28) the same ALT is
-  also left unlifted, unwritten and unanswered by `query` (`schema.unstated_sequence_alt`).
+  also left unlifted, unwritten and unanswered by `query` (`schema.unstated_sequence_alt`). Since 2026-10-31 it is
+  not compared by `concordance` (excluded as `ref_unstated`), states nothing in `consensus`, is graded
+  `grade_basis = ref_unstated` in genotype evidence (a new member of a returned frame's enum, not of the stored
+  schema; rejected: `no_call`, which says the source called nothing, where it wrote `0/0`), and is left out of
+  the sex-chromosome ALT counts. Variant classes are counted at load, before any REF is read, so such a row still
+  counts as an SNV there; no file in hand has one.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.

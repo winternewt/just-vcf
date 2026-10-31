@@ -13,7 +13,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceStore, liftover, load, mint_vrs_ids, normalize, query, resolve_ref, vrs_withheld, write_vcf
+from just_vcf import ReferenceStore, concordance, consensus, liftover, load, mint_vrs_ids, normalize, query, resolve_ref, vrs_withheld, write_vcf
+from just_vcf.concordance import EXCLUDED_REASONS
 from just_vcf.liftover import UNLIFTED_REASONS
 from just_vcf.loading import Loaded
 from just_vcf.schema import CALLS
@@ -226,6 +227,96 @@ def test_the_cli_counts_unstated_rows(tmp_path: Path) -> None:
     fasta = write_fasta(tmp_path / "ref.fa")
     [facet] = report(run("check", vcf(tmp_path, RECORDS), "--reference", fasta, "--json"))["facets"]
     assert facet["ref_check"] == {value: sum(1 for v in EXPECTED.values() if v == value) for value in set(EXPECTED.values())}
+
+
+def third(b: str) -> str:
+    """A base that is neither `b` nor `other(b)`."""
+    return next(x for x in "ACGT" if x not in (b, other(b)))
+
+
+def facet_of(tmp_path: Path, store: ReferenceStore, name: str, records: list[tuple[int, str, str, str, str]], **columns: object) -> Loaded:
+    """`records` loaded with REF read, and any `facets` column set as given."""
+    loaded = resolve_ref(load(vcf(tmp_path, records, f"{name}.vcf")), store)
+    if not columns:
+        return loaded
+    schema = loaded.facets.collect_schema()
+    facets = loaded.facets.with_columns(*[pl.lit(value, dtype=schema[key]).alias(key) for key, value in columns.items()])
+    return Loaded(facets=facets, calls=loaded.calls, blocks=loaded.blocks, links=loaded.links)
+
+
+def test_concordance_compares_no_alt_spelled_against_an_unstated_ref(tmp_path: Path, store: ReferenceStore) -> None:
+    """`a` writes the reference's base, `b` writes `N` at the same three sites. `b`'s sequence ALTs were
+    spelled against the `N`, so none is compared (`ref_unstated`, counted), and `b`'s row there is not
+    read for copies of `a`'s allele either: `a`'s allele is `only_a`, `b`'s silence `other_alleles`.
+    Read beside the reference's base, `N` → `X` would match `a`'s `T` → `X`, a concordance the source
+    never stated; the twin `b` that writes the base shows what the `N` alone changes."""
+    same, hom, differ = 300, 400, 500
+    a = facet_of(tmp_path, store, "a", [(p, f"a{p}", base(p), other(base(p)), g) for p, g in ((same, "1/1"), (hom, "0/0"), (differ, "1/1"))])
+    alts = {same: other(base(same)), hom: other(base(hom)), differ: third(base(differ))}
+    gts = {same: "1/1", hom: "0/0", differ: "1/1"}
+    b = facet_of(tmp_path, store, "b", [(p, f"b{p}", "N", alts[p], gts[p]) for p in (same, hom, differ)])
+    twin = facet_of(tmp_path, store, "twin", [(p, f"t{p}", base(p), alts[p], gts[p]) for p in (same, hom, differ)])
+
+    # The twin's REF states the base: the same records compare (the `differ` one by reading its row, `site`).
+    a_alleles = {(r["pos"], r["agreement"]) for r in concordance(a, twin).sites.collect().iter_rows(named=True) if r["alt"] == other(base(r["pos"]))}
+    assert a_alleles == {(same, "match"), (hom, "match"), (differ, "mismatch")}
+    result = concordance(a, b)
+    sites = result.sites.collect()
+    assert sorted(sites["pos"].to_list()) == [same, hom, differ], "only a's alleles: none of b's is compared"
+    for r in sites.iter_rows(named=True):
+        assert (r["alt"], r["agreement"], r["key"], r["absence"], r["b_gt_alleles"], r["b_copies"]) == (other(base(r["pos"])), "only_a", None, "other_alleles", None, None), r["pos"]
+    assert "ref_unstated" in EXCLUDED_REASONS
+    assert {(r["facet"], r["reason"]): r["alleles"] for r in result.excluded.iter_rows(named=True)} == {("b", "ref_unstated"): 3}
+
+
+def test_concordance_matches_a_symbolic_alt_on_an_unstated_row_as_before(tmp_path: Path, store: ReferenceStore) -> None:
+    """A symbolic ALT on an unstated row (a copy-number call) meets by type and extent as it does over a
+    stated base: its sites are the ones the same records with the reference's base give. On a row with
+    a sequence ALT beside it (`N` → `<DEL>,X`) only the sequence ALT is left out."""
+    del_pos, dup_pos, mixed = 600, 700, 800
+    a = facet_of(tmp_path, store, "a", [(del_pos, "d", base(del_pos), "<DEL>", "0/1"), (dup_pos, "u", base(dup_pos), "<DUP>", "1/1"), (mixed, "m", base(mixed), "<DEL>", "0/1")])
+
+    def b_with(ref: dict[int, str], name: str) -> Loaded:
+        return facet_of(
+            tmp_path, store, name,
+            [(del_pos, "d", ref[del_pos], "<DEL>", "0/1"), (dup_pos, "u", ref[dup_pos], "<DUP>", "1/1"), (mixed, "m", ref[mixed], f"<DEL>,{other(base(mixed))}", "0/1")],
+        )  # fmt: skip
+
+    unstated = concordance(a, b_with({p: "N" for p in (del_pos, dup_pos, mixed)}, "b_n"))
+    stated = concordance(a, b_with({p: base(p) for p in (del_pos, dup_pos, mixed)}, "b_base"))
+    sv = pl.col("variant_class") == "sv"
+    sv_sites = unstated.sites.collect().filter(sv)
+    # The genotype as written is the one difference: its REF slot is the source's `N`.
+    assert sv_sites.drop("b_gt_alleles").equals(stated.sites.collect().filter(sv).drop("b_gt_alleles"))
+    assert [gt[0] for gt in sv_sites["b_gt_alleles"].to_list()] == ["N", "<DUP>", "N"]
+    assert sv_sites.select("pos", "key", "agreement").rows() == [(del_pos, "extent", "match"), (dup_pos, "extent", "match"), (mixed, "extent", "match")]
+    assert unstated.sites.collect().filter(~sv).height == 0, "the mixed row's sequence ALT is not compared"
+    assert {(r["facet"], r["reason"]): r["alleles"] for r in unstated.excluded.iter_rows(named=True)} == {("b", "ref_unstated"): 1}
+    assert stated.excluded.filter(pl.col("reason") == "ref_unstated").height == 0
+
+
+def test_consensus_states_no_alt_spelled_against_an_unstated_ref(tmp_path: Path, store: ReferenceStore) -> None:
+    """`y` writes `N` where `x` writes the reference's base. `y`'s sequence ALTs are no allele of the
+    consensus (none stated by it alone becomes a row), and at a site `x` states, `y`'s row is not read
+    for copies: `y` is silent there as `ref_unstated`. It is still a row at the position, so a
+    whole-genome `y` is not read as reference there (its absence rule would give zero copies, a
+    contradiction from a base `y` never named)."""
+    e = 0.01
+    snv_x = other(base(300)), other(base(400))
+    x = facet_of(tmp_path, store, "x", [(300, "x300", base(300), snv_x[0], "1/1"), (400, "x400", base(400), snv_x[1], "0/1")], caller="X", caller_version="1")
+    wgs = {"absence_means": "weak_reference", "variant_classes": [{"variant_class": "snv", "alleles": 3}]}
+    y_records = [(300, "y300", "N", snv_x[0], "1/1"), (400, "y400", "N", third(base(400)), "0/0"), (500, "y500", "N", other(base(500)), "0/1")]
+    y = facet_of(tmp_path, store, "y", y_records, caller="Y", caller_version="1", **wgs)
+    result = consensus([x, y], atlas=None, default_rate=e)
+    support = result.support.collect()
+    assert support.select("pos", "alt").rows() == [(300, snv_x[0]), (400, snv_x[1])], "no allele y spelled against its N"
+    assert support.select("supported", "contradicted", "silent", "facets").rows() == [(1, 0, 1, 2), (1, 0, 1, 2)]
+    y_id = y.facets.collect()["facet_id"].item()
+    assert f"facet {y_id} silent on alleles others stated: ref_unstated 2" in result.warnings
+    # x alone speaks: a hard call under the default rate, flat prior.
+    for row, copies in zip(result.calls.collect().iter_rows(named=True), (2, 1)):
+        alone = [1 - e if k == copies else e / 2 for k in range(3)]
+        assert row["gp"] == pytest.approx([v / sum(alone) for v in alone], rel=1e-5)
 
 
 # Lifted through test_liftover's construction (block A: source 101..400 at -50; 701..800 reversed onto

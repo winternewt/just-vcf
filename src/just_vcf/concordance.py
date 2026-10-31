@@ -63,7 +63,7 @@ from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_
 from just_vcf.intervals import contig_join, covering, nearest_block
 from just_vcf.loading import Loaded
 from just_vcf.reference import PRIMARY, ReferenceMismatchError, ReferenceStore, _store_for
-from just_vcf.schema import CONTIG_RANK, BlockKind, VariantClass, canonical_chrom, canonical_chrom_expr, enum_dtype
+from just_vcf.schema import CONTIG_RANK, BlockKind, VariantClass, canonical_chrom, canonical_chrom_expr, enum_dtype, unstated_sequence_alt
 
 logger = logging.getLogger(__name__)
 
@@ -209,12 +209,16 @@ EXCLUDED_REASONS: frozenset[str] = frozenset(
         "ref_unread",
         "alts_unread",
         "contig_not_shared",
+        "ref_unstated",
     }
 )
 """Why an allele was left out of the comparison. An open vocabulary. `single_breakend` is a breakend
 with no mate (`.A`, `A.`), which truvari leaves out by default (`no_single_bnd`); `breakend_unparsed`
 an ALT with brackets that is none of VCF's four breakend forms (no `contig:position`, brackets that
-do not pair). `contig_not_shared` covers a breakend whose mate lies on such a contig too."""
+do not pair). `contig_not_shared` covers a breakend whose mate lies on such a contig too.
+`ref_unstated` is a sequence ALT of a row whose source REF states no base (`ref_check = unstated`,
+`schema.unstated_sequence_alt`, F23): spelled against the `N`, it can be read as neither a match nor
+a mismatch. A symbolic ALT of such a row is compared like any other."""
 
 _MAX_GENOTYPE_ALLELES = 64
 """The largest allele list whose diploid genotype order the graded comparison enumerates."""
@@ -379,7 +383,10 @@ def _shared_contigs(fa: Mapping, fb: Mapping, reference: "ReferenceStore | Path 
 
 def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame | pl.DataFrame | None, excluded: Counter, side: str) -> pl.DataFrame:
     """One row per sequence ALT allele of the facet, with what the comparison reads."""
-    rows = calls.select("chrom", "pos", "ref", "source_ref", "alts", "vrs_allele_ids", "gt_alleles", "source_alleles", "gl", "gp", "filters", "gq", *_SV_INPUTS)
+    rows = calls.select(
+        "chrom", "pos", "ref", "source_ref", "alts", "vrs_allele_ids", "gt_alleles", "source_alleles", "gl", "gp", "filters", "gq", *_SV_INPUTS,
+        unstated_sequence_alt().alias("_unstated"),
+    )  # fmt: skip
     rows = rows.with_row_index("_row")
     unread = rows.filter(pl.col("alts").is_null() & pl.col("gt_alleles").is_not_null()).select(pl.len()).collect().item()
     if unread:
@@ -415,6 +422,11 @@ def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame 
         .then(pl.lit("ref_unread"))
         .when(pl.col("variant_class").is_null())
         .then(pl.lit("not_sequence"))
+        # Past the branches above the allele is a sequence one. On a row whose source REF states no
+        # base it was spelled against that `N` (F23): read beside `ref` it is an allele the source never
+        # wrote. A symbolic ALT of the same row took the SV branch and is compared.
+        .when(pl.col("_unstated"))
+        .then(pl.lit("ref_unstated"))
     )
     tagged = exploded.with_columns(reason.alias("_excluded"))
     if shared is not None:
@@ -427,7 +439,7 @@ def _alleles(calls: pl.LazyFrame, shared: set[str] | None, region: pl.LazyFrame 
         )
     for reason_name, count in tagged.group_by("_excluded").len().drop_nulls("_excluded").iter_rows():
         excluded[(side, reason_name)] += count
-    kept = tagged.filter(pl.col("_excluded").is_null()).drop("_excluded")
+    kept = tagged.filter(pl.col("_excluded").is_null()).drop("_excluded", "_unstated")
     if region is not None:
         kept = _in_region(kept, region)
     return kept
@@ -766,7 +778,10 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
     mine = rest.rename({name: f"{side}_{name}" for name in ("gt_alleles", "filters", "gq")}).with_columns(pl.col("pos").alias(f"{side}_pos"))
     wanted = mine.select("chrom", "pos").unique().lazy()
     rows_there = (
-        other.calls.select("chrom", "pos", pl.coalesce("ref", "source_ref").str.to_uppercase().alias("_other_ref"), "gt_alleles", "filters", "gq")
+        other.calls.select(
+            "chrom", "pos", pl.coalesce("ref", "source_ref").str.to_uppercase().alias("_other_ref"), "gt_alleles", "filters", "gq",
+            unstated_sequence_alt().alias("_other_unstated"),
+        )  # fmt: skip
         .with_row_index("_other_row")
         .join(wanted, on=["chrom", "pos"], how="semi")
         .group_by("chrom", "pos")
@@ -777,13 +792,17 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
             pl.col("gq").first().alias(f"{other_side}_gq"),
             pl.col("_other_row").first().alias(f"_{other_side}_row"),
             pl.col("_other_ref").first().alias("_other_ref"),
+            pl.col("_other_unstated").first().alias("_other_unstated"),
         )
         .collect()
     )
     mine = mine.join(rows_there, on=["chrom", "pos"], how="left")
     # Read only a row over the same REF span: a longer allele there (a haplotype caller's complex
     # allele) holds no allele of this span, so its genotype says nothing about this allele's copies.
-    single = ((pl.col("_rows") == 1) & (pl.col("_other_ref") == pl.col("_ref").str.to_uppercase())).fill_null(False)
+    # Nor a row whose source REF states no base and which spells a sequence ALT (F23): its haplotypes
+    # were spelled against that `N` (`N` → `G`, `1/1`, read over `T` would hold no copy of `T` → `C`),
+    # so the allele stays one-sided, the row counted as there (`other_alleles`) and not read.
+    single = ((pl.col("_rows") == 1) & (pl.col("_other_ref") == pl.col("_ref").str.to_uppercase()) & ~pl.col("_other_unstated")).fill_null(False)
     several = (pl.col("_rows") > 1).fill_null(False)
     n_several = mine.filter(several).height
     if n_several:

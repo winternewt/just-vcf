@@ -80,7 +80,8 @@ read** (`schema.unstated_sequence_alt`). It was spelled against the `N`, not aga
 beside the reference's base it would be an allele the source never wrote (`N` → `NAC` read as `C` →
 `NAC`). A symbolic ALT (`<DEL>`, `<CN0>`, ...), no ALT, and the REF slot are read as on a `match` row,
 with `ref` standing in for the base the source left out. Every copy-number file in hand has only
-those (merge audit 13, 2026-10-28, found liftover, the writers and `query` reading the sequence ALT):
+those (merge audit 13, 2026-10-28, found liftover, the writers and `query` reading the sequence ALT;
+`concordance` and `consensus` followed on 2026-10-31):
 
 - `liftover` lifts it as a `match` row (the target's base is compared with `ref`, read from the
   source assembly; on a plus strand an SV's padding base must still agree, `ref_mismatch_after_lift`),
@@ -107,8 +108,16 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   CLI's `check` (`ref_check` counts, `--json` included), which groups by the column.
 - `resolve_ref` counts it apart in its warning ("… with a source REF of only N, which states no base
   to compare"), never among the mismatches, and never as an IUPAC ambiguity.
-- No other reader: `concordance` compares `ref` (or `source_ref` where `ref` is null) and never reads
-  `ref_check`; loaders, `rejoin_split` and `consensus` write `not_run` or null; `liftover` and
+- `concordance` compares none of its sequence ALTs: each is counted in `excluded` as `ref_unstated`
+  (2026-10-31; before, `N` → `G` was compared as `ref` → `G`, so it met another facet's `T` → `G` as
+  a concordance the source never stated). Nor is its genotype read for another facet's allele at its
+  position (the `site` key): that allele stays one-sided, `absence = other_alleles`. A symbolic ALT
+  of the row, a copy-number call, meets by type and extent as over a stated base.
+- `consensus` takes none of its sequence ALTs as a stated allele, and reads its genotype for no other
+  facet's allele at its position: that facet is silent there as `ref_unstated` (`CONSENSUS_VERSION`
+  5). The row still stands at its position, so the facet's silence is not read by a block or its
+  absence rule there: a whole-genome facet would otherwise read zero copies where it wrote a call.
+- No other reader: loaders, `rejoin_split` and `consensus` write `not_run` or null; `liftover` and
   `normalize` null it on a row they move or re-derive (`liftover` moves none with a sequence ALT); the
   facet guard (`tests/test_load_seams.py`) reads `facets` columns only.
 
@@ -2700,7 +2709,9 @@ refused. Rejected: comparing by label alone. GRCh37 and hg19 share it and differ
 symbolic structural-variant alleles meet by type and extent ("Structural variants", below, RM282),
 breakends by their adjacency ("Breakends", below). `<*>`, `*`, single breakends (`single_breakend`),
 breakend ALTs that do not parse (`breakend_unparsed`), ALTs that are no VCF allele, rows whose REF
-was never read, and array rows whose `alts` are still null are counted in `excluded`. A sequence allele meets the other
+was never read, and array rows whose `alts` are still null are counted in `excluded`, and so is a
+sequence ALT of a row whose source REF states no base (`ref_unstated`, `ref_check = unstated`,
+Decision 2): spelled against the `N`, it reads as neither a match nor a mismatch. A sequence allele meets the other
 facet's in this order, each row saying which in `key`:
 
 1. `vrs`: both rows minted an id for it (the ALT's slot of `vrs_allele_ids`, never the REF slot: a
@@ -2715,8 +2726,9 @@ facet's in this order, each row saying which in `key`:
    site). A row over another span is not read: a haplotype caller's complex allele (`AC>GT` beside
    another facet's `A>G`) holds no allele of this span, so its genotype would read as zero copies, a
    mismatch that is only representation. Several rows there and none with the allele (a split file)
-   are not read against, counted in a warning. Either way the allele stays one-sided, `absence =
-   other_alleles`.
+   are not read against, counted in a warning. Nor is a row whose source REF states no base and
+   which spells a sequence ALT (Decision 2): its haplotypes were spelled against the `N`. Either way
+   the allele stays one-sided, `absence = other_alleles`.
 
 An allele stated by several rows of one facet (`normalize` keeps rows that differ, charter 8) pairs
 with each, counted in a warning.
@@ -3130,8 +3142,16 @@ likelihoods as zero copies, unquantified, whatever `gq_on_reference` says).
 Silent otherwise, each kind counted in the warnings per facet: `filtered` (`pass_only` and the row
 failed a filter), `no_call` (no haplotype called and no vector), `covered` (inside another record's
 span, a deletion), `several_rows` and `other_span` (concordance's rule: such a row holds no allele of
-this span), `no_call_block`, `unknown` (silence that says nothing: an array, a content filter, a
-class the facet did not call), `ploidy_differs` (below).
+this span), `ref_unstated` (the one row there has a source REF that states no base and spells a
+sequence ALT, Decision 2: its genotype was spelled against the `N`), `no_call_block`, `unknown`
+(silence that says nothing: an array, a content filter, a class the facet did not call),
+`ploidy_differs` (below).
+
+A row whose source REF states no base (`ref_check = unstated`) and which spells a sequence ALT
+states no allele of the consensus (`CONSENSUS_VERSION` 5): `N` → `G` read beside the reference's `T`
+would be `T` → `G`, an allele the source never wrote. It still counts as a row at its position, so
+the facet there is `ref_unstated`, never `ref_block` or `absence`: a whole-genome facet's rule would
+read zero copies at a position where it wrote a call it could not spell.
 
 **Error rates** (`method_error_rates(atlas)`). The atlas states how often two methods disagree, not
 which erred. With independent rare errors a pair's genotype disagreement `d = mismatch / (match +
@@ -3270,7 +3290,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `LIFT_VERSION` 13) or refuse it (`ref_unstated`) when one is (merge audit 13, 2026-10-28);
   `mint_vrs_ids` mints its REF slot and withholds a sequence ALT as `ref_unstated` (`MINT_VERSION` 4);
   `normalize` leaves it as written, counted; `query` answers from it neither `stated` for a sequence
-  ALT nor `site_genotyped`. **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
+  ALT nor `site_genotyped`; `concordance` leaves a sequence ALT out (`excluded`, `ref_unstated`) and
+  reads no such row for another facet's allele at its position, and `consensus` states no allele from
+  it and is silent there as `ref_unstated` (`CONSENSUS_VERSION` 5; 2026-10-31). **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
   F23 measured were all `mismatch` and none lifted; all are `unstated`, and 1,224 lift. A store of
   0.0.21 migrates with the enum widened and its values kept, its facets holding such rows named.
 

@@ -4,6 +4,24 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`concordance` and `consensus` keep the `unstated` rule too** (the two readers audit 13 left; the
+  lead's call). Both keyed an allele on `ref`, else `source_ref`, plus the ALT, and never read
+  `ref_check`, so `REF=N ALT=G` over a reference `T` was compared and counted as `T` → `G`.
+  - `concordance` leaves such an ALT out, counted in `excluded` as `ref_unstated` (a new member of
+    `EXCLUDED_REASONS`, an open vocabulary). It met another facet's `T` → `G` by position as a
+    `match`. Such a row's genotype is no longer read for another facet's allele at its position
+    either (the `site` key): `N` → `G`, `1/1`, read a `mismatch` against `T` → `C`, `1/1`. That
+    allele is now `only_a`/`only_b` with `absence = other_alleles`. A symbolic ALT on such a row
+    meets by type and extent as before, and on a row with both (`N` → `<DEL>,G`) only the `G` goes.
+  - `consensus` states no allele from such a row, and its genotype is read for no other facet's
+    allele there: that facet is silent as `ref_unstated` (a new silent reason, in the warnings), where
+    a `0/0` read as zero copies, a contradiction from a base it never named. The row still counts as
+    a row at its position, so a whole-genome facet's absence rule does not read zero copies there.
+    `CONSENSUS_VERSION` 5, so a consensus facet made before gets a new `facet_id`.
+  No schema change. `concordance` (and `method_atlas`, which runs it) keys no cached result and has no
+  version constant. The PGP-HMS copy-number files write symbolic ALTs or none, so their comparisons
+  do not move. Tests: `tests/test_unstated_ref.py`, each watched failing on the code before.
+
 - **An `unstated` row's sequence ALT is read by no reader** (merge audit 13, two outside models, each
   finding checked against the code). F23 made `mint_vrs_ids` withhold a sequence ALT on a row whose
   source REF is only `N` (`ref_check = unstated`): it was spelled against the `N`, not against the

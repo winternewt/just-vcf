@@ -63,6 +63,7 @@ from just_vcf.schema import (
     VariantClass,
     canonical_chrom_expr,
     enum_dtype,
+    unstated_sequence_alt,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,10 +83,12 @@ __all__ = [
     "method_error_rates",
 ]
 
-CONSENSUS_VERSION = 4
+CONSENSUS_VERSION = 5
 """Part of the consensus `facet_id` and its links' `step_version`: bumped whenever the rule changes
 what it emits (3: a CGI row graded by its allele scores, `hq`, speaks with its confidence band; 4: so
-does a VCF row graded by its FORMAT HQ, which the loader now reads into `hq`)."""
+does a VCF row graded by its FORMAT HQ, which the loader now reads into `hq`; 5: a row whose source
+REF states no base, `ref_check = unstated`, states no sequence ALT, and its genotype is not read for
+another facet's allele at its position, `ref_unstated`, F23)."""
 
 CALLER = "just-vcf consensus"
 """The consensus facet's `caller`: the rule that made its rows, versioned by `CONSENSUS_VERSION`."""
@@ -648,8 +651,11 @@ def _assembly(rows: list[dict], warnings: list[str]) -> tuple[str | None, str | 
 # Readings
 
 
-_SILENT = ("filtered", "no_call", "covered", "several_rows", "other_span", "no_call_block", "unknown", "ploidy_differs")
-"""Why a facet said nothing about an allele (the counts in the warnings)."""
+_SILENT = ("filtered", "no_call", "covered", "several_rows", "other_span", "ref_unstated", "no_call_block", "unknown", "ploidy_differs")
+"""Why a facet said nothing about an allele (the counts in the warnings). `ref_unstated`: its one row at
+the position has a source REF that states no base and spells a sequence ALT (F23), so its genotype was
+spelled against that `N` and says nothing of this allele's copies; the row is still there, so its
+silence is not read by a block or the absence rule either."""
 
 
 def _passes(filters: pl.Expr) -> pl.Expr:
@@ -659,16 +665,20 @@ def _passes(filters: pl.Expr) -> pl.Expr:
 def _evidence(piece: Loaded, chrom: str, gq_on_reference: bool) -> pl.DataFrame:
     """The facet's rows on `chrom`, graded as `genotype_evidence` grades them, with what matching needs."""
     calls = piece.calls.filter(pl.col("chrom") == chrom).with_row_index("_row").with_columns(
-        pl.coalesce("ref", "source_ref").str.to_uppercase().alias("_ref_key"), pl.col("ref").is_not_null().alias("_ref_read")
+        pl.coalesce("ref", "source_ref").str.to_uppercase().alias("_ref_key"), pl.col("ref").is_not_null().alias("_ref_read"),
+        unstated_sequence_alt().alias("_unstated"),
     )
-    keep = ("_row", "_ref_key", "_ref_read", "alts", "gt_alleles", "filters")
+    keep = ("_row", "_ref_key", "_ref_read", "_unstated", "alts", "gt_alleles", "filters")
     return _calls_evidence(calls, gq_on_reference, piece.facets, keep=keep).collect()
 
 
 def _stated_alleles(evidence: pl.DataFrame) -> pl.DataFrame:
-    """One row per sequence ALT allele a row states, with the row's evidence."""
+    """One row per sequence ALT allele a row states, with the row's evidence. A row whose source REF
+    states no base and which spells a sequence ALT (`_unstated`, F23) states none: its ALTs were spelled
+    against the `N`, and read beside `ref` would be alleles the source never wrote. Its other ALTs are
+    symbolic, never a small allele, so the whole row goes."""
     exploded = (
-        evidence.filter(pl.col("alts").list.len() > 0)
+        evidence.filter((pl.col("alts").list.len() > 0) & ~pl.col("_unstated"))
         .explode("alts", empty_as_null=False)
         .rename({"alts": "alt"})
         .filter(pl.col("_ref_key").is_not_null() & ~pl.col("alt").is_in(sorted(NOT_A_VARIANT)))
@@ -807,6 +817,7 @@ def _readings(
         pl.col("end_pos").first().alias("_other_end"),
         pl.col("gt_alleles").first().alias("_other_gt"),
         pl.col("filters").first().alias("_other_filters"),
+        pl.col("_unstated").first().alias("_other_unstated"),
     )
     rest = rest.join(at, on="pos", how="left")
     same_span = (pl.col("_other_ref") == pl.col("_ref_key")) | (
@@ -814,6 +825,10 @@ def _readings(
         & (pl.col("_other_end").is_null() | (pl.col("_other_end").cast(pl.Int64) == pl.col("pos").cast(pl.Int64)))
     )  # fmt: skip
     one = (pl.col("_rows") == 1).fill_null(False) & same_span.fill_null(False)
+    # The one row there spells its sequence ALTs against an `N` (F23): `N` → `G`, `0/0`, read over `T`
+    # would be zero copies of `T` → `C` from a base the source never named. Silent, never `site`.
+    unstated = one & pl.col("_other_unstated").fill_null(False)
+    readable = one & ~unstated
     rest = rest.with_columns(
         _fully_called("_other_gt").alias("_called"),
         _copies_of("_other_gt", "alt").alias("_count"),
@@ -823,11 +838,12 @@ def _readings(
     site_reading = rest.filter(pl.col("_rows").is_not_null()).select(
         "_site",
         pl.when(pl.col("_rows") > 1).then(pl.lit("several_rows")).when(~one).then(pl.lit("other_span"))
+        .when(unstated).then(pl.lit("ref_unstated"))
         .when(~pl.col("_pass")).then(pl.lit("filtered"))
         .when(pl.col("_called")).then(pl.lit("site"))
         .otherwise(pl.lit("no_call")).alias("_reading"),
-        pl.when(one & pl.col("_pass") & pl.col("_called")).then(pl.col("_gt_ploidy")).alias("_ploidy"),
-        pl.when(one & pl.col("_pass") & pl.col("_called")).then(pl.col("_count")).alias("_hard"),
+        pl.when(readable & pl.col("_pass") & pl.col("_called")).then(pl.col("_gt_ploidy")).alias("_ploidy"),
+        pl.when(readable & pl.col("_pass") & pl.col("_called")).then(pl.col("_count")).alias("_hard"),
     )  # fmt: skip
 
     silent = rest.filter(pl.col("_rows").is_null()).select("_site", "pos", "variant_class").with_columns(pl.col("pos").cast(pl.Int64).alias("_at"))

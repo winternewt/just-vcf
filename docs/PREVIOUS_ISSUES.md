@@ -68,6 +68,12 @@ and reads it as silent, `ref_unstated`, for another facet's allele there, never 
 or `absence` (`_stated_alleles`, `_readings`, `CONSENSUS_VERSION` 5). A symbolic ALT on such a row
 still meets by type and extent. Tests in `tests/test_unstated_ref.py`.
 
+**Amended 2026-10-31, later** (the last readers the previous builder found): `evidence._calls_evidence`
+indexed GT into `[N] + alts` without `ref_check`, so `genotype_evidence` and `reference_support` read
+`N` → `G`, `0/0`, as hom-ref. Such a row now grades nothing (`GradeBasis.REF_UNSTATED`, unknown), and
+still covers its position, so `reference_support` answers `call`, never absence. A symbolic ALT on
+such a row is graded as before. Tests in `tests/test_unstated_ref.py`.
+
 ## F32 — `write_vcf_zarr` leaves a breakend's mate as held and declares none
 
 Severity: low · Found 2026-10-26 in an audit of F30's repair; until now only the CHANGELOG said so.

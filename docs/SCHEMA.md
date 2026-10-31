@@ -81,7 +81,7 @@ beside the reference's base it would be an allele the source never wrote (`N` â†
 `NAC`). A symbolic ALT (`<DEL>`, `<CN0>`, ...), no ALT, and the REF slot are read as on a `match` row,
 with `ref` standing in for the base the source left out. Every copy-number file in hand has only
 those (merge audit 13, 2026-10-28, found liftover, the writers and `query` reading the sequence ALT;
-`concordance` and `consensus` followed on 2026-10-31):
+`concordance` and `consensus` followed on 2026-10-31, then the graded-evidence readers):
 
 - `liftover` lifts it as a `match` row (the target's base is compared with `ref`, read from the
   source assembly; on a plus strand an SV's padding base must still agree, `ref_mismatch_after_lift`),
@@ -117,6 +117,17 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   facet's allele at its position: that facet is silent there as `ref_unstated` (`CONSENSUS_VERSION`
   5). The row still stands at its position, so the facet's silence is not read by a block or its
   absence rule there: a whole-genome facet would otherwise read zero copies where it wrote a call.
+- `genotype_evidence`, `genotype_evidence_at` and `reference_support` grade no genotype on it:
+  `grade_basis = ref_unstated`, `confidence_kind = unknown`, no `genotype_index`, alleles, vector or
+  confidence, its GP or likelihoods included, which are over `[N] + alts` as much as its GT is
+  (2026-10-31; before, `N` â†’ `G` with GT `0/0` was hom-ref, and `reference_support` answered
+  reference at a base the source never named, the case `query` already refused). The row still covers
+  its position, so `reference_support` answers `call` there (`call_at_position`, or
+  `call_spans_position`), never the facet's absence rule; among calls of one span it ranks as one
+  stating nothing. `consensus` and the atlas's confidence bands read the same grade (`atlas` takes
+  the lowest confidence a facet states at a position, and this row states none); `consensus` already
+  read no such row, so its output does not move. Before `resolve_ref` the row's `ref_check` is
+  `not_run` and it is graded as written: the rule needs the REF read.
 - No other reader: loaders, `rejoin_split` and `consensus` write `not_run` or null; `liftover` and
   `normalize` null it on a row they move or re-derive (`liftover` moves none with a sequence ALT); the
   facet guard (`tests/test_load_seams.py`) reads `facets` columns only.
@@ -2251,6 +2262,10 @@ reading) into every cache spill and need a version bump each time they move.
 
 **The bases**, the first that applies to a row:
 
+- `ref_unstated` (0.0.22, F23): a row whose source REF states no base and which spells a sequence
+  ALT (`ref_check = unstated`, Decision 2). Its genotype and any vector were spelled against the `N`,
+  so nothing is graded: unknown, no `genotype_index`, alleles, vector or number. A row with only
+  symbolic ALTs, or none, is graded by the bases below.
 - `gp`: a usable GP vector, as written.
 - `gl`: a usable likelihood vector, normalized under a flat prior. GL and PL are one quantity on two
   scales and load into one `gl` column (Decision 3), so there is one basis for both; the row's
@@ -3292,7 +3307,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `normalize` leaves it as written, counted; `query` answers from it neither `stated` for a sequence
   ALT nor `site_genotyped`; `concordance` leaves a sequence ALT out (`excluded`, `ref_unstated`) and
   reads no such row for another facet's allele at its position, and `consensus` states no allele from
-  it and is silent there as `ref_unstated` (`CONSENSUS_VERSION` 5; 2026-10-31). **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
+  it and is silent there as `ref_unstated` (`CONSENSUS_VERSION` 5; 2026-10-31); `genotype_evidence`,
+  `genotype_evidence_at` and `reference_support` grade no genotype on it, `grade_basis = ref_unstated`
+  (a new `GradeBasis` member in those computed frames, none stored; 2026-10-31). **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
   F23 measured were all `mismatch` and none lifted; all are `unstated`, and 1,224 lift. A store of
   0.0.21 migrates with the enum widened and its values kept, its facets holding such rows named.
 

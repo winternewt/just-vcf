@@ -4,6 +4,20 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **The graded-evidence readers keep the `unstated` rule** (the last readers of an `unstated` row's
+  ALT; the lead's call). `genotype_evidence`, `genotype_evidence_at` and `reference_support` indexed
+  GT into `[N] + alts` without reading `ref_check`, so `REF=N ALT=G GT=0/0` was graded hom-ref and
+  `reference_support` answered reference at a base the source never named, the case `query` already
+  refused. Such a row now grades no genotype: `grade_basis = ref_unstated`, a new `GradeBasis` member,
+  `confidence_kind = unknown`, no `genotype_index`, alleles, vector or confidence (its GP and
+  likelihoods are over `[N] + alts` too). It still covers its position, so `reference_support` answers
+  `call` there and never the facet's absence rule. A row with only symbolic ALTs, or none, is graded
+  as before; a row not yet through `resolve_ref` (`not_run`) is graded as written. Pre-1.0 this widens
+  the `grade_basis` enum of three returned frames, so a consumer that matches on every member breaks;
+  nothing stored changes, no schema change. `consensus` already read no such row (its output is
+  unchanged, `CONSENSUS_VERSION` stays 5); the atlas's confidence bands read no confidence from it,
+  and key no cached result. Test: `tests/test_unstated_ref.py`, watched failing on the code before.
+
 - **`concordance` and `consensus` keep the `unstated` rule too** (the two readers audit 13 left; the
   lead's call). Both keyed an allele on `ref`, else `source_ref`, plus the ALT, and never read
   `ref_check`, so `REF=N ALT=G` over a reference `T` was compared and counted as `T` → `G`.

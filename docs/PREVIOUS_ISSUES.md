@@ -85,6 +85,14 @@ row is no longer usable, and a site whose every row is one is unknown, `SiteBasi
 still a row at its position, so the absence rule is not read there. `ancestry` counts those sites
 apart (`n_sites_ref_unstated`). Tests in `tests/test_unstated_ref.py` and `tests/test_ancestry.py`.
 
+**Amended 2026-10-31, phase blocks** (the lead's call: phasing follows evidence):
+`phasing.cis_phased_blocks(reference_alleles=True)` took the minted REF slot of `N` → `G` as a member,
+so a `0|0` row's haplotypes, and a `0|1` row's haplotype 0, joined their blocks stating the
+reference's base where the GT indexed `[N, G]`. No slot of such a row joins a block now, and a slot
+that would be a member withholds it `ref_unstated`, named by that slot (`withheld_allele` `N`, as
+`gt_alleles` holds it). By default a REF slot joins nothing, so the default output does not move; an
+unstated row with only a symbolic ALT is read as before. Test in `tests/test_unstated_ref.py`.
+
 ## F32 — `write_vcf_zarr` leaves a breakend's mate as held and declares none
 
 Severity: low · Found 2026-10-26 in an audit of F30's repair; until now only the CHANGELOG said so.

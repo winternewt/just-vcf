@@ -34,7 +34,11 @@ not (charter 4), so any slot of the haplotype that cannot be stated withholds th
 first such slot in row order gives the reason: its phase is unknown (`phase_unknown`, a VCF 4.4+ slot
 0 polars-bio's rewrite hides, P4, when its allele would be a member), it is uncalled (`uncalled`),
 its allele has no index into the site's alleles (`not_indexed`), or the allele has no VRS id (the
-reason `vrs_withheld` gives, `not_run` when `mint_vrs_ids` has not run). A haplotype with fewer than two members is
+reason `vrs_withheld` gives, `not_run` when `mint_vrs_ids` has not run). A row whose source REF states
+no base and which spells a sequence ALT (`ref_check = unstated`, docs/SCHEMA.md Decision 2) states no
+allele on any slot: its GT indexes `[N] + alts`, so its REF slot is `ref_unstated` like its sequence
+ALTs, minted id or not, and withholds the block under `reference_alleles=True` (by default a REF slot
+joins nothing, so nothing changes). A haplotype with fewer than two members is
 `too_few_members`: the spec requires two, and one allele is an Allele, not a block. `withheld_chrom`,
 `withheld_pos` and `withheld_allele` name the slot that gave the reason (its record and its allele as
 `gt_alleles` holds it), so the one symbolic ALT that withholds a chromosome's implicit set can be found;
@@ -52,7 +56,7 @@ import polars as pl
 from gtars.refget import sha512t24u_digest
 
 from just_vcf.loading import Loaded
-from just_vcf.schema import PhaseSetKind, enum_dtype
+from just_vcf.schema import PhaseSetKind, enum_dtype, unstated_sequence_alt
 from just_vcf.vrs import WITHHELD_REASONS, vrs_withheld
 
 CPB_WITHHELD_REASONS: frozenset[str] = frozenset({"phase_unknown", "uncalled", "not_indexed", "too_few_members"}) | WITHHELD_REASONS
@@ -99,7 +103,8 @@ def cis_phased_blocks(loaded: Loaded, *, reference_alleles: bool = False) -> pl.
     phased_rows = loaded.calls.with_row_index("_order").filter(pl.col("phased").list.eval(pl.element().fill_null(False)).list.any().fill_null(False))
     rows = (
         vrs_withheld(phased_rows)
-        .select("_order", "facet_id", "chrom", "pos", "gt", "gt_alleles", "phased", "phase_sets", "phase_set_kinds", "vrs_allele_ids", "vrs_withheld")
+        .with_columns(unstated_sequence_alt().alias("_unstated"))
+        .select("_order", "facet_id", "chrom", "pos", "gt", "gt_alleles", "phased", "phase_sets", "phase_set_kinds", "vrs_allele_ids", "vrs_withheld", "_unstated")
     )
     is_ps = pl.col("phase_set_kinds").list.eval(pl.element() == PhaseSetKind.PS.value).list.any().fill_null(False)
     # A PS is one value per record, on each of its PS-kind slots; null for the implicit set. A PSL
@@ -117,6 +122,14 @@ def cis_phased_blocks(loaded: Loaded, *, reference_alleles: bool = False) -> pl.
         .with_columns(
             pl.col("vrs_allele_ids").list.get(pl.col("_index").cast(pl.Int64), null_on_oob=True).alias("_id"),
             pl.col("vrs_withheld").list.get(pl.col("_index").cast(pl.Int64), null_on_oob=True).alias("_why"),
+        )
+        # A row whose sequence ALT was spelled against an `N` states no allele on any slot, its REF
+        # slot included: the GT indexes `[N] + alts` (Decision 2). Its minted REF id joins no block,
+        # and a slot that would be a member withholds the block `ref_unstated`; a symbolic ALT keeps
+        # its own reason.
+        .with_columns(
+            pl.when(~pl.col("_unstated")).then(pl.col("_id")).alias("_id"),
+            pl.when(pl.col("_unstated")).then(pl.coalesce(pl.col("_why"), pl.lit("ref_unstated"))).otherwise(pl.col("_why")).alias("_why"),
         )
         .with_columns(pl.col("_set").filter(pl.col("_kind") == PhaseSetKind.PS.value).drop_nulls().first().over("_order").alias("_row_ps"))
     )

@@ -710,6 +710,11 @@ cached, 139 → 116 s and 107 → 88 s; frames, facet and warnings hash the same
 now loads on this machine: 9.4 GB fresh (1,035 s), 6.8 GB cached (804 s). A cached load still costs
 two polars-bio passes over the VCF (the warning counts and the sink the spill key hashes), 83 of
 hu416394's 88 s; making it a lookup is a design call for the lead (F26's resolution lists the options).
+*Re-measured 2026-10-31, after the warning counts were cached* (`cache/stats/`, so a reload reads the
+records once, to spill them; same file, a fresh cache dir, each load its own process under a 20 GB
+cap, peak from the process's own `ru_maxrss`). hu80855C's Isaac gVCF: fresh 782 s at 6.8 GB, cached
+401 s at 6.5 GB (was 1,035 s and 804 s); 45,242,155 calls, 138,019,217 blocks and 3 warnings both
+times. The cached load's remaining cost is the one pass the spill key hashes.
 
 *Measured 2026-10-26, `resolve_ref` a group of contigs at a time* (F24, docs/PREVIOUS_ISSUES.md; same
 library-only bench). hu416394's bcftools gVCF: `resolve_ref` 110.5 s with 2,057 part files → 27.8–29.7

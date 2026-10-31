@@ -73,8 +73,10 @@ indexed GT into `[N] + alts` without `ref_check`, so `genotype_evidence` and `re
 `N` → `G`, `0/0`, as hom-ref. Such a row now grades nothing (`GradeBasis.REF_UNSTATED`, unknown), and
 still covers its position, so `reference_support` answers `call`, never absence. A symbolic ALT on
 such a row is graded as before. `karyotype.measure` counted such a row's GT as an ALT call (`N` →
-`G`, `0/1`, a het on X); it now carries no ALT there, its ploidy as written still counted. Tests in
-`tests/test_unstated_ref.py`.
+`G`, `0/1`, a het on X); it now carries no ALT there, its ploidy as written still counted.
+`facets.variant_classes` is counted at load, before any REF is read (`not_run`), so the rule cannot
+apply there: `N` → `G` counts as `snv` by its lengths, and `resolve_ref` keeps the count (written down
+in Decision 2, pinned by a test). Tests in `tests/test_unstated_ref.py`.
 
 ## F32 — `write_vcf_zarr` leaves a breakend's mate as held and declares none
 

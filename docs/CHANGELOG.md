@@ -13,6 +13,13 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   constant. The PGP-HMS copy-number files write symbolic ALTs or none, so their measures do not move.
   Test: `tests/test_unstated_ref.py`, watched failing on the code before.
 
+- **`facets.variant_classes` and the `unstated` rule, written down** (no code change). The count runs
+  at load, where every row's `ref_check` is `not_run`, so it cannot know a row's REF states no base;
+  `N` → `G` counts as `snv` by its lengths, and `resolve_ref` keeps the count. Decision 2 says so, and
+  what it would cost (a whole-genome facet whose only SNV-shaped rows are spelled against `N` reads
+  its silence as reference for SNVs; no file in hand has one). A test pins the count, so a recount at
+  `resolve_ref` is a decision; it passes on the code before, since nothing changed.
+
 - **The graded-evidence readers keep the `unstated` rule** (the last readers of an `unstated` row's
   ALT; the lead's call). `genotype_evidence`, `genotype_evidence_at` and `reference_support` indexed
   GT into `[N] + alts` without reading `ref_check`, so `REF=N ALT=G GT=0/0` was graded hom-ref and

@@ -525,3 +525,17 @@ def test_sex_chromosome_measures_read_no_alt_spelled_against_an_unstated_ref(tmp
     assert {k: unstated[k] for k in _PLOIDY_COUNTS} == {k: twin[k] for k in _PLOIDY_COUNTS}
     assert (unstated["diploid_alt"], unstated["het"], unstated["haploid_alt"]) == (2, 2, 0), "the <DEL> and the stated het"
     assert {k: counts(KARYOTYPE_RECORDS, "raw", resolved_ref=False)[k] for k in _ALT_COUNTS} == {k: twin[k] for k in _ALT_COUNTS}
+
+
+def test_variant_classes_are_counted_at_load_before_any_ref_is_read(tmp_path: Path, store: ReferenceStore) -> None:
+    """`variant_classes` is counted at load, where every row's `ref_check` is `not_run`: an unstated
+    row's sequence ALT is not known to be one yet, so `N` → `X` counts as the SNV its lengths make it,
+    and `resolve_ref` keeps the facet's count (Decision 2: the rule cannot apply to a reader that runs
+    before the REF is read). Pinned, so a recount is a decision and not an accident."""
+    records = [(300, "unstated_snv", "N", other(base(300)), "0/1"), (500, "unstated_del", "N", "<DEL>", "0/1")]
+    loaded = load(vcf(tmp_path, records, "classes.vcf"))
+    at_load = loaded.facets.collect()["variant_classes"].item().to_list()
+    assert at_load == [{"variant_class": "snv", "alleles": 1}, {"variant_class": "sv", "alleles": 1}]
+    resolved_facet = resolve_ref(loaded, store)
+    assert resolved_facet.calls.collect()["ref_check"].to_list() == ["unstated", "unstated"]
+    assert resolved_facet.facets.collect()["variant_classes"].item().to_list() == at_load

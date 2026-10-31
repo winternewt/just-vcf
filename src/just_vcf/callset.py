@@ -201,7 +201,11 @@ def variant_class_expr(ref: pl.Expr, alt: pl.Expr) -> pl.Expr:
 
 
 def variant_class_counts(calls: pl.LazyFrame) -> dict[VariantClass, int]:
-    """ALT alleles per variant class over a `calls` frame (`source_ref`, `alts`), every class listed."""
+    """ALT alleles per variant class over a `calls` frame (`source_ref`, `alts`), every class listed.
+
+    It runs at load, before any REF is read (`ref_check = not_run`), so a sequence ALT spelled against a
+    source REF of only `N` (F23, `schema.unstated_sequence_alt`) is counted by its lengths: the rule
+    that no reader takes such an ALT as stated cannot apply here (docs/SCHEMA.md Decision 2)."""
     counted = (
         calls.select("source_ref", "alts")
         .explode("alts", empty_as_null=False)

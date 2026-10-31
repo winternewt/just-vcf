@@ -135,6 +135,14 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   caller's statement of how many haplotypes it saw, not an allele. A symbolic ALT on such a row counts
   as any symbolic call does, as before: a called `<DEL>` with GT `0/1` is one more diploid ALT call
   and a het. On a facet not yet through `resolve_ref` the rule cannot apply (`not_run`).
+- `facets.variant_classes` (`callset.variant_class_counts`) cannot keep the rule: it is counted at
+  load, before any REF is read, when every row's `ref_check` is `not_run`, and `resolve_ref` keeps the
+  count. `N` → `G` counts as the `snv` its lengths make it, a reading that holds whatever base the `N`
+  stands for; what it cannot show is that the site varies (over a reference `G` it is no variant). A
+  whole-genome facet whose only SNV-shaped rows were spelled against `N` would so read its silence as
+  reference for SNVs. No file in hand writes such rows: every copy-number file writes symbolic ALTs
+  or none, and its `sv` count is as stated. A recount at `resolve_ref` would change a load-time count
+  in a resolve step, and is not made (`tests/test_unstated_ref.py` pins the count).
 - No other reader: loaders, `rejoin_split` and `consensus` write `not_run` or null; `liftover` and
   `normalize` null it on a row they move or re-derive (`liftover` moves none with a sequence ALT); the
   facet guard (`tests/test_load_seams.py`) reads `facets` columns only.
@@ -3320,7 +3328,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   it and is silent there as `ref_unstated` (`CONSENSUS_VERSION` 5; 2026-10-31); `genotype_evidence`,
   `genotype_evidence_at` and `reference_support` grade no genotype on it, `grade_basis = ref_unstated`
   (a new `GradeBasis` member in those computed frames, none stored; 2026-10-31), and
-  `sex_chromosome_evidence` counts no ALT on it (2026-10-31). **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
+  `sex_chromosome_evidence` counts no ALT on it (2026-10-31); `facets.variant_classes`, counted at
+  load before any REF is read, cannot apply the rule and counts such an ALT by its lengths. **Values change**: the 1,324 rows of the three PGP-HMS copy-number files
   F23 measured were all `mismatch` and none lifted; all are `unstated`, and 1,224 lift. A store of
   0.0.21 migrates with the enum widened and its values kept, its facets holding such rows named.
 

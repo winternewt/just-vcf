@@ -1019,3 +1019,56 @@ def test_a_real_format_1_x_var_loads(pgp_participants: Path) -> None:
     kinds = dict(loaded.blocks.group_by("kind").len().collect().iter_rows())
     assert kinds.get("ref", 0) > 0 and kinds.get("no_call", 0) > 0
     assert not [w for w in loaded.warnings if "dropped" in w], loaded.warnings
+
+
+def _header_keys(path: Path) -> set[str]:
+    """The `#` metadata keys of a CGI file's head, up to its column line."""
+    keys: set[str] = set()
+    with bz2.open(path, "rt", errors="replace") as text:
+        for _, line in zip(range(40), text):
+            if line.startswith(">"):
+                break
+            if line.startswith("#"):
+                keys.add(line[1:].split("\t", 1)[0].strip())
+    return keys
+
+
+def test_a_real_get_evidence_copy_named_by_its_assembly_loads(pgp_participants: Path) -> None:
+    """Counts only. GET-Evidence serves some `var` files as `<assembly id>.tsv.bz2`, without the `var-`
+    prefix (12 on disk, 2026-10-31: the two 1.x files above and ten at format 2.0, none with a
+    `#TITLE`). The smallest 2.0 one is loaded whole. The name is not read: the format comes from the
+    content and the build from `#GENOME_REFERENCE`, and the rows, not a title, make it a genome."""
+    named = [
+        path
+        for path in pgp_participants.glob("*/evidence-*/*.tsv.bz2")
+        if not path.name.startswith(("var-", "masterVarBeta-")) and (_format_version(path) or "").startswith("2.")
+    ]
+    if not named:
+        pytest.skip("no GET-Evidence CGI 2.x copy named by its assembly on disk")
+    found = min(named, key=lambda path: (path.stat().st_size, path.as_posix()))
+    sniffed = sniff(found)
+    assert sniffed.format == "cgi_var" and sniffed.layers == ("bz2",)
+    assert sniffed.build is not None and (sniffed.build_evidence or "").startswith("#GENOME_REFERENCE\t"), "the build is the header's"
+    assert "TITLE" not in _header_keys(found)
+    loaded = load(sniffed)
+    facet = loaded.facets.collect().row(0, named=True)
+    assert facet["format_id"] == "cgi_var" and facet["caller_version"].startswith("2.0")
+    assert (facet["assembly_label"], facet["assembly_label_basis"]) == (sniffed.build, "stated")
+    assert (facet["callset_type"], facet["absence_means"]) == ("wgs", "blocks"), "no title: the rows' spread says genome"
+    assert facet["dropped_fields"] == ["varScoreVAF"]
+    counts = loaded.calls.select(
+        pl.len().alias("rows"),
+        pl.col("sample_filters").is_not_null().sum().alias("filtered"),
+        pl.col("ids").is_not_null().sum().alias("with_ids"),
+        pl.col("phase_sets").is_not_null().sum().alias("linked"),
+    ).collect().row(0, named=True)
+    assert 0 < counts["filtered"] <= counts["rows"], "2.0's varQuality is kept as the filter"
+    assert counts["with_ids"] > 0.3 * counts["rows"] and counts["linked"] > 0, counts
+    kinds = dict(loaded.blocks.group_by("kind").len().collect().iter_rows())
+    assert kinds.get("ref", 0) > 0 and kinds.get("no_call", 0) > 0
+    assert not [w for w in loaded.warnings if "dropped" in w], loaded.warnings
+    # Each haplotype-score warning counts haplotypes of called rows: at most two per row.
+    scored = [w for w in loaded.warnings if "haplotype" in w and "score" in w.lower()]
+    assert scored, "a 2.0 file carries both allele scores, so the VAF/EAF comparison runs"
+    for warning in scored:
+        assert int(warning.split(" ", 1)[0]) <= 2 * counts["rows"], warning

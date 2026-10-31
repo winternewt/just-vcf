@@ -91,3 +91,17 @@ refuses. It predates F30; the lift's rows take the chain's name and its mates th
 Repairs: name lifted rows by the collection too, which renames every lifted scaffold row; or map the
 chain's name to the collection's through F19's alias table before either is written, which is the
 table's job. Not fixed: which name a lifted facet should carry is a naming rule for the whole lift.
+
+## F33 — `write_vcf(resolved_only=True)` keeps a phase set whose member it skipped
+
+Severity: low · Found 2026-10-31 by the builder making phase blocks follow F23's rule (merge c94251f).
+
+`resolved_only=True` skips each unwritable row and writes the rest, phase sets included. When a skipped
+row sat inside a phase set (`PS`, or a VCF 4.5 `PSL`), the set's other rows are written with the same
+set and phase, so on reload `cis_phased_blocks` builds that haplotype's block from fewer alleles than the
+source had, and a block the source facet withholds (for the skipped row's allele) comes back stated. It
+predates F23 and holds for every unwritable reason, `ref_mismatch` and `ref_unstated` alike. Repairs,
+none made: write the set's remaining rows unphased, which drops phase the source did state for them; cut
+the set at the skipped row into two sets, which states a break the source did not; or refuse a set with
+a skipped member and count it, which loses rows `resolved_only` promises to write. Which of the three is
+a judgement on what a written set may claim.

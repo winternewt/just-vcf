@@ -60,6 +60,14 @@ reader, `schema.unstated_sequence_alt`: such a row stays behind in a lift (`sour
 `stated`. Symbolic and ALT-less rows are unaffected: the three files above lift 568, 538 and 118 rows
 as before, none left behind as `source_ref_unstated`.
 
+**Amended 2026-10-31** (the two readers audit 13 left): `concordance` and `consensus` keyed an allele
+on `ref`, else `source_ref`, and never read `ref_check`, so `N` → `G` over `T` was compared as `T` →
+`G`. `concordance` now counts such an ALT in `excluded` as `ref_unstated` and reads such a row for no
+other facet's allele at its position (`_alleles`, `_one_sided`); `consensus` states no allele from it
+and reads it as silent, `ref_unstated`, for another facet's allele there, never as `site`, `ref_block`
+or `absence` (`_stated_alleles`, `_readings`, `CONSENSUS_VERSION` 5). A symbolic ALT on such a row
+still meets by type and extent. Tests in `tests/test_unstated_ref.py`.
+
 ## F32 — `write_vcf_zarr` leaves a breakend's mate as held and declares none
 
 Severity: low · Found 2026-10-26 in an audit of F30's repair; until now only the CHANGELOG said so.

@@ -173,11 +173,12 @@ def prive_proportions(
         "n_sites_observed": counts.n_observed,
         "n_sites_absent_as_reference": counts.n_absent_as_reference,
         "n_sites_unusable": counts.n_unusable,
+        "n_sites_ref_unstated": counts.n_ref_unstated,
         "coverage": counts.n_used / n_panel if n_panel else 0.0,
     }
     logger.info(
-        "%s on Privé: %d of %d sites (%d observed, %d absent read as reference, %d unusable)",
-        facet.facet_id, counts.n_used, n_panel, counts.n_observed, counts.n_absent_as_reference, counts.n_unusable,
+        "%s on Privé: %d of %d sites (%d observed, %d absent read as reference, %d unusable, %d with a REF that states no base)",
+        facet.facet_id, counts.n_used, n_panel, counts.n_observed, counts.n_absent_as_reference, counts.n_unusable, counts.n_ref_unstated,
     )
     if counts.n_used < max(min_sites, 1):
         return AncestryEstimate(**measured, reason="too_few_sites", detail=f"{counts.n_used} sites read, fewer than {min_sites}")

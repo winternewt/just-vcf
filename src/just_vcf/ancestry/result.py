@@ -94,6 +94,10 @@ class AncestryEstimate(BaseModel):
     """Sites the source wrote but that could not be read against the panel's two alleles: a no-call
     or half-call, a haploid call, another allele, a row flagged by `split_signal`, or two rows that
     both fit."""
+    n_sites_ref_unstated: int | None = None
+    """Sites the source wrote only rows for whose REF states no base (`ref_check = unstated`, a
+    copy-number caller's `N`) and whose ALT is a sequence allele spelled against it: unknown, never
+    read as a genotype and never as an absence."""
     coverage: float | None = None
     """`n_sites_used / n_sites_panel`."""
 

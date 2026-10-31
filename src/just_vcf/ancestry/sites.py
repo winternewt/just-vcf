@@ -25,6 +25,8 @@ class SiteDosages:
     n_observed: int
     n_absent_as_reference: int
     n_unusable: int
+    n_ref_unstated: int
+    """Sites whose every row spells a sequence ALT against a source REF that states no base (F23)."""
 
     @property
     def n_used(self) -> int:
@@ -41,4 +43,5 @@ def site_dosages(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> SiteDosag
         n_observed=int((basis == SiteBasis.OBSERVED.value).sum()),
         n_absent_as_reference=int((basis == SiteBasis.ABSENT_AS_REFERENCE.value).sum()),
         n_unusable=int((basis == SiteBasis.UNUSABLE.value).sum()),
+        n_ref_unstated=int((basis == SiteBasis.REF_UNSTATED.value).sum()),
     )

@@ -14,10 +14,15 @@ Per panel site, in this order:
 1. **Rows at the site.** Every `calls` row of the facet at the site's `(chrom, pos)` is read against
    the panel's two alleles. A row is usable when it has no `split_signal` (in a pre-split file a `0`
    can mean another ALT; `rejoin_split` re-joins such rows first), exactly two haplotypes, and both
-   of them one of the panel's two alleles (a null haplotype is neither). Its count is the number of
-   haplotypes carrying the panel's effect allele. Exactly one usable row gives the site's count.
-   Rows that are there but none usable, or two usable rows, make the site **unusable**: unknown,
-   never 0. A no-call is the source saying it looked and could not tell.
+   of them one of the panel's two alleles (a null haplotype is neither), unless its source REF states
+   no base and an ALT of it is a sequence allele (`ref_check = unstated`, `schema.unstated_sequence_alt`,
+   F23): that ALT was spelled against the `N`, so `N` → `G`, `1/1`, names no base beside `G` and is
+   not read. Its count is the number of haplotypes carrying the panel's effect allele. Exactly one
+   usable row gives the site's count. Rows that are there but none usable, or two usable rows, make
+   the site **unusable**: unknown, never 0. A no-call is the source saying it looked and could not
+   tell. Where every row at the site is one spelled against an unstated REF, the site is
+   **ref_unstated** instead: unknown too, and still rows at the position, so step 2 does not apply.
+   Before `resolve_ref` a row's `ref_check` is `not_run` and it is read as written.
 2. **No row.** What that means is the facet's `absence_means`: `weak_reference` (a whole-genome callset
    without blocks) reads it as homozygous for the panel's reference allele, count 0; `blocks` (a
    gVCF) does so only inside a `ref` block; `reference` (CGI's VCF, whose producer called what it
@@ -36,7 +41,7 @@ from enum import Enum
 import polars as pl
 
 from just_vcf.loading import Loaded
-from just_vcf.schema import CONTIG_ALIASES, AbsenceMeans, BlockKind
+from just_vcf.schema import CONTIG_ALIASES, AbsenceMeans, BlockKind, unstated_sequence_alt
 
 AUTOSOMES: frozenset[str] = frozenset(str(n) for n in range(1, 23))
 """Canonical `chrom` names on which an absence can be read as homozygous reference."""
@@ -54,6 +59,10 @@ class SiteBasis(str, Enum):
     """No row, and the facet's `absence_means` reads the silence as homozygous reference."""
     UNUSABLE = "unusable"
     """Rows at the site, none usable or more than one usable: unknown."""
+    REF_UNSTATED = "ref_unstated"
+    """Rows at the site, every one with a source REF that states no base and a sequence ALT spelled
+    against it (`ref_check = unstated`, F23): unknown. Still rows at the position, so the facet's
+    silence is not read there."""
     ABSENT = "absent"
     """No row, and the facet's silence says nothing: unknown."""
 
@@ -110,7 +119,7 @@ def read_site_genotypes(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> pl
     keys = sites.lazy().select("_site", "chrom", "pos", "ref_allele", "effect_allele")
     rows = (
         loaded.calls.filter(pl.col("facet_id") == facet.facet_id)
-        .select("chrom", "pos", "gt_alleles", "split_signal")
+        .select("chrom", "pos", "gt_alleles", "split_signal", _unstated=unstated_sequence_alt())
         .join(keys.select("chrom", "pos").unique(), on=["chrom", "pos"], how="semi")
         .with_row_index("_row")
     )
@@ -120,19 +129,21 @@ def read_site_genotypes(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> pl
     )
     allele = pl.col("_allele")
     per_row = (
-        pairs.select("_site", "_row", "_ploidy", "_split", "ref_allele", "effect_allele", pl.col("gt_alleles").alias("_allele"))
+        pairs.select("_site", "_row", "_ploidy", "_split", "_unstated", "ref_allele", "effect_allele", pl.col("gt_alleles").alias("_allele"))
         .explode("_allele", empty_as_null=True)
         .group_by("_site", "_row")
         .agg(
             pl.col("_ploidy").first(),
             pl.col("_split").first(),
+            pl.col("_unstated").first(),
             _in_pair=((allele == pl.col("ref_allele")) | (allele == pl.col("effect_allele"))).fill_null(False).sum(),
             _effect=(allele == pl.col("effect_allele")).fill_null(False).sum(),
         )
-        .with_columns(_usable=(~pl.col("_split")) & (pl.col("_ploidy") == 2) & (pl.col("_in_pair") == 2))
+        .with_columns(_usable=(~pl.col("_split")) & (~pl.col("_unstated")) & (pl.col("_ploidy") == 2) & (pl.col("_in_pair") == 2))
     )
     per_site = per_row.group_by("_site").agg(
         _n_usable=pl.col("_usable").sum(),
+        _all_unstated=pl.col("_unstated").all(),
         _count=pl.col("_effect").filter(pl.col("_usable")).first(),
     )
     reference = _absent_as_reference(loaded, facet, sites)
@@ -150,6 +161,8 @@ def read_site_genotypes(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> pl
             .alias("count"),
             pl.when(pl.col("_n_usable") == 1)
             .then(pl.lit(SiteBasis.OBSERVED.value))
+            .when((pl.col("_n_usable") == 0) & pl.col("_all_unstated"))
+            .then(pl.lit(SiteBasis.REF_UNSTATED.value))
             .when(pl.col("_n_usable").is_not_null())
             .then(pl.lit(SiteBasis.UNUSABLE.value))
             .when(pl.col("_reference").fill_null(False))

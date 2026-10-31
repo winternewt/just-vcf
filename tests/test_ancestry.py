@@ -35,7 +35,10 @@ from just_vcf.ancestry._projection import DEFAULT_MISSING, build_reference_pca  
 from just_vcf.ancestry.pca import PANEL_META_KEYS, panel_paths  # noqa: E402
 from just_vcf.ancestry.sites import facet_of, panel_sites, site_dosages  # noqa: E402
 from just_vcf.assembly import ASSEMBLY_LENGTHS  # noqa: E402
+from just_vcf.reference import resolve_ref  # noqa: E402
 from just_vcf.schema import BLOCKS, conform  # noqa: E402
+from test_unstated_ref import SITE_RECORDS, site_panel, store, with_facet  # noqa: E402, F401 (store is a fixture)
+from test_unstated_ref import vcf as unstated_vcf  # noqa: E402
 
 SEED = 20261022
 POPULATIONS = {"AFR": "Yoruba", "EAS": "Han", "EUR": "French"}
@@ -156,7 +159,7 @@ def test_each_population_is_placed_from_a_full_vcf(panel, tmp_path: Path, group:
     assert sum(result.proportions.values()) == pytest.approx(1.0, abs=0.01)
     assert result.proportion_method == "pca_nnls"
     assert (result.n_sites_panel, result.n_sites_observed, result.n_sites_used) == (sites.height, sites.height, sites.height)
-    assert result.n_sites_absent_as_reference == 0 and result.n_sites_unusable == 0
+    assert result.n_sites_absent_as_reference == 0 and result.n_sites_unusable == 0 and result.n_sites_ref_unstated == 0
     assert result.coverage == 1.0 and result.panel_assembly == result.facet_assembly == "GRCh37"
     assert result.group_to_continental == {g: g for g in POPULATIONS}
     assert infer_ancestry(loaded, panel_dir, "synth") == result
@@ -285,6 +288,17 @@ def test_site_rules_weak_reference_reads_autosomal_absence_as_reference(tmp_path
     expected[12] = 0.0  # 2:100, absent; X:100 stays missing (not an autosome)
     assert got.dosage.tolist() == expected
     assert (got.n_observed, got.n_absent_as_reference, got.n_unusable) == (5, 2, 6)
+
+
+def test_site_dosages_count_rows_spelled_against_an_unstated_ref_apart(tmp_path: Path, store) -> None:  # noqa: F811
+    """A row whose source REF is only `N` reads no dosage at a site where its ALT is a sequence allele
+    (`tests/test_unstated_ref.py` has the reading): those sites are counted as `n_ref_unstated`, apart
+    from `n_unusable`, and enter neither `n_used` nor, on a whole-genome facet, the absence count."""
+    loaded = with_facet(resolve_ref(load(unstated_vcf(tmp_path, SITE_RECORDS, "sites.vcf")), store), absence_means="weak_reference")
+    got = site_dosages(loaded, facet_of(loaded), site_panel())
+    # 300, 400, 500 unstated; 600 stated 1/1; 700 a <DEL>, no panel allele; 800 the stated row beside an unstated one; 900 absent.
+    assert got.dosage.tolist() == [M, M, M, 2, M, 1, 0]
+    assert (got.n_observed, got.n_absent_as_reference, got.n_unusable, got.n_ref_unstated) == (2, 1, 1, 3)
 
 
 def test_site_rules_blocks_read_absence_inside_reference_blocks_only(tmp_path: Path) -> None:

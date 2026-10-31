@@ -16,7 +16,10 @@ not about who their people are.
 - **Genotypes.** Each facet is read at the panel's sites by `just_vcf.site_genotypes`, the reading
   population inference uses: a row's literal alleles against the panel's two, so an array export (no
   REF) reads like a VCF; a no-call, a half call, a haploid call or a row of a pre-split site is unknown,
-  never 0; an absent site is homozygous reference only where the facet's `absence_means` says so
+  never 0; so is a row whose source REF is only `N` (`ref_check = unstated`, a copy-number caller's
+  REF) with a sequence ALT, whose letters were spelled against the `N` (`N` → `G`, `1/1`, names no
+  base beside `G`): the site is unknown, `ref_unstated`, and still a row there, so the absence rule
+  does not reach it; an absent site is homozygous reference only where the facet's `absence_means` says so
   (`weak_reference`, inside a `ref` block for `blocks`, outside every block for `reference`). An
   array's silence stays unknown.
 - **Kinship.** KING-robust (Manichaikul et al. 2010), the between-family form PLINK 2's `--make-king`

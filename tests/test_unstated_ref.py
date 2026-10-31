@@ -35,6 +35,8 @@ from just_vcf.karyotype import measure
 from just_vcf.liftover import UNLIFTED_REASONS
 from just_vcf.loading import Loaded
 from just_vcf.schema import CALLS
+from just_vcf.site_genotypes import SiteBasis, panel_sites, read_site_genotypes
+from just_vcf.site_genotypes import facet_of as site_facet
 from just_vcf.vcf_zarr import write_vcf_zarr
 from just_vcf.vrs import WITHHELD_REASONS
 from just_vcf.writing import UnwritableRowsError
@@ -539,3 +541,59 @@ def test_variant_classes_are_counted_at_load_before_any_ref_is_read(tmp_path: Pa
     resolved_facet = resolve_ref(loaded, store)
     assert resolved_facet.calls.collect()["ref_check"].to_list() == ["unstated", "unstated"]
     assert resolved_facet.facets.collect()["variant_classes"].item().to_list() == at_load
+
+
+SITE_RECORDS = [
+    (300, "unstated_hom_alt", "N", other(base(300)), "1/1"),
+    (400, "unstated_het", "N", other(base(400)), "0/1"),
+    (500, "unstated_hom_ref", "N", other(base(500)), "0/0"),
+    (600, "stated_hom_alt", base(600), other(base(600)), "1/1"),
+    (700, "unstated_del", "N", "<DEL>", "0/1"),
+    (800, "beside_stated_unstated", "N", other(base(800)), "1/1"),
+    (800, "beside_stated_stated", base(800), other(base(800)), "0/1"),
+]
+SITE_POSITIONS = [300, 400, 500, 600, 700, 800, 900]
+"""Panel sites: each record's position, and 900, where the facet wrote nothing."""
+
+
+def site_panel() -> pl.DataFrame:
+    """A panel over `SITE_POSITIONS`: the reference's base, and `other` of it as the effect allele."""
+    positions = SITE_POSITIONS
+    return panel_sites(
+        pl.DataFrame({"chrom": ["1"] * len(positions), "pos": positions, "ref_allele": [base(p) for p in positions], "effect_allele": [other(base(p)) for p in positions]})
+    )
+
+
+def read_sites(loaded: Loaded) -> dict[int, tuple[int | None, str]]:
+    """`(count, basis)` per panel position, as relatedness and ancestry read the facet."""
+    got = read_site_genotypes(loaded, site_facet(loaded), site_panel())
+    return {SITE_POSITIONS[r["site"]]: (r["count"], r["basis"]) for r in got.iter_rows(named=True)}
+
+
+def test_site_genotypes_read_no_genotype_spelled_against_an_unstated_ref(tmp_path: Path, store: ReferenceStore) -> None:
+    """Relatedness and ancestry read a facet at panel sites from its rows' literal alleles. `N` → `X`
+    with GT `1/1` names `X` twice and no base beside it: read as written, it is two copies of the
+    panel's effect allele `X`, the same as a stated `A` → `X`, at a site whose base the source never
+    named. Its `0/1` and `0/0` were unknown before only because the letter `N` is neither panel allele.
+    All three are `ref_unstated` now: unknown, and still a row at the position, so a whole-genome
+    facet's silence is not read as reference there. A stated row beside one at the same position is
+    the one usable row. A symbolic ALT reads as before (here `<DEL>` is no panel allele: unusable);
+    before `resolve_ref` the rule cannot apply (`not_run`)."""
+    path = vcf(tmp_path, SITE_RECORDS, "sites.vcf")
+    loaded = with_facet(resolve_ref(load(path), store), absence_means="weak_reference")
+    assert read_sites(loaded) == {
+        300: (None, "ref_unstated"),
+        400: (None, "ref_unstated"),
+        500: (None, "ref_unstated"),
+        600: (2, "observed"),
+        700: (None, "unusable"),
+        800: (1, "observed"),
+        900: (0, "absent_as_reference"),
+    }
+    assert SiteBasis("ref_unstated") is SiteBasis.REF_UNSTATED
+    # The twin writes the reference's base where the source wrote N: the same genotypes are read.
+    twin = [(p, i, base(p), alt, g) for p, i, ref, alt, g in SITE_RECORDS if p in (300, 400, 500)]
+    stated = with_facet(resolve_ref(load(vcf(tmp_path, twin, "twin.vcf")), store), absence_means="weak_reference")
+    assert {p: read_sites(stated)[p] for p in (300, 400, 500)} == {300: (2, "observed"), 400: (1, "observed"), 500: (0, "observed")}
+    # Before `resolve_ref` no REF was compared: the row is read as written.
+    assert read_sites(with_facet(load(path), absence_means="weak_reference"))[300] == (2, "observed")

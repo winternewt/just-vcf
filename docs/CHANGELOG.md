@@ -4,6 +4,17 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`normalize` keeps the duplicate whose REF was stated and matched** (merge audit 14, finding 5).
+  Two rows equal in everything but how the source wrote them (`source_ref`, `ref_check`, ...) are one
+  row, and canonical order chose which: it sorts `source_ref`, so of `N` → `A` (`unstated`) and `T` →
+  `A` (`match`) over a reference `T` the `unstated` row was kept, whose ALT no reader takes as stated,
+  and of `C` → `A` (`mismatch`) and `T` → `A` the unwritable `mismatch`. The kept row is now chosen by
+  `ref_check` first, `match`, null (a REF read from the reference with nothing to compare), `not_run`,
+  `unstated`, `mismatch`, then canonical order, and stays at its own place in that order.
+  `NORMALIZE_VERSION` 10, since a facet holding such a pair emits another row; every normalized facet
+  is renamed. Test: `tests/test_unstated_ref.py::test_normalize_keeps_the_stated_row_of_two_that_differ_only_in_their_source_ref`,
+  both input orders, failing on the code before.
+
 - **`rejoin_split` leaves a split site spelled against an `N` as written** (merge audit 14, finding
   4). On a facet whose REF was read, a split site whose rows' source REF is `N` (`ref_check =
   unstated`, sequence ALTs) joined into one row with `ref_check = not_run`, which every reader reads as

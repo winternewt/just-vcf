@@ -37,7 +37,9 @@ The rules are in docs/SCHEMA.md ("Normalizing"); in short:
    base after its REF span instead.
 3. **Dedup and sort.** Rows that state the same thing are kept once, counted: equal in every column
    but the ones a move clears (`_POSITIONAL`), so a moved indel and its unmoved twin with the same
-   genotype and evidence are one row, the unmoved one. Rows for the same allele at the same position
+   genotype and evidence are one row, the unmoved one; of any two, the one whose REF was stated and
+   matched before one with no comparison, one stating no base or one the reference contradicts
+   (`_KEPT_FIRST`). Rows for the same allele at the same position
    that differ in anything else are all kept, with a warning (charter 8: disagreement is data, never
    resolved by picking a winner). The result is in canonical order (SCHEMA.md Decision 11).
 
@@ -65,11 +67,12 @@ from just_vcf.schema import CALLS, EMPTY_ALLELE, SCHEMA_VERSION, RefCheck, Split
 
 logger = logging.getLogger(__name__)
 
-NORMALIZE_VERSION = 9
+NORMALIZE_VERSION = 10
 """Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits (6: RM282's
 per-ALT SV columns split with their ALT, the intervals of a moved row cleared; 7: F19's scaffold aliases;
 8: a split row's `hq` null on each GT slot it writes `.`; 9: RM3's anchored insertion points aligned, and
-a deletion at a contig's first base anchored on the base after)."""
+a deletion at a contig's first base anchored on the base after; 10: of two duplicates the one whose REF
+was stated and matched is kept, `_KEPT_FIRST`)."""
 
 NORMALIZE_LAYOUT = 1
 """How a normalize spill's files hold the rows, a key in its manifest and in its generation's key: 1 is
@@ -97,6 +100,15 @@ _WINDOW_GROWTH = 16
 _POSITIONAL = ("source_ref", "ref_check", "source_gt", "vrs_allele_ids", "vrs_errors", "cipos", "ciend")
 """Columns that describe the source's representation at the source's position: null on a row that
 left-alignment or trimming changed."""
+
+_KEPT_FIRST = {RefCheck.MATCH.value: 0, RefCheck.NOT_RUN.value: 2, RefCheck.UNSTATED.value: 3, RefCheck.MISMATCH.value: 4}
+_KEPT_FIRST_NULL = 1
+"""Which of two duplicates is kept, by `ref_check`, lowest first: a REF the source stated and the
+reference confirmed (`match`); then one read from the reference with nothing to compare (null: a row
+this step moved, a lifted or an array row); then one not compared (`not_run`); then a REF stating no
+base (`unstated`: its sequence ALT is not read, Decision 2); last a REF the reference contradicts
+(`mismatch`, unwritable). Ties keep canonical order. Before `NORMALIZE_VERSION` 10 canonical order
+alone decided, so `N` → `A` was kept over `T` → `A` where the reference reads `T`."""
 
 
 def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = None) -> Loaded:
@@ -202,9 +214,20 @@ def _normalize_contig(
     work = _align(_split(rows.filter(~flagged), counts), store, contig, counts, rereads, from_file)
     ordered = canonical_order(pl.concat([work, held], how="vertical").lazy()).collect()
     # A duplicate states what another row states: the columns a move clears describe how the source
-    # wrote the row, not what it says, so they do not make two rows differ. Canonical order puts a row
-    # with `source_ref` first, so of a moved indel and its unmoved twin the unmoved one is kept.
-    unique = ordered.unique(subset=[name for name in ordered.columns if name not in _POSITIONAL], keep="first", maintain_order=True)
+    # wrote the row, not what it says, so they do not make two rows differ. Which of them is kept is
+    # read from `ref_check` first (`_KEPT_FIRST`), then canonical order, which puts a row with
+    # `source_ref` first, so of a moved indel and its unmoved twin the unmoved one is kept. The kept
+    # row stays at its own place in canonical order.
+    subset = [name for name in ordered.columns if name not in _POSITIONAL]
+    rank = pl.col("ref_check").cast(pl.String).replace_strict(_KEPT_FIRST, return_dtype=pl.UInt8).fill_null(_KEPT_FIRST_NULL)
+    unique = (
+        ordered.with_row_index("_order")
+        .with_columns(rank.alias("_rank"))
+        .sort("_rank", maintain_order=True)
+        .unique(subset=subset, keep="first", maintain_order=True)
+        .sort("_order")
+        .drop("_order", "_rank")
+    )
     counts["duplicates"] += ordered.height - unique.height
     written_ref = pl.coalesce(pl.col("ref"), pl.col("source_ref"))
     conflicts = (

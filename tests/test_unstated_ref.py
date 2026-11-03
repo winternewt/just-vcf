@@ -185,6 +185,34 @@ def test_normalize_leaves_an_unstated_row_as_written_and_says_why(tmp_path: Path
     assert any(w == "1 row(s) not left-aligned or trimmed: the source REF states no base (ref_check unstated)" for w in out.warnings)
 
 
+@pytest.mark.parametrize("stated_first", [True, False])
+def test_normalize_keeps_the_stated_row_of_two_that_differ_only_in_their_source_ref(tmp_path: Path, store: ReferenceStore, stated_first: bool) -> None:
+    """Two rows that state the same allele and genotype are one row (`normalize`'s dedup ignores the
+    columns that describe how the source wrote it, `source_ref` and `ref_check` among them). Which one is
+    kept decides what every reader sees: canonical order put `N` before `T`, so of `N` → `A` and `T` →
+    `A` (the reference reads `T`) the `unstated` row was kept and the stated `match` dropped, and of `C`
+    → `A` and `T` → `A` the `mismatch`. The row whose REF was stated and matched is kept, whichever
+    order the rows came in; between the other two, `unstated` before `mismatch`."""
+    at = [p for p in range(1000, N_RUN) if base(p) == "T"][:3]
+    cases = [
+        (at[0], [("N", "unstated")]),
+        (at[1], [("C", "mismatch")]),
+        (at[2], [("N", "unstated"), ("C", "mismatch")]),
+    ]
+    records = []
+    for pos, others in cases:
+        rows = [(pos, ".", "T", "A", "1/1")] if stated_first else []
+        rows += [(pos, ".", ref, "A", "1/1") for ref, _ in others]
+        records += rows if stated_first else [*rows, (pos, ".", "T", "A", "1/1")]
+    # Where the reference reads `G`, neither `N` nor `C` matches: canonical order would keep the `C`.
+    g = next(p for p in range(at[2] + 1, N_RUN) if base(p) == "G")
+    pair = [(g, ".", "N", "A", "1/1"), (g, ".", "C", "A", "1/1")]
+    source = resolve_ref(load(vcf(tmp_path, sorted(records + (pair if stated_first else pair[::-1]), key=lambda r: r[0]))), store)
+    out = normalize(source, store).calls.collect()
+    kept = {p: out.filter(pl.col("pos") == p).select("source_ref", "ref_check").rows() for p in [*at, g]}
+    assert kept == {**{p: [("T", "match")] for p in at}, g: [("N", "unstated")]}
+
+
 def unwritable() -> dict[str, int]:
     """What the writers leave out of `RECORDS`: a mismatch, and an unstated row's sequence ALT, which
     written beside the reference's base would read back as a stated `match` (`N` → `NAC` as `C` → `NAC`)."""

@@ -13,6 +13,22 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
   `gap_too_large`; `split_across_blocks` now means a span whose first or last base is in no block.
   Lifted facets' ids change with the version.
 
+- **Behaviour change: `ancestry.consensus` takes one panel's methods as one witness** (RM5). It
+  multiplied every vote and every set of proportions as independent evidence, so one panel's vote and
+  proportions, or two resolutions of it, sharpened each other: a 50/50 EUR/EAS person on a synthetic
+  panel came out 0.709 EAS where no reading gave more than 0.60. Now readings of panels not declared
+  disjoint are one witness, answered by their mean (`combination = mean`), which gives the leader no
+  more than any one reading did; only witnesses the caller declares disjoint, `disjoint_panels=[(a,
+  b)]`, are multiplied (`product_of_means`, as is any call with a `prior`). The same person reads
+  0.551 EAS. Nothing infers disjointness from panel names, so by default every panel is one witness.
+  New, additive: `AncestryEstimate.combination` and `.witnesses` (`ConsensusWitness`,
+  `WitnessReading`: the readings pooled, their mean and their spread per group, and readings left out
+  because no group of theirs is continental), `CONSENSUS_COMBINATIONS`, `CONSENSUS_READINGS`, and the
+  reason `no_continental_groups`, where the old rule answered a flat 0.2 per group. Refused now: a
+  consensus given as an input, and a `prior` that leaves a group out or at 0 (it was read as weight 1).
+  docs/SCHEMA.md "Combining ancestry estimates" has the rule and the lead's calls for veto. Tests:
+  `tests/test_ancestry.py`, the consensus tests.
+
 - **`person_karyotype(person, pairs=None, array_y=None)` weighs a person's facets against each
   other** (RM269, new, additive; `PersonKaryotype` exported, `CallsetKaryotype` and `SetAsideFacet`
   in `just_vcf.karyotype`, `SINGLE_PARENT_RELATIONS` in `just_vcf.links`). Facets joined by one-parent

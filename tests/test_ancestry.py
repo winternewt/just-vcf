@@ -25,6 +25,7 @@ from just_vcf.ancestry import (  # noqa: E402
     build_pca_panel,
     consensus,
     continental_of,
+    to_continental,
     infer_ancestry,
     build_prive_reference,
     load_pca_panel,
@@ -382,7 +383,29 @@ def test_estimate_holds_an_answer_or_a_reason() -> None:
     assert "too_few_sites" in ANCESTRY_REASONS
 
 
+def _readings(*estimates: AncestryEstimate) -> list[dict[str, float]]:
+    """Each estimate's vote and proportions, folded onto the five continental groups."""
+    return [
+        to_continental(distribution, estimate.group_to_continental)
+        for estimate in estimates
+        for distribution in (estimate.probabilities, estimate.proportions)
+        if distribution
+    ]
+
+
+def _knn(panel: str, dist: dict[str, float]) -> AncestryEstimate:
+    return AncestryEstimate(method="pca_knn", panel=panel, estimate=max(dist, key=dist.get), probabilities=dist)
+
+
+def _mixed_person(sites: pl.DataFrame, freqs: dict[str, np.ndarray], path: Path) -> Loaded:
+    """Each allele drawn from an even mix of EUR's and EAS's frequencies (seed 1): no method is sure."""
+    mixed = 0.5 * freqs["EUR"] + 0.5 * freqs["EAS"]
+    return load(write_vcf(path, sites, np.random.default_rng(1).binomial(2, mixed).astype(np.int8)))
+
+
 def test_consensus_of_two_panels(panel, tmp_path: Path) -> None:
+    """`synth2` is drawn from another seed, so its reference samples are not `synth`'s. Declared so, the
+    two are two witnesses and multiplied; undeclared, they are one and averaged."""
     panel_dir, sites, freqs, _ = panel
     other_sites, _, genotypes, labels = synthetic_panel(SEED + 2)
     build_pca_panel(genotypes, other_sites, labels, panel="synth2", assembly="GRCh37", panel_dir=panel_dir)
@@ -391,26 +414,154 @@ def test_consensus_of_two_panels(panel, tmp_path: Path) -> None:
     second = infer_ancestry(loaded, panel_dir, "synth2")
     unknown = infer_ancestry(loaded, tmp_path / "empty", "synth")
 
-    fused = consensus([first, second, unknown])
-    assert fused.estimate == "EAS" and fused.method == "consensus"
+    fused = consensus([first, second, unknown], disjoint_panels=[("synth", "synth2")])
+    assert fused.estimate == "EAS" and fused.method == "consensus" and fused.combination == "product_of_means"
     assert fused.panel == "synth+synth2" and fused.facet_ids == first.facet_ids
+    assert [witness.panels for witness in fused.witnesses] == [("synth",), ("synth2",)]
     assert set(fused.probabilities) == set(CANONICAL_SUPERPOPS)
     assert sum(fused.probabilities.values()) == pytest.approx(1.0, abs=1e-3)
-    assert fused == consensus([first, second])
-    assert fused.probabilities["EAS"] >= first.probabilities["EAS"] - 1e-9
+    assert fused == consensus([first, second], disjoint_panels=[("synth2", "synth")])
+    # Two witnesses are independent factors: the product of their smoothed means, renormalised.
+    product = {g: np.prod([w.mean[g] + 1e-3 for w in fused.witnesses]) for g in CANONICAL_SUPERPOPS}
+    assert fused.probabilities == pytest.approx({g: v / sum(product.values()) for g, v in product.items()}, abs=2e-4)
+
+    pooled = consensus([first, second, unknown])
+    assert pooled.combination == "mean" and [witness.panels for witness in pooled.witnesses] == [("synth", "synth2")]
+    readings = _readings(first, second)
+    expected = {g: sum(r[g] for r in readings) / len(readings) for g in CANONICAL_SUPERPOPS}
+    assert pooled.probabilities == pytest.approx(expected, abs=1e-4)
+    assert pooled.estimate == "EAS" and pooled.probabilities["EAS"] < fused.probabilities["EAS"]
 
     nothing = consensus([unknown])
     assert not nothing and nothing.reason == "no_estimates" and "panel_missing" in nothing.detail
+    assert nothing.combination is None and nothing.witnesses == ()
 
 
-def test_consensus_agreement_sharpens_and_disagreement_flattens() -> None:
-    def knn(dist: dict[str, float]) -> AncestryEstimate:
-        return AncestryEstimate(method="pca_knn", panel="p", estimate=max(dist, key=dist.get), probabilities=dist)
+def test_one_panels_methods_are_one_witness(panel, tmp_path: Path) -> None:
+    """Two resolutions of one panel, each with a vote and proportions, see the same reference samples at
+    the same sites: four readings of one witness. Their agreement is not independent evidence, so the
+    consensus may give its leader no more than the most any one of them gave it. The product it replaced
+    counted them as four and gave this person 0.7089 for EAS where no reading gave more than 0.6."""
+    panel_dir, sites, freqs, _ = panel
+    loaded = _mixed_person(sites, freqs, tmp_path / "m.vcf")
+    estimates = (infer_ancestry(loaded, panel_dir, "synth"), infer_ancestry(loaded, panel_dir, "synth", resolution="population"))
+    readings = _readings(*estimates)
+    assert len(readings) == 4
+    # The fixture's premise: no reading is sure, so a sharpened answer would show.
+    assert max(max(reading.values()) for reading in readings) < 0.95
 
-    agree = consensus([knn({"EUR": 0.9, "AMR": 0.1}), knn({"EUR": 0.85, "SAS": 0.15}), knn({"EUR": 1.0})])
-    assert agree.estimate == "EUR" and agree.probabilities["EUR"] > 0.95
-    split = consensus([knn({"EUR": 0.9, "EAS": 0.1}), knn({"EAS": 0.9, "EUR": 0.1})])
-    assert max(split.probabilities.values()) < 0.95 and split.margin < agree.margin
+    fused = consensus(estimates)
+    leader = fused.estimate
+    assert fused.probabilities[leader] <= max(reading[leader] for reading in readings) + 1e-4
+    assert fused.combination == "mean" and fused.panel == "synth"
+    (witness,) = fused.witnesses
+    assert witness.panels == ("synth",) and len(witness.readings) == 4 and witness.left_out == ()
+    assert sorted(r.reading for r in witness.readings) == ["probabilities"] * 2 + ["proportions"] * 2
+    assert {r.method for r in witness.readings} == {"pca_knn"}
+    for group in CANONICAL_SUPERPOPS:
+        values = [reading[group] for reading in readings]
+        assert witness.mean[group] == pytest.approx(sum(values) / len(values), abs=1e-4)
+        assert witness.spread[group] == pytest.approx(max(values) - min(values), abs=1e-4)
+    assert fused.probabilities == witness.mean
+    # The vote and the proportions disagree here, and the spread says so rather than averaging it away.
+    assert max(witness.spread.values()) > 0.05
+
+    # Agreement does not sharpen: the same readings again, in any order, give the same answer.
+    assert consensus([*estimates, *estimates]).probabilities == fused.probabilities
+    assert consensus(estimates[::-1]) == fused
+
+
+def test_prive_on_the_same_samples_is_the_same_witness(panel, prive, tmp_path: Path) -> None:
+    """The `prive` fixture is built from `synth`'s own genotype matrix: another method and another panel
+    name over the same reference samples and sites. Nothing tells the two names apart as disjoint, so
+    they are one witness unless the caller says otherwise."""
+    panel_dir, sites, freqs, _ = panel
+    reference, _, _ = prive
+    loaded = _mixed_person(sites, freqs, tmp_path / "m.vcf")
+    estimates = (infer_ancestry(loaded, panel_dir, "synth"), prive_proportions(loaded, reference, n_bootstrap=0))
+    readings = _readings(*estimates)
+    assert len(readings) == 3
+
+    fused = consensus(estimates)
+    assert fused.combination == "mean" and [w.panels for w in fused.witnesses] == [("prive", "synth")]
+    assert {(r.panel, r.method, r.reading) for r in fused.witnesses[0].readings} == {
+        ("prive", "prive_qp", "proportions"),
+        ("synth", "pca_knn", "probabilities"),
+        ("synth", "pca_knn", "proportions"),
+    }
+    leader = fused.estimate
+    assert fused.probabilities[leader] <= max(reading[leader] for reading in readings) + 1e-4
+    declared = consensus(estimates, disjoint_panels=[("prive", "synth")])
+    assert declared.combination == "product_of_means" and len(declared.witnesses) == 2
+
+
+def test_agreement_sharpens_only_across_disjoint_panels() -> None:
+    agreeing = [{"EUR": 0.9, "AMR": 0.1}, {"EUR": 0.85, "SAS": 0.15}, {"EUR": 1.0}]
+    one = consensus([_knn("p", dist) for dist in agreeing])
+    assert one.estimate == "EUR" and one.combination == "mean"
+    assert one.probabilities["EUR"] == pytest.approx((0.9 + 0.85 + 1.0) / 3, abs=1e-4)
+    assert one.probabilities["EUR"] <= max(dist["EUR"] for dist in agreeing)
+    assert one.witnesses[0].spread["EUR"] == pytest.approx(0.15, abs=1e-4)
+
+    panels = ("p1", "p2", "p3")
+    pairs = [(a, b) for i, a in enumerate(panels) for b in panels[i + 1 :]]
+    three = consensus([_knn(name, dist) for name, dist in zip(panels, agreeing, strict=True)], disjoint_panels=pairs)
+    assert three.combination == "product_of_means" and len(three.witnesses) == 3
+    assert three.probabilities["EUR"] > 0.99 > one.probabilities["EUR"]
+
+    split = consensus([_knn("p", {"EUR": 0.9, "EAS": 0.1}), _knn("p", {"EAS": 0.9, "EUR": 0.1})])
+    assert split.probabilities["EUR"] == pytest.approx(0.5, abs=1e-4) and split.margin < one.margin
+    assert split.witnesses[0].spread == pytest.approx({"AFR": 0.0, "AMR": 0.0, "EAS": 0.8, "EUR": 0.8, "SAS": 0.0}, abs=1e-4)
+
+
+@pytest.mark.parametrize(
+    ("declared", "witnesses"),
+    [
+        ([], [("a", "b", "c")]),
+        ([("a", "b")], [("a", "b", "c")]),
+        ([("a", "b"), ("a", "c")], [("a",), ("b", "c")]),
+        ([("a", "b"), ("a", "c"), ("b", "c")], [("a",), ("b",), ("c",)]),
+    ],
+    ids=["none", "one_pair_leaves_c_joining_both", "a_apart", "all_apart"],
+)
+def test_witnesses_are_the_panels_not_declared_disjoint(declared: list, witnesses: list) -> None:
+    """Panel c, declared disjoint from neither a nor b, may share samples with both, so one declared pair
+    alone splits nothing."""
+    fused = consensus([_knn(name, {"EUR": 0.7, "AFR": 0.3}) for name in "abc"], disjoint_panels=declared)
+    assert [witness.panels for witness in fused.witnesses] == witnesses
+    assert fused.combination == ("mean" if len(witnesses) == 1 else "product_of_means")
+
+
+def test_consensus_refusals_and_left_out_readings() -> None:
+    eur = _knn("p", {"EUR": 1.0})
+    with pytest.raises(ValueError, match="not combined again"):
+        consensus([eur, consensus([eur])])
+    with pytest.raises(ValueError, match="no estimate is on"):
+        consensus([eur], disjoint_panels=[("p", "q")])
+    with pytest.raises(ValueError, match="disjoint from itself"):
+        consensus([eur], disjoint_panels=[("p", "p")])
+    with pytest.raises(ValueError, match="above 0"):
+        consensus([eur], prior={"EUR": 0.5, "AFR": 0.5})
+    with pytest.raises(ValueError, match="above 0"):
+        consensus([eur], prior={**dict.fromkeys(CANONICAL_SUPERPOPS, 0.2), "SAS": 0.0})
+
+    # A prior is one more factor, so even one witness is then a product.
+    prior = {**dict.fromkeys(CANONICAL_SUPERPOPS, 0.1), "EAS": 0.6}
+    weighed = consensus([_knn("p", {"EUR": 0.5, "EAS": 0.5})], prior=prior)
+    assert weighed.combination == "product_of_means" and weighed.estimate == "EAS"
+
+    # A reading none of whose groups is continental (an `aadr_ho` region such as Siberia) is listed, not read.
+    siberia = AncestryEstimate(
+        method="pca_knn", panel="aadr_ho", estimate="Siberia", probabilities={"Siberia": 1.0},
+        group_to_continental={"Siberia": None},
+    )
+    nothing = consensus([siberia])
+    assert not nothing and nothing.reason == "no_continental_groups"
+    assert nothing.witnesses[0].readings == () and len(nothing.witnesses[0].left_out) == 1
+    beside = consensus([siberia, _knn("aadr_ho", {"EUR": 1.0})])
+    (witness,) = beside.witnesses
+    assert beside.estimate == "EUR" and len(witness.readings) == 1 and witness.left_out[0].distribution == {}
+    assert beside.probabilities["EUR"] == 1.0
 
 
 def test_continental_rollup() -> None:

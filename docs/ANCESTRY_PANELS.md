@@ -186,6 +186,28 @@ rule still catches a panel that places its samples among unrelated regions.
 AADR is a published research dataset. The builder reads it from the caller's path and nothing derived
 from it is in the repository: the tests write synthetic EIGENSTRAT files with made-up individuals.
 
+## Combining estimates from several panels
+
+`consensus(estimates)` folds each estimate's vote and proportions onto the five 1000 Genomes groups.
+Panels that share reference samples are one witness: their methods see the same people at the same
+sites, so agreeing with each other is not more evidence. Inside a witness the answer is the mean of
+its readings, with their spread per group beside it; witnesses are multiplied as independent only
+where the caller declares their panels' reference samples disjoint. Nothing here can tell that from
+the panels, so by default every panel given is one witness:
+
+```python
+fused = consensus([infer_ancestry(loaded, panels, "aadr_ho"), prive_proportions(loaded, panels)])
+# one witness, combination "mean"
+fused = consensus([...], disjoint_panels=[("aadr_ho", "prive")])
+# two witnesses, combination "product_of_means": only if the caller knows no person is in both
+```
+
+Which of the panels above share people: `hgdp_1kg` holds `1000g`'s (HGDP+1kGP is the two projects
+together); `aadr_ho` holds 1000 Genomes people (hu6ABACE's nearest population in it is `GBR`; read from its
+labels, not checked by sample id), so it shares with both. Privé's groups are drawn from UK Biobank participants (Privé 2022); whether any of
+them is in another panel here has not been checked, so no pair of these panels is known disjoint. The rule and
+what was rejected for it are in docs/SCHEMA.md, "Combining ancestry estimates".
+
 ## Testing against a panel
 
 `JUST_VCF_ANCESTRY_DIR` names one directory holding any of the above, and may hold AADR's

@@ -16,7 +16,7 @@ import polars as pl
 import pytest
 
 from just_vcf import Loaded, ReferenceMismatchError, ReferenceStore, liftover, load, mint_vrs_ids, normalize, read_chain, resolve_ref, vrs_withheld, write_vcf
-from just_vcf.liftover import RELATION, REPORT, UNLIFTED_REASONS, _segments
+from just_vcf.liftover import GAP_LIMIT, RELATION, REPORT, UNLIFTED_REASONS, _segments
 from just_vcf.schema import BLOCKS, CALLS, FACETS, canonical_order
 
 rng = random.Random(7)
@@ -67,9 +67,131 @@ F1_HEAD, F1_TAIL = random_bases(50), random_bases(60)
 T1 = F1_HEAD + _edited(S1[100:400], 100) + S1[410:600] + F1_TAIL
 F2_HEAD, F2_MID, F2_TAIL = random_bases(30), random_bases(40), random_bases(25)
 T2 = F2_HEAD + revcomp(S1[700:800]) + F2_MID + S1[150:170] + F2_TAIL
-TARGET = {"1": T1, "2": T2}
 MINUS_F0 = len(F2_HEAD)  # 0-based forward start of the reverse-complemented segment on target 2
 DUP_F0 = len(F2_HEAD) + 100 + len(F2_MID)
+
+# Contig 3, for rows across a gap of one chain (step 2b), from its own seeded bases so contigs 1 and 2
+# stay as they were. Chain 5 is twelve plus-strand blocks of 30 source bases from source 100, each pair
+# separated by one named gap (dt source-only bases, dq target-only bases); chain 6 follows it on the
+# source with no gap, to another place on target 3; chain 7, after that, is three blocks on the minus
+# strand with two gaps; chain 8 maps the last three bases before the `doubly` gap a second time.
+gap_rng = random.Random(31)
+
+
+def gap_random(n: int) -> str:
+    return "".join(gap_rng.choice("ACGT") for _ in range(n))
+
+
+GAPS5 = [
+    ("anchor", 0, 3),
+    ("swap", 0, 2),
+    ("mismatch", 0, 2),
+    ("insert", 0, 3),
+    ("roll", 0, 3),
+    ("dt_change", 2, 0),
+    ("dt_flank", 2, 0),
+    ("both", 1, 2),
+    ("too_large", 0, GAP_LIMIT),
+    ("under", 0, GAP_LIMIT - 1),
+    ("doubly", 0, 2),
+]
+GAPS7 = [("minus_anchor", 0, 2), ("minus_mnv", 0, 3)]
+EDGE: dict[str, int] = {}
+"""Per named gap, the 0-based source position just past the block before it: the last base before
+the gap is `EDGE - 1`, and the next block starts at `EDGE + dt`."""
+start = 100
+for name, dt, _ in GAPS5:
+    EDGE[name] = start + 30
+    start += 30 + dt
+CHAIN5_END = start + 30
+CHAIN6 = (CHAIN5_END, CHAIN5_END + 30)
+CHAIN7_START = CHAIN6[1]
+EDGE["minus_anchor"], EDGE["minus_mnv"] = CHAIN7_START + 30, CHAIN7_START + 60
+CHAIN7_END = CHAIN7_START + 90
+
+S3_BASES = list(gap_random(CHAIN7_END + 40))
+FORCED = {
+    # A deletion of CGT on the anchor A: no placement of it reaches back across the gap.
+    "anchor": (-1, "ACGT"),
+    "too_large": (-1, "ACGT"),
+    "under": (-1, "ACGT"),
+    "doubly": (-1, "ACGT"),
+    "minus_anchor": (-1, "ACG"),
+    # An insertion between T and A, at the gap itself.
+    "insert": (-1, "TA"),
+    # CA deleted from GCACA: the left-most CA lies before the gap, the right-most after it.
+    "roll": (-3, "GCACA"),
+    # Source E-1, E (source-only), then TGC, of which GC is deleted.
+    "both": (-1, "AATGC"),
+}
+for name, (offset, text) in FORCED.items():
+    S3_BASES[EDGE[name] + offset : EDGE[name] + offset + len(text)] = list(text)
+S3 = "".join(S3_BASES)
+
+IMAGE3: dict[int, tuple[int, str]] = {}
+"""The construction's own mapping of a 0-based source position on contig 3: (0-based forward target
+position, strand); positions in no block, or in two (chain 8), are not in it."""
+GAP_TARGET: dict[str, str] = {}
+"""Per named gap, its target-only bases as they read on the target's forward strand."""
+H3 = gap_random(40)
+pieces = [H3]
+cursor = len(H3)
+start = 100
+for name, dt, dq in [*GAPS5, (None, 0, 0)]:
+    for x in range(start, start + 30):
+        IMAGE3[x] = (cursor + x - start, "+")
+    pieces.append(S3[start : start + 30])
+    cursor += 30
+    if name is not None:
+        GAP_TARGET[name] = gap_random(dq)
+        pieces.append(GAP_TARGET[name])
+        cursor += dq
+    start += 30 + dt
+CHAIN5_Q_END = cursor
+pieces.append(gap_random(20))
+cursor += 20
+CHAIN6_Q0 = cursor
+for x in range(*CHAIN6):
+    IMAGE3[x] = (cursor + x - CHAIN6[0], "+")
+pieces.append(S3[CHAIN6[0] : CHAIN6[1]])
+cursor += 30
+pieces.append(gap_random(20))
+cursor += 20
+# Chain 7 on the chain's (reverse) strand: its blocks with each gap's target bases between them.
+chain7 = ""
+chain7_offset: dict[int, int] = {}
+for index, block_start in enumerate(range(CHAIN7_START, CHAIN7_END, 30)):
+    for x in range(block_start, block_start + 30):
+        chain7_offset[x] = len(chain7) + x - block_start
+    chain7 += S3[block_start : block_start + 30]
+    if index < len(GAPS7):
+        reverse_gap = gap_random(GAPS7[index][2])
+        GAP_TARGET[GAPS7[index][0]] = revcomp(reverse_gap)
+        chain7 += reverse_gap
+MINUS3_F0 = cursor
+for x, c in chain7_offset.items():
+    IMAGE3[x] = (MINUS3_F0 + len(chain7) - 1 - c, "-")
+pieces.append(revcomp(chain7))
+cursor += len(chain7)
+pieces.append(gap_random(20))
+cursor += 20
+DOUBLY = (EDGE["doubly"] - 3, EDGE["doubly"])
+CHAIN8_Q0 = cursor
+for x in range(*DOUBLY):
+    IMAGE3.pop(x)
+pieces.append(S3[DOUBLY[0] : DOUBLY[1]])
+pieces.append(gap_random(15))
+T3_BASES = list("".join(pieces))
+# The target changes one base inside the `swap` row's change (to its ALT) and one in the
+# `mismatch` row's flank (to a base no allele has).
+SWAP3_ALT = other(S3[EDGE["swap"] + 1])
+T3_BASES[IMAGE3[EDGE["swap"] + 1][0]] = SWAP3_ALT
+MISMATCH3_ALT = other(S3[EDGE["mismatch"] + 1])
+T3_BASES[IMAGE3[EDGE["mismatch"] - 1][0]] = other(S3[EDGE["mismatch"] - 1])
+T3 = "".join(T3_BASES)
+
+SOURCE["3"] = S3
+TARGET = {"1": T1, "2": T2, "3": T3}
 
 
 def expected_target(pos: int) -> tuple[str, int, str]:
@@ -101,8 +223,31 @@ def chain_text(source_1_size: int = len(S1)) -> str:
             f"chain 700 1 {source_1_size} + 850 860 chrUn_q 100 + 0 10 4",
             "10",
             "",
+            *chain3_lines(),
         ]
     )
+
+
+def chain3_lines() -> list[str]:
+    """Contig 3's chains (5 to 8), as the construction above lays them out."""
+    s3, q3 = len(S3), len(T3)
+    minus_q0 = q3 - MINUS3_F0 - len(chain7)  # chain 7's start on the target's reverse strand
+    return [
+        f"chain 600 3 {s3} + 100 {CHAIN5_END} 3 {q3} + {len(H3)} {CHAIN5_Q_END} 5",
+        *[f"30 {dt} {dq}" for _, dt, dq in GAPS5],
+        "30",
+        "",
+        f"chain 500 3 {s3} + {CHAIN6[0]} {CHAIN6[1]} 3 {q3} + {CHAIN6_Q0} {CHAIN6_Q0 + 30} 6",
+        "30",
+        "",
+        f"chain 400 3 {s3} + {CHAIN7_START} {CHAIN7_END} 3 {q3} - {minus_q0} {minus_q0 + len(chain7)} 7",
+        *[f"30 {dt} {dq}" for _, dt, dq in GAPS7],
+        "30",
+        "",
+        f"chain 300 3 {s3} + {DOUBLY[0]} {DOUBLY[1]} 3 {q3} + {CHAIN8_Q0} {CHAIN8_Q0 + 3} 8",
+        "3",
+        "",
+    ]
 
 
 def write_fasta(path: Path, seqs: dict[str, str]) -> Path:
@@ -345,6 +490,159 @@ def test_minus_strand_indels_are_reanchored_on_the_base_before(tmp_path: Path, s
     assert any("re-anchored" in w for w in lifted.loaded.warnings)
 
 
+def s3(x0: int, n: int = 1) -> str:
+    """Source contig 3's bases from 0-based `x0`."""
+    return S3[x0 : x0 + n]
+
+
+def gap_row(name: str, x0: int, ref_length: int, alt: str, gt: str = "0/1") -> str:
+    """A row on contig 3 whose REF starts at 0-based `x0`; the rsid names the case."""
+    return row(x0 + 1, s3(x0, ref_length), alt, gt, chrom="3", rsid=name)
+
+
+E = EDGE
+GAP_CASES = {
+    "inside": (gap_row("inside", 110, 1, other(s3(110))), None),
+    # Anchor before the gap, deleted bases after it: the gap is on the anchor base only.
+    "anchor": (gap_row("anchor", E["anchor"] - 1, 4, s3(E["anchor"] - 1)), None),
+    "swap": (gap_row("swap", E["swap"] - 1, 3, s3(E["swap"] - 1, 2) + SWAP3_ALT).replace("\tGT\t0/1", "\tGT:PL\t0/1:10,0,40"), None),
+    "mismatch": (gap_row("mismatch", E["mismatch"] - 1, 3, s3(E["mismatch"] - 1, 2) + MISMATCH3_ALT), "ref_mismatch_after_lift"),
+    # The gap where the insertion goes, and inside the stretch a repeat's deletion could sit on.
+    "insert": (gap_row("insert", E["insert"] - 1, 2, "TGA", "1/1"), "gap_in_change"),
+    "roll": (gap_row("roll", E["roll"] - 3, 5, "GCA"), "gap_in_change"),
+    # The deleted bases include the gap's source-only ones; a span ending on one runs off its block.
+    "dt_change": (gap_row("dt_change", E["dt_change"] - 1, 4, s3(E["dt_change"] - 1)), "gap_in_change"),
+    "dt_end": (gap_row("dt_end", E["dt_change"] - 1, 2, s3(E["dt_change"] - 1)), "split_across_blocks"),
+    # Source-only bases in the flank of an SNV written in context, and a two-sided gap in a deletion's.
+    "dt_flank": (gap_row("dt_flank", E["dt_flank"] - 2, 6, s3(E["dt_flank"] - 2, 5) + other(s3(E["dt_flank"] + 3))), None),
+    "both": (gap_row("both", E["both"] - 1, 5, s3(E["both"] - 1, 3)), None),
+    "too_large": (gap_row("too_large", E["too_large"] - 1, 4, s3(E["too_large"] - 1)), "gap_too_large"),
+    "under": (gap_row("under", E["under"] - 1, 4, s3(E["under"] - 1)), None),
+    "doubly": (gap_row("doubly", E["doubly"] - 1, 4, s3(E["doubly"] - 1)), "multiple_targets"),
+    "other_chain": (gap_row("other_chain", CHAIN5_END - 1, 3, s3(CHAIN5_END - 1)), "split_across_chains"),
+    "strand_switch": (gap_row("strand_switch", CHAIN7_START - 1, 3, s3(CHAIN7_START - 1)), "split_across_chains"),
+    "minus_anchor": (gap_row("minus_anchor", E["minus_anchor"] - 1, 3, s3(E["minus_anchor"] - 1)), None),
+    "minus_mnv": (gap_row("minus_mnv", E["minus_mnv"] - 1, 3, s3(E["minus_mnv"] - 1, 2) + other(s3(E["minus_mnv"] + 1))), None),
+}
+
+
+def expected_gap_lift() -> dict[str, tuple[int, str, list[str], str]]:
+    """Each lifted gap case, from the construction: (1-based target pos, REF, ALTs, strand). The gap's
+    own target bases are the target's in every allele; its source-only bases are in none."""
+    def at(x: int) -> int:
+        return IMAGE3[x][0] + 1
+
+    out = {"inside": (at(110), s3(110), [other(s3(110))], "+")}
+    for name in ("anchor", "under"):
+        e, gap = E[name], GAP_TARGET[name]
+        out[name] = (at(e - 1), s3(e - 1) + gap + s3(e, 3), [s3(e - 1) + gap], "+")
+    e, gap = E["swap"], GAP_TARGET["swap"]
+    # The target reads the ALT's base: REF and that ALT swap, the old REF carried across into its slot.
+    out["swap"] = (at(e - 1), s3(e - 1) + gap + s3(e) + SWAP3_ALT, [s3(e - 1) + gap + s3(e, 2)], "+")
+    e = E["dt_flank"]
+    out["dt_flank"] = (at(e - 2), s3(e - 2, 2) + s3(e + 2, 2), [s3(e - 2, 2) + s3(e + 2) + other(s3(e + 3))], "+")
+    e, gap = E["both"], GAP_TARGET["both"]
+    out["both"] = (at(e - 1), "A" + gap + "TGC", ["A" + gap + "T"], "+")
+    # Minus strand: CG deleted after A, reverse-complemented, is re-anchored on the target's base
+    # before the images of the deleted bases (the image of source E+2, complemented).
+    e, gap = E["minus_anchor"], GAP_TARGET["minus_anchor"]
+    anchor = comp(s3(e + 2))
+    assert T3[IMAGE3[e + 1][0] - 1] == anchor
+    out["minus_anchor"] = (at(e + 1) - 1, anchor + revcomp(s3(e, 2)) + gap, [anchor + gap], "-")
+    e, gap = E["minus_mnv"], GAP_TARGET["minus_mnv"]
+    out["minus_mnv"] = (at(e + 1), comp(s3(e + 1)) + comp(s3(e)) + gap + comp(s3(e - 1)), [comp(other(s3(e + 1))) + comp(s3(e)) + gap + comp(s3(e - 1))], "-")
+    return out
+
+
+def gap_lifted(tmp_path: Path, store: ReferenceStore, chain: Path):
+    return lifted_from_cases(tmp_path, store, chain, {name: line for name, (line, _) in GAP_CASES.items()})
+
+
+def test_rows_across_a_gap_of_one_chain_get_their_reason(tmp_path: Path, setup) -> None:
+    store, _, _, chain = setup
+    _, lifted = gap_lifted(tmp_path, store, chain)
+    report = by_case(lifted.report.collect())
+    assert {case: r["lift_reason"] for case, r in report.items()} == {case: reason for case, (_, reason) in GAP_CASES.items()}
+    assert set(lifted.reasons) <= UNLIFTED_REASONS
+    assert any("crossed a gap of one chain" in w for w in lifted.loaded.warnings)
+
+
+def test_rows_across_a_gap_state_the_same_change_on_the_targets_sequence(tmp_path: Path, setup) -> None:
+    """Checked against the construction's own base-by-base mapping: the lifted span runs from the image
+    of the row's first base to that of its last, REF is the target's there, and each ALT is the
+    target's sequence there with the source ALT's change put in."""
+    store, _, _, chain = setup
+    _, lifted = gap_lifted(tmp_path, store, chain)
+    calls = by_case(lifted.loaded.calls.collect())
+    report = by_case(lifted.report.collect())
+    expected = expected_gap_lift()
+    assert set(calls) == {case for case, (_, reason) in GAP_CASES.items() if reason is None} == set(expected)
+    for case, (pos, ref, alts, strand) in expected.items():
+        r = calls[case]
+        assert (r["chrom"], r["pos"], r["ref"], r["alts"]) == ("3", pos, ref, alts), case
+        assert (report[case]["lift_pos"], report[case]["lift_strand"]) == (pos, strand), case
+        # REF is read from the target over the lifted span, never carried over.
+        assert r["ref"] == T3[pos - 1 : pos - 1 + len(r["ref"])] and r["end_pos"] == pos + len(r["ref"]) - 1
+        assert r["source_ref"] is None and r["ref_check"] is None
+        alleles = [r["ref"], *r["alts"]]
+        assert [alleles[g] for g in r["gt"]] == r["gt_alleles"], case
+    # The swap row has likelihoods: source_alleles is lifted slot by slot, never reordered (Decision 2),
+    # so its first slot, the source REF, is the old REF carried across, now the ALT.
+    assert calls["swap"]["source_alleles"] == [calls["swap"]["alts"][0], calls["swap"]["ref"]]
+    assert calls["swap"]["gl"] == report["swap"]["gl"] is not None
+    # A plus-strand span lands from its first base's image to its last's (the gap's bases inside it).
+    for case in ("anchor", "under", "both", "dt_flank"):
+        source = report[case]
+        first, last = source["pos"] - 1, source["pos"] - 2 + len(source["ref"])
+        assert (calls[case]["pos"], calls[case]["end_pos"]) == (IMAGE3[first][0] + 1, IMAGE3[last][0] + 1), case
+    assert calls["swap"]["gt"] == [1, 0] and report["swap"]["lift_swapped"] is True
+    assert all(report[case]["lift_swapped"] is False for case in expected if case != "swap")
+
+
+def test_the_gap_limit_is_a_strict_bound(tmp_path: Path, setup) -> None:
+    """A gap of GAP_LIMIT - 1 target bases is lifted across; one of GAP_LIMIT is not."""
+    assert {name: dq for name, _, dq in GAPS5}["under"] == GAP_LIMIT - 1
+    store, _, _, chain = setup
+    _, lifted = gap_lifted(tmp_path, store, chain)
+    report = by_case(lifted.report.collect())
+    assert (report["under"]["lift_reason"], report["too_large"]["lift_reason"]) == (None, "gap_too_large")
+    assert len(by_case(lifted.loaded.calls.collect())["under"]["ref"]) == 4 + GAP_LIMIT - 1
+
+
+def test_rows_across_a_gap_lift_alike_through_a_chain_listed_twice(tmp_path: Path, setup) -> None:
+    """F14: the second copy of each chain has other block ids; a span across a gap still has its two
+    sides in one chain, and lifts as once."""
+    store, _, _, chain = setup
+    (tmp_path / "once").mkdir()
+    _, once = gap_lifted(tmp_path / "once", store, chain)
+    doubled = tmp_path / "doubled.chain"
+    doubled.write_text(chain_text() + chain_text())
+    (tmp_path / "twice").mkdir()
+    _, twice = gap_lifted(tmp_path / "twice", store, doubled)
+    assert twice.reasons == once.reasons
+    assert twice.loaded.calls.drop("facet_id").collect().equals(once.loaded.calls.drop("facet_id").collect())
+
+
+def test_a_lifted_row_across_a_gap_normalizes_on_the_target(tmp_path: Path, setup) -> None:
+    """The gap's own bases ride in every allele as context; `normalize` trims them off, and what is
+    left is the change on its own, left-aligned in the target's sequence."""
+    store, _, _, chain = setup
+    _, lifted = gap_lifted(tmp_path, store, chain)
+    normalized = by_case(normalize(lifted.loaded, store).calls.collect())
+    for case in ("anchor", "both", "minus_anchor"):
+        r = normalized[case]
+        assert len(r["ref"]) - len(r["alts"][0]) in (2, 3), case  # the deletion alone, no gap bases
+        assert r["ref"] == T3[r["pos"] - 1 : r["pos"] - 1 + len(r["ref"])]
+        # The haplotype it states is the target with the source's deleted bases' images taken out.
+        source = by_case(lifted.report.collect())[case]
+        start0 = source["pos"] - 1
+        gone = {IMAGE3[start0 + i][0] for i in range(len(source["alts"][0]), len(source["ref"]))}
+        window = range(min(gone) - 60, max(gone) + 60)
+        expected = "".join(T3[i] for i in window if i not in gone)
+        stated = T3[window.start : r["pos"] - 1] + r["alts"][0] + T3[r["pos"] - 1 + len(r["ref"]) : window.stop]
+        assert stated == expected, case
+
+
 def test_a_minus_strand_indel_at_the_target_contigs_first_base_stays_behind(tmp_path: Path) -> None:
     """Target 1 is source 1 reverse-complemented whole: an insertion after the last source base lands
     at the target's first base, with nothing before it to anchor on."""
@@ -442,7 +740,10 @@ def test_positions_agree_with_pyliftover(tmp_path: Path, setup) -> None:
         assert len(hits) == 1
         chrom, zero, strand, _ = hits[0]
         assert (chrom, zero + 1, strand) == expected_target(pos)
-    assert plain.blocks.height == 5  # two blocks in the first chain, one in each other
+    assert plain.blocks.filter(pl.col("t_chrom") == "1").height == 5  # two blocks in the first chain, one in each other
+    # Contig 3, across its gaps of one chain: every base the construction maps once is where it says.
+    for x, (forward, strand) in IMAGE3.items():
+        assert lifter.convert_coordinate("3", x) == [("3", forward, strand, lifter.convert_coordinate("3", x)[0][3])], x
 
     # A re-anchored minus-strand indel starts at the image of the source base after its span, where
     # pyliftover puts that base (the edge case's base is past the block, so pyliftover has none).

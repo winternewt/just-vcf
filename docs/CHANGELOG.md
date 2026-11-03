@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`liftover` lifts a sequence row across a gap of one chain** (RM6, `LIFT_VERSION` 14; docs/SCHEMA.md
+  "Lifting", step 2b). An SNV in context, MNV or indel whose REF span crosses a chain gap, with both
+  ends in blocks of one chain, every crossed gap under `GAP_LIMIT` (50) bases each side, and each ALT's
+  change (with a repeat's room for an indel) inside one block, lands on the span's image: REF read from
+  the target there, each allele the target's sequence there with its change put in. Before, all such
+  rows stayed behind as `split_across_blocks`. New reasons `split_across_chains`, `gap_in_change` and
+  `gap_too_large`; `split_across_blocks` now means a span whose first or last base is in no block.
+  Lifted facets' ids change with the version.
+
 - **`person_karyotype(person, pairs=None, array_y=None)` weighs a person's facets against each
   other** (RM269, new, additive; `PersonKaryotype` exported, `CallsetKaryotype` and `SetAsideFacet`
   in `just_vcf.karyotype`, `SINGLE_PARENT_RELATIONS` in `just_vcf.links`). Facets joined by one-parent

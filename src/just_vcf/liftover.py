@@ -17,7 +17,14 @@ short:
    another target (chains that overlap on the source side with different targets make a position's
    target ambiguous; blocks repeating one mapping count once, F14).
    Otherwise it is unlifted: no block at all, a span that crosses a block edge, or more than one
-   target.
+   target. **Across a gap of one chain** (2b) a sequence row still lifts where its first and last
+   bases lie in blocks of one chain, every gap between has fewer than `GAP_LIMIT` bases on each side,
+   and each ALT's change (the bases it changes, or for an indel in a repeat every place it could
+   equally sit) lies inside one block. Its lifted span runs from the image of its first base to the
+   image of its last; REF is read there, and each allele is the target's sequence there with that
+   allele's change put in, so the change against the source is the same change against the target
+   and the gap's own bases are the target's in every allele. Otherwise `split_across_chains`,
+   `gap_in_change` or `gap_too_large`.
 3. **Alleles.** On a minus-strand block every allele is reverse-complemented. An indel whose alleles
    all start with one base (VCF's padding base) then has that base at their end instead, so it is
    re-anchored: the base is dropped from every allele and the target's base before the lifted span
@@ -83,6 +90,8 @@ import hashlib
 import json
 import logging
 from collections import Counter
+from collections.abc import Callable
+from itertools import pairwise
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -99,7 +108,7 @@ from just_vcf.schema import BLOCKS, CALLS, FACETS, SCHEMA_VERSION, AbsenceMeans,
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 13
+LIFT_VERSION = 14
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
 row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
 `phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
@@ -109,7 +118,8 @@ minus strand, a source SV with CIEND and no CIPOS gets `ciend = [0, 0]`, its pre
 11: breakends lifted by both ends, the mate rewritten inside ALT and the brackets turned per strand;
 12: a breakend whose mate is a contig of the `##assembly` file, `<ctg1>`, lifted by POS alone, the mate
 kept as written; 13: a row whose source REF states no base, `ref_check = unstated`, with a sequence ALT
-left behind as `source_ref_unstated`)."""
+left behind as `source_ref_unstated`; 14: a sequence row whose REF span crosses a gap of one chain lifted,
+REF read over the lifted span and each ALT's change carried into the target's sequence there)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -129,6 +139,10 @@ UNLIFTED_REASONS: frozenset[str] = frozenset(
         "split_across_blocks",
         "multiple_targets",
         "target_contig_unmatched",
+        # A span across a gap of one chain (step 2b).
+        "split_across_chains",
+        "gap_in_change",
+        "gap_too_large",
         # What the target says about its alleles.
         "indel_minus_strand",
         "ref_mismatch_after_lift",
@@ -159,7 +173,13 @@ REASON_TEXT: dict[str, str] = {
     "contig_not_in_chain": "a contig the chain does not cover",
     "chain_contig_mismatch": "a contig whose size in the chain differs from the source assembly's",
     "no_chain_block": "no chain block covers it (a gap in the alignment)",
-    "split_across_blocks": "its REF span crosses the edge of a chain block",
+    "split_across_blocks": "its REF span runs off a chain block: its first or last base is in no block (a gap's source-only bases, or past the chain's end)",
+    "split_across_chains": "its REF span starts and ends in blocks of different chains (another alignment, target contig or strand), or crosses a block of another chain",
+    "gap_in_change": (
+        "its REF span crosses a gap of one chain inside the bases an allele changes, or where an indel in a repeat could equally be placed, "
+        "so the change has no one place on the target"
+    ),
+    "gap_too_large": "its REF span crosses a gap of one chain of GAP_LIMIT bases or more on either side",
     "multiple_targets": "it lies in more than one chain block (overlapping chains), so its target is ambiguous",
     "target_contig_unmatched": "the chain's target contig is not in the target collection, or its size differs",
     "indel_minus_strand": "an indel or SV on a minus-strand block lifted to the target contig's first base, with no base before it to anchor on",
@@ -184,6 +204,20 @@ source's: kept where `|lifted - source| <= SV_LENGTH_TOLERANCE * source`. liftov
 (`-p/--percent 0.05`, "difference max between both SVLENs < 5%"); Picard LiftoverVcf has none (the
 whole POS..END interval must lift, `LIFTOVER_MIN_MATCH` 1.0), CrossMap rewrites END from the REF span.
 A point SV (`<INS>`, length 0) must stay a point, which lifting one position always gives."""
+
+GAP_LIMIT = 50
+"""A sequence row whose REF span crosses a gap of one chain lifts only where every gap it crosses has
+fewer than `GAP_LIMIT` bases on each side (`dt`, the source's own bases, and `dq`, the target's), else
+`gap_too_large` (step 2b). The rule never puts a gap inside the change, so no size is forced by the
+spelling: the gap's `dq` target bases go into every allele as the target's reference context, and its
+`dt` source bases drop out of every allele. What the size bounds is how much sequence a lifted record
+states that its source record never covered. No tool or chain fixes that number, so this is the
+conservative reading, at the indel/SV boundary of VCF practice (a change of 50 bases or more is an SV):
+a gap below it is an indel-sized difference between the assemblies, and the lifted record stays a small
+variant. Measured 2026-11-03 on the chains in hand: one-sided gaps under 50 bases are 95% (`dt`) and 96%
+(`dq`) of UCSC hg19ToHg38's, 81% and 94% of hg38ToHg19's, 96% and 98% of Ensembl GRCh38_to_GRCh37's,
+97% and 98% of hs1ToHg38's; two-sided gaps 20-68%. bcftools +liftover's `--max-indel-inc` (250) bounds
+another thing, how far it lets an indel's anchors drift while it realigns the indel through a gap."""
 
 PARENT_COLUMNS_KEPT = ("ids", "phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "gl", "gp", "dosage", "evidence_basis", "gq", "hq", "dp", "ad", "qual", "filters", "sample_filters", "split_signal")
 """`calls` columns a lifted row carries from its parent as they were (phase sets and dosage aside, below)."""
@@ -844,15 +878,22 @@ def _lift_contig(
 
     blocks = chain.blocks.filter(pl.col("t_chrom") == chrom)
     candidates = work.filter(pl.col("lift_reason").is_null())
-    placed_columns = ["_row", "_reason2", "_q_chrom", "_q0", "_minus", "_reanchor", "_t_ref", "_swap", "_new_end", *_BND_PLACED]
+    placed_columns = ["_row", "_reason2", "_q_chrom", "_q0", "_minus", "_reanchor", "_t_ref", "_swap", "_new_end", *_BND_PLACED, *_GAP_PLACED]
     if candidates.height and blocks.height:
-        sequence = candidates.filter(~pl.col("_sv") & ~pl.col("_bnd"))
         segments = _contig_segments(chain, chrom)
+        sequence = _place(candidates.filter(~pl.col("_sv") & ~pl.col("_bnd")), blocks, targets, segments)
+        # A span crossing a block edge may lie across a gap of one chain (step 2b); the rest read as before.
+        across = (pl.col("_reason2") == "split_across_blocks").fill_null(False)
+        within = _with_nulls(_read_target(sequence.filter(~across), store, targets), _GAP_PLACED)
+        gapped = _place_gap(sequence.filter(across), blocks, segments, store, targets)
         sequence = _with_nulls(
-            _read_target(_place(sequence, blocks, targets, segments), store, targets).with_columns(pl.lit(None, dtype=pl.Int64).alias("_new_end")), _BND_PLACED
+            pl.concat([part.select(placed_columns[:8] + list(_GAP_PLACED)) for part in (within, gapped)], how="vertical").with_columns(
+                pl.lit(None, dtype=pl.Int64).alias("_new_end")
+            ),
+            _BND_PLACED,
         )
-        svs = _with_nulls(_place_sv(candidates.filter(pl.col("_sv")), blocks, segments, store, targets), _BND_PLACED)
-        bnds = _place_bnd(candidates.filter(pl.col("_bnd")), chrom, blocks, chain, store, targets, counts, mates)
+        svs = _with_nulls(_with_nulls(_place_sv(candidates.filter(pl.col("_sv")), blocks, segments, store, targets), _BND_PLACED), _GAP_PLACED)
+        bnds = _with_nulls(_place_bnd(candidates.filter(pl.col("_bnd")), chrom, blocks, chain, store, targets, counts, mates), _GAP_PLACED)
         placed = pl.concat([part.select(placed_columns) for part in (sequence, svs, bnds)], how="vertical")
         work = work.join(placed, on="_row", how="left", maintain_order="left")
         work = work.with_columns(pl.coalesce("lift_reason", "_reason2").alias("lift_reason"))
@@ -867,7 +908,7 @@ def _lift_contig(
                 pl.lit(None, dtype=pl.Boolean).alias("_swap"),
                 pl.lit(None, dtype=pl.Int64).alias("_new_end"),
             ),
-            _BND_PLACED,
+            {**_BND_PLACED, **_GAP_PLACED},
         )
         if candidates.height:
             work = work.with_columns(pl.col("lift_reason").fill_null(pl.lit("no_chain_block")))
@@ -896,6 +937,18 @@ def _lift_contig(
 
 _BND_PLACED = {"_bnd_alts": CALLS["alts"], "_bnd_cipos": CALLS["cipos"], "_bnd_ciend": CALLS["ciend"]}
 """What `_place_bnd` adds to a placed breakend row: its rewritten ALTs and intervals (null elsewhere)."""
+
+_GAP_PLACED = {
+    "_gap": pl.Boolean,
+    "_gap_reanchor": pl.Boolean,
+    "_gap_ref": pl.String,
+    "_gap_alts": CALLS["alts"],
+    "_gap_gt_alleles": CALLS["gt_alleles"],
+    "_gap_source_alleles": CALLS["source_alleles"],
+}
+"""What `_place_gap` adds to a row lifted across a gap of one chain: its alleles already on the target
+(the parent's REF carried across, the ALTs, `gt_alleles` and `source_alleles`), and whether it was
+re-anchored on a minus strand (null elsewhere)."""
 
 
 def _with_nulls(frame: pl.DataFrame, columns: dict[str, pl.DataType]) -> pl.DataFrame:
@@ -1347,6 +1400,221 @@ def _drop_last(allele: pl.Expr) -> pl.Expr:
     return allele.str.slice(0, allele.str.len_chars() - 1)
 
 
+def _revcomp(text: str) -> str:
+    return text.translate(_BASE_COMPLEMENT)[::-1]
+
+
+def _common_prefix(a: str, b: str, limit: int) -> int:
+    n = 0
+    while n < limit and a[n] == b[n]:
+        n += 1
+    return n
+
+
+def _common_suffix(a: str, b: str, limit: int) -> int:
+    n = 0
+    while n < limit and a[len(a) - 1 - n] == b[len(b) - 1 - n]:
+        n += 1
+    return n
+
+
+def _placements(ref: str, allele: str) -> tuple[tuple[int, int, str], tuple[int, int]]:
+    """Where `allele` changes `ref`, as offsets into the span: its left-most placement (start, REF
+    bases replaced, the bases put in), trimming a common suffix first as `normalize` does, and its
+    right-most (start, REF bases replaced), trimming a common prefix first. They differ only for an
+    indel in a repeat, which could equally sit anywhere between them."""
+    shortest = min(len(ref), len(allele))
+    suffix = _common_suffix(ref, allele, shortest)
+    prefix = _common_prefix(ref, allele, shortest - suffix)
+    left = (prefix, len(ref) - suffix - prefix, allele[prefix : len(allele) - suffix])
+    prefix = _common_prefix(ref, allele, shortest)
+    suffix = _common_suffix(ref, allele, shortest - prefix)
+    return left, (prefix, len(ref) - suffix - prefix)
+
+
+def _footprint(start: int, replaced: int) -> tuple[int, int]:
+    """The source bases a placement needs on one block: those it replaces, or for an insertion
+    (nothing replaced) the bases on either side of the point it goes in at."""
+    return (start, start + replaced) if replaced else (start - 1, start + 1)
+
+
+@dataclass
+class _GapPlan:
+    """One row's lift across gaps of one chain, before the target's bases are read: its blocks in
+    order (`t_start`, `t_end`, `q_start`), the chain-strand image of its span (`c0`, `c1`), the forward
+    range read (`f0`, `f1`), and each gap's place in the span and on the chain's strand."""
+
+    chrom: str
+    minus: bool
+    reanchor: bool
+    blocks: list[tuple[int, int, int]]
+    c0: int
+    c1: int
+    f0: int
+    f1: int
+    gaps: list[tuple[int, int, int]]
+    """Per gap: the span offset of the last base before it, and the chain-strand range of its target bases."""
+
+
+def _gap_plan(s0: int, e0: int, segments: list[tuple[int | None, int]], info: dict[int, dict], ref: str, alleles: list[str], targets: dict[str, Contig]) -> "_GapPlan | str":
+    """How a row whose REF span `[s0, e0)` crosses block edges lies across gaps of one chain, or why it
+    cannot be lifted so. `segments` are the chain axis segments the span touches, in order, as (the one
+    block giving each or None, its start); `info` the blocks by id; `alleles` every allele but REF."""
+    if segments[0][0] is None or segments[-1][0] is None:
+        return "split_across_blocks"
+    ids: list[int] = []
+    for block, _ in segments:
+        if block is not None and (not ids or ids[-1] != block):
+            ids.append(block)
+    first = info[ids[0]]
+    if any(info[block]["chain"] != first["chain"] for block in ids):
+        return "split_across_chains"
+    chrom = canonical_chrom(first["q_chrom"])
+    if chrom not in targets:
+        return "target_contig_unmatched"
+    blocks = [(info[block]["t_start"], info[block]["t_end"], info[block]["q_start"]) for block in ids]
+
+    def block_of(x: int) -> int | None:
+        return next((index for index, (start, end, _) in enumerate(blocks) if start <= x < end), None)
+
+    for allele in alleles:
+        (start, replaced, _), (right, right_replaced) = _placements(ref, allele)
+        low, high = _footprint(start, replaced)
+        low, high = min(low, _footprint(right, right_replaced)[0]), max(high, _footprint(right, right_replaced)[1])
+        home = block_of(s0 + low)
+        if home is None or home != block_of(s0 + high - 1):
+            return "gap_in_change"
+    pairs = list(pairwise(blocks))
+    if any(b[0] - a[1] >= GAP_LIMIT or b[2] - (a[2] + a[1] - a[0]) >= GAP_LIMIT for a, b in pairs):
+        return "gap_too_large"
+
+    def image(x: int) -> int:
+        start, _, q_start = blocks[block_of(x)]
+        return q_start + x - start
+
+    c0, c1 = image(s0), image(e0 - 1) + 1
+    q_size, minus = first["q_size"], first["q_minus"]
+    f0, f1 = (q_size - c1, q_size - c0) if minus else (c0, c1)
+    every = [ref, *alleles]
+    indel = any(len(allele) != len(ref) for allele in alleles)
+    reanchor = minus and indel and len({allele[:1] for allele in every}) == 1
+    if reanchor and f0 == 0:
+        return "indel_minus_strand"
+    gaps = [(a[1] - 1 - s0, a[2] + a[1] - a[0], b[2]) for a, b in pairs]
+    return _GapPlan(chrom, minus, reanchor, blocks, c0, c1, f0 - reanchor, f1, gaps)
+
+
+def _gap_alleles(plan: _GapPlan, s0: int, ref: str, read: str) -> Callable[[str], str]:
+    """The function giving each allele on the target, from the row's plan and the target bases read
+    over `[plan.f0, plan.f1)`: the parent's REF carried across (each base on a block at its image, the
+    gap's own target bases where the chain puts them, the gap's source-only bases dropped) with the
+    allele's change put in at its left-most placement; reverse-complemented on a minus strand, and
+    re-anchored there when it is a padded indel, as step 3 re-anchors any."""
+    main = read[1:] if plan.reanchor else read
+    chain_strand = _revcomp(main) if plan.minus else main
+    mapped = [any(start <= s0 + i < end for start, end, _ in plan.blocks) for i in range(len(ref))]
+    after = {offset: chain_strand[q0 - plan.c0 : q1 - plan.c0] for offset, q0, q1 in plan.gaps}
+
+    def lifted(allele: str) -> str:
+        if allele == ref:
+            start, replaced, inserted = 0, 0, ""
+        else:
+            (start, replaced, inserted), _ = _placements(ref, allele)
+        out: list[str] = []
+        for i in range(len(ref)):
+            if i == start:
+                out.append(inserted)
+            if mapped[i] and not start <= i < start + replaced:
+                out.append(ref[i])
+            out.append(after.get(i, ""))
+        if start == len(ref):
+            out.append(inserted)
+        text = "".join(out)
+        if plan.minus:
+            text = _revcomp(text)
+        return read[0] + text[:-1] if plan.reanchor else text
+
+    return lifted
+
+
+def _place_gap(rows: pl.DataFrame, blocks: pl.DataFrame, segments: pl.DataFrame, store: ReferenceStore, targets: dict[str, Contig]) -> pl.DataFrame:
+    """Rows whose REF span crosses a block edge (`_place` said `split_across_blocks`), lifted across
+    gaps of one chain where that is well defined (step 2b), or why not (`_reason2`). Few rows, so the
+    per-row work is plain Python: the target's REF (`_t_ref`), whether it swaps, and every allele on
+    the target (`_GAP_PLACED`)."""
+    columns = {"_reason2": pl.String, "_q_chrom": pl.String, "_q0": pl.Int64, "_minus": pl.Boolean, "_reanchor": pl.Boolean, "_t_ref": pl.String, "_swap": pl.Boolean, **_GAP_PLACED}
+    rows = rows.drop([name for name in columns if name in rows.columns])
+    if rows.is_empty():
+        return _with_nulls(rows, columns)
+    axis = segments.with_columns(pl.col("seg_start").shift(-1).fill_null(_FAR).alias("seg_end"))
+    first = rows.select("_row", "_s0").sort("_s0").join_asof(axis.select("seg_start", pl.col("seg").alias("_seg_s")), left_on="_s0", right_on="seg_start", strategy="backward")
+    last = (
+        rows.select("_row", (pl.col("_e0") - 1).alias("_last"))
+        .sort("_last")
+        .join_asof(axis.select("seg_start", pl.col("seg").alias("_seg_e")), left_on="_last", right_on="seg_start", strategy="backward")
+    )
+    touched = (
+        first.select("_row", "_seg_s")
+        .join(last.select("_row", "_seg_e"), on="_row")
+        .with_columns(pl.int_ranges(pl.col("_seg_s"), pl.col("_seg_e") + 1, dtype=pl.UInt32).alias("seg"))
+        .explode("seg", empty_as_null=False)
+        .join(axis.select("seg", "seg_start", "seg_block"), on="seg", how="left")
+        .sort("_row", "seg")
+        .group_by("_row", maintain_order=True)
+        .agg("seg_block", "seg_start")
+    )
+    spans = {row: list(zip(block_ids, starts)) for row, block_ids, starts in touched.iter_rows()}
+    ids = {block for span in spans.values() for block, _ in span if block is not None}
+    info = {row["block"]: row for row in blocks.filter(pl.col("block").is_in(list(ids))).iter_rows(named=True)}
+
+    plans: dict[int, _GapPlan | str] = {}
+    for row, s0, e0, ref, alts in rows.select("_row", "_s0", "_e0", pl.col("ref").str.to_uppercase(), "alts").iter_rows():
+        alleles = sorted({allele.upper() for allele in alts or []} - {ref})
+        plans[row] = _gap_plan(s0, e0, spans[row], info, ref, alleles, targets)
+    reads: dict[int, str] = {}
+    for chrom in sorted({plan.chrom for plan in plans.values() if isinstance(plan, _GapPlan)}):
+        wanted = [(row, plan) for row, plan in plans.items() if isinstance(plan, _GapPlan) and plan.chrom == chrom]
+        bases = store.fetch(targets[chrom], [(plan.f0, plan.f1) for _, plan in wanted])
+        reads |= {row: text for (row, _), text in zip(wanted, bases)}
+
+    out: dict[str, list] = {name: [] for name in ("_row", *columns)}
+    for row, s0, ref, alts, gt_alleles, source_alleles in rows.select("_row", "_s0", pl.col("ref").str.to_uppercase(), "alts", "gt_alleles", "source_alleles").iter_rows():
+        plan = plans[row]
+        out["_row"].append(row)
+        if not isinstance(plan, _GapPlan):
+            for name in columns:
+                out[name].append(plan if name == "_reason2" else None)
+            continue
+        target = reads[row][:-1] if plan.reanchor else reads[row]
+        lifted = _gap_alleles(plan, s0, ref, reads[row])
+        old_ref = lifted(ref)
+        new_alts = [lifted(allele.upper()) for allele in alts or []]
+        gt_lifted, source_lifted = (
+            None if alleles is None else [None if allele is None else lifted(allele.upper()) for allele in alleles] for alleles in (gt_alleles, source_alleles)
+        )
+        swap = target != old_ref
+        reason = "ref_mismatch_after_lift" if swap and target not in new_alts else None
+        values = {
+            "_reason2": reason,
+            "_q_chrom": plan.chrom,
+            "_q0": plan.f0,
+            "_minus": plan.minus,
+            "_reanchor": False,
+            "_t_ref": target,
+            "_swap": swap,
+            "_gap": True,
+            "_gap_reanchor": plan.reanchor,
+            "_gap_ref": old_ref,
+            "_gap_alts": new_alts,
+            "_gap_gt_alleles": gt_lifted,
+            "_gap_source_alleles": source_lifted,
+        }
+        for name in columns:
+            out[name].append(values[name])
+    placed = pl.DataFrame(out, schema={"_row": rows.schema["_row"], **columns})
+    return rows.join(placed, on="_row", how="left", maintain_order="left")
+
+
 def _reanchored(rows: pl.DataFrame) -> pl.DataFrame:
     """Re-anchored rows' alleles on the target: the new padding base (REF's first, read from the
     target), then each complemented allele less its old padding base. Few rows, so plain Python."""
@@ -1373,12 +1641,15 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
         return pl.DataFrame(schema=CALLS)
     minus = pl.col("_minus")
     alts = pl.col("alts").fill_null(pl.lit([], dtype=CALLS["alts"]))
-    lifted_ref = _complement(pl.col("ref"), minus)
+    # A row lifted across a gap of one chain has its alleles on the target already (`_place_gap`).
+    gap = pl.col("_gap").fill_null(False)
+    lifted_ref = pl.when(gap).then(pl.col("_gap_ref")).otherwise(_complement(pl.col("ref"), minus))
     moved_contig = pl.col("_q_chrom") != source_chrom
     array = pl.col("source_ref").is_null()
     counts["lifted"] += work.height
     counts["minus"] += int(work["_minus"].sum())
-    counts["reanchored"] += int(work["_reanchor"].sum())
+    counts["reanchored"] += int(work["_reanchor"].sum()) + int(work["_gap_reanchor"].fill_null(False).sum())
+    counts["gap_lifted"] += int(work.select(gap.sum()).item())
     counts["swapped"] += int(work["_swap"].sum())
     counts["other_contig"] += int(work.select(moved_contig.sum()).item())
     counts["dosage_withheld"] += int(work.select((pl.col("_swap") & pl.col("dosage").is_not_null()).sum()).item())
@@ -1388,12 +1659,16 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
         pl.lit(facet_id).alias("facet_id"),
         pl.col("_q_chrom").alias("chrom"),
         _to_pos(pl.col("_q0")).alias("pos"),
-        (pl.col("_q0") + pl.col("ref").str.len_chars()).cast(pl.UInt32).alias("end_pos"),
+        (pl.col("_q0") + pl.when(gap).then(pl.col("_t_ref")).otherwise(pl.col("ref")).str.len_chars()).cast(pl.UInt32).alias("end_pos"),
         pl.col("_t_ref").alias("ref"),
         lifted_ref.alias("_lifted_ref"),
-        _complement_list(alts, minus).alias("alts"),
-        pl.when(pl.col("gt_alleles").is_not_null()).then(_complement_list(pl.col("gt_alleles"), minus)).alias("gt_alleles"),
-        pl.when(pl.col("source_alleles").is_not_null()).then(_complement_list(pl.col("source_alleles"), minus)).alias("source_alleles"),
+        pl.when(gap).then(pl.col("_gap_alts")).otherwise(_complement_list(alts, minus)).alias("alts"),
+        pl.when(gap).then(pl.col("_gap_gt_alleles")).when(pl.col("gt_alleles").is_not_null()).then(_complement_list(pl.col("gt_alleles"), minus)).alias("gt_alleles"),
+        pl.when(gap)
+        .then(pl.col("_gap_source_alleles"))
+        .when(pl.col("source_alleles").is_not_null())
+        .then(_complement_list(pl.col("source_alleles"), minus))
+        .alias("source_alleles"),
         pl.lit(None, dtype=CALLS["source_ref"]).alias("source_ref"),
         pl.lit(None, dtype=CALLS["ref_check"]).alias("ref_check"),
         pl.lit(None, dtype=CALLS["source_gt"]).alias("source_gt"),
@@ -1472,6 +1747,11 @@ def _warnings(
         lines.append(
             f"{counts['reanchored']} of them indels re-anchored on the target's base before the lifted span (one base left); "
             "run normalize on the lifted facet to left-align them on the target"
+        )
+    if counts["gap_lifted"]:
+        lines.append(
+            f"{counts['gap_lifted']} lifted row(s) crossed a gap of one chain (under {GAP_LIMIT} bases each side) outside the bases "
+            "they change: REF read over the lifted span, each allele's change put into the target's sequence there"
         )
     if counts["dosage_withheld"]:
         lines.append(f"{counts['dosage_withheld']} swapped row(s): dosage withheld (it counted the other allele)")

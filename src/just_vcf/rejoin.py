@@ -17,7 +17,13 @@ import polars as pl
 from just_vcf import cache
 from just_vcf.links import SPLIT_REJOINED, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_parts
-from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck, unstated_sequence_alt
+from just_vcf.schema import (
+    CALLS,
+    SCHEMA_VERSION,
+    EvidenceBasis,
+    RefCheck,
+    unstated_sequence_alt,
+)
 
 REJOIN_VERSION = 6
 """Part of the derived `facet_id`: bumped whenever the join rule changes what it emits (2: the SV

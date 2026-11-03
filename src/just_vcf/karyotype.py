@@ -108,7 +108,12 @@ from just_vcf.coverage import Coverage
 from just_vcf.links import LIFTOVER_TO
 from just_vcf.loading import Loaded
 from just_vcf.person import Person
-from just_vcf.schema import SEQUENCE_ALLELE, AssemblyLabelBasis, CallsetType, unstated_sequence_alt
+from just_vcf.schema import (
+    SEQUENCE_ALLELE,
+    AssemblyLabelBasis,
+    CallsetType,
+    unstated_sequence_alt,
+)
 
 # --- Regions -----------------------------------------------------------------------------------
 # Derived from GIAB genome stratifications v3.6, `XY` group, and for T2T-CHM13's X-degenerate Y from the

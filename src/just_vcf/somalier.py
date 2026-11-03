@@ -58,7 +58,14 @@ from just_vcf.relatedness import (
     band_of,
     split_first_degree,
 )
-from just_vcf.schema import BLOCKS, CALLS, EvidenceBasis, canonical_order, conform, empty
+from just_vcf.schema import (
+    BLOCKS,
+    CALLS,
+    EvidenceBasis,
+    canonical_order,
+    conform,
+    empty,
+)
 from just_vcf.site_genotypes import Facet, SiteBasis, facets_of, read_site_genotypes
 from just_vcf.writing import write_vcf
 

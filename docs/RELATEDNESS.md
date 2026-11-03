@@ -59,7 +59,9 @@ not about who their people are.
 - **VRS cross-check.** Where both facets carry minted VRS ids for a site's ALT, the ids are compared
   and a difference counted (`n_vrs_differ`). On one assembly there should be none.
 - **somalier.** `just_vcf.somalier.somalier_relate` runs somalier (MIT) when its binary is on PATH and
-  reads its `pairs.tsv` into the same frame. Not run on this machine: docs/TRUST.md has no row for it.
+  reads its `pairs.tsv` into the same frame. Each facet is handed to it as the site reading above reads
+  it (`somalier_sites`: a GT-only record per site with a count, none where the reading is unknown), and
+  `somalier relate` runs without `--unknown`, which would read every sample's unknowns as reference. Not run on this machine: docs/TRUST.md has no row for it.
 - **Pedigrees.** `read_pedigree` reads a GA4GH Pedigree as supplied. `expected_kinship` reads what it
   says each pair's kinship should be: the pedigree kinship coefficient through its parent links
   (KIN:003 and the terms under it, KIN:032 the other way), stated degrees where a term fixes one (full

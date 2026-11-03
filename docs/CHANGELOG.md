@@ -4,6 +4,23 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **somalier is handed each facet as just-vcf's panel-site reading reads it** (merge audit 14,
+  finding 1). `somalier_relate` wrote each facet's panel rows with `write_vcf(resolved_only=True)` and
+  passed `--unknown` to `somalier extract` for a whole-genome facet, meant to read its silence as
+  reference. somalier's source says otherwise: `--unknown` is a flag of `somalier relate` (`unk2hr`),
+  not of `extract`, and it reads every unknown of every sample in the run as homozygous reference. A
+  panel site whose only row the writer withheld (`ref_unstated`, `ref_mismatch`, any of its reasons),
+  and a no-call, would so have read as zero copies, where `site_genotypes` reads them unknown. Now
+  `somalier_sites` writes one GT-only record per site `read_site_genotypes` gives a count (the panel's
+  REF and effect allele; a facet's silence as `0/0` where its `absence_means` reads it so, gVCF ref
+  blocks and CGI's omissions included) and none where it reads unknown, and `relate` runs without
+  `--unknown`. No AD is written: where a header declares AD, somalier reads a record without one as
+  depth zero, so somalier now compares the genotypes just-vcf reads instead of calling its own from
+  allele depths. The old wrapper also handed `write_vcf` rows out of order after its semi-join
+  (`UnsortedRowsError`). Never run here for real (no docs/TRUST.md row for the binary). Test:
+  `tests/test_somalier.py::test_somalier_reads_a_withheld_site_as_unknown_and_the_facets_silence_as_reference`,
+  which reads the commands and files where the binary would run; it failed on the code before.
+
 - **GET-Evidence's CGI copies named by their assembly id are checked** (RM4's last CGI item). The
   12 PGP-HMS `var` files served as `<assembly>.tsv.bz2`, without the `var-` prefix (two at format 1.x,
   ten at 2.0 with no `#TITLE`), all sniff as `cgi_var` with the build from `#GENOME_REFERENCE`; four

@@ -2,16 +2,22 @@
 
 The `pairs.tsv` here is synthetic, in the column layout somalier's `relate.nim` writes; the run itself
 is tested only where a `somalier` binary is on PATH (none on this machine: docs/TRUST.md lists no row
-for it yet).
+for it yet). What the wrapper hands somalier (its commands, the VCF of each facet) is read where the
+binary would have run.
 """
 
+import gzip
 from pathlib import Path
 
 import polars as pl
 import pytest
 
+from just_vcf import ReferenceStore, load, resolve_ref
 from just_vcf.relatedness import RELATEDNESS_FRAME, TOO_FEW_SITES, RelationBand, SitePanel
+from just_vcf.site_genotypes import facet_of as site_facet
+from just_vcf.site_genotypes import read_site_genotypes
 from just_vcf.somalier import SOMALIER_PAIRS_COLUMNS, SomalierNotFoundError, read_somalier_pairs, somalier_binary, somalier_relate
+from test_unstated_ref import base, store, vcf, with_facet  # noqa: F401 (store is a fixture)
 
 PAIRS = [
     # sample_a, sample_b, relatedness, ibs0, ibs2, concordance, hets_a, hets_b, hets_ab, shared_hets,
@@ -28,6 +34,11 @@ def write_pairs(path: Path) -> Path:
     lines = ["#" + "\t".join(SOMALIER_PAIRS_COLUMNS), *("\t".join(str(value) for value in row) for row in PAIRS)]
     path.write_text("\n".join(lines) + "\n")
     return path
+
+
+def transition(b: str) -> str:
+    """The transition partner of `b`: a site panel holds no strand-ambiguous (A/T, C/G) pair."""
+    return {"A": "G", "G": "A", "C": "T", "T": "C"}[b]
 
 
 def test_pairs_tsv_reads_into_the_relatedness_frame(tmp_path: Path) -> None:
@@ -60,3 +71,63 @@ def test_without_a_binary_it_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     with pytest.raises(SomalierNotFoundError):
         somalier_relate([], panel=panel, sites_vcf=Path("sites.vcf.gz"), fasta=Path("ref.fa"))
+
+
+def test_somalier_reads_a_withheld_site_as_unknown_and_the_facets_silence_as_reference(
+    tmp_path: Path,
+    store: ReferenceStore,  # noqa: F811 (the fixture)
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """somalier is given each facet as `site_genotypes` reads it, never a silence to impute.
+
+    `--unknown` is a flag of `somalier relate` (`unk2hr`), not of `extract`, and reads every unknown of
+    every sample in the run as homozygous reference. A site whose only rows `write_vcf(resolved_only=True)`
+    withheld (`N` → `X`, `ref_unstated`) had no record, so it read as zero copies where `site_genotypes`
+    reads it unknown; so did a no-call (`./.`, unusable), under the same flag. The somalier-bound file
+    now holds a record only where that reading gives a count: the whole-genome facet's silence (900) as
+    `0/0`, no record at the withheld and unusable sites (300, 400, 700), and somalier runs without
+    `--unknown`. The binary is not run: the commands and the files handed to it are read where it would
+    have run."""
+    records = [
+        (300, "unstated_hom_alt", "N", transition(base(300)), "1/1"),
+        (400, "unstated_het", "N", transition(base(400)), "0/1"),
+        (600, "stated_hom_alt", base(600), transition(base(600)), "1/1"),
+        (700, "no_call", base(700), transition(base(700)), "./."),
+        (800, "beside_stated_unstated", "N", transition(base(800)), "1/1"),
+        (800, "beside_stated_stated", base(800), transition(base(800)), "0/1"),
+    ]
+    positions = [300, 400, 600, 700, 800, 900]
+    loaded = with_facet(resolve_ref(load(vcf(tmp_path, records, "sites.vcf")), store), absence_means="weak_reference")
+    panel = SitePanel(
+        assembly_label="GRCh37",
+        sites=pl.DataFrame({"chrom": ["1"] * len(positions), "pos": pl.Series(positions, dtype=pl.UInt32),
+                            "ref_allele": [base(p) for p in positions], "effect_allele": [transition(base(p)) for p in positions]}),
+        source="synthetic",
+    )  # fmt: skip
+    commands: list[list[str]] = []
+    handed: dict[str, list[tuple[int, str, str, str, str]]] = {}
+
+    def run(command: list[str], **_: object) -> None:
+        commands.append(command)
+        if command[1] == "extract":
+            with gzip.open(command[-1], "rt") as text:
+                written = [line.rstrip("\n").split("\t") for line in text if not line.startswith("#")]
+            handed[Path(command[-1]).name] = [(int(r[1]), r[3], r[4], r[8], r[9]) for r in written]
+        else:
+            write_pairs(Path(f"{command[command.index('-o') + 1]}.pairs.tsv"))
+
+    monkeypatch.setattr("just_vcf.somalier.somalier_binary", lambda: Path("/nonexistent/somalier"))
+    monkeypatch.setattr("just_vcf.somalier.subprocess.run", run)
+    somalier_relate([loaded], panel=panel, sites_vcf=tmp_path / "sites.vcf.gz", fasta=tmp_path / "ref.fa", workdir=tmp_path)
+
+    assert not any(flag in command for command in commands for flag in ("--unknown", "-u"))
+    # GT alone: where a header declares AD, somalier reads a record without one as depth zero, unknown.
+    assert handed == {
+        "f0.vcf.gz": [
+            (600, base(600), transition(base(600)), "GT", "1/1"),
+            (800, base(800), transition(base(800)), "GT", "0/1"),
+            (900, base(900), transition(base(900)), "GT", "0/0"),
+        ]
+    }
+    read = {positions[r["site"]]: r["count"] for r in read_site_genotypes(loaded, site_facet(loaded), panel.sites).iter_rows(named=True)}
+    assert {pos for pos, count in read.items() if count is not None} == {pos for pos, *_ in handed["f0.vcf.gz"]}

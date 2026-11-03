@@ -145,6 +145,12 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   `AncestryEstimate.n_sites_ref_unstated`); `relatedness` reads only sites with a count, as it does for
   every unknown. A symbolic ALT is read as before (it is no panel allele, so `unusable`); before
   `resolve_ref` the row is read as written (`not_run`).
+- `somalier_relate` hands somalier that same reading, one `0/0`, `0/1` or `1/1` record per panel site
+  it gives a count and none where it reads unknown, and runs `somalier relate` without `--unknown`
+  (2026-11-03; before, each facet's rows went through `write_vcf(resolved_only=True)` and a
+  whole-genome facet was meant to be read with `--unknown`, which is a flag of `relate`, not of
+  `extract`, and reads every sample's unknowns as homozygous reference: a site whose only row the writer
+  withheld, `ref_unstated` among its reasons, had no record and would have read as zero copies).
 - `cis_phased_blocks` takes no slot of it into a block, its REF slot included: the GT indexes
   `[N] + alts`, so a `0` names no base either, as `genotype_evidence` reads it (2026-10-31; before,
   `reference_alleles=True` took the REF slot's minted id, so `N` → `G`, `0|0`, joined both blocks

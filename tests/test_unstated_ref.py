@@ -26,6 +26,7 @@ from just_vcf import (
     normalize,
     query,
     reference_support,
+    rejoin_split,
     resolve_ref,
     vrs_withheld,
     write_vcf,
@@ -184,6 +185,34 @@ def test_normalize_leaves_an_unstated_row_as_written_and_says_why(tmp_path: Path
     assert any(w == "1 row(s) not left-aligned or trimmed: the source REF states no base (ref_check unstated)" for w in out.warnings)
 
 
+@pytest.mark.parametrize("stated_first", [True, False])
+def test_normalize_keeps_the_stated_row_of_two_that_differ_only_in_their_source_ref(tmp_path: Path, store: ReferenceStore, stated_first: bool) -> None:
+    """Two rows that state the same allele and genotype are one row (`normalize`'s dedup ignores the
+    columns that describe how the source wrote it, `source_ref` and `ref_check` among them). Which one is
+    kept decides what every reader sees: canonical order put `N` before `T`, so of `N` → `A` and `T` →
+    `A` (the reference reads `T`) the `unstated` row was kept and the stated `match` dropped, and of `C`
+    → `A` and `T` → `A` the `mismatch`. The row whose REF was stated and matched is kept, whichever
+    order the rows came in; between the other two, `unstated` before `mismatch`."""
+    at = [p for p in range(1000, N_RUN) if base(p) == "T"][:3]
+    cases = [
+        (at[0], [("N", "unstated")]),
+        (at[1], [("C", "mismatch")]),
+        (at[2], [("N", "unstated"), ("C", "mismatch")]),
+    ]
+    records = []
+    for pos, others in cases:
+        rows = [(pos, ".", "T", "A", "1/1")] if stated_first else []
+        rows += [(pos, ".", ref, "A", "1/1") for ref, _ in others]
+        records += rows if stated_first else [*rows, (pos, ".", "T", "A", "1/1")]
+    # Where the reference reads `G`, neither `N` nor `C` matches: canonical order would keep the `C`.
+    g = next(p for p in range(at[2] + 1, N_RUN) if base(p) == "G")
+    pair = [(g, ".", "N", "A", "1/1"), (g, ".", "C", "A", "1/1")]
+    source = resolve_ref(load(vcf(tmp_path, sorted(records + (pair if stated_first else pair[::-1]), key=lambda r: r[0]))), store)
+    out = normalize(source, store).calls.collect()
+    kept = {p: out.filter(pl.col("pos") == p).select("source_ref", "ref_check").rows() for p in [*at, g]}
+    assert kept == {**{p: [("T", "match")] for p in at}, g: [("N", "unstated")]}
+
+
 def unwritable() -> dict[str, int]:
     """What the writers leave out of `RECORDS`: a mismatch, and an unstated row's sequence ALT, which
     written beside the reference's base would read back as a stated `match` (`N` → `NAC` as `C` → `NAC`)."""
@@ -242,6 +271,23 @@ def test_query_counts_unstated_and_reads_neither_site_nor_alt_from_an_unstated_r
     assert (unstated.basis.value, unstated.carried) == ("overlapping_call", None)
     (matched,) = q.carries(chrom="1", pos=10, ref=base(10), alt=next(b for b in "ACGT" if b not in (base(10), other(base(10)))))
     assert (matched.basis.value, matched.carried) == ("site_genotyped", False), "a stated REF still genotypes its site"
+
+
+def test_query_counts_variant_classes_as_the_facet_counted_them_at_load(tmp_path: Path, store: ReferenceStore) -> None:
+    """`counts(by=["variant_class"])` classes an `unstated` row's ALT against `source_ref`, as
+    `facets.variant_classes` counted it at load (Decision 2), so the count never depends on the base
+    the reference reads under the `N`. `variant_class_expr` reads only lengths and which letters an
+    allele holds, and `resolve_ref` reads `ref` over the `source_ref`'s own span, so `N` → `NAC` is an
+    indel and `N` → `X` an SNV read against either; pinned so that a REF read over another span cannot
+    move the count unnoticed."""
+    loaded = load(vcf(tmp_path, RECORDS))
+    at_load = {entry["variant_class"]: entry["alleles"] for entry in loaded.facets.collect()["variant_classes"].item().to_list()}
+    (table,) = query(resolve_ref(loaded, store)).counts(by=["variant_class"])
+    counted = {group.values[0]: group.count for group in table.groups if group.values[0] is not None}
+    assert counted == {cls: n for cls, n in at_load.items() if n}
+    unstated = [(p, case, r, a, g) for p, case, r, a, g in RECORDS if EXPECTED[case] == "unstated"]
+    (only,) = query(resolve_ref(load(vcf(tmp_path, unstated, "unstated.vcf")), store)).counts(by=["variant_class"])
+    assert {group.values[0]: group.count for group in only.groups} == {"snv": 2, "indel": 1, "sv": 2}
 
 
 def test_the_cli_counts_unstated_rows(tmp_path: Path) -> None:
@@ -352,6 +398,38 @@ LIFT_CASES = {
     # allele the source never called.
     "unstated_swap": (f"1\t{MULTI_SWAP_POS}\tunstated_swap\tN\t{MULTI_BASE}\t50\tPASS\t.\tGT\t0/0", "source_ref_unstated"),
 }
+
+
+def test_rejoin_leaves_a_split_site_spelled_against_an_unstated_ref_as_written(tmp_path: Path, store: ReferenceStore) -> None:
+    """A split site whose rows' source REF is `N` (`N` → `X` and `N` → `Y`, one row per ALT) joined into
+    one row with `ref_check = not_run`, which every reader reads as written: its sequence ALTs, spelled
+    against the `N`, became readable again, and `resolve_ref` refuses a facet already read, so nothing
+    could set the row back to `unstated`. The group is now left as written, counted under its own
+    reason, as the other groups that cannot be read as one site are; a stated split site beside it
+    still joins."""
+    tag = "OLD_MULTIALLELIC=1:{}:A/G/T"
+    x, y = other(base(300)), third(base(300))
+    lines = [
+        "##fileformat=VCFv4.2",
+        f"##contig=<ID=1,length={len(SEQ['1'])}>",
+        '##INFO=<ID=OLD_MULTIALLELIC,Number=1,Type=String,Description="Original chr:pos:ref:alt encoding">',
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1",
+        f"1\t300\t.\tN\t{x}\t50\tPASS\t{tag.format(300)}\tGT\t1/0",
+        f"1\t300\t.\tN\t{y}\t50\tPASS\t{tag.format(300)}\tGT\t0/1",
+        f"1\t400\t.\t{base(400)}\t{other(base(400))}\t50\tPASS\t{tag.format(400)}\tGT\t1/0",
+        f"1\t400\t.\t{base(400)}\t{third(base(400))}\t50\tPASS\t{tag.format(400)}\tGT\t0/1",
+    ]
+    path = tmp_path / "split.vcf"
+    path.write_text("\n".join(lines) + "\n")
+    rejoined = rejoin_split(resolve_ref(load(path), store))
+    calls = {pos: group for (pos,), group in rejoined.calls.collect().group_by(["pos"])}
+    assert calls[300].select("source_ref", "ref_check", "alts", "split_signal").sort("alts").rows() == [
+        ("N", "unstated", [x], "marker"),
+        ("N", "unstated", [y], "marker"),
+    ]
+    assert calls[400]["alts"].to_list() == [sorted([other(base(400)), third(base(400))])]
+    assert "1 split site(s) left as written: a source REF of only N, which states no base (ref_check unstated)" in rejoined.warnings
 
 
 def test_liftover_lifts_unstated_rows_like_matching_ones_unless_they_spell_a_sequence_alt(tmp_path: Path, setup) -> None:  # noqa: F811
@@ -529,6 +607,61 @@ def test_sex_chromosome_measures_read_no_alt_spelled_against_an_unstated_ref(tmp
     assert {k: unstated[k] for k in _PLOIDY_COUNTS} == {k: twin[k] for k in _PLOIDY_COUNTS}
     assert (unstated["diploid_alt"], unstated["het"], unstated["haploid_alt"]) == (2, 2, 0), "the <DEL> and the stated het"
     assert {k: counts(KARYOTYPE_RECORDS, "raw", resolved_ref=False)[k] for k in _ALT_COUNTS} == {k: twin[k] for k in _ALT_COUNTS}
+
+
+def test_sex_chromosome_measures_read_a_symbolic_alt_of_an_unstated_row_by_its_genotype_index(tmp_path: Path, store: ReferenceStore) -> None:
+    """On a row `N` → `<DEL>,X` only the sequence ALT was spelled against the `N`: a GT index pointing at
+    `<DEL>` is a symbolic call, read as any is (SCHEMA Decision 2), and one pointing at `X` is not read.
+    So `0/1` counts as a diploid ALT call, a het and a depth site, as `N` → `<DEL>` with `0/1` does,
+    while `0/2` and `1/2` (a slot on `X`) count as no ALT call, as a row with an unread allele. The whole
+    row was dropped from these measures before, `0/1` included."""
+    records = [
+        (300, "del_het", "N", f"<DEL>,{other(base(300))}", "0/1:30"),
+        (400, "sequence_het", "N", f"<DEL>,{other(base(400))}", "0/2:30"),
+        (500, "del_and_sequence", "N", f"<DEL>,{other(base(500))}", "1/2:30"),
+    ]
+    got = measure(resolve_ref(load(vcf_with(tmp_path, "mixed", "GT:DP", records)), store).calls, None)["groups"]["autosomes"]
+    only_del = measure(resolve_ref(load(vcf_with(tmp_path, "del", "GT:DP", [(300, "del_het", "N", "<DEL>", "0/1:30")])), store).calls, None)
+    assert {k: got[k] for k in _ALT_COUNTS} == {k: only_del["groups"]["autosomes"][k] for k in _ALT_COUNTS}
+    assert (got["diploid_alt"], got["het"], got["depth_sites"]) == (1, 1, 1)
+    assert {k: got[k] for k in _PLOIDY_COUNTS} == {"rows": 3, "one": 0, "two": 3, "more": 0}
+
+
+def test_array_letter_measures_read_no_pair_spelled_against_an_unstated_ref(tmp_path: Path) -> None:
+    """An array's X is read from its letters (`base_pairs`, `letter_hets`): a chip VCF row `N` → `C,G`
+    with GT `1/2` has letters `C` and `G`, both spelled against the `N`, so it is neither a base pair nor
+    a letter het; its stated twin is both. Its call as written still counts (`called`, `no_calls`), as
+    its ploidy does: the chip said it called the probe, whatever the letters name. Read on an autosome
+    and on X outside the PARs."""
+    fasta = tmp_path / "ref.fa"
+    fasta.write_text("".join(f">{name}\n" + "\n".join(SEQ["1"][i : i + 60] for i in range(0, len(SEQ["1"]), 60)) + "\n" for name in ("1", "X")))
+    two = ReferenceStore.open(tmp_path / "two")
+    two.add_fasta(fasta)
+
+    def letters(ref_of: object, name: str) -> dict[str, dict]:
+        lines = [
+            "##fileformat=VCFv4.2",
+            *(f"##contig=<ID={c},length={len(SEQ['1'])}>" for c in ("1", "X")),
+            '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+            "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "S1"]),
+        ]
+        for chrom in ("1", "X"):
+            for pos in (300, 400):
+                b = base(pos)
+                alts = ",".join(x for x in "ACGT" if x != b)[:3]
+                lines.append(f"{chrom}\t{pos}\t.\t{ref_of(b)}\t{alts}\t50\tPASS\t.\tGT\t1/2")
+            lines.append(f"{chrom}\t500\t.\t{ref_of(base(500))}\t{other(base(500))}\t50\tPASS\t.\tGT\t./.")
+        path = tmp_path / f"{name}.vcf"
+        path.write_text("\n".join(lines) + "\n")
+        return measure(resolve_ref(load(path), two).calls, "GRCh37")["groups"]
+
+    unstated, stated = letters(lambda b: "N", "unstated"), letters(lambda b: b, "stated")
+    for group in ("autosomes", "x_nonpar"):
+        assert (stated[group]["base_pairs"], stated[group]["letter_hets"]) == (2, 2), group
+        assert (unstated[group]["base_pairs"], unstated[group]["letter_hets"]) == (0, 0), group
+        assert {k: unstated[group][k] for k in ("rows", "called", "no_calls", "called_one")} == {
+            k: stated[group][k] for k in ("rows", "called", "no_calls", "called_one")
+        }, group
 
 
 def test_variant_classes_are_counted_at_load_before_any_ref_is_read(tmp_path: Path, store: ReferenceStore) -> None:

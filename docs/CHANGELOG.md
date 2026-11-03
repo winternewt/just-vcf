@@ -4,6 +4,52 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`query.counts(by=["variant_class"])` classes an `unstated` row's ALT against its source REF**
+  (merge audit 14, finding 6), as `facets.variant_classes` counts it at load. It read
+  `coalesce(ref, source_ref)`, the reference's base under the `N`; no count moved, since `resolve_ref`
+  reads `ref` over the `source_ref`'s own span and the class reads only lengths and which letters an
+  allele holds, so the finding is a non-issue at the count level, shown by a test that passes on the
+  code before and after. The rule is now written in the expression, so a REF read over another span
+  could not move the count. `genotype_class` is a shape of the GT indices and stays as written; its
+  docstring says so. Test: `tests/test_unstated_ref.py::test_query_counts_variant_classes_as_the_facet_counted_them_at_load`.
+
+- **`normalize` keeps the duplicate whose REF was stated and matched** (merge audit 14, finding 5).
+  Two rows equal in everything but how the source wrote them (`source_ref`, `ref_check`, ...) are one
+  row, and canonical order chose which: it sorts `source_ref`, so of `N` → `A` (`unstated`) and `T` →
+  `A` (`match`) over a reference `T` the `unstated` row was kept, whose ALT no reader takes as stated,
+  and of `C` → `A` (`mismatch`) and `T` → `A` the unwritable `mismatch`. The kept row is now chosen by
+  `ref_check` first, `match`, null (a REF read from the reference with nothing to compare), `not_run`,
+  `unstated`, `mismatch`, then canonical order, and stays at its own place in that order.
+  `NORMALIZE_VERSION` 10, since a facet holding such a pair emits another row; every normalized facet
+  is renamed. Test: `tests/test_unstated_ref.py::test_normalize_keeps_the_stated_row_of_two_that_differ_only_in_their_source_ref`,
+  both input orders, failing on the code before.
+
+- **`rejoin_split` leaves a split site spelled against an `N` as written** (merge audit 14, finding
+  4). On a facet whose REF was read, a split site whose rows' source REF is `N` (`ref_check =
+  unstated`, sequence ALTs) joined into one row with `ref_check = not_run`, which every reader reads as
+  written, so the sequence ALTs spelled against the `N` became readable again; `resolve_ref` refuses a
+  facet read once, so nothing could mark the row `unstated` again. Such a group now stays as written,
+  counted ("a source REF of only N, which states no base (ref_check unstated)"), as the other groups
+  that cannot be read as one site do. `REJOIN_VERSION` 6, since a facet holding such a group emits other
+  rows, which renames every rejoined facet. On a facet not yet read nothing changes. What a join after
+  `resolve_ref` costs a `match` row (its `ref` and VRS ids, for good) is a separate finding, F34, left
+  open with three candidate repairs. Test:
+  `tests/test_unstated_ref.py::test_rejoin_leaves_a_split_site_spelled_against_an_unstated_ref_as_written`,
+  failing on the code before.
+
+- **The sex-chromosome measures read an `unstated` row per GT slot** (merge audit 14, findings 2 and
+  3). `karyotype.measure` dropped the whole row from its ALT counts when any ALT was a sequence allele,
+  so `N` → `<DEL>,G` with GT `0/1` lost its symbolic call from the diploid ALT, het and depth counts,
+  against SCHEMA's "a symbolic ALT on such a row counts as any symbolic call does". Now a slot on a
+  symbolic ALT is read and a slot on a sequence ALT is not: `0/1` counts as `N` → `<DEL>` does, `0/2`
+  and `1/2` count no ALT. The array letter measures (`base_pairs`, `letter_hets`, read for an array's
+  X) still read the letters of such a row, so a chip VCF's `N` → `C,G`, `1/2`, was a base pair and a
+  letter het; it is neither now, while its call and its letter count as written still count
+  (`called`, `no_calls`, `called_one`). `sex_chromosome_evidence` moves only on facets holding such
+  rows; no file in hand writes them. Tests: `tests/test_unstated_ref.py`, the two new
+  `test_sex_chromosome_measures_read_a_symbolic_alt_...` and `test_array_letter_measures_...`, both
+  failing on the code before.
+
 - **GET-Evidence's CGI copies named by their assembly id are checked** (RM4's last CGI item). The
   12 PGP-HMS `var` files served as `<assembly>.tsv.bz2`, without the `var-` prefix (two at format 1.x,
   ten at 2.0 with no `#TITLE`), all sniff as `cgi_var` with the build from `#GENOME_REFERENCE`; four

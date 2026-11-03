@@ -100,13 +100,19 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   `ref_unstated`: `N` → `NAC` read as `C` → `NAC` would be a delins the source never wrote. A symbolic
   ALT keeps its own reason (`sv_no_vrs_model`).
 - `normalize` leaves it as written, counted ("the source REF states no base"): trimming an ALT spelled
-  against `N` against the reference's base would rewrite an allele.
+  against `N` against the reference's base would rewrite an allele. Of two rows that differ only in
+  how the source wrote them, an `unstated` one and a `match` one, the `match` one is kept (2026-11-03,
+  `NORMALIZE_VERSION` 10; canonical order put `N` before `T` and kept the `unstated` row).
 - `query` never answers from it for a sequence allele, neither `stated` nor `site_genotyped`: its
   sequence ALTs were spelled against the `N`, and a REF the source did not state says nothing about
   which base the site holds. An allele asked at its POS, spelled by it or not, is `overlapping_call`
   (carried unknown); read as stated, `N` → `G` with GT `0/0` would answer `hom_ref` for a base the
   source never named. `counts` by `ref_check` lists it, as does the
-  CLI's `check` (`ref_check` counts, `--json` included), which groups by the column.
+  CLI's `check` (`ref_check` counts, `--json` included), which groups by the column. `counts` by
+  `variant_class` classes its ALT against `source_ref`, as `facets.variant_classes` counted it at load
+  (2026-11-03, written out; it read `ref` before, which `resolve_ref` reads over the `source_ref`'s own
+  span, so no count moved: the class reads lengths and letters only). `genotype_class` is a shape of
+  the GT indices and reads it as written.
 - `resolve_ref` counts it apart in its warning ("… with a source REF of only N, which states no base
   to compare"), never among the mismatches, and never as an IUPAC ambiguity.
 - `concordance` compares none of its sequence ALTs: each is counted in `excluded` as `ref_unstated`
@@ -129,12 +135,17 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   the lowest confidence a facet states at a position, and this row states none); `consensus` already
   read no such row, so its output does not move. Before `resolve_ref` the row's `ref_check` is
   `not_run` and it is graded as written: the rule needs the REF read.
-- `sex_chromosome_evidence` (`karyotype.measure`) counts no ALT on it: such a row feeds neither the
-  het share, nor the allele balance, nor the depth line (2026-10-31; before, `N` → `G`, `0/1`, on X
-  was a het of two bases the source never named). Its ploidy as written still counts, being the
-  caller's statement of how many haplotypes it saw, not an allele. A symbolic ALT on such a row counts
-  as any symbolic call does, as before: a called `<DEL>` with GT `0/1` is one more diploid ALT call
-  and a het. On a facet not yet through `resolve_ref` the rule cannot apply (`not_run`).
+- `sex_chromosome_evidence` (`karyotype.measure`) reads no GT slot on a sequence ALT of it: a row with
+  such a slot feeds neither the het share, nor the allele balance, nor the depth line (2026-10-31;
+  before, `N` → `G`, `0/1`, on X was a het of two bases the source never named). Its ploidy as written
+  still counts, being the caller's statement of how many haplotypes it saw, not an allele. A slot on a
+  symbolic ALT counts as any symbolic call does: a called `<DEL>` with GT `0/1` is one more diploid ALT
+  call and a het, on `N` → `<DEL>,G` as on `N` → `<DEL>` (2026-11-03; before, the second ALT made the
+  whole row count as none). `N` → `<DEL>,G` with `0/2` or `1/2` has a slot on `G` and counts no ALT.
+  An array's letter measures read no letter of it either: `N` → `C,G`, `1/2`, from a chip VCF, is
+  neither a two-letter base call nor a letter het (2026-11-03), while its call as written still counts
+  (`called`, `no_calls`, one letter or two), as its ploidy does. On a facet not yet through
+  `resolve_ref` the rule cannot apply (`not_run`).
 - `site_genotypes.read_site_genotypes`, the panel-site reading `relatedness` and `ancestry` share,
   reads no genotype from it at a panel site: the row is not usable, and a site whose every row is
   such a row is unknown, `basis = ref_unstated` (2026-10-31; before, `N` → `G`, `1/1`, at a site whose
@@ -162,6 +173,13 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   reference for SNVs. No file in hand writes such rows: every copy-number file writes symbolic ALTs
   or none, and its `sv` count is as stated. A recount at `resolve_ref` would change a load-time count
   in a resolve step, and is not made (`tests/test_unstated_ref.py` pins the count).
+- `rejoin_split` leaves a split site as written, counted ("a source REF of only N, which states no
+  base"), when a row of it spells a sequence ALT against an `N` (2026-11-03, `REJOIN_VERSION` 6;
+  before, on a facet whose REF was read, the joined row took `ref_check = not_run`, which every reader
+  reads as written, so its sequence ALTs became readable again, and `resolve_ref` refuses a facet read
+  once, so nothing could mark it `unstated` again). On a facet not yet read every row is `not_run` and
+  the join is made; `resolve_ref` then compares the joined REF as any other (F34 records what a join
+  after `resolve_ref` costs a `match` row).
 - No other reader: loaders, `rejoin_split` and `consensus` write `not_run` or null; `liftover` and
   `normalize` null it on a row they move or re-derive (`liftover` moves none with a sequence ALT); the
   facet guard (`tests/test_load_seams.py`) reads `facets` columns only.
@@ -1045,8 +1063,10 @@ parquet spill of `calls`, three columns, so they cost no second parse of the VCF
 
 A position stays as written, its rows still flagged, when it cannot be read as one site: two ALTs in
 one slot, rows of different ploidy, a symbolic allele, REFs that are not prefixes of one another, an
-index past a row's ALTs, a row with no genotype, or a row with no `source_ref` (one `normalize` moved).
-Each reason is one warning with a count. Not done:
+index past a row's ALTs, a row with no genotype, a row with no `source_ref` (one `normalize` moved),
+or a row whose sequence ALT was spelled against a source REF of only `N` (`ref_check = unstated`,
+Decision 2; `REJOIN_VERSION` 6). Each reason is one warning with a count. A joined row's `ref` is null
+and its `ref_check` `not_run`, so a facet whose REF was read is rejoined at a cost (F34). Not done:
 grouping by the bcftools marker's original record, which would also catch split indels that
 left-alignment moved to another POS.
 
@@ -1109,7 +1129,11 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    `vrs_errors`, `cipos`, `ciend`), which say how the source wrote a row, not what it states. So one indel written twice
    by the source, once already left-aligned and once further right, with the same genotype and
    evidence, is one row, and the one kept is the row that did not move, with its source REF, check and
-   GT text. Rows that state the same allele at one position and differ in anything else (genotype,
+   GT text. Which row is kept is read from `ref_check` first: `match`, then null (a REF read from the
+   reference with nothing to compare: a row that moved, a lifted or an array row), then `not_run`,
+   `unstated`, `mismatch`; then canonical order (`NORMALIZE_VERSION` 10, 2026-11-03; before, canonical
+   order alone, so of `N` → `A` and `T` → `A` over a reference `T` the `unstated` row was kept and the
+   stated `match` dropped, as `C` → `A`, a `mismatch`, was). Rows that state the same allele at one position and differ in anything else (genotype,
    phasing, the likelihoods, depths, quality, filters, ids) are all kept, with a warning (charter 8).
    Then canonical order (Decision 11).
 

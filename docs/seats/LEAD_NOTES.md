@@ -28,7 +28,10 @@ each reset.
 0. **Shipped since, kept out of Open**: F23 as schema 0.0.22 (2026-10-27); audit 12's fixes and the loosened
    own-sample test, merge 6eed88a (2026-10-26). The roadmap's stale "awaiting the lead's merge" lines (RM274,
    RM276, RM5) corrected 2026-11-03.
-0. **Running 2026-11-03**: RM5's ancestry consensus, methods on one panel one witness. RM6's lift across a
+0. **Done 2026-11-03, nothing running**: RM5's consensus merged as 6b5503c (merge 4 of 6): one panel's methods
+   are one witness, averaged; only panels the caller declares disjoint multiply; its calls for veto in
+   docs/SCHEMA.md "Combining ancestry estimates" (disjointness never inferred, every reading weighed alike,
+   arithmetic mean). No decided buildable item is left that needs no person's data. RM6's lift across a
    gap of one chain merged as 855ab49 (merge 3 of 6; `GAP_LIMIT` 50 and "the gap does not follow the person",
    the gap's target bases written as context, are its calls for veto in docs/SCHEMA.md "Lifting" 2b). RM278's thresholds file and quantized
    runs merged (merge 2 of 6), its veto list in docs/SCHEMA.md "Coverage facets" (a contig's last base its own

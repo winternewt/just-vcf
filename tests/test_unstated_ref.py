@@ -531,6 +531,61 @@ def test_sex_chromosome_measures_read_no_alt_spelled_against_an_unstated_ref(tmp
     assert {k: counts(KARYOTYPE_RECORDS, "raw", resolved_ref=False)[k] for k in _ALT_COUNTS} == {k: twin[k] for k in _ALT_COUNTS}
 
 
+def test_sex_chromosome_measures_read_a_symbolic_alt_of_an_unstated_row_by_its_genotype_index(tmp_path: Path, store: ReferenceStore) -> None:
+    """On a row `N` → `<DEL>,X` only the sequence ALT was spelled against the `N`: a GT index pointing at
+    `<DEL>` is a symbolic call, read as any is (SCHEMA Decision 2), and one pointing at `X` is not read.
+    So `0/1` counts as a diploid ALT call, a het and a depth site, as `N` → `<DEL>` with `0/1` does,
+    while `0/2` and `1/2` (a slot on `X`) count as no ALT call, as a row with an unread allele. The whole
+    row was dropped from these measures before, `0/1` included."""
+    records = [
+        (300, "del_het", "N", f"<DEL>,{other(base(300))}", "0/1:30"),
+        (400, "sequence_het", "N", f"<DEL>,{other(base(400))}", "0/2:30"),
+        (500, "del_and_sequence", "N", f"<DEL>,{other(base(500))}", "1/2:30"),
+    ]
+    got = measure(resolve_ref(load(vcf_with(tmp_path, "mixed", "GT:DP", records)), store).calls, None)["groups"]["autosomes"]
+    only_del = measure(resolve_ref(load(vcf_with(tmp_path, "del", "GT:DP", [(300, "del_het", "N", "<DEL>", "0/1:30")])), store).calls, None)
+    assert {k: got[k] for k in _ALT_COUNTS} == {k: only_del["groups"]["autosomes"][k] for k in _ALT_COUNTS}
+    assert (got["diploid_alt"], got["het"], got["depth_sites"]) == (1, 1, 1)
+    assert {k: got[k] for k in _PLOIDY_COUNTS} == {"rows": 3, "one": 0, "two": 3, "more": 0}
+
+
+def test_array_letter_measures_read_no_pair_spelled_against_an_unstated_ref(tmp_path: Path) -> None:
+    """An array's X is read from its letters (`base_pairs`, `letter_hets`): a chip VCF row `N` → `C,G`
+    with GT `1/2` has letters `C` and `G`, both spelled against the `N`, so it is neither a base pair nor
+    a letter het; its stated twin is both. Its call as written still counts (`called`, `no_calls`), as
+    its ploidy does: the chip said it called the probe, whatever the letters name. Read on an autosome
+    and on X outside the PARs."""
+    fasta = tmp_path / "ref.fa"
+    fasta.write_text("".join(f">{name}\n" + "\n".join(SEQ["1"][i : i + 60] for i in range(0, len(SEQ["1"]), 60)) + "\n" for name in ("1", "X")))
+    two = ReferenceStore.open(tmp_path / "two")
+    two.add_fasta(fasta)
+
+    def letters(ref_of: object, name: str) -> dict[str, dict]:
+        lines = [
+            "##fileformat=VCFv4.2",
+            *(f"##contig=<ID={c},length={len(SEQ['1'])}>" for c in ("1", "X")),
+            '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+            "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "S1"]),
+        ]
+        for chrom in ("1", "X"):
+            for pos in (300, 400):
+                b = base(pos)
+                alts = ",".join(x for x in "ACGT" if x != b)[:3]
+                lines.append(f"{chrom}\t{pos}\t.\t{ref_of(b)}\t{alts}\t50\tPASS\t.\tGT\t1/2")
+            lines.append(f"{chrom}\t500\t.\t{ref_of(base(500))}\t{other(base(500))}\t50\tPASS\t.\tGT\t./.")
+        path = tmp_path / f"{name}.vcf"
+        path.write_text("\n".join(lines) + "\n")
+        return measure(resolve_ref(load(path), two).calls, "GRCh37")["groups"]
+
+    unstated, stated = letters(lambda b: "N", "unstated"), letters(lambda b: b, "stated")
+    for group in ("autosomes", "x_nonpar"):
+        assert (stated[group]["base_pairs"], stated[group]["letter_hets"]) == (2, 2), group
+        assert (unstated[group]["base_pairs"], unstated[group]["letter_hets"]) == (0, 0), group
+        assert {k: unstated[group][k] for k in ("rows", "called", "no_calls", "called_one")} == {
+            k: stated[group][k] for k in ("rows", "called", "no_calls", "called_one")
+        }, group
+
+
 def test_variant_classes_are_counted_at_load_before_any_ref_is_read(tmp_path: Path, store: ReferenceStore) -> None:
     """`variant_classes` is counted at load, where every row's `ref_check` is `not_run`: an unstated
     row's sequence ALT is not known to be one yet, so `N` → `X` counts as the SNV its lengths make it,

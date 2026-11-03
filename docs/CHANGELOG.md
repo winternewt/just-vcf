@@ -4,6 +4,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **The sex-chromosome measures read an `unstated` row per GT slot** (merge audit 14, findings 2 and
+  3). `karyotype.measure` dropped the whole row from its ALT counts when any ALT was a sequence allele,
+  so `N` → `<DEL>,G` with GT `0/1` lost its symbolic call from the diploid ALT, het and depth counts,
+  against SCHEMA's "a symbolic ALT on such a row counts as any symbolic call does". Now a slot on a
+  symbolic ALT is read and a slot on a sequence ALT is not: `0/1` counts as `N` → `<DEL>` does, `0/2`
+  and `1/2` count no ALT. The array letter measures (`base_pairs`, `letter_hets`, read for an array's
+  X) still read the letters of such a row, so a chip VCF's `N` → `C,G`, `1/2`, was a base pair and a
+  letter het; it is neither now, while its call and its letter count as written still count
+  (`called`, `no_calls`, `called_one`). `sex_chromosome_evidence` moves only on facets holding such
+  rows; no file in hand writes them. Tests: `tests/test_unstated_ref.py`, the two new
+  `test_sex_chromosome_measures_read_a_symbolic_alt_...` and `test_array_letter_measures_...`, both
+  failing on the code before.
+
 - **somalier is handed each facet as just-vcf's panel-site reading reads it** (merge audit 14,
   finding 1). `somalier_relate` wrote each facet's panel rows with `write_vcf(resolved_only=True)` and
   passed `--unknown` to `somalier extract` for a whole-genome facet, meant to read its silence as

@@ -5,9 +5,11 @@ whole-genome callset that wrote no variant at a position the reads covered well 
 that wrote none where no read landed. It is read two ways:
 
 - **`read_coverage(path)`** reads what a depth tool already wrote: mosdepth's `.per-base.bed.gz`,
-  `.regions.bed.gz`, `.quantized.bed.gz` and `.mosdepth.summary.txt`, and `samtools depth` and
-  `samtools coverage` output. The kind is told from the content, never from the file name, and
-  compression from the magic bytes.
+  `.regions.bed.gz`, `.quantized.bed.gz`, `.thresholds.bed.gz` and `.mosdepth.summary.txt`, and
+  `samtools depth` and `samtools coverage` output. The kind is told from the content, never from the
+  file name, and compression from the magic bytes. A thresholds file counts bases at or above each
+  threshold per region; those counts are not depths, so they go to `Coverage.thresholds` and no depth
+  column of `intervals` holds them.
 - **`alignment_coverage(path)`** runs polars-bio's `depth()` over a BAM or CRAM (charter: alignment
   processing is the substrate's, used as is; just-vcf walks no CIGAR of its own) and folds its
   per-base depth into fixed windows while it streams, so the result is a few million rows for a
@@ -43,9 +45,10 @@ import io
 import json
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from enum import Enum
 from importlib.metadata import version
+from itertools import pairwise
 from pathlib import Path
 
 import polars as pl
@@ -101,6 +104,20 @@ COVERAGE_INTERVALS: dict[str, pl.DataType] = {
 - `label`: a quantized bin's or a named region's label, verbatim; null otherwise.
 """
 
+COVERAGE_THRESHOLDS: dict[str, pl.DataType] = {
+    "chrom": pl.String(),
+    "pos": pl.UInt32(),
+    "end_pos": pl.UInt32(),
+    "label": pl.String(),
+    "threshold": pl.UInt32(),
+    "bases_at_or_above": pl.UInt32(),
+}
+"""The `thresholds` frame of a thresholds facet (mosdepth `--thresholds`): one row per region and
+threshold, sorted by contig rank, `pos`, `end_pos`, then `threshold`. `pos`, `end_pos` and `label` are
+the region's, as in `intervals`. `bases_at_or_above` is how many of the region's bases mosdepth counted
+at a depth of `threshold` or more: a count of bases, never a depth, so nothing reading depth reads it.
+"""
+
 
 class CoverageFormat(str, Enum):
     """What a coverage facet was read from. Told by shape, so a name covers every tool writing it."""
@@ -111,6 +128,9 @@ class CoverageFormat(str, Enum):
     """BED4 or BED5 with a mean depth last: mosdepth `.regions.bed.gz` (`--by`)."""
     QUANTIZED_BED = "quantized_bed"
     """BED4 runs of a depth bin: mosdepth `.quantized.bed.gz` (`--quantize`)."""
+    THRESHOLDS_BED = "thresholds_bed"
+    """A BED of regions with one count of bases per depth threshold, under a `#chrom start end region
+    1X 10X ...` header: mosdepth `.thresholds.bed.gz` (`--thresholds`, which needs `--by`)."""
     MOSDEPTH_SUMMARY = "mosdepth_summary"
     """mosdepth `.mosdepth.summary.txt`: length, bases, mean, min and max per contig."""
     SAMTOOLS_DEPTH = "samtools_depth"
@@ -132,6 +152,9 @@ class Resolution(str, Enum):
     """Runs whose depth falls in one bin: bounds, no mean."""
     REGION = "region"
     """A mean over each interval, no bounds; mosdepth's summary adds the bounds per contig."""
+    THRESHOLDS = "thresholds"
+    """Regions with the count of their bases at or above each depth threshold (`Coverage.thresholds`):
+    no mean and no bound in `intervals`."""
 
 
 class CoverageFacet(BaseModel):
@@ -171,15 +194,27 @@ class CoverageFacet(BaseModel):
     """The caller's label for the person whose reads these are (`subject=`), as `load` writes
     `facets.subject` (RM273): supplied, never inferred. Not identity: `facet_id` does not digest it, and
     `alignment_coverage`'s cache spill does not key on it. `Person.of(..., coverage=...)` groups by it."""
+    thresholds: list[int] | None = None
+    """A thresholds facet's depth thresholds, ascending, as its header names them (`1X` is 1); null for
+    every other resolution."""
+    quantize: list[int | None] | None = None
+    """The bin edges a quantized facet was cut at here (`alignment_coverage(quantize=...)`), None as
+    the open top. Null for a file, which does not record its bins, and for every other resolution."""
 
 
 class Coverage(BaseModel):
-    """A coverage facet and its intervals (`COVERAGE_INTERVALS`), sorted by contig rank and `pos`."""
+    """A coverage facet and its intervals (`COVERAGE_INTERVALS`), sorted by contig rank and `pos`.
+
+    `thresholds` (`COVERAGE_THRESHOLDS`) holds a thresholds facet's counts per region and threshold;
+    null for every other resolution. `quantized` is the quantized facet `alignment_coverage(quantize=...)`
+    computed from the same depth pass as these windows; null otherwise."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     facet: CoverageFacet
     intervals: pl.LazyFrame
+    thresholds: pl.LazyFrame | None = None
+    quantized: "Coverage | None" = None
 
 
 class UnsupportedCoverageError(ValueError):
@@ -196,6 +231,10 @@ _CHUNK_BYTES = 64 << 20
 _MOSDEPTH_SUMMARY_HEADER = ["chrom", "length", "bases", "mean", "min", "max"]
 _SAMTOOLS_COVERAGE_HEADER = ["#rname", "startpos", "endpos", "numreads", "covbases", "coverage", "meandepth", "meanbaseq", "meanmapq"]
 _BIN_LABEL = re.compile(r"^(\d+):(\d+|inf)$")
+_THRESHOLDS_HEADER = "#chrom\tstart\tend\tregion"
+"""The start of the header mosdepth writes on a thresholds file (`write_header` in mosdepth.nim), one
+`<n>X` column per threshold after it."""
+_THRESHOLD_COLUMN = re.compile(r"^(\d+)X$")
 
 
 def read_coverage(
@@ -229,6 +268,8 @@ def read_coverage(
     warnings: list[str] = []
     dropped: list[str] = []
     lengths: list[dict] | None = None
+    counts: pl.DataFrame | None = None
+    thresholds: list[int] | None = None
     folded = window if kind in (CoverageFormat.PER_BASE_BED, CoverageFormat.SAMTOOLS_DEPTH) else None
 
     if kind is CoverageFormat.MOSDEPTH_SUMMARY:
@@ -248,6 +289,9 @@ def read_coverage(
         if unbounded:
             warnings.append(f"{unbounded:,} quantized interval(s) carry a bin label that names no depth range (a renamed bin); their depth is unknown")
         resolution = Resolution.BIN
+    elif kind is CoverageFormat.THRESHOLDS_BED:
+        intervals, counts, thresholds = _read_thresholds(path, lines[0])
+        resolution = Resolution.THRESHOLDS
     elif folded is not None:
         partial = _fold_chunks(_depth_chunks(path, kind), folded)
         intervals = _finish_windows(partial, folded, lengths=None, zero_filled=False)
@@ -276,8 +320,14 @@ def read_coverage(
         dropped_fields=dropped,
         warnings=warnings,
         subject=subject,
+        thresholds=thresholds,
     )
-    return Coverage(facet=facet, intervals=_ordered(intervals).lazy())
+    return Coverage(
+        facet=facet,
+        intervals=_ordered(intervals).lazy(),
+        # A region's thresholds stay together, regions sharing coordinates in the file's order.
+        thresholds=None if counts is None else _ordered(counts, COVERAGE_THRESHOLDS, ("region_row", "threshold")).lazy(),
+    )
 
 
 def _check_subject(subject: str | None) -> None:
@@ -345,17 +395,30 @@ def _coverage_kind(lines: list[str]) -> CoverageFormat:
                 "or a samtools depth output, the rows cannot tell; pass kind=CoverageFormat.SAMTOOLS_DEPTH if it is one"
             )
         return CoverageFormat.SAMTOOLS_DEPTH
-    if lines[0].startswith("#chrom\tstart\tend\tregion"):
-        raise UnsupportedCoverageError("a mosdepth thresholds file: counts per threshold, not a depth (not read yet)")
+    if lines[0].startswith(_THRESHOLDS_HEADER):
+        return CoverageFormat.THRESHOLDS_BED
     if not all(_is_int(f[1]) and _is_int(f[2]) for f in body):
         raise UnsupportedCoverageError("not a BED of depths: the second and third columns are not all positions")
     last = [f[-1] for f in body]
     if width == 4 and all(_is_int(v) for v in last):
         return CoverageFormat.PER_BASE_BED
+    if width == 5 and all(_is_int(v) for v in last):
+        # mosdepth writes a region's mean with decimals (`12.50`); whole numbers after a name are what a
+        # thresholds file with one threshold holds once its header is gone (tabix drops it without -h).
+        raise UnsupportedCoverageError(
+            "five columns without a header whose last is always a whole number: a regions file of whole-number means "
+            "or a mosdepth thresholds file without its header line, the rows cannot tell; pass kind=CoverageFormat.REGIONS_BED "
+            "if it is the first, or keep the thresholds file's header (tabix -h)"
+        )
     if width in (4, 5) and all(_is_number(v) for v in last):
         return CoverageFormat.REGIONS_BED
     if width == 4:
         return CoverageFormat.QUANTIZED_BED
+    if all(_is_int(v) for f in body for v in f[4:]):
+        raise UnsupportedCoverageError(
+            f"a BED of {width} columns whose fifth and later are whole numbers: a mosdepth thresholds file without its "
+            "header line, which names the thresholds (tabix drops it without -h)"
+        )
     raise UnsupportedCoverageError(f"a BED of {width} columns whose last is not a depth")
 
 
@@ -437,6 +500,60 @@ def _read_quantized(path: Path) -> tuple[pl.DataFrame, int]:
         label=pl.col("label"),
     )
     return out, int(out["depth_min"].null_count())
+
+
+def _read_thresholds(path: Path, header: str) -> tuple[pl.DataFrame, pl.DataFrame, list[int]]:
+    """mosdepth's thresholds file: the regions as intervals with no depth, and the counts in long form.
+
+    mosdepth (`write_thresholds`) writes `chrom, start, end` of each `--by` region (0-based, half-open),
+    its name or `unknown` when the region has none, then per threshold the number of the region's bases
+    at a depth of that threshold or more. The thresholds are sorted ascending (`threshold_args`)."""
+    columns = header.split("\t")
+    if not header.startswith(_THRESHOLDS_HEADER) or len(columns) < 5:
+        raise UnsupportedCoverageError("a thresholds file must start with mosdepth's header line, which names the thresholds")
+    matched = [_THRESHOLD_COLUMN.match(name) for name in columns[4:]]
+    if not all(matched):
+        raise UnsupportedCoverageError("a thresholds header whose columns after `region` are not all `<n>X` thresholds")
+    thresholds = [int(m.group(1)) for m in matched if m is not None]
+    if any(b <= a for a, b in pairwise(thresholds)):
+        raise UnsupportedCoverageError("a thresholds header whose thresholds do not rise strictly, as mosdepth writes them")
+    names = [f"t{i}" for i in range(len(thresholds))]
+    frame = _read_tsv(
+        path, ["chrom", "start", "end", "region", *names], [pl.String(), pl.UInt32(), pl.UInt32(), pl.String(), *[pl.UInt32()] * len(names)], skip_header=True
+    )
+    length = pl.col("end").cast(pl.Int64) - pl.col("start").cast(pl.Int64)
+    over = frame.filter(pl.any_horizontal([pl.col(n).cast(pl.Int64) > length for n in names]) | (length <= 0)).height
+    rising = frame.filter(pl.any_horizontal([pl.col(b) > pl.col(a) for a, b in pairwise(names)])).height if len(names) > 1 else 0
+    if over or rising:
+        raise UnsupportedCoverageError(
+            f"a thresholds file with {over:,} row(s) counting more bases than their region holds (or an empty region) and "
+            f"{rising:,} counting more bases at a higher threshold than at a lower one: not what mosdepth writes"
+        )
+    intervals = frame.select(
+        chrom=pl.col("chrom"),
+        pos=(pl.col("start") + 1).cast(pl.UInt32),
+        end_pos=pl.col("end"),
+        depth_mean=pl.lit(None, dtype=pl.Float32),
+        depth_min=pl.lit(None, dtype=pl.UInt32),
+        depth_max=pl.lit(None, dtype=pl.UInt32),
+        bases=(pl.col("end") - pl.col("start")).cast(pl.UInt32),
+        label=pl.col("region"),
+    )
+    counts = pl.concat(
+        [
+            frame.select(
+                chrom=pl.col("chrom"),
+                pos=(pl.col("start") + 1).cast(pl.UInt32),
+                end_pos=pl.col("end"),
+                label=pl.col("region"),
+                threshold=pl.lit(threshold, dtype=pl.UInt32),
+                bases_at_or_above=pl.col(name),
+                region_row=pl.int_range(pl.len(), dtype=pl.UInt64),
+            )
+            for name, threshold in zip(names, thresholds)
+        ]
+    )
+    return intervals, counts, thresholds
 
 
 def _read_runs(path: Path, kind: CoverageFormat) -> pl.DataFrame:
@@ -578,12 +695,13 @@ def _finish_windows(partial: pl.DataFrame, window: int, *, lengths: list[dict] |
     )
 
 
-def _ordered(intervals: pl.DataFrame) -> pl.DataFrame:
-    """Canonical chrom, then contig rank, `pos`, `end_pos` (charter 12), in the `COVERAGE_INTERVALS` shape."""
+def _ordered(intervals: pl.DataFrame, shape: dict[str, pl.DataType] = COVERAGE_INTERVALS, then: tuple[str, ...] = ()) -> pl.DataFrame:
+    """Canonical chrom, then contig rank, `pos`, `end_pos` and `then` (charter 12), in `shape`. The sort is
+    stable, so rows equal in every key keep the source's order."""
     frame = intervals.with_columns(chrom=canonical_chrom_expr("chrom"))
     rank = pl.col("chrom").replace_strict(CONTIG_RANK, default=len(CONTIG_RANK), return_dtype=pl.UInt16)
-    return frame.sort([rank, pl.col("chrom"), pl.col("pos"), pl.col("end_pos")], maintain_order=True).select(
-        [pl.col(name).cast(dtype) for name, dtype in COVERAGE_INTERVALS.items()]
+    return frame.sort([rank, pl.col("chrom"), pl.col("pos"), pl.col("end_pos"), *(pl.col(name) for name in then)], maintain_order=True).select(
+        [pl.col(name).cast(dtype) for name, dtype in shape.items()]
     )
 
 
@@ -598,6 +716,7 @@ def alignment_coverage(
     filter_flag: int = DEFAULT_FILTER_FLAG,
     assembly_label: str | None = None,
     subject: str | None = None,
+    quantize: Sequence[int | None] | None = None,
 ) -> Coverage:
     """Depth over a BAM or CRAM by polars-bio's `depth()`, in fixed windows (module docstring).
 
@@ -606,9 +725,16 @@ def alignment_coverage(
     zero (`zero_filled`). The read filters are `depth()`'s own and are recorded in `options`. A CRAM
     needs its reference where htslib-style lookup finds it; polars-bio is given none here.
 
+    `quantize` takes bin edges, as mosdepth's `--quantize` does (`0:1:4:` is `(0, 1, 4, None)`, None
+    the open top), and adds `Coverage.quantized`: runs of bases whose depth falls in one bin, from the
+    same depth pass, so the file is still read once. The runs are what `read_coverage` gives for the
+    `.quantized.bed.gz` mosdepth writes with those edges (mosdepth's labels, docs/SCHEMA.md "Coverage
+    facets"): a bin is `[lower, upper)`, and a base below the first edge or at or above a closed top
+    has no run.
+
     The windows are spilled to the cache (`coverage/` under `JUST_VCF_CACHE_DIR`, `just_vcf.cache`), so
-    the file is read once: a later call with the same file, `window`, `min_mapping_quality` and
-    `filter_flag`, under the same `COVERAGE_VERSION` and polars-bio, reads the spill. The file is known
+    the file is read once: a later call with the same file, `window`, `min_mapping_quality`,
+    `filter_flag` and `quantize`, under the same `COVERAGE_VERSION` and polars-bio, reads the spill. The file is known
     by what names it in `facet_id`: its header, index and size, or, with no index beside it, the sha256
     of its bytes (one more read of the file on every call, spill or not; a header and size alone would
     serve one file's spill to another written with other reads). `assembly_label` is left out of the
@@ -621,6 +747,7 @@ def alignment_coverage(
     _check_subject(subject)
     if window < 1:
         raise ValueError("window must be a positive number of bases")
+    edges = _quantize_edges(quantize) if quantize is not None else None
     versions = {"COVERAGE_VERSION": COVERAGE_VERSION, "POLARS_BIO_VERSION": POLARS_BIO_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
     cache.sweep_stale(cache.COVERAGE_SPILL, versions)
     kind = _alignment_kind(path)
@@ -637,21 +764,48 @@ def alignment_coverage(
     source = {"format": CoverageFormat.ALIGNMENT_DEPTH.value, "kind": kind, "size": path.stat().st_size, "header": header, "index": index,
               "options": options, "window": window, **({"sha256": sha256} if sha256 is not None else {})}
     facet_id = _facet_id({**source, "assembly_label": assembly_label})
-    key = _facet_id({**source, "polars_bio": POLARS_BIO_VERSION})
+    # The bins key the spill only when given, so a spill written before `quantize` existed is still served.
+    binned = {"quantize": edges} if edges is not None else {}
+    key = _facet_id({**source, "polars_bio": POLARS_BIO_VERSION, **binned})
+    groups = ("intervals", "quantized") if edges is not None else ("intervals",)
     origin = cache.Origin(source_sha256=sha256, source_path=str(path.resolve()), facet_id=facet_id)
-    with cache.spilling(cache_dir() / "coverage" / key, cache.COVERAGE_SPILL, versions, origin, ("intervals",)) as spill:
+    with cache.spilling(cache_dir() / "coverage" / key, cache.COVERAGE_SPILL, versions, origin, groups) as spill:
         generation = spill.key([], {"key": key})
         done = spill.find(generation)
         if done is None:
-            finished, depth_warnings = _alignment_windows(path, window, filter_flag, min_mapping_quality, lengths)
-            part = spill.stage / "intervals.parquet"
-            finished.write_parquet(part)
-            done = spill.commit(generation, {"intervals": [part]}, depth_warnings)
+            finished, runs, depth_warnings = _alignment_pass(path, window, filter_flag, min_mapping_quality, lengths, edges)
+            parts = {"intervals": [spill.stage / "intervals.parquet"]}
+            finished.write_parquet(parts["intervals"][0])
+            if runs is not None:
+                parts["quantized"] = [spill.stage / "quantized.parquet"]
+                runs.write_parquet(parts["quantized"][0])
+            done = spill.commit(generation, parts, depth_warnings)
     warnings = done.warnings
     label, basis, label_warnings = _assembly(assembly_label, lengths)
     warnings += label_warnings
     for line in warnings:
         logger.warning("alignment depth: %s", line)
+    quantized = None
+    if edges is not None:
+        # The runs depend on no window, so the quantized facet's id leaves it out.
+        quantized_facet = CoverageFacet(
+            facet_id=_facet_id({**{k: v for k, v in source.items() if k != "window"}, **binned, "assembly_label": assembly_label}),
+            format_id=CoverageFormat.ALIGNMENT_DEPTH,
+            source_path=str(path),
+            source_sha256=sha256,
+            assembly_label=label,
+            assembly_label_basis=basis,
+            contig_lengths=lengths,
+            resolution=Resolution.BIN,
+            window=None,
+            options=options,
+            zero_filled=False,
+            dropped_fields=[],
+            warnings=list(warnings),
+            subject=subject,
+            quantize=list(edges),
+        )
+        quantized = Coverage(facet=quantized_facet, intervals=pl.scan_parquet(done.files("quantized")))
     facet = CoverageFacet(
         facet_id=facet_id,
         format_id=CoverageFormat.ALIGNMENT_DEPTH,
@@ -668,33 +822,156 @@ def alignment_coverage(
         warnings=warnings,
         subject=subject,
     )
-    return Coverage(facet=facet, intervals=pl.scan_parquet(done.files("intervals")))
+    return Coverage(facet=facet, intervals=pl.scan_parquet(done.files("intervals")), quantized=quantized)
 
 
-def _alignment_windows(
-    path: Path, window: int, filter_flag: int, min_mapping_quality: int, lengths: list[dict]
-) -> tuple[pl.DataFrame, list[str]]:
-    """polars-bio's per-base depth over `path`, folded into `COVERAGE_INTERVALS` windows, and the
-    warning for wrapped depths: the one full read of the file."""
+def _quantize_labels(edges: Sequence[int | None]) -> list[str]:
+    """mosdepth's label for each bin between `edges` (`make_lookup`): `lower:upper`, `lower:inf` for an
+    open top. mosdepth's `MOSDEPTH_Q<n>` renaming is not read: a renamed bin bounds no depth."""
+    checked = _quantize_edges(edges)
+    return [f"{low}:{'inf' if high is None else high}" for low, high in pairwise(checked)]
+
+
+def _quantize_edges(edges: Sequence[int | None]) -> list[int | None]:
+    """The edges as given, checked: two or more whole numbers, none negative, strictly rising, None only last."""
+    values = list(edges)
+    if len(values) < 2:
+        raise ValueError("quantize needs two or more bin edges, as mosdepth's --quantize 0:1:4: is (0, 1, 4, None)")
+    finite = values[:-1] if values[-1] is None else values
+    if any(value is None or isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in finite):
+        raise ValueError("quantize edges are whole numbers of reads, not negative, with None only as the last (an open top)")
+    if any(high <= low for low, high in pairwise(finite)):
+        raise ValueError("quantize edges must rise strictly")
+    return values
+
+
+def _base_partials(bases: pl.LazyFrame, window: int) -> pl.LazyFrame:
+    """Per-base depth rows (`contig, pos, coverage`) summed into window partials (`_PARTIAL_AGG`). A
+    negative depth (polars-bio's Int16 wrap) is left out of the sums and bounds and counted."""
+    readable = pl.col("coverage") >= 0
+    depth = pl.when(readable).then(pl.col("coverage").cast(pl.Int64))
+    return bases.group_by(chrom=pl.col("contig"), window=(pl.col("pos").cast(pl.Int64) - 1) // window).agg(
+        depth_sum=depth.sum().cast(pl.Int64),
+        bases=readable.sum().cast(pl.Int64),
+        depth_min=depth.min(),
+        depth_max=depth.max(),
+        unreadable_bases=(~readable).sum().cast(pl.Int64),
+    )
+
+
+_OUTSIDE_BINS = -1
+"""A run key: bases whose depth lies below the first edge or at or above a closed top (no run)."""
+_UNREADABLE = -2
+"""A run key: bases polars-bio's Int16 wrap made negative (no run; their bin is unknown)."""
+
+_BATCH_ROWS = 1_000_000
+"""Rows per batch of the quantizing pass: about 3,100 batches for a human genome, each a few tens of
+megabytes (a contig name, an Int32 and an Int16 per base), small beside `depth()`'s own dense arrays.
+Stated rather than left to Polars so the Python work per batch is bounded. A batch edge changes no
+window and no run (runs of one bin meeting across it are joined)."""
+
+
+def _bin_key(depth: pl.Expr, edges: list[int | None]) -> pl.Expr:
+    """The index of the bin `depth` falls in (`[edges[i], edges[i + 1])`), or a negative key."""
+    top = edges[-1]
+    inside = depth >= edges[0] if top is None else (depth >= edges[0]) & (depth < top)
+    index = pl.sum_horizontal([(depth >= edge).cast(pl.Int64) for edge in edges[1:] if edge is not None] or [pl.lit(0, dtype=pl.Int64)])
+    return pl.when(depth < 0).then(pl.lit(_UNREADABLE, dtype=pl.Int64)).when(~inside).then(pl.lit(_OUTSIDE_BINS, dtype=pl.Int64)).otherwise(index)
+
+
+def _merge_runs(runs: pl.DataFrame, *, by_key: bool = True) -> pl.DataFrame:
+    """`chrom, start, end, key` runs (1-based, inclusive) with each touching pair of one key joined
+    into one; with `by_key=False`, touching runs join whatever their key (the span the source wrote)."""
+    ordered = runs.sort("chrom", "start")
+    broken = (pl.col("chrom") != pl.col("chrom").shift(1)) | (pl.col("start") != pl.col("end").shift(1) + 1)
+    if by_key:
+        broken = broken | (pl.col("key") != pl.col("key").shift(1))
+    return (
+        ordered.with_columns(run=broken.fill_null(True).cum_sum())
+        .group_by("run", maintain_order=True)
+        .agg(pl.col("chrom").first(), pl.col("start").min(), pl.col("end").max(), pl.col("key").first())
+        .drop("run")
+    )
+
+
+def _batch_runs(batch: pl.DataFrame, edges: list[int | None]) -> pl.DataFrame:
+    """One batch of per-base rows as runs of one key over consecutive positions."""
+    keyed = batch.select(chrom=pl.col("contig"), start=pl.col("pos").cast(pl.Int64), key=_bin_key(pl.col("coverage").cast(pl.Int64), edges))
+    return _merge_runs(keyed.with_columns(end=pl.col("start")))
+
+
+def _quantized_runs(runs: list[pl.DataFrame], edges: list[int | None], lengths: list[dict]) -> pl.DataFrame:
+    """The batches' runs as `COVERAGE_INTERVALS` bins over the header's contigs.
+
+    A base `depth()` wrote no row for (a contig no read reached) is depth zero, as the windows read it
+    (`zero_filled`), and takes zero's bin. Runs of one bin meeting across a batch edge are joined."""
+    schema = {"chrom": pl.String, "start": pl.Int64, "end": pl.Int64, "key": pl.Int64}
+    seen = _merge_runs(pl.concat(runs) if runs else pl.DataFrame(schema=schema))
+    contigs = pl.DataFrame({"chrom": [c["source"] for c in lengths], "length": [c["length"] for c in lengths]}, schema={"chrom": pl.String, "length": pl.Int64})
+    spans = _merge_runs(seen, by_key=False).sort("chrom", "start")
+    before = spans.with_columns(gap_start=pl.col("end").shift(1).over("chrom").fill_null(0) + 1).filter(pl.col("start") > pl.col("gap_start"))
+    tails = spans.group_by("chrom").agg(pl.col("end").max()).join(contigs, on="chrom").filter(pl.col("end") < pl.col("length"))
+    gaps = pl.concat(
+        [
+            before.select("chrom", start=pl.col("gap_start"), end=pl.col("start") - 1),
+            tails.select("chrom", start=pl.col("end") + 1, end=pl.col("length")),
+            contigs.join(spans, on="chrom", how="anti").select("chrom", start=pl.lit(1, dtype=pl.Int64), end=pl.col("length")),
+        ]
+    )
+    zero = pl.DataFrame({"z": [0]}).select(key=_bin_key(pl.col("z").cast(pl.Int64), edges))["key"][0]
+    merged = _merge_runs(pl.concat([seen, gaps.with_columns(key=pl.lit(zero, dtype=pl.Int64))]))
+    labels = _quantize_labels(edges)
+    bins = pl.DataFrame(
+        {
+            "key": list(range(len(labels))),
+            "label": labels,
+            "low": edges[:-1],
+            "high": [None if edge is None else edge - 1 for edge in edges[1:]],
+        },
+        schema={"key": pl.Int64, "label": pl.String, "low": pl.UInt32, "high": pl.UInt32},
+    )
+    out = merged.join(bins, on="key", how="inner").select(
+        chrom=pl.col("chrom"),
+        pos=pl.col("start").cast(pl.UInt32),
+        end_pos=pl.col("end").cast(pl.UInt32),
+        depth_mean=pl.lit(None, dtype=pl.Float32),
+        depth_min=pl.col("low"),
+        depth_max=pl.col("high"),
+        bases=(pl.col("end") - pl.col("start") + 1).cast(pl.UInt32),
+        label=pl.col("label"),
+    )
+    return _ordered(out)
+
+
+def _alignment_pass(
+    path: Path, window: int, filter_flag: int, min_mapping_quality: int, lengths: list[dict], edges: list[int | None] | None
+) -> tuple[pl.DataFrame, pl.DataFrame | None, list[str]]:
+    """polars-bio's per-base depth over `path`, folded into `COVERAGE_INTERVALS` windows, with the
+    quantized runs when `edges` are given, and the warning for wrapped depths: the one full read of the
+    file.
+
+    Without `edges` the windows are summed by Polars' streaming engine. With them, the rows are taken
+    batch by batch (`collect_batches`, one execution of the source) and each batch is folded into both
+    window partials, by the same expressions, and runs of one bin; the batches' partials are combined
+    and their runs joined across batch edges at the end."""
     # Per-base rows, not run-length blocks: polars-bio 0.36 builds every contig's block batches before
     # it emits the first, so block mode's peak grows with the reads (22.6 GB on a 27 GB BAM, 33.6 GB on
     # a 48 GB one); per-base mode emits contig by contig from its dense arrays (13.3 GB on the first).
     bases = pb.depth(
         str(path), filter_flag=filter_flag, min_mapping_quality=min_mapping_quality, use_zero_based=False, per_base=True
     )
-    readable = pl.col("coverage") >= 0
-    depth = pl.when(readable).then(pl.col("coverage").cast(pl.Int64))
-    partial = (
-        bases.group_by(chrom=pl.col("contig"), window=(pl.col("pos").cast(pl.Int64) - 1) // window)
-        .agg(
-            depth_sum=depth.sum().cast(pl.Int64),
-            bases=readable.sum().cast(pl.Int64),
-            depth_min=depth.min(),
-            depth_max=depth.max(),
-            unreadable_bases=(~readable).sum().cast(pl.Int64),
-        )
-        .collect(engine="streaming")
-    )
+    runs: pl.DataFrame | None = None
+    if edges is None:
+        partial = _base_partials(bases, window).collect(engine="streaming")
+    else:
+        partials: list[pl.DataFrame] = []
+        batch_runs: list[pl.DataFrame] = []
+        for batch in bases.collect_batches(chunk_size=_BATCH_ROWS, engine="streaming"):
+            partials.append(_base_partials(batch.lazy(), window).collect())
+            batch_runs.append(_batch_runs(batch, edges))
+        empty = pl.DataFrame(schema={"chrom": pl.String, "window": pl.Int64, **dict.fromkeys(_PARTIAL_AGG, pl.Int64)})
+        partial = _combine(pl.concat(partials)) if partials else empty
+        runs = _quantized_runs(batch_runs, edges, lengths)
     finished = _finish_windows(partial, window, lengths=lengths, zero_filled=True)
     warnings: list[str] = []
     unreadable = int(finished["unreadable_bases"].sum())
@@ -703,8 +980,9 @@ def _alignment_windows(
         warnings.append(
             f"{unreadable:,} base(s) in {windows:,} window(s) came back with a negative depth (polars-bio writes depth as Int16, "
             "wrapping past 32,767); they are left out of those windows' depth, which then describe fewer bases"
+            + ("; no quantized run covers them, so their bin is unknown" if edges is not None else "")
         )
-    return _ordered(finished), warnings
+    return _ordered(finished), runs, warnings
 
 
 def _alignment_kind(path: Path) -> str:
@@ -760,7 +1038,8 @@ CALLABLE_REASONS: frozenset[str] = frozenset({"no_interval", "no_bounds", "strad
 """Why a position's callability is unknown.
 
 - `no_interval`: no interval of the coverage facet covers it.
-- `no_bounds`: the interval states a mean or a renamed bin, which bounds no single base.
+- `no_bounds`: the interval states a mean, a renamed bin or a thresholds file's region (whose counts
+  are kept apart, `Coverage.thresholds`), none of which bounds a single base in the depth columns.
 - `straddles`: the interval's lowest depth is under `min_depth` and its highest is not: some of its
   bases reach it and some do not, and the interval does not say which.
 - `partly_described`: the bounds clear the threshold, but the source described only some of the

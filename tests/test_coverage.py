@@ -4,10 +4,12 @@ import gzip
 import hashlib
 import re
 from datetime import timedelta
+from itertools import pairwise
 from pathlib import Path
 
 import polars as pl
 import pytest
+from polars_bio import polars_bio as pb_native
 
 from just_vcf import (
     Coverage,
@@ -24,7 +26,7 @@ from just_vcf import (
 from just_vcf import cache
 from just_vcf import coverage as coverage_module
 from just_vcf.assembly import ASSEMBLY_LENGTHS
-from just_vcf.coverage import CALLABLE_REASONS, COVERAGE_INTERVALS
+from just_vcf.coverage import CALLABLE_REASONS, COVERAGE_INTERVALS, COVERAGE_THRESHOLDS
 
 # --- An independent oracle: per-base depth from read definitions ----------------------------------
 
@@ -309,10 +311,93 @@ def test_samtools_coverage_keeps_the_mean_and_names_what_it_drops(tmp_path: Path
     assert coverage.facet.dropped_fields == ["numreads", "covbases", "coverage", "meanbaseq", "meanmapq"]
 
 
+THRESHOLDS = [0, 1, 2, 3]
+REGIONS = [
+    # `--by 10` on chr1 (mosdepth names such regions `unknown`), a named BED region on X, and Y, where no read lands.
+    *[("chr1", start, min(start + 10, 100), "unknown") for start in range(0, 100, 10)],
+    ("chrX", 5, 30, "geneX"),
+    ("chrY", 0, 40, "unknown"),
+]
+
+
+def thresholds_lines(reads: list[tuple[str, int, str]], regions: list[tuple[str, int, int, str]], thresholds: list[int]) -> list[str]:
+    """mosdepth's `.thresholds.bed` (`write_header`, `write_thresholds`): per region, the bases at a depth of each threshold or more."""
+    out = ["#chrom\tstart\tend\tregion\t" + "\t".join(f"{t}X" for t in thresholds)]
+    for source, start, end, name in regions:
+        depth = depth_of(reads, contig=source)
+        counts = [sum(1 for base in range(start + 1, end + 1) if depth.get(base, 0) >= t) for t in thresholds]
+        out.append("\t".join([source, str(start), str(end), name, *map(str, counts)]))
+    return out
+
+
+def test_a_thresholds_file_keeps_its_counts_apart_from_every_depth(tmp_path: Path) -> None:
+    coverage = read_coverage(write(tmp_path / "t.thresholds.bed.gz", thresholds_lines(READS, REGIONS, THRESHOLDS), compress=True))
+    facet = coverage.facet
+    assert (facet.format_id, facet.resolution, facet.thresholds) == (CoverageFormat.THRESHOLDS_BED, Resolution.THRESHOLDS, THRESHOLDS)
+    assert (facet.window, facet.zero_filled, facet.contig_lengths, facet.dropped_fields, facet.options) == (None, False, None, [], {})
+    intervals = coverage.intervals.collect()
+    assert intervals.schema == pl.Schema(COVERAGE_INTERVALS)
+    # The regions, and not one depth: a count of bases at a threshold is no depth of any base.
+    assert intervals.select("chrom", "pos", "end_pos", "bases", "label").rows() == [
+        (source.removeprefix("chr"), start + 1, end, end - start, name) for source, start, end, name in REGIONS
+    ]
+    assert intervals.select(pl.col("depth_mean", "depth_min", "depth_max").null_count()).row(0) == (len(REGIONS),) * 3
+    counts = coverage.thresholds.collect()
+    assert counts.schema == pl.Schema(COVERAGE_THRESHOLDS)
+    expected = [
+        (source.removeprefix("chr"), start + 1, end, name, t, sum(1 for b in range(start + 1, end + 1) if depth_of(READS, contig=source).get(b, 0) >= t))
+        for source, start, end, name in REGIONS
+        for t in THRESHOLDS
+    ]
+    assert counts.rows() == expected
+    # mosdepth's own invariants hold: at 0X every base, no count above its region, none rising with the threshold.
+    by_region = counts.group_by("chrom", "pos", maintain_order=True).agg("bases_at_or_above", length=(pl.col("end_pos") - pl.col("pos") + 1).first())
+    for row in by_region.iter_rows(named=True):
+        assert row["bases_at_or_above"][0] == row["length"]
+        assert row["bases_at_or_above"] == sorted(row["bases_at_or_above"], reverse=True)
+    # What is callable cannot be read from it: the depth columns bound nothing.
+    assert callable_at(coverage, "1", 25, min_depth=1).reason == "no_bounds"
+
+
+def test_a_thresholds_file_with_no_reads_reads_as_written(tmp_path: Path) -> None:
+    # A BAM with no read at all (mosdepth's `tid == -2`) writes 0 at every threshold, 0X included.
+    lines = ["#chrom\tstart\tend\tregion\t0X\t10X", "chr1\t0\t500\tunknown\t0\t0"]
+    counts = read_coverage(write(tmp_path / "t.bed", lines)).thresholds.collect()
+    assert counts.select("threshold", "bases_at_or_above").rows() == [(0, 0), (10, 0)]
+
+
 @pytest.mark.parametrize(
     ("lines", "match"),
     [
-        (["#chrom\tstart\tend\tregion\t1X\t10X", "chr1\t0\t10\tunknown\t10\t5"], "thresholds"),
+        (["#chrom\tstart\tend\tregion\t1X\tdeep", "chr1\t0\t10\tunknown\t10\t5"], "not all `<n>X` thresholds"),
+        (["#chrom\tstart\tend\tregion\t10X\t1X", "chr1\t0\t10\tunknown\t5\t10"], "do not rise strictly"),
+        (["#chrom\tstart\tend\tregion\t1X\t10X", "chr1\t0\t10\tunknown\t11\t5"], "1 row(s) counting more bases than their region"),
+        (["#chrom\tstart\tend\tregion\t1X\t10X", "chr1\t0\t10\tunknown\t5\t6"], "1 counting more bases at a higher threshold"),
+    ],
+)
+def test_a_thresholds_file_mosdepth_could_not_have_written_is_refused(tmp_path: Path, lines: list[str], match: str) -> None:
+    with pytest.raises(UnsupportedCoverageError, match=re.escape(match)):
+        read_coverage(write(tmp_path / "t.bed", lines))
+
+
+def test_a_thresholds_file_without_its_header_is_never_read_as_depths(tmp_path: Path) -> None:
+    """tabix drops a file's header unless run with -h. Without it one threshold's counts look like a
+    regions file's means, and several look like nothing: both are refused rather than read."""
+    one = thresholds_lines(READS, REGIONS, [1])[1:]
+    with pytest.raises(UnsupportedCoverageError, match="kind=CoverageFormat.REGIONS_BED"):
+        read_coverage(write(tmp_path / "one.bed", one))
+    with pytest.raises(UnsupportedCoverageError, match="without its header line, which names the thresholds"):
+        read_coverage(write(tmp_path / "many.bed", thresholds_lines(READS, REGIONS, THRESHOLDS)[1:]))
+    with pytest.raises(UnsupportedCoverageError, match="must start with mosdepth's header line"):
+        read_coverage(write(tmp_path / "stated.bed", one), kind=CoverageFormat.THRESHOLDS_BED)
+    # A regions file of whole-number means, stated, still reads.
+    stated = read_coverage(write(tmp_path / "r.bed", ["chr1\t0\t500\tgeneA\t12"]), kind=CoverageFormat.REGIONS_BED)
+    assert stated.intervals.select("depth_mean", "label").collect().rows() == [(12.0, "geneA")]
+
+
+@pytest.mark.parametrize(
+    ("lines", "match"),
+    [
         (["chr1\tfoo\t10\t3"], "not a BED of depths"),
         ([""], "empty"),
     ],
@@ -497,3 +582,131 @@ def test_the_spill_is_swept_and_cleared_like_the_loaders(tmp_path: Path, depth_c
     assert sorted(m.source_path or "" for m in coverage_manifests().values()) == ["", "", str(other.resolve())]
     alignment_coverage(path, window=10)
     assert depth_calls.count(str(path)) == 2
+
+
+# --- Quantized runs from the same depth pass (RM278) ---------------------------------------------
+
+# chrX's last base (50) is reached by a read of its own: its depth (1) differs from the base before it (0).
+QREADS = [*READS, ("chrX", 40, "5M"), ("chrX", 49, "1M")]
+
+
+def quantized_lines(reads: list[tuple[str, int, str]], edges: list[int | None]) -> list[str]:
+    """mosdepth's `.quantized.bed` for `edges` by what its bins mean (`linear_search`, `make_lookup` in
+    mosdepth.nim): each base in the bin `[lower, upper)` its depth falls in, runs of one bin joined, a
+    base outside every bin in no run, bins labelled `lower:upper` or `lower:inf`."""
+    pairs = list(pairwise(edges))
+    labels = [f"{low}:{'inf' if high is None else high}" for low, high in pairs]
+
+    def bin_of(depth: int) -> int | None:
+        return next((i for i, (low, high) in enumerate(pairs) if depth >= low and (high is None or depth < high)), None)
+
+    out = []
+    for source, length in CONTIGS:
+        depth = depth_of(reads, contig=source)
+        current, start = None, 0
+        for base in range(1, length + 2):
+            found = bin_of(depth.get(base, 0)) if base <= length else None
+            if found == current:
+                continue
+            if current is not None:
+                out.append(f"{source}\t{start - 1}\t{base - 1}\t{labels[current]}")
+            current, start = found, base
+    return out
+
+
+@pytest.mark.parametrize("edges", [(0, 1, 3, None), (1, 3), (0, 2), (2, None)])
+def test_quantized_runs_are_what_read_coverage_gives_for_mosdepths_file(tmp_path: Path, edges: tuple[int | None, ...]) -> None:
+    bam = write_bam(tmp_path / "q.bam", QREADS)
+    found = alignment_coverage(bam, window=10, quantize=edges)
+    mosdepth = read_coverage(write(tmp_path / "q.quantized.bed.gz", quantized_lines(QREADS, list(edges)), compress=True))
+    assert (mosdepth.facet.format_id, mosdepth.facet.resolution) == (CoverageFormat.QUANTIZED_BED, Resolution.BIN)
+    assert found.quantized.intervals.collect().equals(mosdepth.intervals.collect())
+    facet = found.quantized.facet
+    assert (facet.format_id, facet.resolution, facet.window, facet.zero_filled, facet.quantize) == (
+        CoverageFormat.ALIGNMENT_DEPTH, Resolution.BIN, None, False, list(edges),
+    )
+    assert (facet.options, facet.contig_lengths, facet.source_sha256) == (found.facet.options, found.facet.contig_lengths, found.facet.source_sha256)
+    assert facet.facet_id != found.facet.facet_id
+    # The windows of the same pass are those of a call without bins, under the same facet id.
+    plain = alignment_coverage(bam, window=10)
+    assert found.intervals.collect().equals(plain.intervals.collect())
+    assert found.facet == plain.facet and plain.quantized is None
+
+
+def test_batch_edges_change_no_window_and_no_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth_calls: list[str]) -> None:
+    bam = write_bam(tmp_path / "q.bam", QREADS)
+    whole = alignment_coverage(bam, window=10, quantize=(0, 1, 3, None))
+    clear_cache(source=bam)
+    monkeypatch.setattr(coverage_module, "_BATCH_ROWS", 7)  # cuts runs, windows and contigs, many times
+    cut = alignment_coverage(bam, window=10, quantize=(0, 1, 3, None))
+    assert depth_calls == [str(bam)] * 2
+    assert cut.intervals.collect().equals(whole.intervals.collect())
+    assert cut.quantized.intervals.collect().equals(whole.quantized.intervals.collect())
+
+
+def test_a_contigs_last_base_takes_its_own_bin(tmp_path: Path) -> None:
+    """mosdepth's `gen_quantized` loops to the second-to-last base and ends its last run at the
+    contig's end, so a last base whose bin differs from the base before it goes into that run. The bin
+    here is the base's own (docs/SCHEMA.md, the lead's call)."""
+    found = alignment_coverage(write_bam(tmp_path / "q.bam", QREADS), window=10, quantize=(0, 1, None)).quantized
+    rows = found.intervals.filter(pl.col("chrom") == "X").select("pos", "end_pos", "label").collect().rows()
+    assert rows[-2:] == [(46, 49, "0:1"), (50, 50, "1:inf")]
+
+
+def test_the_quantized_runs_come_from_the_one_depth_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`depth_calls` counts `depth()` calls, not reads of the file: each execution of polars-bio's
+    source reads it (`py_read_table`), so that is what is counted here."""
+    executions: list[str] = []
+    real = pb_native.py_read_table
+
+    def counted(*args, **kwargs):
+        executions.append(args[1])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pb_native, "py_read_table", counted)
+    bam = write_bam(tmp_path / "q.bam", QREADS)
+    alignment_coverage(bam, window=10)
+    plain = len(executions)
+    assert plain == 1
+    alignment_coverage(write_bam(tmp_path / "r.bam", QREADS), window=10, quantize=(0, 1, 3, None))
+    assert len(executions) == plain + 1
+    # Read again from the spill: no execution at all.
+    alignment_coverage(tmp_path / "r.bam", window=10, quantize=(0, 1, 3, None))
+    assert len(executions) == plain + 1
+
+
+def test_quantized_runs_are_spilled_under_their_bins(tmp_path: Path, depth_calls: list[str]) -> None:
+    bam = write_bam(tmp_path / "q.bam", QREADS)
+    first = alignment_coverage(bam, window=10, quantize=(0, 1, None))
+    again = alignment_coverage(bam, window=10, quantize=[0, 1, None])
+    assert depth_calls == [str(bam)]
+    assert again.quantized.facet == first.quantized.facet
+    assert again.quantized.intervals.collect().equals(first.quantized.intervals.collect())
+    # Other bins, and no bins, are other spills: the file is read for each (the bins key the spill).
+    other = alignment_coverage(bam, window=10, quantize=(0, 2, None))
+    alignment_coverage(bam, window=10)
+    assert depth_calls == [str(bam)] * 3
+    assert other.quantized.facet.facet_id != first.quantized.facet.facet_id
+    assert len(coverage_manifests()) == 3
+
+
+def test_a_wrapped_depth_is_in_no_quantized_run(tmp_path: Path) -> None:
+    deep = [("chr1", 40, "5M")] * 32_770
+    found = alignment_coverage(write_bam(tmp_path / "deep.bam", [*READS, *deep]), window=10, quantize=(0, 1, None))
+    runs = found.quantized.intervals.filter(pl.col("chrom") == "1").collect()
+    covered = {base for row in runs.iter_rows(named=True) for base in range(row["pos"], row["end_pos"] + 1)}
+    assert covered == set(range(1, 101)) - set(range(41, 46))
+    (warning,) = found.quantized.facet.warnings
+    assert warning == found.facet.warnings[0]
+    assert warning.startswith("5 base(s) in 1 window(s) came back with a negative depth")
+    assert warning.endswith("no quantized run covers them, so their bin is unknown")
+
+
+@pytest.mark.parametrize(
+    ("edges", "match"),
+    [((), "two or more"), ((0,), "two or more"), ((1, 1), "rise strictly"), ((2, 1), "rise strictly"), ((0, None, 5), "None only as the last"),
+     ((-1, 2), "not negative"), ((True, 2), "whole numbers"), ((0, 1.5), "whole numbers")],
+)
+def test_quantize_edges_are_checked(tmp_path: Path, edges: tuple, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        alignment_coverage(tmp_path / "never-read.bam", quantize=edges)

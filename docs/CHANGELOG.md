@@ -4,6 +4,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`person_karyotype(person, pairs=None, array_y=None)` weighs a person's facets against each
+  other** (RM269, new, additive; `PersonKaryotype` exported, `CallsetKaryotype` and `SetAsideFacet`
+  in `just_vcf.karyotype`, `SINGLE_PARENT_RELATIONS` in `just_vcf.links`). Facets joined by one-parent
+  lineage (`liftover_to`, `normalized`, `split_rejoined`) to one loaded file are one callset and answer
+  once, saying which member stands and why; a merge or a consensus, and what is made from one, is set
+  aside. Independent callsets ranked by none: where they differ, a genome against an array included,
+  the person's answer is withheld as `facets_disagree` with each callset's answer listed; a callset
+  whose members differ withholds it as `members_disagree`; a callset withheld on its karyotype still
+  contradicts with the X or Y it states (23andMe's two-letter X against a genome's `XY`). `x_copies`
+  is weighed the same way on its own. `sex_chromosome_evidence` and `person_sex_chromosome_evidence`
+  return what they did. Whether a measured answer should outrank an estimated one is open, the lead's
+  call to veto (docs/SCHEMA.md). Tests: `tests/test_karyotype.py`, the person-level section.
+
 - **`query.counts(by=["variant_class"])` classes an `unstated` row's ALT against its source REF**
   (merge audit 14, finding 6), as `facets.variant_classes` counts it at load. It read
   `coalesce(ref, source_ref)`, the reference's base under the `N`; no count moved, since `resolve_ref`

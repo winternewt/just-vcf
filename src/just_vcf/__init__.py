@@ -36,8 +36,10 @@ from just_vcf.evidence import (
 )
 from just_vcf.karyotype import (
     KaryotypicSex,
+    PersonKaryotype,
     SexChromosomeEvidence,
     XCopies,
+    person_karyotype,
     person_sex_chromosome_evidence,
     sex_chromosome_evidence,
 )
@@ -169,6 +171,7 @@ __all__ = [
     "ProbeSet",
     "ProbeSetKind",
     "Person",
+    "PersonKaryotype",
     "Presence",
     "PresenceBasis",
     "Query",
@@ -252,6 +255,7 @@ __all__ = [
     "relatedness",
     "resolve_ref",
     "same_person",
+    "person_karyotype",
     "person_sex_chromosome_evidence",
     "sex_chromosome_evidence",
     "sniff",

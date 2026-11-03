@@ -1904,8 +1904,10 @@ lifted to GRCh38. How the draft holds up:
   this person has two Ys. `gt_alleles` keeps what the file wrote, because list length is never an
   asserted ploidy (Decision 2), so nothing is silently "corrected". **Open:** nothing in the draft can
   *say* the karyotype. It is a fact about the person, measured from evidence (Y depth near 2x, X depth
-  near 1x). It is not a fact about any one facet. A person-level finding with its own provenance does
-  not exist yet. Since RM269 each facet's own evidence can be measured (below); it reads this person's
+  near 1x). It is not a fact about any one facet. Since 2026-11-03 `person_karyotype` weighs the
+  facets' answers against each other, with each callset's answer as its provenance ("Sex-chromosome
+  evidence", below); here the T2T facet and its GRCh38 liftover are one callset, the short-read VCF
+  another. Since RM269 each facet's own evidence can be measured (below); it reads this person's
   X as one copy and Y as present, so `XY` from the VCF alone: the Y depth of a variant-call VCF does
   not separate one Y from two (`y_copy_count` stays null). With a coverage facet of the same person
   the X-degenerate Y reads near 1.0 of chr20's depth, two copies, and the answer is `XYY`.
@@ -2033,9 +2035,8 @@ supplies, read into frames of its own. docs/RELATEDNESS.md has the method.
 `vrs_withheld()`, it is a function over the frames, not a column, so it adds nothing to the schema and
 needs no version bump. Rejected: a struct column on `facets`, which would cost a full scan of `calls`
 at every load, orphan every cache spill with its version bump (RM268) and freeze today's thresholds
-into stored data. There is no person in the schema yet, so nothing person-level is stored either;
-weighing facets against each other (liftovers of one callset are one piece of evidence) is for that
-later layer.
+into stored data. Nothing person-level is stored either: `person_karyotype` (below) weighs a
+`Person`'s facets against each other on request.
 
 What it reads, over `assay` rows no filter failed (`filters` and `sample_filters` null or `["PASS"]`;
 null is VCF's "filters not applied"):
@@ -2109,6 +2110,57 @@ person's BAM labelled with this subject, which `lines_disagree` otherwise shows;
 read-group sample against the VCF's sample column, a file's label that is often a real name and the
 same for different people (the reason the subject is never read from it); a blend of several coverage
 lines.
+
+**Weighed against each other**, `person_karyotype(person, pairs=None, array_y=None)` returns one
+`PersonKaryotype` (2026-11-03, RM269): the person's facets grouped into callsets, one answer per
+callset, and one for the person. It combines what `person_sex_chromosome_evidence` returns and changes
+none of it (the result carries that tuple, verbatim, as `evidence`). Computed, not stored.
+
+- **A callset** is the person's facets joined by one-parent lineage
+  (`just_vcf.links.SINGLE_PARENT_RELATIONS`: `liftover_to`, `normalized`, `split_rejoined`, read from
+  `links` and from `facets.derived_from`) back to one file as loaded, its root, which names it
+  (`root_facet_id`). The lineage is read over every id the links name, so a `load → normalize →
+  liftover` chain joins its first and last facets when the person holds neither the middle nor, at
+  all, the root (`root_loaded`). A callset answers once (`just_vcf.karyotype.CallsetKaryotype`): the
+  member that says the most stands for it (a named karyotype over an X or Y line alone over nothing),
+  the root where it does, else the member nearest the root, then the lowest id (`basis`: `only_member`,
+  `root`, `nearest_answering`, `none_answered`; `just_vcf.karyotype.CALLSET_BASES`), and its answer is
+  that member's, verbatim, with `members` listing every facet of the callset the person holds. Members
+  that say different things withhold the callset (`basis` and `reason` `members_disagree`), never
+  resolved toward one of them. A member whose answer is withheld is neither agreement nor
+  disagreement.
+- **Kin facets are separate callsets.** A `caller_split` pair (freeBayes and VarScan2 from one PGP
+  merge, Decision 8) or an `appended_export` pair are two witnesses: neither was made from the other.
+- **A merge or a consensus is set aside** (`set_aside`, `just_vcf.karyotype.SetAsideFacet`, reason
+  `multi_parent`), and so is anything lifted, normalized or rejoined from one
+  (`descends_from_multi_parent`): its rows are its parents', so counting it would count them twice. A
+  facet is one when its `relation` is `merge` or `consensus` or such a link ends at it. Its parents stay
+  callsets of their own.
+- **The person's answer ranks no callset over another.** The karyotype is named when every callset that
+  names one names the same and no callset's X or Y line contradicts it; `supported_by` lists the
+  callsets that named it. A karyotype stands for its X and Y counts (`XY` one and one,
+  `OTHER_KARYOTYPE` three and two, as `estimate` names them), and a callset whose karyotype is withheld
+  can still state a line that contradicts it: `x_copies`, `x_copy_count`, `y_present` and
+  `y_copy_count` each allow a range of counts, and ranges every callset's answer allows must overlap. So
+  a 23andMe export's two-letter X (`x_copies = two_or_more`, its Y not read) against a genome's `XY` is
+  a disagreement, and against a coverage-measured `XX` it fits but is not support. Withheld, the reason
+  is `facets_disagree` (two independent callsets say different things; each one's answer is on
+  `callsets`), `members_disagree` (a callset contradicts itself: one piece of evidence that does so is
+  not set aside for the others to answer), `all_withheld` (no callset names one; each one's reason is
+  on `callsets`) or `no_callset` (every facet was set aside); `just_vcf.karyotype.PERSON_KARYOTYPE_REASONS`.
+  `x_copies` is weighed by the same rule over the X lines alone, with its own reason and supporters,
+  so it can be known when the karyotype is not (just-prs's dosage, S1).
+- **The lead's call, open for the person's veto: no answer outranks another.** A measured answer (a
+  genome's calls and depth, a coverage facet's counts) against an estimated one (an array's letters)
+  that differs is `facets_disagree`, as two genomes that differ are; a genome's calls-only `XY` against a
+  coverage facet's `XYY` on another callset likewise. Whether a measured answer should outrank an
+  estimated one is open, with no desk number (RM269).
+
+Rejected: ranking callsets by kind or depth (a measured genome over an array, a coverage-backed answer
+over a calls-only one; left open above, not decided by default); letting a self-contradicting callset
+fall silent while another answers, which would resolve its disagreement away (charter 8); comparing
+karyotypes alone, which reads a withheld array's stated two X beside a genome's `XY` as no
+disagreement; a merged answer pieced together from several members' fields, which no member said.
 
 An array facet (`callset_type = array`) gets its own lines, on the result's `array` field
 (`just_vcf.karyotype.ArrayLines`, null for every other facet), read from `gt_alleles` as the export
@@ -3357,6 +3409,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-03, RM269 at the person level): `person_karyotype` weighs a
+  `Person`'s facets against each other ("Sex-chromosome evidence", "Weighed against each other"):
+  liftovers of one callset answer once, a merge or a consensus is set aside, and independent callsets
+  that answer differently withhold the answer as `facets_disagree`. Computed, not stored; no frame
+  changes, and what the facet-level functions return is unchanged.
 
 - **An enum member, landed in 0.0.22** (2026-10-27, F23: a source REF that states no base):
   `RefCheck.UNSTATED` (`unstated`), a source REF made only of `N` where the reference reads a base,

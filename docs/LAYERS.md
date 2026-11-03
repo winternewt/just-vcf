@@ -105,7 +105,7 @@ meanwhile. The desk carries the ones filed there.
   Y copies past two. Chip files read X from their own hets; their Y probes per vendor (#136, answered 2026-10-26: on by
   default for AncestryDNA, whose Y calls are measured, off for 23andMe and every other vendor; `array_y` forces either). The lead's calls, for veto: three X with two Y
   is `OTHER_KARYOTYPE`; the array two-X expectation is 3/4 (Ne_X = 3/4 Ne_A), not PLINK's 0.2/0.8; copy counts are new
-  nullable `x_copy_count`/`y_copy_count`, not new `XCopies` members; a table that states no build answers `no_build` as loaded and is estimated on `resolve_ref`'s output, the result naming the build's source.
+  nullable `x_copy_count`/`y_copy_count`, not new `XCopies` members; a table that states no build answers `no_build` as loaded and is estimated on `resolve_ref`'s output, the result naming the build's source; at the person level (`person_karyotype`, 2026-11-03) no callset outranks another, so a measured genome and an estimated array that differ withhold the answer as `facets_disagree`.
 - **Layer 1, the lead's calls on VCF loading (built, listed for veto):** GT declared Integer, Float or Character is
   read as the genotype with a warning, not refused; a VCF with no GT anywhere loads with the genotype unknown on every
   row and a warning, not refused as no calls; Float-declared integer keys (GQ, DP, PS, END, ...) are read from their

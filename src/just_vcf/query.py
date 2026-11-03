@@ -99,11 +99,15 @@ class Dimension(str, Enum):
     CHROM = "chrom"
     """The canonical contig (Decision 7), both frames."""
     VARIANT_CLASS = "variant_class"
-    """The class of each ALT allele (`calls` only); grouping by it counts ALT alleles, not rows."""
+    """The class of each ALT allele (`calls` only); grouping by it counts ALT alleles, not rows. An ALT of
+    a row whose source REF states no base (`ref_check = unstated`) is classed against that `source_ref`,
+    as `facets.variant_classes` counts it at load, never against the reference's base."""
     FILTER = "filter"
     """The row's site filters, sorted and joined with `;` (`calls` only); null = the source said `.`."""
     GENOTYPE_CLASS = "genotype_class"
-    """`GenotypeClass` of the row (`calls` only)."""
+    """`GenotypeClass` of the row (`calls` only): a shape of its GT indices (how many slots, how many on
+    `0`, how many distinct ALTs), never of the alleles they name, so an `unstated` row is classed as
+    written: `0/1` there is `het` whatever base the `N` stood for."""
     REF_CHECK = "ref_check"
     """`calls` only."""
     EVIDENCE_BASIS = "evidence_basis"
@@ -360,7 +364,13 @@ def _dimension_expr(dimension: Dimension) -> pl.Expr:
     if dimension is Dimension.CHROM:
         return pl.col("chrom")
     if dimension is Dimension.VARIANT_CLASS:
-        return variant_class_expr(pl.coalesce("ref", "source_ref"), pl.col("alts"))
+        # An `unstated` row's ALT was spelled against its source REF of `N`, not against `ref` (F23): it
+        # is classed against `source_ref`, as `facets.variant_classes` counted it at load (Decision 2).
+        # The class reads only lengths, and `ref` is read over the `source_ref`'s span, so the two agree
+        # today; the rule is written here so a REF read over another span cannot move the count.
+        unstated = pl.col("ref_check") == RefCheck.UNSTATED.value
+        ref = pl.when(unstated.fill_null(False)).then(pl.col("source_ref")).otherwise(pl.coalesce("ref", "source_ref"))
+        return variant_class_expr(ref, pl.col("alts"))
     if dimension is Dimension.FILTER:
         return pl.col("filters").list.sort().list.join(";")
     if dimension is Dimension.GENOTYPE_CLASS:

@@ -4,6 +4,15 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`query.counts(by=["variant_class"])` classes an `unstated` row's ALT against its source REF**
+  (merge audit 14, finding 6), as `facets.variant_classes` counts it at load. It read
+  `coalesce(ref, source_ref)`, the reference's base under the `N`; no count moved, since `resolve_ref`
+  reads `ref` over the `source_ref`'s own span and the class reads only lengths and which letters an
+  allele holds, so the finding is a non-issue at the count level, shown by a test that passes on the
+  code before and after. The rule is now written in the expression, so a REF read over another span
+  could not move the count. `genotype_class` is a shape of the GT indices and stays as written; its
+  docstring says so. Test: `tests/test_unstated_ref.py::test_query_counts_variant_classes_as_the_facet_counted_them_at_load`.
+
 - **`normalize` keeps the duplicate whose REF was stated and matched** (merge audit 14, finding 5).
   Two rows equal in everything but how the source wrote them (`source_ref`, `ref_check`, ...) are one
   row, and canonical order chose which: it sorts `source_ref`, so of `N` → `A` (`unstated`) and `T` →

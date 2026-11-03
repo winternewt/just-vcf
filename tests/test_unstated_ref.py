@@ -273,6 +273,23 @@ def test_query_counts_unstated_and_reads_neither_site_nor_alt_from_an_unstated_r
     assert (matched.basis.value, matched.carried) == ("site_genotyped", False), "a stated REF still genotypes its site"
 
 
+def test_query_counts_variant_classes_as_the_facet_counted_them_at_load(tmp_path: Path, store: ReferenceStore) -> None:
+    """`counts(by=["variant_class"])` classes an `unstated` row's ALT against `source_ref`, as
+    `facets.variant_classes` counted it at load (Decision 2), so the count never depends on the base
+    the reference reads under the `N`. `variant_class_expr` reads only lengths and which letters an
+    allele holds, and `resolve_ref` reads `ref` over the `source_ref`'s own span, so `N` → `NAC` is an
+    indel and `N` → `X` an SNV read against either; pinned so that a REF read over another span cannot
+    move the count unnoticed."""
+    loaded = load(vcf(tmp_path, RECORDS))
+    at_load = {entry["variant_class"]: entry["alleles"] for entry in loaded.facets.collect()["variant_classes"].item().to_list()}
+    (table,) = query(resolve_ref(loaded, store)).counts(by=["variant_class"])
+    counted = {group.values[0]: group.count for group in table.groups if group.values[0] is not None}
+    assert counted == {cls: n for cls, n in at_load.items() if n}
+    unstated = [(p, case, r, a, g) for p, case, r, a, g in RECORDS if EXPECTED[case] == "unstated"]
+    (only,) = query(resolve_ref(load(vcf(tmp_path, unstated, "unstated.vcf")), store)).counts(by=["variant_class"])
+    assert {group.values[0]: group.count for group in only.groups} == {"snv": 2, "indel": 1, "sv": 2}
+
+
 def test_the_cli_counts_unstated_rows(tmp_path: Path) -> None:
     fasta = write_fasta(tmp_path / "ref.fa")
     [facet] = report(run("check", vcf(tmp_path, RECORDS), "--reference", fasta, "--json"))["facets"]

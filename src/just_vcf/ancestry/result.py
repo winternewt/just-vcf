@@ -14,7 +14,8 @@ ANCESTRY_METHODS: frozenset[str] = frozenset({"pca_knn", "prive_qp", "consensus"
   the panel's reference samples; `proportions` are the PCA-centroid mixture (`pca_nnls`).
 - `prive_qp`: Privé's worldwide reference (UK Biobank, 21 groups): projection onto its published PCs,
   then group proportions by simplex-constrained least squares.
-- `consensus`: a product of the answered estimates' distributions over five continental groups.
+- `consensus`: the answered estimates combined over five continental groups, one panel's methods as
+  one witness (`consensus.consensus`, `CONSENSUS_COMBINATIONS`).
 """
 
 ANCESTRY_REASONS: frozenset[str] = frozenset(
@@ -24,6 +25,7 @@ ANCESTRY_REASONS: frozenset[str] = frozenset(
         "panel_missing",
         "too_few_sites",
         "no_estimates",
+        "no_continental_groups",
     }
 )
 """Why an estimate is unknown. Grows additively.
@@ -34,11 +36,72 @@ ANCESTRY_REASONS: frozenset[str] = frozenset(
 - `panel_missing`: the panel path holds no panel of the asked name.
 - `too_few_sites`: too few panel sites could be read from the facet (`coverage_floor`, `min_sites`).
 - `no_estimates`: a consensus was asked of estimates none of which answered.
+- `no_continental_groups`: the estimates answered, but every group they put weight on folds onto none of
+  the five continental groups (an `aadr_ho` placement in Central Asia or Siberia), so a consensus over
+  those groups has nothing to read.
 """
 
 PROPORTION_METHODS: frozenset[str] = frozenset({"pca_nnls", "prive_qp"})
 """How `proportions` were computed. Either way they are a projection-space approximation, not
 haplotype-level admixture."""
+
+CONSENSUS_COMBINATIONS: frozenset[str] = frozenset({"mean", "product_of_means"})
+"""How a consensus combined its witnesses (a witness: the estimates whose panels are not known to have
+disjoint reference samples, `ConsensusWitness`). Grows additively.
+
+- `mean`: one witness and no prior. The answer is the mean of the witness's readings, which gives the
+  leader no more than the most any one reading gave it: agreement does not sharpen it.
+- `product_of_means`: two or more witnesses, or a prior. Each witness's mean, smoothed, is one factor of
+  a product, as independent evidence is; the prior is one more.
+"""
+
+CONSENSUS_READINGS: frozenset[str] = frozenset({"probabilities", "proportions"})
+"""Which distribution of an estimate a witness read: its `probabilities` (`pca_knn`'s neighbour vote) or
+its `proportions` (`pca_nnls`, `prive_qp`). One estimate can give a witness both."""
+
+
+class WitnessReading(BaseModel):
+    """One distribution a consensus read, folded onto `CANONICAL_SUPERPOPS`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    panel: str
+    method: str
+    """The estimate's `method`."""
+    reading: str
+    """`probabilities` or `proportions` (`CONSENSUS_READINGS`)."""
+    facet_ids: tuple[str, ...] = ()
+    distribution: dict[str, float] = {}
+    """Over the five continental groups, summing to 1; empty for a reading left out because none of its
+    groups folds onto one of them."""
+
+    @field_validator("reading")
+    @classmethod
+    def _known_reading(cls, value: str) -> str:
+        if value not in CONSENSUS_READINGS:
+            raise ValueError(f"unknown consensus reading {value!r}; known: {sorted(CONSENSUS_READINGS)}")
+        return value
+
+
+class ConsensusWitness(BaseModel):
+    """The readings a consensus took as one witness: every estimate on these panels.
+
+    Panels are one witness unless the caller declared their reference samples disjoint, since two
+    methods on one set of reference samples and sites are not independent evidence. `mean` is what the
+    witness says; `spread` is how far its readings disagree, per group the largest value a reading gave
+    it minus the smallest (0 for a witness of one reading).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    panels: tuple[str, ...]
+    readings: tuple[WitnessReading, ...] = ()
+    mean: dict[str, float] = {}
+    """The readings' mean per continental group; empty when every reading was left out."""
+    spread: dict[str, float] = {}
+    left_out: tuple[WitnessReading, ...] = ()
+    """Readings none of whose groups folds onto a continental group; they enter neither `mean` nor
+    `spread`."""
 
 
 class AncestryEstimate(BaseModel):
@@ -64,10 +127,11 @@ class AncestryEstimate(BaseModel):
 
     estimate: str | None = None
     """The panel group the genome lies nearest: the neighbour vote's leader (`pca_knn`), the largest
-    proportion (`prive_qp`) or the posterior's leader (`consensus`). None = unknown."""
+    proportion (`prive_qp`) or the combined support's leader (`consensus`). None = unknown."""
     probabilities: dict[str, float] = {}
     """`pca_knn`: the fraction of the k nearest reference samples per group (an uncertainty over the
-    nearest group, not a genome fraction). `consensus`: the posterior over the continental groups."""
+    nearest group, not a genome fraction). `consensus`: the combined support over the continental
+    groups, by the rule `combination` names; relative support, not a calibrated probability."""
     margin: float | None = None
     """The leading value of `probabilities` (or of `proportions` for `prive_qp`) minus the runner-up.
     A small margin means the leader barely won."""
@@ -79,6 +143,11 @@ class AncestryEstimate(BaseModel):
     group_to_continental: dict[str, str | None] = {}
     """Each group of this panel folded onto `CANONICAL_SUPERPOPS`, None where none fits (Middle
     Eastern groups). The consensus reads it."""
+    combination: str | None = None
+    """`consensus` only: how its witnesses were combined (`CONSENSUS_COMBINATIONS`). Null otherwise, and
+    on a consensus that did not answer."""
+    witnesses: tuple[ConsensusWitness, ...] = ()
+    """`consensus` only: the witnesses it combined, each with the readings pooled into it."""
     pc_coords: tuple[float, ...] | None = None
     """The projected principal-component coordinates. Their signs depend on the panel's build."""
 
@@ -120,6 +189,13 @@ class AncestryEstimate(BaseModel):
     def _known_proportion_method(cls, value: str | None) -> str | None:
         if value is not None and value not in PROPORTION_METHODS:
             raise ValueError(f"unknown proportion method {value!r}; known: {sorted(PROPORTION_METHODS)}")
+        return value
+
+    @field_validator("combination")
+    @classmethod
+    def _known_combination(cls, value: str | None) -> str | None:
+        if value is not None and value not in CONSENSUS_COMBINATIONS:
+            raise ValueError(f"unknown consensus combination {value!r}; known: {sorted(CONSENSUS_COMBINATIONS)}")
         return value
 
     @model_validator(mode="after")

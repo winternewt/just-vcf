@@ -44,13 +44,24 @@ from just_vcf.ancestry.pca import (
     panel_assemblies,
 )
 from just_vcf.ancestry.prive import PRIVE_ASSEMBLY, PriveBuild, build_prive_reference, prive_proportions
-from just_vcf.ancestry.result import ANCESTRY_METHODS, ANCESTRY_REASONS, PROPORTION_METHODS, AncestryEstimate
+from just_vcf.ancestry.result import (
+    ANCESTRY_METHODS,
+    ANCESTRY_REASONS,
+    CONSENSUS_COMBINATIONS,
+    CONSENSUS_READINGS,
+    PROPORTION_METHODS,
+    AncestryEstimate,
+    ConsensusWitness,
+    WitnessReading,
+)
 
 __all__ = [
     "AADR_REGIONS",
     "ANCESTRY_METHODS",
     "ANCESTRY_REASONS",
     "CANONICAL_SUPERPOPS",
+    "CONSENSUS_COMBINATIONS",
+    "CONSENSUS_READINGS",
     "DEFAULT_COVERAGE_FLOOR",
     "DEFAULT_DIM_REF",
     "DEFAULT_KNN_K",
@@ -63,9 +74,11 @@ __all__ = [
     "WEST_EURASIA",
     "AadrBuild",
     "AncestryEstimate",
+    "ConsensusWitness",
     "PanelBuild",
     "PcaPanel",
     "PriveBuild",
+    "WitnessReading",
     "build_aadr_panel",
     "build_pca_panel",
     "build_prive_reference",

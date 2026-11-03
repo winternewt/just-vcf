@@ -3479,6 +3479,63 @@ likelihood by default (Decision 3: a posterior already holds its source's prior,
 once per facet); one rate for every reading, which would let a whole genome's silence (one-sided
 rates of 1 to 30%, docs/METHOD_ATLAS.md) weigh like a stated genotype (0.05 to 3%).
 
+## Combining ancestry estimates: computed, not stored (RM5)
+
+`just_vcf.ancestry.consensus(estimates, prior=None, smoothing=1e-3, *, disjoint_panels=())` combines
+`AncestryEstimate`s over the five 1000 Genomes groups (`CANONICAL_SUPERPOPS`) and returns one more
+`AncestryEstimate`, `method = consensus`. Nothing is written to a frame. It is not RM280's genotype
+consensus above: that one makes a facet, and this one makes a placement.
+
+**Readings.** Each answered estimate gives its `probabilities` (`pca_knn`'s neighbour vote) and its
+`proportions` (`pca_nnls`, `prive_qp`), each one a reading, folded onto the five groups by its own
+`group_to_continental`. A reading none of whose groups folds onto one of them (an `aadr_ho` placement
+in Siberia or Central Asia, a Privé reading wholly on `Middle East`) is listed under its witness's
+`left_out` and read nowhere. An unknown estimate gives no reading. A consensus given as an input is
+refused, since its own readings would be counted again.
+
+**Witnesses, the lead's rule: methods that share a reference panel are one witness,
+not several.** Two methods on one panel see the same reference samples at the same sites, so their
+agreement is not independent evidence. Panels are one witness unless the caller names the pair in
+`disjoint_panels`; the witnesses are the connected groups of panels with no such declaration between
+them, so panels a, b and c with only (a, b) declared are still one witness, c perhaps sharing samples
+with both. A declared pair must name two different panels some estimate is on, or the call is refused.
+
+- **Inside a witness: the mean of its readings** (a linear opinion pool). It gives its leader no more
+  than the most any one reading gave that group, so agreement never sharpens it, and the same readings
+  given twice give the same answer. Rejected: the product the port carried from just-prs, which made
+  a 50/50 EUR/EAS person on a synthetic panel 0.709 EAS from two resolutions whose four readings gave
+  EAS 0.60 and 0.50 (`tests/test_ancestry.py`); and a normalised geometric mean, which is not bounded so:
+  two readings that put 0.6 on one group and split the rest differently put almost everything there.
+  "Sharper" here means the leader's value. A mean's margin can still exceed each reading's (0.6 / 0.4 on
+  X, Y and 0.6 / 0.4 on X, Z have margin 0.2 each; their mean has 0.4), which is why the margin is
+  not the measure.
+- **Disagreement stays in view**: each `ConsensusWitness` lists its readings (`WitnessReading`: panel,
+  method, `probabilities` or `proportions`, facet ids, the folded distribution), their `mean`, and per
+  group their `spread`, the largest value a reading gave it minus the smallest.
+- **Across witnesses: a product.** Each witness's mean, plus `smoothing`, so that no witness can veto
+  a group, is one factor, and a `prior` is one more; the product is renormalised.
+  `combination` says which rule answered (`CONSENSUS_COMBINATIONS`): `mean` for one witness and no
+  prior, the mean itself, unsmoothed; `product_of_means` otherwise. A `prior` must give each of the five
+  groups a weight above 0; the port read a group it left out as weight 1.
+- `no_continental_groups` (a new `ANCESTRY_REASONS` value): estimates answered, but no reading folds
+  onto a continental group. The port answered such a call with a flat 0.2 per group and AFR as leader.
+
+The lead's calls, open for the person's veto:
+
+- **Disjointness is declared, never inferred.** An estimate carries its panel's name and none of its
+  reference samples' ids, and two panels' ids could not prove disjointness anyway: one person can be
+  listed under two ids (AADR does so inside one release, which `build_aadr_panel`'s rule 9 meets). So
+  the default is one witness for everything, the conservative reading. Panels known to share samples:
+  `hgdp_1kg` holds `1000g`'s people (HGDP+1kGP is the two projects together), and `aadr_ho` holds
+  1000 Genomes people (its `GBR` population, docs/ANCESTRY_PANELS.md).
+- **Each reading weighs the same inside a witness.** A panel read at two resolutions, or a vote beside
+  proportions, puts two readings in; a witness pooling two panels then leans toward the panel with more
+  readings. The mean still cannot sharpen; rejected: a mean per panel first, then over panels, which
+  would let a witness's panel count decide its weights before the rule needs it.
+- **A vote and proportions are both readings.** They are different quantities (which group the
+  neighbours are, against what fractions the genome is), as they were in the port's product; the
+  consensus is relative support, not a calibrated probability, and `spread` shows where the two part.
+
 ## Open questions
 
 Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5 (`end_pos`) and Q6
@@ -3486,6 +3543,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-03, RM5: one panel's methods as one witness): no column of `facets`,
+  `calls` or `blocks` changes. `ancestry.consensus` averages the readings of panels not declared
+  disjoint and multiplies only across declared-disjoint witnesses ("Combining ancestry estimates");
+  `AncestryEstimate` gains `combination` and `witnesses` (null and empty outside a consensus), and
+  `ANCESTRY_REASONS` gains `no_continental_groups`. A behaviour change for every consensus.
 
 - **No version change** (2026-11-03, RM269 at the person level): `person_karyotype` weighs a
   `Person`'s facets against each other ("Sex-chromosome evidence", "Weighed against each other"):

@@ -731,6 +731,29 @@ def test_coverage_with_too_few_bases_gives_no_ratio() -> None:
     assert found.y_reason == "y_not_shown"
 
 
+def no_mean(coverage: Coverage, resolution: Resolution) -> Coverage:
+    """`coverage`'s windows as a facet of `resolution` that states no mean: bins keep their bounds, a
+    thresholds file's regions bound nothing."""
+    bounds = (pl.col("depth_min"), pl.col("depth_max")) if resolution is Resolution.BIN else (pl.lit(None), pl.lit(None))
+    intervals = coverage.intervals.with_columns(depth_mean=pl.lit(None), depth_min=bounds[0], depth_max=bounds[1]).cast(COVERAGE_INTERVALS)
+    return Coverage(facet=coverage.facet.model_copy(update={"resolution": resolution}), intervals=intervals)
+
+
+@pytest.mark.parametrize("resolution", [Resolution.BIN, Resolution.THRESHOLDS])
+def test_coverage_that_states_no_mean_is_set_aside_with_a_reason_never_read_as_zero(resolution: Resolution) -> None:
+    found = with_coverage(frame(chr20(), XX[0], XX[1]), no_mean(coverage_facet(30.0, 0.0), resolution))
+    assert found.coverage.reason == "coverage_no_mean" and "coverage_no_mean" in UNKNOWN_REASONS
+    assert (found.coverage.x_ratio, found.coverage.y_ratio, found.coverage.reference_median) == (None, None, None)
+    # The answer is the calls' alone, as with no coverage at all.
+    assert found.model_copy(update={"coverage": None}) == with_coverage_none(frame(chr20(), XX[0], XX[1]))
+
+
+def with_coverage_none(calls: pl.LazyFrame) -> SexChromosomeEvidence:
+    facets = conform(pl.LazyFrame({"facet_id": ["f"], "assembly_label": ["GRCh38"], "callset_type": ["wgs"]}), FACETS)
+    (found,) = sex_chromosome_evidence(Loaded(facets=facets, calls=calls, blocks=empty(BLOCKS)))
+    return found
+
+
 # --- Counts past two, from coverage only ---------------------------------------------------------
 
 THREE_X_DP = round(REF_DP * 1.5)  # calls' X depth 1.5: above two copies' band, three or more
@@ -1187,6 +1210,17 @@ def test_of_several_on_one_build_the_only_usable_one_is_used_and_the_rest_named(
     (neither,) = person_sex_chromosome_evidence(Person.of(f, coverage=[exome, covered("c3", 30.0, 0.0, uneven=True)], check=None))
     assert (neither.coverage_pairing.basis, neither.coverage_pairing.coverage_facet_id, neither.coverage) == ("none_usable_on_build", None, None)
     assert "c2: coverage_uneven" in neither.coverage_pairing.detail and "c3: coverage_uneven" in neither.coverage_pairing.detail
+
+
+def test_a_quantized_facet_beside_the_windows_of_one_bam_does_not_block_the_pairing() -> None:
+    """Quantized bins state no mean, so they are not a second usable coverage on the build: before
+    `coverage_no_mean` they were, and the pair answered `several_on_build` with neither used."""
+    f = callset("f", *XX)
+    windows_, bins = covered("c1", 30.0, 0.0), no_mean(covered("c2", 30.0, 0.0), Resolution.BIN)
+    (found,) = person_sex_chromosome_evidence(Person.of(f, coverage=[bins, windows_], check=None))
+    assert found.coverage_pairing.model_dump(exclude={"detail"}) == {"coverage_facet_id": "c1", "basis": "only_usable_on_build", "candidates": ("c1", "c2")}
+    assert "c2: coverage_no_mean" in found.coverage_pairing.detail
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XX
 
 
 def test_a_stated_pairing_must_name_the_persons_own_facets() -> None:

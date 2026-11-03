@@ -24,7 +24,7 @@ from just_vcf import (
 from just_vcf import cache
 from just_vcf import coverage as coverage_module
 from just_vcf.assembly import ASSEMBLY_LENGTHS
-from just_vcf.coverage import CALLABLE_REASONS, COVERAGE_INTERVALS
+from just_vcf.coverage import CALLABLE_REASONS, COVERAGE_INTERVALS, COVERAGE_THRESHOLDS
 
 # --- An independent oracle: per-base depth from read definitions ----------------------------------
 
@@ -309,10 +309,93 @@ def test_samtools_coverage_keeps_the_mean_and_names_what_it_drops(tmp_path: Path
     assert coverage.facet.dropped_fields == ["numreads", "covbases", "coverage", "meanbaseq", "meanmapq"]
 
 
+THRESHOLDS = [0, 1, 2, 3]
+REGIONS = [
+    # `--by 10` on chr1 (mosdepth names such regions `unknown`), a named BED region on X, and Y, where no read lands.
+    *[("chr1", start, min(start + 10, 100), "unknown") for start in range(0, 100, 10)],
+    ("chrX", 5, 30, "geneX"),
+    ("chrY", 0, 40, "unknown"),
+]
+
+
+def thresholds_lines(reads: list[tuple[str, int, str]], regions: list[tuple[str, int, int, str]], thresholds: list[int]) -> list[str]:
+    """mosdepth's `.thresholds.bed` (`write_header`, `write_thresholds`): per region, the bases at a depth of each threshold or more."""
+    out = ["#chrom\tstart\tend\tregion\t" + "\t".join(f"{t}X" for t in thresholds)]
+    for source, start, end, name in regions:
+        depth = depth_of(reads, contig=source)
+        counts = [sum(1 for base in range(start + 1, end + 1) if depth.get(base, 0) >= t) for t in thresholds]
+        out.append("\t".join([source, str(start), str(end), name, *map(str, counts)]))
+    return out
+
+
+def test_a_thresholds_file_keeps_its_counts_apart_from_every_depth(tmp_path: Path) -> None:
+    coverage = read_coverage(write(tmp_path / "t.thresholds.bed.gz", thresholds_lines(READS, REGIONS, THRESHOLDS), compress=True))
+    facet = coverage.facet
+    assert (facet.format_id, facet.resolution, facet.thresholds) == (CoverageFormat.THRESHOLDS_BED, Resolution.THRESHOLDS, THRESHOLDS)
+    assert (facet.window, facet.zero_filled, facet.contig_lengths, facet.dropped_fields, facet.options) == (None, False, None, [], {})
+    intervals = coverage.intervals.collect()
+    assert intervals.schema == pl.Schema(COVERAGE_INTERVALS)
+    # The regions, and not one depth: a count of bases at a threshold is no depth of any base.
+    assert intervals.select("chrom", "pos", "end_pos", "bases", "label").rows() == [
+        (source.removeprefix("chr"), start + 1, end, end - start, name) for source, start, end, name in REGIONS
+    ]
+    assert intervals.select(pl.col("depth_mean", "depth_min", "depth_max").null_count()).row(0) == (len(REGIONS),) * 3
+    counts = coverage.thresholds.collect()
+    assert counts.schema == pl.Schema(COVERAGE_THRESHOLDS)
+    expected = [
+        (source.removeprefix("chr"), start + 1, end, name, t, sum(1 for b in range(start + 1, end + 1) if depth_of(READS, contig=source).get(b, 0) >= t))
+        for source, start, end, name in REGIONS
+        for t in THRESHOLDS
+    ]
+    assert counts.rows() == expected
+    # mosdepth's own invariants hold: at 0X every base, no count above its region, none rising with the threshold.
+    by_region = counts.group_by("chrom", "pos", maintain_order=True).agg("bases_at_or_above", length=(pl.col("end_pos") - pl.col("pos") + 1).first())
+    for row in by_region.iter_rows(named=True):
+        assert row["bases_at_or_above"][0] == row["length"]
+        assert row["bases_at_or_above"] == sorted(row["bases_at_or_above"], reverse=True)
+    # What is callable cannot be read from it: the depth columns bound nothing.
+    assert callable_at(coverage, "1", 25, min_depth=1).reason == "no_bounds"
+
+
+def test_a_thresholds_file_with_no_reads_reads_as_written(tmp_path: Path) -> None:
+    # A BAM with no read at all (mosdepth's `tid == -2`) writes 0 at every threshold, 0X included.
+    lines = ["#chrom\tstart\tend\tregion\t0X\t10X", "chr1\t0\t500\tunknown\t0\t0"]
+    counts = read_coverage(write(tmp_path / "t.bed", lines)).thresholds.collect()
+    assert counts.select("threshold", "bases_at_or_above").rows() == [(0, 0), (10, 0)]
+
+
 @pytest.mark.parametrize(
     ("lines", "match"),
     [
-        (["#chrom\tstart\tend\tregion\t1X\t10X", "chr1\t0\t10\tunknown\t10\t5"], "thresholds"),
+        (["#chrom\tstart\tend\tregion\t1X\tdeep", "chr1\t0\t10\tunknown\t10\t5"], "not all `<n>X` thresholds"),
+        (["#chrom\tstart\tend\tregion\t10X\t1X", "chr1\t0\t10\tunknown\t5\t10"], "do not rise strictly"),
+        (["#chrom\tstart\tend\tregion\t1X\t10X", "chr1\t0\t10\tunknown\t11\t5"], "1 row(s) counting more bases than their region"),
+        (["#chrom\tstart\tend\tregion\t1X\t10X", "chr1\t0\t10\tunknown\t5\t6"], "1 counting more bases at a higher threshold"),
+    ],
+)
+def test_a_thresholds_file_mosdepth_could_not_have_written_is_refused(tmp_path: Path, lines: list[str], match: str) -> None:
+    with pytest.raises(UnsupportedCoverageError, match=re.escape(match)):
+        read_coverage(write(tmp_path / "t.bed", lines))
+
+
+def test_a_thresholds_file_without_its_header_is_never_read_as_depths(tmp_path: Path) -> None:
+    """tabix drops a file's header unless run with -h. Without it one threshold's counts look like a
+    regions file's means, and several look like nothing: both are refused rather than read."""
+    one = thresholds_lines(READS, REGIONS, [1])[1:]
+    with pytest.raises(UnsupportedCoverageError, match="kind=CoverageFormat.REGIONS_BED"):
+        read_coverage(write(tmp_path / "one.bed", one))
+    with pytest.raises(UnsupportedCoverageError, match="without its header line, which names the thresholds"):
+        read_coverage(write(tmp_path / "many.bed", thresholds_lines(READS, REGIONS, THRESHOLDS)[1:]))
+    with pytest.raises(UnsupportedCoverageError, match="must start with mosdepth's header line"):
+        read_coverage(write(tmp_path / "stated.bed", one), kind=CoverageFormat.THRESHOLDS_BED)
+    # A regions file of whole-number means, stated, still reads.
+    stated = read_coverage(write(tmp_path / "r.bed", ["chr1\t0\t500\tgeneA\t12"]), kind=CoverageFormat.REGIONS_BED)
+    assert stated.intervals.select("depth_mean", "label").collect().rows() == [(12.0, "geneA")]
+
+
+@pytest.mark.parametrize(
+    ("lines", "match"),
+    [
         (["chr1\tfoo\t10\t3"], "not a BED of depths"),
         ([""], "empty"),
     ],

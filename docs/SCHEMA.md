@@ -2090,7 +2090,8 @@ XYY genome was measured: the bands are copy number alone. A coverage facet witho
 another one, is set aside with `coverage.reason` (`coverage_no_build`, `coverage_build_mismatch`),
 and the answer is the calls' alone. So is a coverage facet whose chr20 depth is too uneven for a whole
 genome (`coverage_uneven`: under 75% of its bases within half to twice the median, an exome's or a
-panel's shape). The field defaults to null, so nothing changes without coverage.
+panel's shape), and one that states no mean depth (`coverage_no_mean`: quantized bins or a thresholds
+file, whose counts are not depths; 2026-11-03). The field defaults to null, so nothing changes without coverage.
 
 **At the person level**, `person_sex_chromosome_evidence(person, pairs=None, array_y=None)` answers
 for each facet of a `Person` (RM273) with one of the person's coverage facets paired to it, and the
@@ -2230,13 +2231,50 @@ return a `Coverage`: a `CoverageFacet` model and a lazy `intervals` frame. It is
 | `label` | a quantized bin's or a named region's label, verbatim |
 
 `CoverageFacet`: `facet_id` (a digest of the source, the format, the options and `COVERAGE_VERSION`),
-`format_id` (`per_base_bed`, `regions_bed`, `quantized_bed`, `mosdepth_summary`, `samtools_depth`,
-`samtools_coverage`, `alignment_depth`: named by shape, since mosdepth's per-base BED and bedtools'
-`genomecov -bg` are one shape), `source_path`, `source_sha256`, `assembly_label` and its basis,
-`contig_lengths`, `resolution` (`base`, `window`, `bin`, `region`), `window`, `options` (the read
-filters `depth()` ran with), `zero_filled`, `dropped_fields`, `warnings`, `subject` (the caller's
-label, "Facets of one person" above). just-vcf's own shape
-(charter 2): GA4GH has no coverage model.
+`format_id` (`per_base_bed`, `regions_bed`, `quantized_bed`, `thresholds_bed`, `mosdepth_summary`,
+`samtools_depth`, `samtools_coverage`, `alignment_depth`: named by shape, since mosdepth's per-base BED
+and bedtools' `genomecov -bg` are one shape), `source_path`, `source_sha256`, `assembly_label` and its
+basis, `contig_lengths`, `resolution` (`base`, `window`, `bin`, `region`, `thresholds`), `window`,
+`options` (the read filters `depth()` ran with), `zero_filled`, `dropped_fields`, `warnings`, `subject`
+(the caller's label, "Facets of one person" above), `thresholds` (a thresholds facet's thresholds,
+ascending; null otherwise). just-vcf's own shape (charter 2): GA4GH has no coverage model.
+
+**A thresholds facet** (`thresholds_bed`, resolution `thresholds`; RM278, 2026-11-03) is mosdepth's
+`.thresholds.bed.gz`, written with `--thresholds 1,10,20` and `--by` (mosdepth refuses the first
+without the second). Its header is `#chrom start end region` and one `<n>X` column per threshold,
+ascending (`write_header`, `threshold_args` in mosdepth.nim); each row is a `--by` region, 0-based
+half-open, its name or the literal `unknown` where the region has none, then per threshold the number
+of the region's bases at a depth of that threshold or more (`write_thresholds`). A count of bases is
+not a depth, so it is kept apart:
+
+- `intervals` holds the regions with `depth_mean`, `depth_min` and `depth_max` null, `bases` the
+  region's length and `label` the region column verbatim, `unknown` included. Kept verbatim since a BED
+  region may be named `unknown`; the regions file of the same run has no name column there, so its
+  `label` is null where this one reads `unknown`.
+- `Coverage.thresholds` (`COVERAGE_THRESHOLDS`) holds the counts in long form: `chrom, pos, end_pos,
+  label` of the region, `threshold`, `bases_at_or_above`, one row per region and threshold, sorted by
+  contig rank, `pos`, `end_pos`, then the file's order of regions sharing those, then `threshold`. It
+  is null on every other facet.
+- A row is taken as written, with one exception: a count above its region's length, or a count that
+  rises with the threshold, is not what mosdepth writes, and the file is refused. A BAM with no read
+  at all writes 0 at every threshold, `0X` included (mosdepth's `tid == -2`), and it reads so.
+- **What the depth measures give it.** `callable_sites` answers null, `no_bounds`, at every position;
+  `measure_coverage` (`sex_chromosome_evidence`'s coverage line) sets the facet aside with
+  `coverage.reason = coverage_no_mean` and no ratio, and the answer is the calls' alone, never a
+  zero depth. The same reason now sets aside a quantized facet (`bin`), whose bins state no mean
+  either; before, such a facet measured nothing with no reason, counted as usable, and beside a
+  windows facet of the same build made `person_sex_chromosome_evidence` answer `several_on_build`.
+- **The lead's call, for veto:** a count equal to the region's length at threshold `t` bounds every
+  base of it at `t` or more, and a count of 0 bounds every base under `t`. Both are exact, and
+  `callable_sites` could read them; they are left unused, so a thresholds facet answers callable
+  unknown everywhere. Rejected for now: writing them into `depth_min`/`depth_max`, where a reader of
+  depth would take a threshold for a measured depth.
+- **The lead's call, for veto:** without its header (tabix drops it unless run with `-h`), a
+  thresholds file of one threshold has five columns ending in a whole number, as a regions file of
+  whole-number means does (mosdepth writes means with decimals, `12.50`). Such a file is refused unless
+  `kind=CoverageFormat.REGIONS_BED` states it, and one of several thresholds is refused outright, since
+  only the header names the thresholds. Rejected: reading the five-column file as a regions file, which
+  puts a count of bases in `depth_mean`.
 
 Rules:
 
@@ -2249,8 +2287,8 @@ Rules:
   `window=None` keeps every source row, read whole, for small files. Regions, bins and summaries keep
   their own intervals.
 - **The kind is read from the content**, compression from the magic bytes. A `samtools depth` with
-  several depth columns is refused (one alignment file per facet), as are mosdepth's thresholds file and
-  anything whose rows are not positions. A headerless three-column file whose third column always
+  several depth columns is refused (one alignment file per facet), as is anything whose rows are not
+  positions, and a thresholds file without its header (above). A headerless three-column file whose third column always
   exceeds the second is refused too: a BED3 of intervals and a `samtools depth` near a contig's start
   (chrM, thousands deep) look the same. `kind=` states the format where the content cannot.
 - **The build** is stated by the caller, or inferred from contig lengths where the source gives them
@@ -2284,7 +2322,7 @@ Rules:
 frame of `chrom, pos`; `callable_at` asks for one position and returns a `Callability` (truthy only
 when callable). `True` when the covering interval's `depth_min` reaches `min_depth` and every base was
 described; `False` when its `depth_max` is under it, likewise; otherwise null with a reason:
-`no_interval`, `no_bounds` (a mean or a renamed bin bounds no base), `straddles`, `partly_described`.
+`no_interval`, `no_bounds` (a mean, a renamed bin or a thresholds region bounds no base), `straddles`, `partly_described`.
 `min_depth` has no default: what depth makes a base callable is the caller's choice. It is evidence
 beside `absence_means` (Decision 4) and changes no answer `absence_is_reference` gives.
 
@@ -3357,6 +3395,17 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-03, RM278: mosdepth's thresholds file): no column of `facets`,
+  `calls` or `blocks` changes. Additive, outside the frames: `CoverageFormat.THRESHOLDS_BED`,
+  `Resolution.THRESHOLDS`, `CoverageFacet.thresholds` (null by default), `Coverage.thresholds` (a
+  `COVERAGE_THRESHOLDS` frame, null by default) and the karyotype reason `coverage_no_mean`
+  ("Coverage facets" above). **Values change**: a quantized coverage facet given to
+  `sex_chromosome_evidence` now reads `coverage.reason = coverage_no_mean` where it read null with
+  nothing measured, and beside a windows facet on one build it no longer makes the pairing
+  `several_on_build`. A headerless five-column BED whose last column is a whole number, read as a
+  regions file before, is refused unless `kind=` states it. `COVERAGE_VERSION` stays 1: no input read
+  before gives other intervals.
 
 - **An enum member, landed in 0.0.22** (2026-10-27, F23: a source REF that states no base):
   `RefCheck.UNSTATED` (`unstated`), a source REF made only of `N` where the reference reads a base,

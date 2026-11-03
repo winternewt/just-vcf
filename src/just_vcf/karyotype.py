@@ -104,7 +104,7 @@ from enum import Enum
 import polars as pl
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from just_vcf.coverage import Coverage
+from just_vcf.coverage import Coverage, Resolution
 from just_vcf.links import LIFTOVER_TO
 from just_vcf.loading import Loaded
 from just_vcf.person import Person
@@ -339,6 +339,7 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
         "coverage_no_build",
         "coverage_build_mismatch",
         "coverage_uneven",
+        "coverage_no_mean",
         "copies_uncounted",
         "vendor_asserted",
         "no_calls_not_written",
@@ -370,6 +371,10 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
   (`coverage.reason` only).
 - `coverage_uneven`: the coverage facet's chr20 depth is not even enough for a whole genome
   (`COVERAGE_MIN_EVEN_SHARE`): an exome's or a panel's reads; it is set aside (`coverage.reason` only).
+- `coverage_no_mean`: the coverage facet states no mean depth for any interval, which the ratios are
+  medians of: quantized bins (`Resolution.BIN`) or a thresholds file (`Resolution.THRESHOLDS`, whose
+  counts of bases at or above a threshold are not depths). It is set aside (`coverage.reason` only),
+  never read as zero depth.
 - `vendor_asserted`: an array's Y probes were measured but not read: whether they are called follows
   the vendor's own sex call where it masks Y for the samples it calls female (`array_y`; `y_reason`
   only). Off by default for a vendor not in `ARRAY_Y_VENDORS` or an unknown one, or turned off by the
@@ -810,12 +815,22 @@ def _pairing(
     )
 
 
+_NO_MEAN_RESOLUTIONS = frozenset({Resolution.BIN, Resolution.THRESHOLDS})
+"""Resolutions whose intervals never carry `depth_mean` (`coverage_no_mean`)."""
+
+
 def measure_coverage(coverage: Coverage) -> CoverageRatios:
     """A coverage facet's region medians and ratios, on the coverage's own build (`CoverageRatios`)."""
     label = coverage.facet.assembly_label
     base = {"coverage_facet_id": coverage.facet.facet_id, "format_id": coverage.facet.format_id.value}
-    if label not in ESTIMATE_BUILDS:
-        reason = "coverage_no_build" if label is None else "unsupported_build" if label not in REGION_BUILDS else "uncalibrated_build"
+    no_mean = coverage.facet.resolution in _NO_MEAN_RESOLUTIONS
+    if no_mean or label not in ESTIMATE_BUILDS:
+        reason = (
+            "coverage_no_mean" if no_mean
+            else "coverage_no_build" if label is None
+            else "unsupported_build" if label not in REGION_BUILDS
+            else "uncalibrated_build"
+        )
         return CoverageRatios(
             **base, reason=reason, reference_bases=0, reference_median=None,
             reference_even_share=None, x_bases=0, x_median=None, y_bases=0, y_median=None, x_ratio=None, y_ratio=None,

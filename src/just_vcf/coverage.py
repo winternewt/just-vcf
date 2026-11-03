@@ -5,9 +5,11 @@ whole-genome callset that wrote no variant at a position the reads covered well 
 that wrote none where no read landed. It is read two ways:
 
 - **`read_coverage(path)`** reads what a depth tool already wrote: mosdepth's `.per-base.bed.gz`,
-  `.regions.bed.gz`, `.quantized.bed.gz` and `.mosdepth.summary.txt`, and `samtools depth` and
-  `samtools coverage` output. The kind is told from the content, never from the file name, and
-  compression from the magic bytes.
+  `.regions.bed.gz`, `.quantized.bed.gz`, `.thresholds.bed.gz` and `.mosdepth.summary.txt`, and
+  `samtools depth` and `samtools coverage` output. The kind is told from the content, never from the
+  file name, and compression from the magic bytes. A thresholds file counts bases at or above each
+  threshold per region; those counts are not depths, so they go to `Coverage.thresholds` and no depth
+  column of `intervals` holds them.
 - **`alignment_coverage(path)`** runs polars-bio's `depth()` over a BAM or CRAM (charter: alignment
   processing is the substrate's, used as is; just-vcf walks no CIGAR of its own) and folds its
   per-base depth into fixed windows while it streams, so the result is a few million rows for a
@@ -46,6 +48,7 @@ import re
 from collections.abc import Iterator
 from enum import Enum
 from importlib.metadata import version
+from itertools import pairwise
 from pathlib import Path
 
 import polars as pl
@@ -101,6 +104,20 @@ COVERAGE_INTERVALS: dict[str, pl.DataType] = {
 - `label`: a quantized bin's or a named region's label, verbatim; null otherwise.
 """
 
+COVERAGE_THRESHOLDS: dict[str, pl.DataType] = {
+    "chrom": pl.String(),
+    "pos": pl.UInt32(),
+    "end_pos": pl.UInt32(),
+    "label": pl.String(),
+    "threshold": pl.UInt32(),
+    "bases_at_or_above": pl.UInt32(),
+}
+"""The `thresholds` frame of a thresholds facet (mosdepth `--thresholds`): one row per region and
+threshold, sorted by contig rank, `pos`, `end_pos`, then `threshold`. `pos`, `end_pos` and `label` are
+the region's, as in `intervals`. `bases_at_or_above` is how many of the region's bases mosdepth counted
+at a depth of `threshold` or more: a count of bases, never a depth, so nothing reading depth reads it.
+"""
+
 
 class CoverageFormat(str, Enum):
     """What a coverage facet was read from. Told by shape, so a name covers every tool writing it."""
@@ -111,6 +128,9 @@ class CoverageFormat(str, Enum):
     """BED4 or BED5 with a mean depth last: mosdepth `.regions.bed.gz` (`--by`)."""
     QUANTIZED_BED = "quantized_bed"
     """BED4 runs of a depth bin: mosdepth `.quantized.bed.gz` (`--quantize`)."""
+    THRESHOLDS_BED = "thresholds_bed"
+    """A BED of regions with one count of bases per depth threshold, under a `#chrom start end region
+    1X 10X ...` header: mosdepth `.thresholds.bed.gz` (`--thresholds`, which needs `--by`)."""
     MOSDEPTH_SUMMARY = "mosdepth_summary"
     """mosdepth `.mosdepth.summary.txt`: length, bases, mean, min and max per contig."""
     SAMTOOLS_DEPTH = "samtools_depth"
@@ -132,6 +152,9 @@ class Resolution(str, Enum):
     """Runs whose depth falls in one bin: bounds, no mean."""
     REGION = "region"
     """A mean over each interval, no bounds; mosdepth's summary adds the bounds per contig."""
+    THRESHOLDS = "thresholds"
+    """Regions with the count of their bases at or above each depth threshold (`Coverage.thresholds`):
+    no mean and no bound in `intervals`."""
 
 
 class CoverageFacet(BaseModel):
@@ -171,15 +194,22 @@ class CoverageFacet(BaseModel):
     """The caller's label for the person whose reads these are (`subject=`), as `load` writes
     `facets.subject` (RM273): supplied, never inferred. Not identity: `facet_id` does not digest it, and
     `alignment_coverage`'s cache spill does not key on it. `Person.of(..., coverage=...)` groups by it."""
+    thresholds: list[int] | None = None
+    """A thresholds facet's depth thresholds, ascending, as its header names them (`1X` is 1); null for
+    every other resolution."""
 
 
 class Coverage(BaseModel):
-    """A coverage facet and its intervals (`COVERAGE_INTERVALS`), sorted by contig rank and `pos`."""
+    """A coverage facet and its intervals (`COVERAGE_INTERVALS`), sorted by contig rank and `pos`.
+
+    `thresholds` (`COVERAGE_THRESHOLDS`) holds a thresholds facet's counts per region and threshold;
+    null for every other resolution."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     facet: CoverageFacet
     intervals: pl.LazyFrame
+    thresholds: pl.LazyFrame | None = None
 
 
 class UnsupportedCoverageError(ValueError):
@@ -196,6 +226,10 @@ _CHUNK_BYTES = 64 << 20
 _MOSDEPTH_SUMMARY_HEADER = ["chrom", "length", "bases", "mean", "min", "max"]
 _SAMTOOLS_COVERAGE_HEADER = ["#rname", "startpos", "endpos", "numreads", "covbases", "coverage", "meandepth", "meanbaseq", "meanmapq"]
 _BIN_LABEL = re.compile(r"^(\d+):(\d+|inf)$")
+_THRESHOLDS_HEADER = "#chrom\tstart\tend\tregion"
+"""The start of the header mosdepth writes on a thresholds file (`write_header` in mosdepth.nim), one
+`<n>X` column per threshold after it."""
+_THRESHOLD_COLUMN = re.compile(r"^(\d+)X$")
 
 
 def read_coverage(
@@ -229,6 +263,8 @@ def read_coverage(
     warnings: list[str] = []
     dropped: list[str] = []
     lengths: list[dict] | None = None
+    counts: pl.DataFrame | None = None
+    thresholds: list[int] | None = None
     folded = window if kind in (CoverageFormat.PER_BASE_BED, CoverageFormat.SAMTOOLS_DEPTH) else None
 
     if kind is CoverageFormat.MOSDEPTH_SUMMARY:
@@ -248,6 +284,9 @@ def read_coverage(
         if unbounded:
             warnings.append(f"{unbounded:,} quantized interval(s) carry a bin label that names no depth range (a renamed bin); their depth is unknown")
         resolution = Resolution.BIN
+    elif kind is CoverageFormat.THRESHOLDS_BED:
+        intervals, counts, thresholds = _read_thresholds(path, lines[0])
+        resolution = Resolution.THRESHOLDS
     elif folded is not None:
         partial = _fold_chunks(_depth_chunks(path, kind), folded)
         intervals = _finish_windows(partial, folded, lengths=None, zero_filled=False)
@@ -276,8 +315,14 @@ def read_coverage(
         dropped_fields=dropped,
         warnings=warnings,
         subject=subject,
+        thresholds=thresholds,
     )
-    return Coverage(facet=facet, intervals=_ordered(intervals).lazy())
+    return Coverage(
+        facet=facet,
+        intervals=_ordered(intervals).lazy(),
+        # A region's thresholds stay together, regions sharing coordinates in the file's order.
+        thresholds=None if counts is None else _ordered(counts, COVERAGE_THRESHOLDS, ("region_row", "threshold")).lazy(),
+    )
 
 
 def _check_subject(subject: str | None) -> None:
@@ -345,17 +390,30 @@ def _coverage_kind(lines: list[str]) -> CoverageFormat:
                 "or a samtools depth output, the rows cannot tell; pass kind=CoverageFormat.SAMTOOLS_DEPTH if it is one"
             )
         return CoverageFormat.SAMTOOLS_DEPTH
-    if lines[0].startswith("#chrom\tstart\tend\tregion"):
-        raise UnsupportedCoverageError("a mosdepth thresholds file: counts per threshold, not a depth (not read yet)")
+    if lines[0].startswith(_THRESHOLDS_HEADER):
+        return CoverageFormat.THRESHOLDS_BED
     if not all(_is_int(f[1]) and _is_int(f[2]) for f in body):
         raise UnsupportedCoverageError("not a BED of depths: the second and third columns are not all positions")
     last = [f[-1] for f in body]
     if width == 4 and all(_is_int(v) for v in last):
         return CoverageFormat.PER_BASE_BED
+    if width == 5 and all(_is_int(v) for v in last):
+        # mosdepth writes a region's mean with decimals (`12.50`); whole numbers after a name are what a
+        # thresholds file with one threshold holds once its header is gone (tabix drops it without -h).
+        raise UnsupportedCoverageError(
+            "five columns without a header whose last is always a whole number: a regions file of whole-number means "
+            "or a mosdepth thresholds file without its header line, the rows cannot tell; pass kind=CoverageFormat.REGIONS_BED "
+            "if it is the first, or keep the thresholds file's header (tabix -h)"
+        )
     if width in (4, 5) and all(_is_number(v) for v in last):
         return CoverageFormat.REGIONS_BED
     if width == 4:
         return CoverageFormat.QUANTIZED_BED
+    if all(_is_int(v) for f in body for v in f[4:]):
+        raise UnsupportedCoverageError(
+            f"a BED of {width} columns whose fifth and later are whole numbers: a mosdepth thresholds file without its "
+            "header line, which names the thresholds (tabix drops it without -h)"
+        )
     raise UnsupportedCoverageError(f"a BED of {width} columns whose last is not a depth")
 
 
@@ -437,6 +495,60 @@ def _read_quantized(path: Path) -> tuple[pl.DataFrame, int]:
         label=pl.col("label"),
     )
     return out, int(out["depth_min"].null_count())
+
+
+def _read_thresholds(path: Path, header: str) -> tuple[pl.DataFrame, pl.DataFrame, list[int]]:
+    """mosdepth's thresholds file: the regions as intervals with no depth, and the counts in long form.
+
+    mosdepth (`write_thresholds`) writes `chrom, start, end` of each `--by` region (0-based, half-open),
+    its name or `unknown` when the region has none, then per threshold the number of the region's bases
+    at a depth of that threshold or more. The thresholds are sorted ascending (`threshold_args`)."""
+    columns = header.split("\t")
+    if not header.startswith(_THRESHOLDS_HEADER) or len(columns) < 5:
+        raise UnsupportedCoverageError("a thresholds file must start with mosdepth's header line, which names the thresholds")
+    matched = [_THRESHOLD_COLUMN.match(name) for name in columns[4:]]
+    if not all(matched):
+        raise UnsupportedCoverageError("a thresholds header whose columns after `region` are not all `<n>X` thresholds")
+    thresholds = [int(m.group(1)) for m in matched if m is not None]
+    if any(b <= a for a, b in pairwise(thresholds)):
+        raise UnsupportedCoverageError("a thresholds header whose thresholds do not rise strictly, as mosdepth writes them")
+    names = [f"t{i}" for i in range(len(thresholds))]
+    frame = _read_tsv(
+        path, ["chrom", "start", "end", "region", *names], [pl.String(), pl.UInt32(), pl.UInt32(), pl.String(), *[pl.UInt32()] * len(names)], skip_header=True
+    )
+    length = pl.col("end").cast(pl.Int64) - pl.col("start").cast(pl.Int64)
+    over = frame.filter(pl.any_horizontal([pl.col(n).cast(pl.Int64) > length for n in names]) | (length <= 0)).height
+    rising = frame.filter(pl.any_horizontal([pl.col(b) > pl.col(a) for a, b in pairwise(names)])).height if len(names) > 1 else 0
+    if over or rising:
+        raise UnsupportedCoverageError(
+            f"a thresholds file with {over:,} row(s) counting more bases than their region holds (or an empty region) and "
+            f"{rising:,} counting more bases at a higher threshold than at a lower one: not what mosdepth writes"
+        )
+    intervals = frame.select(
+        chrom=pl.col("chrom"),
+        pos=(pl.col("start") + 1).cast(pl.UInt32),
+        end_pos=pl.col("end"),
+        depth_mean=pl.lit(None, dtype=pl.Float32),
+        depth_min=pl.lit(None, dtype=pl.UInt32),
+        depth_max=pl.lit(None, dtype=pl.UInt32),
+        bases=(pl.col("end") - pl.col("start")).cast(pl.UInt32),
+        label=pl.col("region"),
+    )
+    counts = pl.concat(
+        [
+            frame.select(
+                chrom=pl.col("chrom"),
+                pos=(pl.col("start") + 1).cast(pl.UInt32),
+                end_pos=pl.col("end"),
+                label=pl.col("region"),
+                threshold=pl.lit(threshold, dtype=pl.UInt32),
+                bases_at_or_above=pl.col(name),
+                region_row=pl.int_range(pl.len(), dtype=pl.UInt64),
+            )
+            for name, threshold in zip(names, thresholds)
+        ]
+    )
+    return intervals, counts, thresholds
 
 
 def _read_runs(path: Path, kind: CoverageFormat) -> pl.DataFrame:
@@ -578,12 +690,13 @@ def _finish_windows(partial: pl.DataFrame, window: int, *, lengths: list[dict] |
     )
 
 
-def _ordered(intervals: pl.DataFrame) -> pl.DataFrame:
-    """Canonical chrom, then contig rank, `pos`, `end_pos` (charter 12), in the `COVERAGE_INTERVALS` shape."""
+def _ordered(intervals: pl.DataFrame, shape: dict[str, pl.DataType] = COVERAGE_INTERVALS, then: tuple[str, ...] = ()) -> pl.DataFrame:
+    """Canonical chrom, then contig rank, `pos`, `end_pos` and `then` (charter 12), in `shape`. The sort is
+    stable, so rows equal in every key keep the source's order."""
     frame = intervals.with_columns(chrom=canonical_chrom_expr("chrom"))
     rank = pl.col("chrom").replace_strict(CONTIG_RANK, default=len(CONTIG_RANK), return_dtype=pl.UInt16)
-    return frame.sort([rank, pl.col("chrom"), pl.col("pos"), pl.col("end_pos")], maintain_order=True).select(
-        [pl.col(name).cast(dtype) for name, dtype in COVERAGE_INTERVALS.items()]
+    return frame.sort([rank, pl.col("chrom"), pl.col("pos"), pl.col("end_pos"), *(pl.col(name) for name in then)], maintain_order=True).select(
+        [pl.col(name).cast(dtype) for name, dtype in shape.items()]
     )
 
 
@@ -760,7 +873,8 @@ CALLABLE_REASONS: frozenset[str] = frozenset({"no_interval", "no_bounds", "strad
 """Why a position's callability is unknown.
 
 - `no_interval`: no interval of the coverage facet covers it.
-- `no_bounds`: the interval states a mean or a renamed bin, which bounds no single base.
+- `no_bounds`: the interval states a mean, a renamed bin or a thresholds file's region (whose counts
+  are kept apart, `Coverage.thresholds`), none of which bounds a single base in the depth columns.
 - `straddles`: the interval's lowest depth is under `min_depth` and its highest is not: some of its
   bases reach it and some do not, and the interval does not say which.
 - `partly_described`: the bounds clear the threshold, but the source described only some of the

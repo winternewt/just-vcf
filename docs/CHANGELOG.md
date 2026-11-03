@@ -4,6 +4,24 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`read_coverage` reads mosdepth's thresholds file** (RM278). A `.thresholds.bed.gz`
+  (`--thresholds` with `--by`) is told by its `#chrom start end region 1X ...` header and reads as
+  `format_id = thresholds_bed`, `resolution = thresholds`: `intervals` holds the regions with no depth
+  (mean, min and max null; `label` the region column verbatim, mosdepth's `unknown` included), and the
+  counts of bases at or above each threshold go to a new `Coverage.thresholds` frame
+  (`COVERAGE_THRESHOLDS`, long form), never into a depth column; `CoverageFacet.thresholds` lists the
+  thresholds. A count above its region's length, or one rising with the threshold, is refused, as is a
+  header that names no ascending `<n>X` thresholds. Such a facet answers callable unknown
+  (`no_bounds`) everywhere, and `sex_chromosome_evidence` sets it aside with the new reason
+  `coverage_no_mean`, as it now sets aside a quantized facet: **behaviour change** for those, which
+  measured nothing with no reason, counted as usable, and beside a windows facet of one build made the
+  person-level pairing `several_on_build`. Also a **behaviour change**: a headerless five-column BED
+  ending in a whole number (a one-threshold file whose header tabix dropped, or a regions file of
+  whole-number means) is refused unless `kind=` states it, where it read as a regions file. Tests:
+  `tests/test_coverage.py::test_a_thresholds_file_keeps_its_counts_apart_from_every_depth` and the
+  three after it, `tests/test_karyotype.py::test_coverage_that_states_no_mean_is_set_aside_with_a_reason_never_read_as_zero`,
+  `tests/test_karyotype.py::test_a_quantized_facet_beside_the_windows_of_one_bam_does_not_block_the_pairing`.
+
 - **`query.counts(by=["variant_class"])` classes an `unstated` row's ALT against its source REF**
   (merge audit 14, finding 6), as `facets.variant_classes` counts it at load. It read
   `coalesce(ref, source_ref)`, the reference's base under the `N`; no count moved, since `resolve_ref`

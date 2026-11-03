@@ -864,9 +864,11 @@ _OUTSIDE_BINS = -1
 _UNREADABLE = -2
 """A run key: bases polars-bio's Int16 wrap made negative (no run; their bin is unknown)."""
 
-_BATCH_ROWS: int | None = None
-"""Rows per batch of the quantizing pass; None takes Polars' own size. A batch edge changes no window
-and no run (runs of one bin meeting across it are joined)."""
+_BATCH_ROWS = 1_000_000
+"""Rows per batch of the quantizing pass: about 3,100 batches for a human genome, each a few tens of
+megabytes (a contig name, an Int32 and an Int16 per base), small beside `depth()`'s own dense arrays.
+Stated rather than left to Polars so the Python work per batch is bounded. A batch edge changes no
+window and no run (runs of one bin meeting across it are joined)."""
 
 
 def _bin_key(depth: pl.Expr, edges: list[int | None]) -> pl.Expr:

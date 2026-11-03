@@ -2262,7 +2262,8 @@ read in mosdepth.nim (`get_quantize_args`, `linear_search`, `make_lookup`, `gen_
   source) and each batch is folded into window partials, by the same expressions, and into runs, which
   are joined across batch edges at the end; the windows are the same as a call without bins, under the
   same `facet_id`. The runs of a whole genome are held until then: as many as the bins change, plus one
-  per batch. Not measured on a whole-genome BAM yet.
+  per batch, a batch being 1,000,000 bases (`_BATCH_ROWS`, about 3,100 for a human genome). Not
+  measured on a whole-genome BAM yet.
 - **The spill** holds both (groups `intervals` and `quantized`), and the edges enter its key only when
   given, so the spills written before stay valid and `COVERAGE_VERSION` stays 1. A call with other
   edges, or none, after one with edges reads the file again; one spill does not serve another's

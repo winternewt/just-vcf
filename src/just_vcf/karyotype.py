@@ -108,7 +108,7 @@ from just_vcf.coverage import Coverage
 from just_vcf.links import LIFTOVER_TO
 from just_vcf.loading import Loaded
 from just_vcf.person import Person
-from just_vcf.schema import AssemblyLabelBasis, CallsetType, unstated_sequence_alt
+from just_vcf.schema import SEQUENCE_ALLELE, AssemblyLabelBasis, CallsetType, unstated_sequence_alt
 
 # --- Regions -----------------------------------------------------------------------------------
 # Derived from GIAB genome stratifications v3.6, `XY` group, and for T2T-CHM13's X-degenerate Y from the
@@ -891,11 +891,20 @@ def measure(calls: pl.LazyFrame, assembly_label: str | None) -> dict:
     )
     n_haplotypes = pl.col("gt_alleles").list.len()
     gt0, gt1 = pl.col("gt").list.get(0, null_on_oob=True), pl.col("gt").list.get(1, null_on_oob=True)
-    # A row whose source REF states no base and which spells a sequence ALT (F23) carries no ALT here:
-    # `N` → `G`, `0/1`, was spelled against the `N` and says nothing of which bases the site holds, so
-    # it feeds neither the het share, the balance nor the depth line. Its ploidy as written still counts.
-    # Before `resolve_ref` its `ref_check` is `not_run` and the rule cannot apply.
-    has_alt = pl.col("gt").list.eval(pl.element() >= 1).list.any().fill_null(False) & ~pl.col("_unstated")
+    # On a row whose source REF states no base and which spells a sequence ALT (F23) a GT slot on that
+    # ALT is not read: `N` → `G`, `0/1`, was spelled against the `N` and says nothing of which bases the
+    # site holds. A slot on a symbolic ALT of the same row (`N` → `<DEL>,G`, `0/1`) is a symbolic call,
+    # read as any is. A row with an unread slot carries no ALT here, so it feeds neither the het share,
+    # the balance nor the depth line; its ploidy as written still counts. Before `resolve_ref` its
+    # `ref_check` is `not_run` and the rule cannot apply.
+    sequence_alt = pl.concat_list(pl.lit(False), pl.col("alts").list.eval(pl.element().str.to_uppercase().str.contains(SEQUENCE_ALLELE)))
+    unread_slot = (
+        pl.when(pl.col("_unstated") & pl.col("gt").is_not_null())
+        .then(sequence_alt.list.gather(pl.col("gt"), null_on_oob=True).list.any())
+        .otherwise(pl.lit(False))
+        .fill_null(False)
+    )
+    has_alt = pl.col("gt").list.eval(pl.element() >= 1).list.any().fill_null(False) & ~unread_slot
     diploid_called = (pl.col("gt").list.len() == 2) & gt0.is_not_null() & gt1.is_not_null()
     diploid_alt = diploid_called & has_alt & pl.col("split_signal").is_null()
     het = diploid_alt & (gt0 != gt1)
@@ -913,11 +922,14 @@ def measure(calls: pl.LazyFrame, assembly_label: str | None) -> dict:
     xdeg = _in_intervals(X_DEGENERATE_Y.get(assembly_label, ())) if supported else pl.lit(False)
     reference = pl.col("chrom") == DEPTH_REFERENCE_CHROM
     # Letters as written, for arrays (no REF before `resolve_ref`, so no `gt`): a row is called when it
-    # lists alleles and none is null; a two-letter base call is het when its letters differ.
+    # lists alleles and none is null; a two-letter base call is het when its letters differ. A letter
+    # spelled against a source REF of only `N` (a chip VCF's `N` → `C,G`, `1/2`) names no base the site
+    # holds, so such a row is no base pair; that it called something, and with how many letters, is the
+    # caller's statement and still counts (`called`, `no_calls`, `called_one`).
     letters = pl.col("gt_alleles")
     called = (n_haplotypes > 0) & letters.list.eval(pl.element().is_not_null()).list.all().fill_null(False)
     no_call = ((n_haplotypes > 0) & letters.list.eval(pl.element().is_null()).list.any()).fill_null(False)
-    base_pair = called & (n_haplotypes == 2) & letters.list.eval(pl.element().is_in(_BASES)).list.all().fill_null(False)
+    base_pair = called & (n_haplotypes == 2) & letters.list.eval(pl.element().is_in(_BASES)).list.all().fill_null(False) & ~unread_slot
     letter_het = base_pair & (letters.list.get(0, null_on_oob=True) != letters.list.get(1, null_on_oob=True))
 
     per_group = (

@@ -129,12 +129,17 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   the lowest confidence a facet states at a position, and this row states none); `consensus` already
   read no such row, so its output does not move. Before `resolve_ref` the row's `ref_check` is
   `not_run` and it is graded as written: the rule needs the REF read.
-- `sex_chromosome_evidence` (`karyotype.measure`) counts no ALT on it: such a row feeds neither the
-  het share, nor the allele balance, nor the depth line (2026-10-31; before, `N` → `G`, `0/1`, on X
-  was a het of two bases the source never named). Its ploidy as written still counts, being the
-  caller's statement of how many haplotypes it saw, not an allele. A symbolic ALT on such a row counts
-  as any symbolic call does, as before: a called `<DEL>` with GT `0/1` is one more diploid ALT call
-  and a het. On a facet not yet through `resolve_ref` the rule cannot apply (`not_run`).
+- `sex_chromosome_evidence` (`karyotype.measure`) reads no GT slot on a sequence ALT of it: a row with
+  such a slot feeds neither the het share, nor the allele balance, nor the depth line (2026-10-31;
+  before, `N` → `G`, `0/1`, on X was a het of two bases the source never named). Its ploidy as written
+  still counts, being the caller's statement of how many haplotypes it saw, not an allele. A slot on a
+  symbolic ALT counts as any symbolic call does: a called `<DEL>` with GT `0/1` is one more diploid ALT
+  call and a het, on `N` → `<DEL>,G` as on `N` → `<DEL>` (2026-11-03; before, the second ALT made the
+  whole row count as none). `N` → `<DEL>,G` with `0/2` or `1/2` has a slot on `G` and counts no ALT.
+  An array's letter measures read no letter of it either: `N` → `C,G`, `1/2`, from a chip VCF, is
+  neither a two-letter base call nor a letter het (2026-11-03), while its call as written still counts
+  (`called`, `no_calls`, one letter or two), as its ploidy does. On a facet not yet through
+  `resolve_ref` the rule cannot apply (`not_run`).
 - `site_genotypes.read_site_genotypes`, the panel-site reading `relatedness` and `ancestry` share,
   reads no genotype from it at a panel site: the row is not usable, and a site whose every row is
   such a row is unknown, `basis = ref_unstated` (2026-10-31; before, `N` → `G`, `1/1`, at a site whose

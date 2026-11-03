@@ -38,6 +38,9 @@ LINEAGE_RELATIONS: frozenset[str] = frozenset({LIFTOVER_TO, NORMALIZED, SPLIT_RE
 """Relations where the `to` facet was made from the `from` facet."""
 MULTI_PARENT_RELATIONS: frozenset[str] = frozenset({MERGE, CONSENSUS})
 """Lineage relations a facet holds with two or more parents, so `facets.derived_from` stays null."""
+SINGLE_PARENT_RELATIONS: frozenset[str] = LINEAGE_RELATIONS - MULTI_PARENT_RELATIONS
+"""Lineage relations with one parent, the ones `facets.derived_from` holds: a facet linked so is its
+parent's callset, made again (lifted, normalized, rejoined)."""
 KIN_RELATIONS: frozenset[str] = frozenset({CALLER_SPLIT, APPENDED_EXPORT})
 """Relations between facets of one source, neither made from the other."""
 RELATIONS: frozenset[str] = LINEAGE_RELATIONS | KIN_RELATIONS
@@ -143,7 +146,7 @@ def link_disagreements(facets: pl.DataFrame, links: pl.DataFrame) -> list[str]:
         facet_id, parent, relation = facet["facet_id"], facet["derived_from"], facet["relation"]
         into = lineage.filter(pl.col("to_facet_id") == facet_id)
         if parent is not None:
-            if relation not in LINEAGE_RELATIONS - MULTI_PARENT_RELATIONS:
+            if relation not in SINGLE_PARENT_RELATIONS:
                 found.append(f"facet {facet_id}: derived_from is set but relation {relation!r} is not a one-parent lineage relation")
             if into.height != 1:
                 found.append(f"facet {facet_id}: derived_from is set but {into.height} lineage link(s) end at it, not 1")

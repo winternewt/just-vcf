@@ -3,11 +3,12 @@
 `sex_chromosome_evidence(loaded)` measures what a facet's own calls say about its X and Y
 chromosomes and turns that into an estimate with a reason. Nothing is stored: like `vrs_withheld()`,
 the result is computed from the frames on request, so it never drifts from the rows it summarises and
-its thresholds can move without a schema change. The result is per facet; liftovers of one callset
-are one piece of evidence, not several, and weighing facets against each other belongs to a later
-person-level layer. `person_sex_chromosome_evidence(person)` answers for each facet of a `Person`
-with the person's own coverage facets paired to it by build, and says which it used and why
-(`CoveragePairing`); it weighs nothing either.
+its thresholds can move without a schema change. The result is per facet.
+`person_sex_chromosome_evidence(person)` answers for each facet of a `Person` with the person's own
+coverage facets paired to it by build, and says which it used and why (`CoveragePairing`); it weighs
+nothing. `person_karyotype(person)` weighs those answers against each other (`PersonKaryotype`):
+liftovers of one callset are one piece of evidence, a merge or a consensus is set aside, and
+independent callsets that answer differently withhold the answer (`facets_disagree`).
 
 What is measured, over the rows a caller did not filter out (`filters` is `["PASS"]` or null, which
 is VCF's "filters not applied"; FORMAT `FT` likewise; `evidence_basis = assay`):
@@ -105,7 +106,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from just_vcf.coverage import Coverage
-from just_vcf.links import LIFTOVER_TO
+from just_vcf.links import LIFTOVER_TO, MULTI_PARENT_RELATIONS, SINGLE_PARENT_RELATIONS
 from just_vcf.loading import Loaded
 from just_vcf.person import Person
 from just_vcf.schema import SEQUENCE_ALLELE, AssemblyLabelBasis, CallsetType, unstated_sequence_alt
@@ -725,7 +726,8 @@ def person_sex_chromosome_evidence(
 
     One answer per facet, in `person.facets` order. Each is exactly what `sex_chromosome_evidence`
     gives that facet with the chosen coverage facet, plus `coverage_pairing`. Facets are not weighed
-    against each other: liftovers of one callset still answer once each.
+    against each other here: liftovers of one callset still answer once each. `person_karyotype`
+    weighs them.
     """
     stated = dict(pairs or {})
     facets = person.facets.select("facet_id", "assembly_label").collect()
@@ -1352,3 +1354,365 @@ def _y_present(depth: DepthRatios, no_dp: bool, coverage: CoverageRatios | None)
 
 def _fmt(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.3f}"
+
+
+# --- The person level: a person's callsets weighed against each other ------------------------------
+
+PERSON_KARYOTYPE_REASONS: frozenset[str] = frozenset({"facets_disagree", "members_disagree", "all_withheld", "no_callset"})
+"""Why a person-level answer (`PersonKaryotype`) is withheld.
+
+- `facets_disagree`: two independent callsets say different things: two karyotypes, or a karyotype one
+  names against an X or Y line another states (a 23andMe export's two-letter X, `x_copies =
+  two_or_more` with its karyotype withheld, against a genome's `XY`). Each callset's own answer is on
+  `callsets`. No callset outranks another, a measured genome against an estimated array included.
+- `members_disagree`: the facets of one callset (a file and its liftovers, normalizations, rejoins)
+  say different things among themselves (`CallsetKaryotype.reason`). One piece of evidence that
+  contradicts itself is not set aside for the others to answer.
+- `all_withheld`: every callset's own answer is withheld (each one's reason is on `callsets`).
+- `no_callset`: every facet of the person was set aside (`set_aside`): a merge or a consensus is no
+  independent witness, so nothing is left to answer.
+"""
+
+CALLSET_BASES: frozenset[str] = frozenset({"only_member", "root", "nearest_answering", "none_answered", "members_disagree"})
+"""Which member's answer stands for a callset, and why (`CallsetKaryotype.basis`). A member says the
+most when it names a karyotype, less when it states only an X or a Y line, nothing when neither.
+
+- `only_member`: the person holds one facet of the callset.
+- `root`: the file as loaded says the most of all members; every other member agrees with it or says
+  less.
+- `nearest_answering`: the root says less than another member (a GRCh36 genome measured but not
+  estimated, lifted to GRCh37), or the person does not hold it; of the members that say the most, the
+  one nearest the root (then the lowest `facet_id`) stands, the rest agreeing or saying less.
+- `none_answered`: no member names a karyotype or states an X or a Y line; the root's answer (else the
+  nearest member's) stands, withheld, with its reason.
+- `members_disagree`: the members say different things; no member stands and the callset is withheld.
+"""
+
+SET_ASIDE_REASONS: frozenset[str] = frozenset({"multi_parent", "descends_from_multi_parent"})
+"""Why a facet is no witness of its own at the person level (`SetAsideFacet.reason`).
+
+- `multi_parent`: a merge or a consensus (`links.MULTI_PARENT_RELATIONS`): its rows are made from
+  several parents', so counting it would count them again.
+- `descends_from_multi_parent`: lifted, normalized or rejoined from such a facet.
+"""
+
+
+class CallsetKaryotype(BaseModel):
+    """One callset's answer: the person's facets joined by one-parent lineage to one file as loaded."""
+
+    model_config = ConfigDict(frozen=True)
+
+    root_facet_id: str
+    """The facet the callset was loaded as: the one no one-parent lineage link or `derived_from` leads
+    into. It names the callset."""
+    root_loaded: bool
+    """Whether the person holds the root, or only facets derived from it (their links name it)."""
+    members: tuple[str, ...]
+    """The person's facets of this callset, nearest the root first, then by `facet_id`."""
+    standing_facet_id: str | None
+    """The member whose answer stands for the callset; None when the members disagree."""
+    basis: str
+    """Why that member (`CALLSET_BASES`)."""
+    inferred_karyotypic_sex: KaryotypicSex
+    x_copies: XCopies | None
+    x_copy_count: int | None
+    y_present: bool | None
+    y_copy_count: int | None
+    """The standing member's answer, verbatim (`SexChromosomeEvidence`); withheld when the members
+    disagree."""
+    reason: str | None
+    """The standing member's `reason`, or `members_disagree`; None when a karyotype is named."""
+    detail: str
+
+    @field_validator("basis")
+    @classmethod
+    def _known_basis(cls, value: str) -> str:
+        if value not in CALLSET_BASES:
+            raise ValueError(f"unknown callset basis {value!r}")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def _known_reason(cls, value: str | None) -> str | None:
+        if value is not None and value not in UNKNOWN_REASONS | {"members_disagree"}:
+            raise ValueError(f"unknown reason {value!r}")
+        return value
+
+
+class SetAsideFacet(BaseModel):
+    """A facet of the person that is no independent witness, and why (`SET_ASIDE_REASONS`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    facet_id: str
+    reason: str
+    detail: str
+
+    @field_validator("reason")
+    @classmethod
+    def _known_reason(cls, value: str) -> str:
+        if value not in SET_ASIDE_REASONS:
+            raise ValueError(f"unknown set-aside reason {value!r}")
+        return value
+
+
+class PersonKaryotype(BaseModel):
+    """A person's callsets weighed against each other (`person_karyotype`).
+
+    Truthy only when a karyotype was named: every independent callset that names one names the same,
+    and no callset states an X or a Y line against it. `x_copies` is weighed the same way over the X
+    lines alone, so it can be known when the karyotype is not.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    inferred_karyotypic_sex: KaryotypicSex
+    """A Phenopackets `KaryotypicSex` value, estimated from calls and read depth: not a cytogenetic
+    result."""
+    reason: str | None
+    """Why the karyotype is withheld (`PERSON_KARYOTYPE_REASONS`); None when it is named."""
+    supported_by: tuple[str, ...]
+    """The callsets (`root_facet_id`) that name the karyotype. A callset whose karyotype is withheld
+    and whose lines fit it is listed on `callsets`, not here."""
+    x_copies: XCopies | None
+    x_copies_reason: str | None
+    x_copies_supported_by: tuple[str, ...]
+    """The callsets that state an X line (a karyotype, `x_copies` or `x_copy_count`), when `x_copies`
+    is known."""
+    callsets: tuple[CallsetKaryotype, ...]
+    """Each independent callset's own answer, by `root_facet_id`."""
+    set_aside: tuple[SetAsideFacet, ...]
+    """The facets counted in no callset, by `facet_id`."""
+    evidence: tuple[SexChromosomeEvidence, ...]
+    """`person_sex_chromosome_evidence` for every facet of the person, set-aside ones included,
+    exactly as it returns them."""
+    detail: str
+    """The same in words, naming facet ids, never the subject."""
+
+    @field_validator("reason", "x_copies_reason")
+    @classmethod
+    def _known_reason(cls, value: str | None) -> str | None:
+        if value is not None and value not in PERSON_KARYOTYPE_REASONS:
+            raise ValueError(f"unknown reason {value!r}")
+        return value
+
+    def __bool__(self) -> bool:
+        return self.inferred_karyotypic_sex is not KaryotypicSex.UNKNOWN_KARYOTYPE
+
+
+def person_karyotype(
+    person: Person, *, pairs: Mapping[str, str | None] | None = None, array_y: bool | None = None
+) -> PersonKaryotype:
+    """A person's facets weighed against each other: one answer per callset, then one for the person.
+
+    The facet-level answers are `person_sex_chromosome_evidence(person, pairs=pairs, array_y=array_y)`,
+    unchanged (`evidence`); this only combines them.
+
+    **A callset** is the facets joined by one-parent lineage (`links.SINGLE_PARENT_RELATIONS`:
+    `liftover_to`, `normalized`, `split_rejoined`, read from `person.links` and `facets.derived_from`)
+    back to one file as loaded, which names it (`root_facet_id`, held by the person or only named by
+    its links). It answers once (`CallsetKaryotype`): the root's answer where it says the most, else the
+    nearest member's that does (`CALLSET_BASES`). Members that say different things withhold it
+    (`members_disagree`); a withheld member is neither agreement nor disagreement. Kin facets
+    (`caller_split`, `appended_export`) are separate callsets: neither was made from the other.
+
+    **A merge or a consensus** (`links.MULTI_PARENT_RELATIONS`), and any facet made from one, is set
+    aside (`set_aside`), never counted: its rows are its parents'. The parents are callsets of their own.
+
+    **The person's answer** ranks no callset over another. The karyotype is named when every callset
+    that names one names the same and no callset's X or Y line contradicts it: a karyotype is its X and
+    Y counts, and `x_copies`, `x_copy_count`, `y_present` and `y_copy_count` each allow a range, which a
+    callset withheld on its karyotype still states (an array's two-letter X with its Y not read).
+    Otherwise it is withheld: `facets_disagree` with every callset's own answer on `callsets`,
+    `members_disagree` where a callset contradicts itself, `all_withheld` where no callset names one,
+    `no_callset` where everything was set aside (`PERSON_KARYOTYPE_REASONS`). `x_copies` follows the
+    same rule over the X lines alone. Whether a measured answer (a genome, a coverage facet) should
+    outrank an estimated one (an array) is open, the lead's call to veto (SCHEMA.md).
+
+    A malformed lineage (a facet with two one-parent parents, which `link_disagreements` names) still
+    groups: its root is the lowest id no edge leads into.
+    """
+    evidence = person_sex_chromosome_evidence(person, pairs=pairs, array_y=array_y)
+    by_id = {item.facet_id: item for item in evidence}
+    facets = person.facets.select("facet_id", "derived_from", "relation").collect()
+    links = person.links.select("from_facet_id", "to_facet_id", "relation").collect()
+    groups, set_aside = _callset_groups(facets, links)
+    callsets = tuple(_callset(root, members, by_id) for root, members in sorted(groups.items()))
+    counted = [item for item in callsets if item.basis != "members_disagree"]
+    torn = [item.root_facet_id for item in callsets if item.basis == "members_disagree"]
+    named, x_line, y_line = _weigh(counted)
+    answers = "; ".join(f"{item.root_facet_id}: {_said(item)}" for item in callsets)
+    aside = f"; set aside: {', '.join(item.facet_id for item in set_aside)}" if set_aside else ""
+
+    karyotype, supported = KaryotypicSex.UNKNOWN_KARYOTYPE, ()
+    if not callsets:
+        reason, detail = "no_callset", "every facet was set aside"
+    elif len(named) > 1 or x_line == "lines_disagree" or y_line == "lines_disagree":
+        reason, detail = "facets_disagree", f"independent callsets disagree: {answers}"
+    elif torn:
+        reason, detail = "members_disagree", f"the facets of callset(s) {', '.join(torn)} disagree among themselves: {answers}"
+    elif not named:
+        reason, detail = "all_withheld", f"no callset names a karyotype: {answers}"
+    else:
+        (karyotype,) = named
+        reason = None
+        supported = tuple(item.root_facet_id for item in counted if item.inferred_karyotypic_sex is karyotype)
+        detail = f"{karyotype.value}, named by {', '.join(supported)} and contradicted by none: {answers}"
+
+    if not callsets:
+        x_reason = "no_callset"
+    elif x_line == "lines_disagree":
+        x_reason = "facets_disagree"
+    elif torn:
+        x_reason = "members_disagree"
+    elif x_line is None:
+        x_reason = "all_withheld"
+    else:
+        x_reason = None
+    x_copies = None if x_reason is not None else (XCopies.ONE if x_line[0] == 1 else XCopies.TWO_OR_MORE)
+    x_supported = tuple(item.root_facet_id for item in counted if _lines(item)[1] is not None) if x_reason is None else ()
+    return PersonKaryotype(
+        inferred_karyotypic_sex=karyotype, reason=reason, supported_by=supported,
+        x_copies=x_copies, x_copies_reason=x_reason, x_copies_supported_by=x_supported,
+        callsets=callsets, set_aside=set_aside, evidence=evidence, detail=detail + aside,
+    )
+
+
+_COUNTS: dict[KaryotypicSex, tuple[int, int]] = {karyotype: counts for counts, karyotype in KARYOTYPES.items()}
+"""A named karyotype as its X and Y counts, as `estimate` names them (`OTHER_KARYOTYPE` is three X with
+two Y there). `XXXX`, which nothing names, would be compared by name alone."""
+
+
+def _lines(answer: SexChromosomeEvidence | CallsetKaryotype) -> tuple[KaryotypicSex | None, Copies | None, Copies | None]:
+    """What one answer states: its karyotype (None when withheld), and the X and Y counts it allows
+    (None where it states nothing)."""
+    karyotype = None if answer.inferred_karyotypic_sex is KaryotypicSex.UNKNOWN_KARYOTYPE else answer.inferred_karyotypic_sex
+    if karyotype in _COUNTS:
+        x, y = _COUNTS[karyotype]
+        return karyotype, (x, x), (y, y)
+    if answer.x_copy_count is not None:
+        x_line: Copies | None = (answer.x_copy_count, answer.x_copy_count)
+    else:
+        x_line = {XCopies.ONE: (1, 1), XCopies.TWO_OR_MORE: (2, None), None: None}[answer.x_copies]
+    if answer.y_copy_count is not None:
+        y_line: Copies | None = (answer.y_copy_count, answer.y_copy_count)
+    else:
+        y_line = {True: (1, None), False: (0, 0), None: None}[answer.y_present]
+    return karyotype, x_line, y_line
+
+
+def _weigh(answers: list) -> tuple[list[KaryotypicSex], Copies | str | None, Copies | str | None]:
+    """The karyotypes the answers name, in vocabulary order, and the X and Y counts every answer allows
+    (`lines_disagree` where they share none, None where none states a line)."""
+    stated = [_lines(answer) for answer in answers]
+    order = list(KaryotypicSex)
+    named = sorted({karyotype for karyotype, _, _ in stated if karyotype is not None}, key=order.index)
+    x_line = _agree([line for _, line, _ in stated if line is not None])
+    y_line = _agree([line for _, _, line in stated if line is not None])
+    return named, x_line, y_line
+
+
+def _said(answer: SexChromosomeEvidence | CallsetKaryotype) -> str:
+    """One answer in words: its karyotype, or its reason and what it states beside it."""
+    if answer.inferred_karyotypic_sex is not KaryotypicSex.UNKNOWN_KARYOTYPE:
+        return answer.inferred_karyotypic_sex.value
+    stated = [f"x_copies {answer.x_copies.value}"] if answer.x_copies is not None else []
+    stated += [f"y_present {answer.y_present}"] if answer.y_present is not None else []
+    return f"withheld ({', '.join([answer.reason or 'no reason', *stated])})"
+
+
+def _callset(root: str, members: list[tuple[int, str]], by_id: Mapping[str, SexChromosomeEvidence]) -> CallsetKaryotype:
+    """One callset's answer from its members' (`CALLSET_BASES`); `members` as (depth, facet_id), sorted."""
+    ids = tuple(facet_id for _, facet_id in members)
+    answers = [by_id[facet_id] for facet_id in ids]
+    base = {"root_facet_id": root, "root_loaded": root in by_id, "members": ids}
+    said = "; ".join(f"{answer.facet_id}: {_said(answer)}" for answer in answers)
+    named, x_line, y_line = _weigh(answers)
+    if len(named) > 1 or x_line == "lines_disagree" or y_line == "lines_disagree":
+        return CallsetKaryotype(
+            **base, standing_facet_id=None, basis="members_disagree", inferred_karyotypic_sex=KaryotypicSex.UNKNOWN_KARYOTYPE,
+            x_copies=None, x_copy_count=None, y_present=None, y_copy_count=None, reason="members_disagree",
+            detail=f"the members disagree: {said}",
+        )
+
+    def says(answer: SexChromosomeEvidence) -> int:
+        karyotype, x, y = _lines(answer)
+        return 2 if karyotype is not None else 1 if x is not None or y is not None else 0
+
+    standing = max(answers, key=says)  # the first that says the most: answers run nearest the root first
+    if len(answers) == 1:
+        basis = "only_member"
+    elif says(standing) == 0:
+        basis = "none_answered"
+    else:
+        basis = "root" if standing.facet_id == root else "nearest_answering"
+    return CallsetKaryotype(
+        **base, standing_facet_id=standing.facet_id, basis=basis, inferred_karyotypic_sex=standing.inferred_karyotypic_sex,
+        x_copies=standing.x_copies, x_copy_count=standing.x_copy_count, y_present=standing.y_present,
+        y_copy_count=standing.y_copy_count, reason=standing.reason, detail=f"{standing.facet_id} stands ({basis}): {said}",
+    )
+
+
+def _callset_groups(facets: pl.DataFrame, links: pl.DataFrame) -> tuple[dict[str, list[tuple[int, str]]], tuple[SetAsideFacet, ...]]:
+    """The person's facets grouped into callsets by one-parent lineage, each under its root with its
+    members as (depth from the root, facet_id), sorted; and the facets set aside (`SET_ASIDE_REASONS`).
+
+    The lineage is read over every id the links name, not only the facets held: a chain `load →
+    normalize → liftover` joins its first and last facets through a middle one the person may not hold.
+    """
+    held = facets["facet_id"].to_list()
+    edges = {
+        (row["from_facet_id"], row["to_facet_id"])
+        for row in links.filter(pl.col("relation").is_in(sorted(SINGLE_PARENT_RELATIONS))).iter_rows(named=True)
+    }
+    edges |= {(row["derived_from"], row["facet_id"]) for row in facets.iter_rows(named=True) if row["derived_from"] is not None}
+    pooled = set(links.filter(pl.col("relation").is_in(sorted(MULTI_PARENT_RELATIONS)))["to_facet_id"].to_list())
+    pooled |= {row["facet_id"] for row in facets.iter_rows(named=True) if row["relation"] in MULTI_PARENT_RELATIONS}
+
+    leader: dict[str, str] = {}
+
+    def find(node: str) -> str:
+        leader.setdefault(node, node)
+        while leader[node] != node:
+            leader[node] = leader[leader[node]]
+            node = leader[node]
+        return node
+
+    for a, b in sorted(edges):
+        first, second = find(a), find(b)
+        if first != second:
+            leader[max(first, second)] = min(first, second)
+    components: dict[str, set[str]] = defaultdict(set)
+    for node in sorted({*held, *pooled, *(node for edge in edges for node in edge)}):
+        components[find(node)].add(node)
+
+    children: dict[str, set[str]] = defaultdict(set)
+    for a, b in edges:
+        children[a].add(b)
+    led_into = {b for _, b in edges}
+    groups: dict[str, list[tuple[int, str]]] = {}
+    set_aside: list[SetAsideFacet] = []
+    for nodes in components.values():
+        members = sorted(nodes & set(held))
+        if not members:
+            continue
+        sources = sorted(nodes & pooled)
+        if sources:
+            set_aside += [
+                SetAsideFacet(facet_id=facet_id, reason="multi_parent", detail="a merge or a consensus: its rows are its parents'")
+                if facet_id in pooled
+                else SetAsideFacet(
+                    facet_id=facet_id, reason="descends_from_multi_parent", detail=f"made from {', '.join(sources)}, a merge or a consensus"
+                )
+                for facet_id in members
+            ]
+            continue
+        root = min(nodes - led_into, default=min(nodes))
+        depth = {root: 0}
+        queue = [root]
+        for node in queue:  # breadth first: the list grows as it is read
+            for child in sorted(children[node] - depth.keys()):
+                depth[child] = depth[node] + 1
+                queue.append(child)
+        groups[root] = sorted((depth.get(facet_id, len(nodes)), facet_id) for facet_id in members)
+    return groups, tuple(sorted(set_aside, key=lambda item: item.facet_id))

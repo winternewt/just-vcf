@@ -1512,7 +1512,7 @@ aggregates only; every expected id computed by vrs-python at test time:
   directly for `refused` in the synthetic suite.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22. Shipped: half 1 as the `source` detector's caller, version and `ploidy_statements` (RM2, merge bd5c02e, 2026-10-22); the evidence layer, X copies and an XY/XXY estimate per WGS facet, merge 7384428, 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet, merge dd11011 (RM278), 2026-10-23; XXX, XYY, XXYY and XXXY from a coverage facet's copy counts, and arrays' X from their hets with Y behind `array_y`, merge 5ccbffc, 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, with tables that state no build estimated on `resolve_ref`'s output, merge e73b320, 2026-10-25, checked on 109 PGP-HMS tables; GRCh36's region set, its arrays estimated and its genomes measured only, merge 3a80fc0, 2026-10-25, checked on 250 PGP-HMS 23andMe exports and 69 resolved tables; an array's Y read by default per vendor, on for AncestryDNA alone (`ARRAY_Y_VENDORS`, desk #136 answered by the person, 2026-10-26). Waiting on the person: desk #135 (whether a VCF alone may name XY and XXY); the lead's calls listed for veto in docs/LAYERS.md, layer 4 (`OTHER_KARYOTYPE`, the 3/4 array two-X expectation against PLINK's shape, `x_copy_count`/`y_copy_count`, GRCh36 genomes left `uncalibrated_build`). Buildable now: liftovers of one callset weighed as one piece of evidence, with `facets_disagree`, at the person level now that `Person` exists (RM273); an answer to the critique's somalier question. Open, no desk number: whether GRCh37's last X-degenerate interval reaches about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md). Exomes answer unknown) · Owner: lead
+Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22. Shipped: half 1 as the `source` detector's caller, version and `ploidy_statements` (RM2, merge bd5c02e, 2026-10-22); the evidence layer, X copies and an XY/XXY estimate per WGS facet, merge 7384428, 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet, merge dd11011 (RM278), 2026-10-23; XXX, XYY, XXYY and XXXY from a coverage facet's copy counts, and arrays' X from their hets with Y behind `array_y`, merge 5ccbffc, 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, with tables that state no build estimated on `resolve_ref`'s output, merge e73b320, 2026-10-25, checked on 109 PGP-HMS tables; GRCh36's region set, its arrays estimated and its genomes measured only, merge 3a80fc0, 2026-10-25, checked on 250 PGP-HMS 23andMe exports and 69 resolved tables; an array's Y read by default per vendor, on for AncestryDNA alone (`ARRAY_Y_VENDORS`, desk #136 answered by the person, 2026-10-26); a person's facets weighed against each other, liftovers of one callset answering once, a merge or a consensus set aside and independent callsets that differ withheld as `facets_disagree` (`person_karyotype`, 2026-11-03, synthetic facets only, no real genome run). Waiting on the person: desk #135 (whether a VCF alone may name XY and XXY); the lead's calls listed for veto in docs/LAYERS.md, layer 4 (`OTHER_KARYOTYPE`, the 3/4 array two-X expectation against PLINK's shape, `x_copy_count`/`y_copy_count`, GRCh36 genomes left `uncalibrated_build`). Buildable now: an answer to the critique's somalier question. Open, no desk number: whether GRCh37's last X-degenerate interval reaches about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md); whether a measured answer (a genome's calls and depth, a coverage facet's counts) should outrank an estimated one (an array's letters) at the person level, where the lead's call, open for veto in docs/SCHEMA.md, ranks none. Exomes answer unknown) · Owner: lead
 
 Motivating report: S1 (just-prs, 2026-10-11). Callers, reference panels and scoring tools each pick a
 convention for male X and Y and rarely record it: a caller with a diploid-everywhere model (DeepVariant
@@ -1926,8 +1926,36 @@ Checked 2026-10-25 on PGP-HMS through the library (`load`, for tables `resolve_r
 **Left:** whether a VCF alone may name `XY`/`XXY` when it cannot count the Y, or must answer unknown
 until a coverage facet counts it, is the person's decision. The array two-X expectation (3/4 or
 PLINK's shape) is the person's too (the AncestryDNA `array_y` default was answered on desk #136,
-2026-10-26: per vendor, above), and so is whether GRCh36 genomes stay `uncalibrated_build`. Exomes answer unknown. Liftovers of one callset are not yet weighed as one
-piece of evidence (`facets_disagree` belongs to the person-level layer). GRCh37's last X-degenerate
+2026-10-26: per vendor, above), and so is whether GRCh36 genomes stay `uncalibrated_build`. Exomes answer unknown. Liftovers of one callset are weighed as one
+piece of evidence since 2026-11-03 (below, "Built 2026-11-03"). GRCh37's last X-degenerate
 interval may reach about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md); the GRCh36 lift corroborates
 it, since that stretch lifts inside NCBI36's PAR2, where hg18's X and Y are identical. The somalier
 question in the critique is not answered.
+
+**Built 2026-11-03: the person level** (`person_karyotype`, `PersonKaryotype`; docs/SCHEMA.md
+"Weighed against each other"). The lead pinned the rules; the facet-level answers are not touched.
+
+- A callset is the person's facets joined by one-parent lineage (`liftover_to`, `normalized`,
+  `split_rejoined`, from `links` and `derived_from`) to one file as loaded; it answers once, by the
+  member that says the most, the root first, else the nearest member, and its members listed. Members
+  that differ withhold it (`members_disagree`).
+- A merge or a consensus, and anything made from one, is set aside with a reason, never counted.
+- No callset outranks another: different answers withhold the person's (`facets_disagree`), each
+  callset's own answer listed; withheld answers count for neither side; only withheld callsets give
+  `all_withheld`.
+
+Decisions beyond the pin, each with what was rejected:
+
+- A callset withheld on its karyotype still states its X and Y lines, and those can contradict:
+  23andMe's two-letter X (`x_copies = two_or_more`, its Y not read) against a genome's `XY` is
+  `facets_disagree`. Rejected: comparing named karyotypes alone, which would read that pair as the
+  genome's `XY`.
+- A callset whose members disagree withholds the person's answer too (`members_disagree`), even where
+  other callsets agree. Rejected: letting it fall silent, which resolves its contradiction away.
+- `x_copies` is weighed on its own by the same rule, so the person keeps an X count where the
+  karyotype is withheld (just-prs's dosage, S1). Rejected: a person-level Y roll-up as a field (Y lines
+  still veto the karyotype).
+- Kin facets (`caller_split`, `appended_export`) are separate callsets, as the pin's lineage set
+  implies.
+
+Checked on synthetic facets only (tests/test_karyotype.py); no real genome was run through it.

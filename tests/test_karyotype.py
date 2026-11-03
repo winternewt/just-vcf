@@ -15,10 +15,12 @@ from just_vcf import (
     KaryotypicSex,
     Loaded,
     Person,
+    PersonKaryotype,
     ReferenceStore,
     Resolution,
     XCopies,
     load,
+    person_karyotype,
     person_sex_chromosome_evidence,
     resolve_ref,
     sex_chromosome_evidence,
@@ -33,6 +35,7 @@ from just_vcf.karyotype import (
     ARRAY_Y_PRESENT_MIN_CALL_RATIO,
     ARRAY_Y_VENDORS,
     ASSEMBLY_LABEL_SOURCES,
+    CALLSET_BASES,
     COVERAGE_PAIRINGS,
     COVERAGE_X_BANDS,
     COVERAGE_Y_BANDS,
@@ -41,19 +44,34 @@ from just_vcf.karyotype import (
     ESTIMATE_BUILDS,
     ONE_X_MAX_HET_SHARE,
     PAR_BOUNDS,
+    PERSON_KARYOTYPE_REASONS,
     REGION_BUILDS,
     REGION_SET,
+    SET_ASIDE_REASONS,
     TWO_X_MAX_DEPTH_RATIO,
     TWO_X_MIN_HET_SHARE,
     UNKNOWN_REASONS,
     X_DEGENERATE_Y,
+    CallsetKaryotype,
     CoveragePairing,
+    SetAsideFacet,
     SexChromosomeEvidence,
     assembly_label_source,
     estimate,
     measure,
 )
 from just_vcf.liftover import read_chain
+from just_vcf.links import (
+    CALLER_SPLIT,
+    CONSENSUS,
+    LIFTOVER_TO,
+    MERGE,
+    NORMALIZED,
+    derived_links,
+    kin_links,
+    link_disagreements,
+    links_frame,
+)
 from just_vcf.schema import CALLS, AssemblyLabelBasis, CallsetType, conform, empty
 from test_reference import write_fasta
 
@@ -1201,3 +1219,208 @@ def test_the_pairing_basis_is_a_closed_list_checked_on_the_model() -> None:
     assert COVERAGE_PAIRINGS == {"stated", "only_one_on_build", "only_usable_on_build", "several_on_build", "none_usable_on_build", "none_on_build", "no_coverage"}
     with pytest.raises(ValueError, match="unknown coverage pairing"):
         CoveragePairing(coverage_facet_id=None, basis="guessed", candidates=(), detail="")
+
+
+# --- The person level: callsets weighed against each other (RM269) ---------------------------------
+
+WITHHELD = (pl.DataFrame(), pl.DataFrame())
+"""No X or Y rows: a facet that answers nothing (`too_few_sites` on both lines)."""
+NO_DP_XY = (x_calls(40, 1960, None), y_calls(1000, None))
+"""A one-X het share with no DP: `x_copies = one`, the karyotype withheld (`no_depth`)."""
+
+
+def made_from(parent: Loaded, facet_id: str, x: pl.DataFrame, y: pl.DataFrame, *, relation: str = LIFTOVER_TO, build: str = "GRCh37") -> Loaded:
+    """A facet one step made from `parent`: the parent's row with its own id, `derived_from` and
+    `relation` (the steps copy their parent's row, `source_sha256` and subject included), and the
+    parent's links plus the one this step adds. Y_START lies in the X-degenerate Y on both builds."""
+    (parent_id,) = parent.facets.select("facet_id").collect()["facet_id"].to_list()
+    facets = parent.facets.with_columns(
+        facet_id=pl.lit(facet_id), derived_from=pl.lit(parent_id), relation=pl.lit(relation), assembly_label=pl.lit(build)
+    )
+    links = derived_links(parent.links, parent_id, facet_id, relation, step="liftover", step_version="test")
+    calls = frame(chr20(), x, y).with_columns(facet_id=pl.lit(facet_id))
+    return Loaded(facets=conform(facets, FACETS), calls=calls, blocks=empty(BLOCKS), links=links)
+
+
+def pooled(facet_id: str, parents: list[str], x: pl.DataFrame, y: pl.DataFrame, relation: str = CONSENSUS) -> Loaded:
+    """A facet made from several parents (a consensus or a merge), a source of its own, with its links."""
+    facets = conform(
+        pl.LazyFrame({"facet_id": [facet_id], "assembly_label": ["GRCh38"], "callset_type": ["wgs"], "subject": ["person-a"], "relation": [relation]}),
+        FACETS,
+    )
+    provenance = {"step": "consensus", "step_version": "test", "derivation_inputs": []}
+    links = links_frame([{"from_facet_id": p, "to_facet_id": facet_id, "relation": relation, "provenance": provenance} for p in parents])
+    calls = frame(chr20(), x, y).with_columns(facet_id=pl.lit(facet_id))
+    return Loaded(facets=facets, calls=calls, blocks=empty(BLOCKS), links=links)
+
+
+def weighed(*loaded: Loaded, **kwargs: object) -> tuple[PersonKaryotype, Person]:
+    person = Person.of(*loaded, check=None, coverage=kwargs.pop("coverage", ()))
+    assert link_disagreements(person.facets.collect(), person.links.collect()) == [], "the fixtures' lineage is well formed"
+    found = person_karyotype(person, **kwargs)
+    # The facet-level answers are carried exactly as the facet-level function gives them.
+    assert found.evidence == person_sex_chromosome_evidence(person, **kwargs)
+    return found, person
+
+
+def callsets(found: PersonKaryotype) -> dict[str, CallsetKaryotype]:
+    return {item.root_facet_id: item for item in found.callsets}
+
+
+def test_a_liftover_of_one_callset_answers_once_with_its_root() -> None:
+    root = callset("r", *XY)
+    found, _ = weighed(made_from(root, "l", *XY), root)
+    (one,) = found.callsets
+    assert (one.root_facet_id, one.root_loaded, one.members, one.standing_facet_id, one.basis) == ("r", True, ("r", "l"), "r", "root")
+    assert (found.inferred_karyotypic_sex, found.reason, found.supported_by) == (KaryotypicSex.XY, None, ("r",))
+    assert (found.x_copies, found.x_copies_supported_by) == (XCopies.ONE, ("r",))
+    assert bool(found) and found.set_aside == ()
+    # Two facets answered XY; the person-level answer counts one witness, not two.
+    assert [item.inferred_karyotypic_sex for item in found.evidence] == [KaryotypicSex.XY, KaryotypicSex.XY]
+
+
+def test_a_withheld_root_gives_way_to_the_member_that_answers() -> None:
+    root = callset("r", *NO_DP_XY)
+    found, _ = weighed(root, made_from(root, "l", *XY))
+    (one,) = found.callsets
+    r = by_facet(found.evidence)["r"]
+    assert (r.inferred_karyotypic_sex, r.reason, r.x_copies) == (KaryotypicSex.UNKNOWN_KARYOTYPE, "y_unusable", XCopies.ONE)
+    assert (one.standing_facet_id, one.basis, one.inferred_karyotypic_sex) == ("l", "nearest_answering", KaryotypicSex.XY)
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XY and found.supported_by == ("r",)
+    # A member that answers nothing is neither agreement nor disagreement: the root stands for itself.
+    found, _ = weighed(root, made_from(root, "l", *WITHHELD))
+    (one,) = found.callsets
+    assert (one.standing_facet_id, one.basis, one.x_copies, one.reason) == ("r", "root", XCopies.ONE, "y_unusable")
+    assert (found.reason, found.x_copies, found.x_copies_supported_by) == ("all_withheld", XCopies.ONE, ("r",))
+    # No member says anything: the root's withheld answer stands, with its own reason.
+    blank = callset("r", *WITHHELD)
+    found, _ = weighed(made_from(blank, "l", *WITHHELD), blank)
+    (one,) = found.callsets
+    assert (one.standing_facet_id, one.basis, one.reason) == ("r", "none_answered", "too_few_sites")
+
+
+def test_a_lineage_joins_through_a_middle_facet_the_person_does_not_hold() -> None:
+    root = callset("r", *XY)
+    middle = made_from(root, "n", *XY, relation=NORMALIZED, build="GRCh38")
+    found, _ = weighed(made_from(middle, "l", *XY), root)
+    (one,) = found.callsets
+    assert (one.root_facet_id, one.members) == ("r", ("r", "l"))
+    # Without the root, its descendants still form one callset named for it.
+    found, _ = weighed(made_from(middle, "l", *XY), made_from(root, "g", *XY))
+    (one,) = found.callsets
+    assert (one.root_facet_id, one.root_loaded, one.members, one.basis, one.standing_facet_id) == ("r", False, ("g", "l"), "nearest_answering", "g")
+
+
+def test_a_callset_whose_members_disagree_is_withheld_with_its_own_reason() -> None:
+    root, other = callset("r", *XY), callset("o", *XY)
+    found, _ = weighed(root, made_from(root, "l", XX[0], XY[1]), other)
+    torn = callsets(found)["r"]
+    assert (torn.basis, torn.standing_facet_id, torn.reason, torn.inferred_karyotypic_sex) == (
+        "members_disagree", None, "members_disagree", KaryotypicSex.UNKNOWN_KARYOTYPE,
+    )  # fmt: skip
+    assert "r: XY" in torn.detail and "l: XXY" in torn.detail
+    # The other callset answers XY, but one piece of evidence contradicting itself is not set aside for it.
+    assert callsets(found)["o"].inferred_karyotypic_sex is KaryotypicSex.XY
+    assert (found.inferred_karyotypic_sex, found.reason, found.supported_by) == (KaryotypicSex.UNKNOWN_KARYOTYPE, "members_disagree", ())
+    assert (found.x_copies, found.x_copies_reason) == (None, "members_disagree")
+
+
+def test_independent_callsets_that_agree_support_the_answer_together() -> None:
+    found, _ = weighed(callset("b", *XY, build="GRCh37"), callset("a", *XY))
+    assert [item.basis for item in found.callsets] == ["only_member", "only_member"]
+    assert (found.inferred_karyotypic_sex, found.supported_by, found.x_copies_supported_by) == (KaryotypicSex.XY, ("a", "b"), ("a", "b"))
+
+
+def test_independent_callsets_that_disagree_withhold_and_list_each_answer() -> None:
+    found, _ = weighed(callset("a", *XY), callset("b", XX[0], XY[1]))
+    assert (found.inferred_karyotypic_sex, found.reason, found.supported_by) == (KaryotypicSex.UNKNOWN_KARYOTYPE, "facets_disagree", ())
+    assert {root: item.inferred_karyotypic_sex for root, item in callsets(found).items()} == {"a": KaryotypicSex.XY, "b": KaryotypicSex.XXY}
+    assert "a: XY" in found.detail and "b: XXY" in found.detail
+    assert (found.x_copies, found.x_copies_reason) == (None, "facets_disagree")
+    assert not found
+
+
+def test_a_measured_genome_does_not_outrank_an_estimated_array() -> None:
+    """The lead's pin: no ranking between independent callsets. An AncestryDNA export (Y read by
+    default) answering XX against a genome's XY is a disagreement, not the genome's answer."""
+    found, _ = weighed(callset("g", *XY), array_facets({"a": "AncestryDNA"}, subject="person-a"))
+    assert callsets(found)["a"].inferred_karyotypic_sex is KaryotypicSex.XX
+    assert (found.reason, found.inferred_karyotypic_sex) == ("facets_disagree", KaryotypicSex.UNKNOWN_KARYOTYPE)
+
+
+def test_a_withheld_karyotype_still_contradicts_with_the_x_it_states() -> None:
+    """A 23andMe export's two-letter X: Y not read (`vendor_asserted`), so its karyotype is withheld,
+    but it states two or more X, which a genome's XY contradicts and a coverage-measured XX does not."""
+    array = array_facets({"t": "23andMe"}, subject="person-a")
+    found, _ = weighed(callset("g", *XY), array)
+    t = callsets(found)["t"]
+    assert (t.inferred_karyotypic_sex, t.reason, t.x_copies) == (KaryotypicSex.UNKNOWN_KARYOTYPE, "y_unusable", XCopies.TWO_OR_MORE)
+    assert (found.reason, found.x_copies_reason) == ("facets_disagree", "facets_disagree")
+    found, _ = weighed(callset("g", *XX), array, coverage=[covered("cov", 30.0, 0.0)])
+    assert (found.inferred_karyotypic_sex, found.supported_by) == (KaryotypicSex.XX, ("g",)), "a fitting line is listed, not support"
+    assert (found.x_copies, found.x_copies_supported_by) == (XCopies.TWO_OR_MORE, ("g", "t"))
+
+
+def test_one_withheld_callset_beside_one_answering_leaves_the_answer() -> None:
+    found, _ = weighed(callset("a", *XY), callset("b", *WITHHELD))
+    assert callsets(found)["b"].reason == "too_few_sites"
+    assert (found.inferred_karyotypic_sex, found.reason, found.supported_by) == (KaryotypicSex.XY, None, ("a",))
+    assert found.x_copies_supported_by == ("a",)
+
+
+def test_only_withheld_callsets_withhold_with_their_own_reason() -> None:
+    found, _ = weighed(callset("a", *WITHHELD), callset("b", *WITHHELD))
+    assert (found.inferred_karyotypic_sex, found.reason, found.x_copies, found.x_copies_reason) == (
+        KaryotypicSex.UNKNOWN_KARYOTYPE, "all_withheld", None, "all_withheld",
+    )  # fmt: skip
+    assert [item.reason for item in found.callsets] == ["too_few_sites", "too_few_sites"]
+
+
+def test_a_consensus_and_what_is_made_from_it_are_set_aside_and_its_parents_still_count() -> None:
+    a, b = callset("a", *XY), callset("b", *XY)
+    consensus = pooled("c", ["a", "b"], XX[0], XY[1])  # would answer XXY, against both parents
+    found, _ = weighed(a, b, consensus, made_from(consensus, "d", XX[0], XY[1], build="GRCh38"))
+    assert [(item.facet_id, item.reason) for item in found.set_aside] == [("c", "multi_parent"), ("d", "descends_from_multi_parent")]
+    assert by_facet(found.evidence)["c"].inferred_karyotypic_sex is KaryotypicSex.XXY, "measured at the facet level as always"
+    assert [item.root_facet_id for item in found.callsets] == ["a", "b"]
+    assert (found.inferred_karyotypic_sex, found.supported_by) == (KaryotypicSex.XY, ("a", "b"))
+    # A merge is set aside the same way; with nothing else held, no callset is left.
+    found, _ = weighed(pooled("m", ["a", "b"], *XY, relation=MERGE))
+    assert (found.callsets, found.reason, found.x_copies_reason) == ((), "no_callset", "no_callset")
+    assert [(item.facet_id, item.reason) for item in found.set_aside] == [("m", "multi_parent")]
+
+
+def test_facets_split_by_caller_from_one_file_are_separate_callsets() -> None:
+    """Kin links (`caller_split`) join facets of one source neither of which was made from the other."""
+    two = callset("v", *XY)
+    facets = pl.concat([two.facets, two.facets.with_columns(facet_id=pl.lit("f"))])
+    calls = pl.concat([two.calls, frame(chr20(), *XY).with_columns(facet_id=pl.lit("f"))])
+    found, _ = weighed(Loaded(facets=facets, calls=calls, blocks=empty(BLOCKS), links=kin_links(["v", "f"], CALLER_SPLIT)))
+    assert [item.root_facet_id for item in found.callsets] == ["f", "v"]
+    assert found.supported_by == ("f", "v")
+
+
+def test_the_person_level_answer_does_not_depend_on_the_order_facets_are_given() -> None:
+    z = callset("z", *XY)
+    loads = [z, made_from(z, "a", *XY), made_from(made_from(z, "m", *XY, relation=NORMALIZED, build="GRCh38"), "b", *XY), callset("k", *WITHHELD)]
+    first, _ = weighed(*loads)
+    for seed in range(5):
+        shuffled = loads[:]
+        random.Random(seed).shuffle(shuffled)
+        assert weighed(*shuffled)[0] == first
+    assert [item.root_facet_id for item in first.callsets] == ["k", "z"]
+    # Members run nearest the root first, then by id: the root, its one-step liftover, then the two-step one.
+    assert callsets(first)["z"].members == ("z", "a", "b")
+
+
+def test_the_person_level_vocabularies_are_closed_lists_checked_on_the_models() -> None:
+    assert PERSON_KARYOTYPE_REASONS == {"facets_disagree", "members_disagree", "all_withheld", "no_callset"}
+    assert CALLSET_BASES == {"only_member", "root", "nearest_answering", "none_answered", "members_disagree"}
+    assert SET_ASIDE_REASONS == {"multi_parent", "descends_from_multi_parent"}
+    found, _ = weighed(callset("a", *XY))
+    with pytest.raises(ValueError, match="unknown reason"):
+        PersonKaryotype(**{**found.model_dump(), "reason": "nearest_class"})
+    with pytest.raises(ValueError, match="unknown callset basis"):
+        CallsetKaryotype(**{**found.callsets[0].model_dump(), "basis": "deepest"})
+    with pytest.raises(ValueError, match="unknown set-aside reason"):
+        SetAsideFacet(facet_id="c", reason="ranked_lower", detail="")

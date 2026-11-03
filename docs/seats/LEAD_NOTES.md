@@ -28,7 +28,9 @@ each reset.
 0. **Shipped since, kept out of Open**: F23 as schema 0.0.22 (2026-10-27); audit 12's fixes and the loosened
    own-sample test, merge 6eed88a (2026-10-26). The roadmap's stale "awaiting the lead's merge" lines (RM274,
    RM276, RM5) corrected 2026-11-03.
-0. **Running 2026-11-03**: RM6's lift across a small gap of one chain. RM278's thresholds file and quantized
+0. **Running 2026-11-03**: RM5's ancestry consensus, methods on one panel one witness. RM6's lift across a
+   gap of one chain merged as 855ab49 (merge 3 of 6; `GAP_LIMIT` 50 and "the gap does not follow the person",
+   the gap's target bases written as context, are its calls for veto in docs/SCHEMA.md "Lifting" 2b). RM278's thresholds file and quantized
    runs merged (merge 2 of 6), its veto list in docs/SCHEMA.md "Coverage facets" (a contig's last base its own
    bin, unlike mosdepth; a headerless five-column BED ending in a whole number refused). RM269's person-level roll-up
    merged as 6bebc0c (merge 1 of 6 before audit 15); its builder's nine calls beyond the pinned ones (an X or

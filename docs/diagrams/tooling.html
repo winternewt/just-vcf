@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tooling instance layer</title>
+<style>
+:root {
+  --bg: #fbfaf7; --fg: #1d1d1b; --muted: #6b6a64; --line: #3a3a36; --rule: #d9d6cc;
+  --cfg: #e6eefb; --cfg-ink: #1f4f99; --prose: #fbf1e3; --prose-ink: #8a4b08;
+  --hook: #eef6ea; --hook-ink: #2f6b22; --warn: #a3311f; --card: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #17171a; --fg: #e9e7e1; --muted: #a09e96; --line: #c9c6bc; --rule: #3a3a40;
+    --cfg: #1d2a40; --cfg-ink: #9cc0ff; --prose: #3a2a16; --prose-ink: #f0b977;
+    --hook: #1f2e1b; --hook-ink: #a7dc95; --warn: #ff8f7a; --card: #202024;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #17171a; --fg: #e9e7e1; --muted: #a09e96; --line: #c9c6bc; --rule: #3a3a40;
+  --cfg: #1d2a40; --cfg-ink: #9cc0ff; --prose: #3a2a16; --prose-ink: #f0b977;
+  --hook: #1f2e1b; --hook-ink: #a7dc95; --warn: #ff8f7a; --card: #202024;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 1.7rem; margin: 0 0 4px; }
+h2 { font-size: 1.25rem; margin: 40px 0 8px; border-top: 1px solid var(--rule); padding-top: 20px; }
+h3 { font-size: 1.02rem; margin: 20px 0 6px; }
+p, li { max-width: 72ch; }
+code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.meta { color: var(--muted); font-size: 0.92rem; }
+.note { border-left: 3px solid var(--warn); padding: 6px 12px; margin: 16px 0; background: var(--card); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.9rem; margin: 12px 0 4px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 26px; height: 14px; border-radius: 3px; display: inline-block; }
+.sw.cfg { background: var(--cfg); border: 2px solid var(--cfg-ink); }
+.sw.prose { background: var(--prose); border: 2px dashed var(--prose-ink); }
+.sw.hook { background: var(--hook); border: 2px solid var(--hook-ink); }
+figure { margin: 16px 0; overflow-x: auto; }
+figure svg { width: 100%; min-width: 640px; height: auto; display: block; }
+figcaption { color: var(--muted); font-size: 0.9rem; margin-top: 6px; }
+svg text { fill: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+svg .small { font-size: 11px; fill: var(--muted); }
+svg .lbl { font-size: 13px; }
+svg .ttl { font-size: 14px; font-weight: 600; }
+svg .cfg { fill: var(--cfg); stroke: var(--cfg-ink); stroke-width: 1.6; }
+svg .prose { fill: var(--prose); stroke: var(--prose-ink); stroke-width: 1.6; stroke-dasharray: 6 4; }
+svg .hook { fill: var(--hook); stroke: var(--hook-ink); stroke-width: 1.6; }
+svg .plain { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+svg .edge { stroke: var(--line); stroke-width: 1.4; fill: none; }
+svg .edge.dash { stroke-dasharray: 5 4; }
+svg .arrow { fill: var(--line); }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; margin: 8px 0; }
+th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+th { font-weight: 600; }
+.src { color: var(--muted); font-size: 0.85rem; }
+.tag-cfg, .tag-prose { font-size: 0.75rem; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+.tag-cfg { background: var(--cfg); color: var(--cfg-ink); border: 1px solid var(--cfg-ink); }
+.tag-prose { background: var(--prose); color: var(--prose-ink); border: 1px dashed var(--prose-ink); }
+</style>
+</head>
+<body>
+<main>
+<h1>just-vcf's tooling seat: the instance layer</h1>
+<p class="meta">This page shows what this repository's tooling seat changes over the seats kit's tooling role. The kit's
+presenter drew it from <code>docs/seats/TOOLING.md</code> and the <code>[seat.tooling]</code> tables in
+<code>.blueprints.toml</code> at this repository's commit <code>ad48ef7</code>, against the kit at <code>v0.1.115</code>, the
+tag this clone pins. It lies over two layers from the kit: <code>docs/diagrams/base.html</code>, what every session holds,
+and <code>docs/diagrams/tooling.html</code>, the kit's own tooling seat. Both are in the pinned kit copy, which the
+session's <code>$BLUEPRINTS_KIT</code> names.</p>
+
+<p class="note"><strong>This page draws the texts alone.</strong> The kit's flow analysis has not run yet, so nothing
+here has been checked against how the seat actually behaves.</p>
+
+<div class="legend" aria-label="legend">
+  <span><i class="sw cfg"></i> read from configuration</span>
+  <span><i class="sw prose"></i> read from prose</span>
+  <span><i class="sw hook"></i> same as the kit's tooling seat</span>
+</div>
+
+<h2>1. Where this layer sits</h2>
+<figure>
+<svg viewBox="0 0 960 300" role="img" aria-labelledby="j1t j1d">
+  <title id="j1t">The instance's layers</title>
+  <desc id="j1d">The kit's base and the plumber role at the bottom; this repository's tooling priming and configuration above them; the kit's own tooling seat to the right as its upstream.</desc>
+  <defs><marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <g class="lbl">
+    <rect class="hook" x="10" y="226" width="600" height="58" rx="8"/>
+    <text class="ttl" x="26" y="250">the kit's base</text>
+    <text class="small" x="26" y="270">from the pinned kit copy: the hooks, the watchdog, BASE.md</text>
+    <rect class="hook" x="10" y="156" width="600" height="58" rx="8"/>
+    <text class="ttl" x="26" y="180">role: plumber only</text>
+    <text class="small" x="26" y="200">classes/plumber/PLUMBER.md in the kit; triage is a separate seat here</text>
+    <rect class="prose" x="10" y="86" width="600" height="58" rx="8"/>
+    <text class="ttl" x="26" y="110">priming: docs/seats/TOOLING.md</text>
+    <text class="small" x="26" y="130">the leak gate's install, the kit's pin, the watcher tables; no notes file</text>
+    <rect class="cfg" x="10" y="16" width="600" height="58" rx="8"/>
+    <text class="ttl" x="26" y="40">configuration: [seat.tooling]</text>
+    <text class="small" x="26" y="60">2 watchers, wake_from, the messenger account's pool</text>
+    <rect class="plain" x="680" y="86" width="270" height="128" rx="8"/>
+    <text class="ttl" x="696" y="110">the kit's tooling seat</text>
+    <text class="small" x="696" y="132">upstream: the kit's issues are its inbox;</text>
+    <text class="small" x="696" y="150">it may write here in agent-chat</text>
+    <text class="small" x="696" y="168">and wakes this seat (wake_from).</text>
+  </g>
+  <path class="edge" d="M612,120 L680,120" marker-end="url(#c1)"/>
+  <path class="edge dash" d="M680,180 L612,180" marker-end="url(#c1)"/>
+  <text class="small" x="622" y="112">files</text>
+  <text class="small" x="626" y="198">releases</text>
+</svg>
+<figcaption>The base is at the bottom; each layer builds on the one beneath it. The kit's tooling seat holds two roles
+(plumber and triage of the kit's issues); this seat holds the plumber role only.</figcaption>
+</figure>
+
+<h2>2. What reaches it</h2>
+<table>
+  <tr><th style="width:30%">Source</th><th>What it brings</th></tr>
+  <tr><td><span class="tag-cfg">config</span> watcher <code>issues</code></td><td>this repository's issue events, where
+    its own tool requests live: <code>watch-issues.py --origin</code></td></tr>
+  <tr><td><span class="tag-cfg">config</span> watcher <code>desk</code></td><td>an answer to a question it filed:
+    <code>watch-answers.py just-vcf tooling</code></td></tr>
+  <tr><td><span class="tag-cfg">config</span> <code>wake_from</code></td><td><code>just-vcf/triage</code>,
+    <code>just-vcf/upstream-liaison</code>, <code>just-vcf/lead</code>: a fault in a tool, or a tool their text promises ·
+    <code>agents-kit/tooling</code>: about an issue this seat filed on the kit · <code>*/secretary</code>: the person's
+    answers</td></tr>
+  <tr><td><span class="tag-prose">prose</span> the kit's <code>announcements</code></td><td>a release; it moves the pin
+    when a release carries a fix a seat here waits on, or the announcement says a release needs it</td></tr>
+  <tr><td><span class="tag-prose">prose</span> the person</td><td>asking for a tool</td></tr>
+</table>
+<p class="src">Compared with the kit's tooling seat: no <code>trunk</code> and no <code>feedback</code> watcher. The
+consumer inbox (<code>docs/FEEDBACK.md</code>) is triage's here, and its two watcher lines go to triage. Only the
+command lines in those tables are this seat's.</p>
+
+<h2>3. What it owns, and what it does not</h2>
+<figure>
+<svg viewBox="0 0 960 250" role="img" aria-labelledby="j2t j2d">
+  <title id="j2t">What the instance's tooling seat owns</title>
+  <desc id="j2d">Four things it owns on the left; three things in the repository it does not own on the right, each with the seat that does.</desc>
+  <g class="lbl">
+    <text class="ttl" x="10" y="20">Owns</text>
+    <rect class="prose" x="10" y="32"  width="450" height="44" rx="6"/><text x="22" y="52">the kit's pin in this clone: it alone moves it</text><text class="small" x="22" y="68">bin/move-to-tag.py, then the other seats are told to /reload-plugins</text>
+    <rect class="prose" x="10" y="84"  width="450" height="44" rx="6"/><text x="22" y="104">the leak gate's install</text><text class="small" x="22" y="120">core.hooksPath at the pinned copy's .githooks/; the word list is the person's</text>
+    <rect class="prose" x="10" y="136" width="450" height="44" rx="6"/><text x="22" y="156">the watcher tables' commands and skip patterns</text><text class="small" x="22" y="172">which seats exist and who wakes whom: the kit's seat-builder</text>
+    <rect class="prose" x="10" y="188" width="450" height="44" rx="6"/><text x="22" y="208">faults in the triage loop's scripts</text><text class="small" x="22" y="224">the scripts are the kit's: filed there, fixed by a pin move</text>
+
+    <text class="ttl" x="500" y="20">Not its own</text>
+    <rect class="plain" x="500" y="32"  width="450" height="44" rx="6"/><text x="512" y="52">src/ and the library's tests</text><text class="small" x="512" y="68">the lead's</text>
+    <rect class="plain" x="500" y="84"  width="450" height="44" rx="6"/><text x="512" y="104">the data-fetching scripts</text><text class="small" x="512" y="120">the lead's: they are judged by what they fetch</text>
+    <rect class="plain" x="500" y="136" width="450" height="44" rx="6"/><text x="512" y="156">the upstream library's mirror</text><text class="small" x="512" y="172">the upstream liaison's</text>
+    <rect class="plain" x="500" y="188" width="450" height="44" rx="6"/><text x="512" y="208">the consumer inbox and its runbook</text><text class="small" x="512" y="224">triage's: the inbox, the history, the S&lt;n&gt; ids</text>
+  </g>
+</svg>
+<figcaption>Read from <code>docs/seats/TOOLING.md</code>, "What it owns".</figcaption>
+</figure>
+
+<h2>4. Its grant, against the kit's tooling seat's</h2>
+<table>
+  <tr><th style="width:34%">Tree operation</th><th>This seat</th><th>The kit's tooling seat</th></tr>
+  <tr><td>commit; push the trunk as a fast-forward</td><td>yes, to <code>origin</code></td><td>yes</td></tr>
+  <tr><td>patch tags</td><td>yes</td><td>yes</td></tr>
+  <tr><td>its own <code>fix/&lt;n&gt;</code> branches, <code>-d</code>; its own worktrees</td><td>yes</td><td>yes</td></tr>
+  <tr><td>claim tags</td><td>none: an id is a row written by the kit's <code>item-next.py</code></td><td>yes, <code>bin/claim.sh</code></td></tr>
+  <tr><td>a release, a minor or major tag, a publish to the package index</td><td>no: the person's</td><td>the kit's own release only</td></tr>
+  <tr><td>an edit of a sibling repository or of the kit</td><td>no</td><td>the kit is its own repository</td></tr>
+</table>
+<p class="src">The person, 2026-10-18, as the priming quotes them: "tooling gets same set of grants on tree ops upstream
+tooling has". For this seat that grant stands over this repository's <code>CLAUDE.md</code> rules against pushing and
+deleting branches.</p>
+
+<h2>5. Where its requests go</h2>
+<figure>
+<svg viewBox="0 0 960 170" role="img" aria-labelledby="j3t j3d">
+  <title id="j3t">A request's two paths</title>
+  <desc id="j3d">A request from a seat here is either this repository's own gap, fixed and closed here, or the kit's gap, filed on the kit, then the pin moved once a release carries the fix.</desc>
+  <defs><marker id="c3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+  <g class="lbl">
+    <rect class="prose" x="10" y="56" width="200" height="56" rx="6"/><text x="22" y="78" font-weight="600">a request</text><text class="small" x="22" y="98">a seat here, the person</text>
+    <rect class="prose" x="270" y="56" width="160" height="56" rx="6"/><text x="282" y="78" font-weight="600">whose gap?</text><text class="small" x="282" y="98">this seat's own call</text>
+    <rect class="prose" x="490" y="10" width="460" height="56" rx="6"/><text x="502" y="32"><tspan font-weight="600">ours</tspan>: an issue here; the tool, its test and</text><text class="small" x="502" y="52">changelog line in one commit; closed here</text>
+    <rect class="prose" x="490" y="100" width="460" height="56" rx="6"/><text x="502" y="122"><tspan font-weight="600">the kit's</tspan>: report-to-kit, restated (no person, genome, path)</text><text class="small" x="502" y="142">wait for the release, move the pin, retire what it replaced</text>
+  </g>
+  <g class="edge">
+    <path d="M210,84 L270,84" marker-end="url(#c3)"/>
+    <path d="M430,84 C460,84 460,38 490,38" marker-end="url(#c3)"/>
+    <path d="M430,84 C460,84 460,128 490,128" marker-end="url(#c3)"/>
+  </g>
+</svg>
+<figcaption>Read from <code>docs/seats/TOOLING.md</code>, "Where its requests live". What it posts on an issue here ends
+with <code>Seat: just-vcf/tooling</code>, so its own watcher leaves it out.</figcaption>
+</figure>
+</main>
+</body>
+</html>

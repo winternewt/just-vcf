@@ -18,9 +18,6 @@ each reset.
    interview was held 2026-10-23. Option 3 is the prep: CHANGELOG's Unreleased cut as 0.1.0, a README pass,
    and a check that the built sdist and wheel carry no private-derived document. The publish, and the
    `v0.1.0` tag that would mark it, stay the person's.
-0. **F23 is decided** (desk #151, the person, 2026-10-27 20:33Z: "1"): a source REF of `N` gets its own
-   `RefCheck` value ("the file stated no base"), not `match` and not `mismatch`; `liftover` reads the base
-   from the reference and lifts it as it does `match`. A schema change with a changelog note. Next builder.
 0. **Audit 14 done** (2026-11-03, b58f033..bf4b4f4, Sol via Codex and Grok via Cursor): six findings, all
    confirmed. Four merged as 040fcea (karyotype per GT slot and array letters, rejoin leaves an unstated split
    site as written with F34 filed, normalize keeps the matched duplicate, query's variant_class). The fifth,
@@ -28,13 +25,16 @@ each reset.
    genotypes, which ends its independence; blocked: desk #178, default no change (the path errors on WGS
    facets today: `--unknown` is a `relate` flag, not `extract`'s). Also unchecked there: somalier's hg38
    sites say `chr1`, we write `1`. Next audit after 6 more merges.
-0. **Queued next** (one at a time, done 2026-10-26): loosen `test_pca_panels_place_their_own_reference_samples` for regions on a
-   cline (the person chose option 1 for the AADR panel's own-sample failure, 2026-10-26).
-0. **Audit 12's fix builder carries** (the person, 2026-10-26: "keep numbered AADR groups, fix the stats
-   sweep"): AADR rule 5 keeps numbered groups (`Kumyk-1`, `Uzbek-2`, about 22 people), excluding only
-   `Ignore_` and the named QC qualifiers; `_STATS_CODE` joins `stats_versions()` so the sweep retires old
-   stats entries; Sol's two (a duplicate `.anno` key refused; `build_pca_panel` validates before writing);
-   the own-sample test loosened; and whatever of Grok's report survives the check.
+0. **Shipped since, kept out of Open**: F23 as schema 0.0.22 (2026-10-27); audit 12's fixes and the loosened
+   own-sample test, merge 6eed88a (2026-10-26). The roadmap's stale "awaiting the lead's merge" lines (RM274,
+   RM276, RM5) corrected 2026-11-03.
+0. **Running 2026-11-03** (two builders): RM278's mosdepth thresholds file and a quantized output from
+   `alignment_coverage`'s depth pass; RM269's person-level roll-up (liftovers of one callset answer once, a
+   merge or consensus set aside, any disagreement between independent callsets withholds as `facets_disagree`,
+   no ranking of measured over estimated, which is left open). Merges 1 and 2 of the 6 before audit 15.
+0. **Imputation** (the person asked 2026-11-03 whether it belongs here or downstream): desk #180, default
+   downstream, nothing built here. The read-back half is RM287 (per-site R2/DR2, an `imputed_from` link, the
+   way out checked against a server's input rules), blocked on #180, yes after a present.
 1. **The data cache holds whole private genomes** (RM268, shipped 731d38c): stale versions are swept on each
    step, and `clear_cache(source=...)` removes every copy of a deleted genome. Entries written before the
    index (REWRITE_VERSION 7) are swept as stale.

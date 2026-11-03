@@ -108,7 +108,11 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   which base the site holds. An allele asked at its POS, spelled by it or not, is `overlapping_call`
   (carried unknown); read as stated, `N` → `G` with GT `0/0` would answer `hom_ref` for a base the
   source never named. `counts` by `ref_check` lists it, as does the
-  CLI's `check` (`ref_check` counts, `--json` included), which groups by the column.
+  CLI's `check` (`ref_check` counts, `--json` included), which groups by the column. `counts` by
+  `variant_class` classes its ALT against `source_ref`, as `facets.variant_classes` counted it at load
+  (2026-11-03, written out; it read `ref` before, which `resolve_ref` reads over the `source_ref`'s own
+  span, so no count moved: the class reads lengths and letters only). `genotype_class` is a shape of
+  the GT indices and reads it as written.
 - `resolve_ref` counts it apart in its warning ("… with a source REF of only N, which states no base
   to compare"), never among the mismatches, and never as an IUPAC ambiguity.
 - `concordance` compares none of its sequence ALTs: each is counted in `excluded` as `ref_unstated`

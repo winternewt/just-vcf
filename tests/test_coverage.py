@@ -4,10 +4,12 @@ import gzip
 import hashlib
 import re
 from datetime import timedelta
+from itertools import pairwise
 from pathlib import Path
 
 import polars as pl
 import pytest
+from polars_bio import polars_bio as pb_native
 
 from just_vcf import (
     Coverage,
@@ -580,3 +582,131 @@ def test_the_spill_is_swept_and_cleared_like_the_loaders(tmp_path: Path, depth_c
     assert sorted(m.source_path or "" for m in coverage_manifests().values()) == ["", "", str(other.resolve())]
     alignment_coverage(path, window=10)
     assert depth_calls.count(str(path)) == 2
+
+
+# --- Quantized runs from the same depth pass (RM278) ---------------------------------------------
+
+# chrX's last base (50) is reached by a read of its own: its depth (1) differs from the base before it (0).
+QREADS = [*READS, ("chrX", 40, "5M"), ("chrX", 49, "1M")]
+
+
+def quantized_lines(reads: list[tuple[str, int, str]], edges: list[int | None]) -> list[str]:
+    """mosdepth's `.quantized.bed` for `edges` by what its bins mean (`linear_search`, `make_lookup` in
+    mosdepth.nim): each base in the bin `[lower, upper)` its depth falls in, runs of one bin joined, a
+    base outside every bin in no run, bins labelled `lower:upper` or `lower:inf`."""
+    pairs = list(pairwise(edges))
+    labels = [f"{low}:{'inf' if high is None else high}" for low, high in pairs]
+
+    def bin_of(depth: int) -> int | None:
+        return next((i for i, (low, high) in enumerate(pairs) if depth >= low and (high is None or depth < high)), None)
+
+    out = []
+    for source, length in CONTIGS:
+        depth = depth_of(reads, contig=source)
+        current, start = None, 0
+        for base in range(1, length + 2):
+            found = bin_of(depth.get(base, 0)) if base <= length else None
+            if found == current:
+                continue
+            if current is not None:
+                out.append(f"{source}\t{start - 1}\t{base - 1}\t{labels[current]}")
+            current, start = found, base
+    return out
+
+
+@pytest.mark.parametrize("edges", [(0, 1, 3, None), (1, 3), (0, 2), (2, None)])
+def test_quantized_runs_are_what_read_coverage_gives_for_mosdepths_file(tmp_path: Path, edges: tuple[int | None, ...]) -> None:
+    bam = write_bam(tmp_path / "q.bam", QREADS)
+    found = alignment_coverage(bam, window=10, quantize=edges)
+    mosdepth = read_coverage(write(tmp_path / "q.quantized.bed.gz", quantized_lines(QREADS, list(edges)), compress=True))
+    assert (mosdepth.facet.format_id, mosdepth.facet.resolution) == (CoverageFormat.QUANTIZED_BED, Resolution.BIN)
+    assert found.quantized.intervals.collect().equals(mosdepth.intervals.collect())
+    facet = found.quantized.facet
+    assert (facet.format_id, facet.resolution, facet.window, facet.zero_filled, facet.quantize) == (
+        CoverageFormat.ALIGNMENT_DEPTH, Resolution.BIN, None, False, list(edges),
+    )
+    assert (facet.options, facet.contig_lengths, facet.source_sha256) == (found.facet.options, found.facet.contig_lengths, found.facet.source_sha256)
+    assert facet.facet_id != found.facet.facet_id
+    # The windows of the same pass are those of a call without bins, under the same facet id.
+    plain = alignment_coverage(bam, window=10)
+    assert found.intervals.collect().equals(plain.intervals.collect())
+    assert found.facet == plain.facet and plain.quantized is None
+
+
+def test_batch_edges_change_no_window_and_no_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth_calls: list[str]) -> None:
+    bam = write_bam(tmp_path / "q.bam", QREADS)
+    whole = alignment_coverage(bam, window=10, quantize=(0, 1, 3, None))
+    clear_cache(source=bam)
+    monkeypatch.setattr(coverage_module, "_BATCH_ROWS", 7)  # cuts runs, windows and contigs, many times
+    cut = alignment_coverage(bam, window=10, quantize=(0, 1, 3, None))
+    assert depth_calls == [str(bam)] * 2
+    assert cut.intervals.collect().equals(whole.intervals.collect())
+    assert cut.quantized.intervals.collect().equals(whole.quantized.intervals.collect())
+
+
+def test_a_contigs_last_base_takes_its_own_bin(tmp_path: Path) -> None:
+    """mosdepth's `gen_quantized` loops to the second-to-last base and ends its last run at the
+    contig's end, so a last base whose bin differs from the base before it goes into that run. The bin
+    here is the base's own (docs/SCHEMA.md, the lead's call)."""
+    found = alignment_coverage(write_bam(tmp_path / "q.bam", QREADS), window=10, quantize=(0, 1, None)).quantized
+    rows = found.intervals.filter(pl.col("chrom") == "X").select("pos", "end_pos", "label").collect().rows()
+    assert rows[-2:] == [(46, 49, "0:1"), (50, 50, "1:inf")]
+
+
+def test_the_quantized_runs_come_from_the_one_depth_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`depth_calls` counts `depth()` calls, not reads of the file: each execution of polars-bio's
+    source reads it (`py_read_table`), so that is what is counted here."""
+    executions: list[str] = []
+    real = pb_native.py_read_table
+
+    def counted(*args, **kwargs):
+        executions.append(args[1])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pb_native, "py_read_table", counted)
+    bam = write_bam(tmp_path / "q.bam", QREADS)
+    alignment_coverage(bam, window=10)
+    plain = len(executions)
+    assert plain == 1
+    alignment_coverage(write_bam(tmp_path / "r.bam", QREADS), window=10, quantize=(0, 1, 3, None))
+    assert len(executions) == plain + 1
+    # Read again from the spill: no execution at all.
+    alignment_coverage(tmp_path / "r.bam", window=10, quantize=(0, 1, 3, None))
+    assert len(executions) == plain + 1
+
+
+def test_quantized_runs_are_spilled_under_their_bins(tmp_path: Path, depth_calls: list[str]) -> None:
+    bam = write_bam(tmp_path / "q.bam", QREADS)
+    first = alignment_coverage(bam, window=10, quantize=(0, 1, None))
+    again = alignment_coverage(bam, window=10, quantize=[0, 1, None])
+    assert depth_calls == [str(bam)]
+    assert again.quantized.facet == first.quantized.facet
+    assert again.quantized.intervals.collect().equals(first.quantized.intervals.collect())
+    # Other bins, and no bins, are other spills: the file is read for each (the bins key the spill).
+    other = alignment_coverage(bam, window=10, quantize=(0, 2, None))
+    alignment_coverage(bam, window=10)
+    assert depth_calls == [str(bam)] * 3
+    assert other.quantized.facet.facet_id != first.quantized.facet.facet_id
+    assert len(coverage_manifests()) == 3
+
+
+def test_a_wrapped_depth_is_in_no_quantized_run(tmp_path: Path) -> None:
+    deep = [("chr1", 40, "5M")] * 32_770
+    found = alignment_coverage(write_bam(tmp_path / "deep.bam", [*READS, *deep]), window=10, quantize=(0, 1, None))
+    runs = found.quantized.intervals.filter(pl.col("chrom") == "1").collect()
+    covered = {base for row in runs.iter_rows(named=True) for base in range(row["pos"], row["end_pos"] + 1)}
+    assert covered == set(range(1, 101)) - set(range(41, 46))
+    (warning,) = found.quantized.facet.warnings
+    assert warning == found.facet.warnings[0]
+    assert warning.startswith("5 base(s) in 1 window(s) came back with a negative depth")
+    assert warning.endswith("no quantized run covers them, so their bin is unknown")
+
+
+@pytest.mark.parametrize(
+    ("edges", "match"),
+    [((), "two or more"), ((0,), "two or more"), ((1, 1), "rise strictly"), ((2, 1), "rise strictly"), ((0, None, 5), "None only as the last"),
+     ((-1, 2), "not negative"), ((True, 2), "whole numbers"), ((0, 1.5), "whole numbers")],
+)
+def test_quantize_edges_are_checked(tmp_path: Path, edges: tuple, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        alignment_coverage(tmp_path / "never-read.bam", quantize=edges)

@@ -45,7 +45,7 @@ import io
 import json
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from enum import Enum
 from importlib.metadata import version
 from itertools import pairwise
@@ -197,19 +197,24 @@ class CoverageFacet(BaseModel):
     thresholds: list[int] | None = None
     """A thresholds facet's depth thresholds, ascending, as its header names them (`1X` is 1); null for
     every other resolution."""
+    quantize: list[int | None] | None = None
+    """The bin edges a quantized facet was cut at here (`alignment_coverage(quantize=...)`), None as
+    the open top. Null for a file, which does not record its bins, and for every other resolution."""
 
 
 class Coverage(BaseModel):
     """A coverage facet and its intervals (`COVERAGE_INTERVALS`), sorted by contig rank and `pos`.
 
     `thresholds` (`COVERAGE_THRESHOLDS`) holds a thresholds facet's counts per region and threshold;
-    null for every other resolution."""
+    null for every other resolution. `quantized` is the quantized facet `alignment_coverage(quantize=...)`
+    computed from the same depth pass as these windows; null otherwise."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     facet: CoverageFacet
     intervals: pl.LazyFrame
     thresholds: pl.LazyFrame | None = None
+    quantized: "Coverage | None" = None
 
 
 class UnsupportedCoverageError(ValueError):
@@ -711,6 +716,7 @@ def alignment_coverage(
     filter_flag: int = DEFAULT_FILTER_FLAG,
     assembly_label: str | None = None,
     subject: str | None = None,
+    quantize: Sequence[int | None] | None = None,
 ) -> Coverage:
     """Depth over a BAM or CRAM by polars-bio's `depth()`, in fixed windows (module docstring).
 
@@ -719,9 +725,16 @@ def alignment_coverage(
     zero (`zero_filled`). The read filters are `depth()`'s own and are recorded in `options`. A CRAM
     needs its reference where htslib-style lookup finds it; polars-bio is given none here.
 
+    `quantize` takes bin edges, as mosdepth's `--quantize` does (`0:1:4:` is `(0, 1, 4, None)`, None
+    the open top), and adds `Coverage.quantized`: runs of bases whose depth falls in one bin, from the
+    same depth pass, so the file is still read once. The runs are what `read_coverage` gives for the
+    `.quantized.bed.gz` mosdepth writes with those edges (mosdepth's labels, docs/SCHEMA.md "Coverage
+    facets"): a bin is `[lower, upper)`, and a base below the first edge or at or above a closed top
+    has no run.
+
     The windows are spilled to the cache (`coverage/` under `JUST_VCF_CACHE_DIR`, `just_vcf.cache`), so
-    the file is read once: a later call with the same file, `window`, `min_mapping_quality` and
-    `filter_flag`, under the same `COVERAGE_VERSION` and polars-bio, reads the spill. The file is known
+    the file is read once: a later call with the same file, `window`, `min_mapping_quality`,
+    `filter_flag` and `quantize`, under the same `COVERAGE_VERSION` and polars-bio, reads the spill. The file is known
     by what names it in `facet_id`: its header, index and size, or, with no index beside it, the sha256
     of its bytes (one more read of the file on every call, spill or not; a header and size alone would
     serve one file's spill to another written with other reads). `assembly_label` is left out of the
@@ -734,6 +747,7 @@ def alignment_coverage(
     _check_subject(subject)
     if window < 1:
         raise ValueError("window must be a positive number of bases")
+    edges = _quantize_edges(quantize) if quantize is not None else None
     versions = {"COVERAGE_VERSION": COVERAGE_VERSION, "POLARS_BIO_VERSION": POLARS_BIO_VERSION, "SPILL_LAYOUT": cache.SPILL_LAYOUT}
     cache.sweep_stale(cache.COVERAGE_SPILL, versions)
     kind = _alignment_kind(path)
@@ -750,21 +764,48 @@ def alignment_coverage(
     source = {"format": CoverageFormat.ALIGNMENT_DEPTH.value, "kind": kind, "size": path.stat().st_size, "header": header, "index": index,
               "options": options, "window": window, **({"sha256": sha256} if sha256 is not None else {})}
     facet_id = _facet_id({**source, "assembly_label": assembly_label})
-    key = _facet_id({**source, "polars_bio": POLARS_BIO_VERSION})
+    # The bins key the spill only when given, so a spill written before `quantize` existed is still served.
+    binned = {"quantize": edges} if edges is not None else {}
+    key = _facet_id({**source, "polars_bio": POLARS_BIO_VERSION, **binned})
+    groups = ("intervals", "quantized") if edges is not None else ("intervals",)
     origin = cache.Origin(source_sha256=sha256, source_path=str(path.resolve()), facet_id=facet_id)
-    with cache.spilling(cache_dir() / "coverage" / key, cache.COVERAGE_SPILL, versions, origin, ("intervals",)) as spill:
+    with cache.spilling(cache_dir() / "coverage" / key, cache.COVERAGE_SPILL, versions, origin, groups) as spill:
         generation = spill.key([], {"key": key})
         done = spill.find(generation)
         if done is None:
-            finished, depth_warnings = _alignment_windows(path, window, filter_flag, min_mapping_quality, lengths)
-            part = spill.stage / "intervals.parquet"
-            finished.write_parquet(part)
-            done = spill.commit(generation, {"intervals": [part]}, depth_warnings)
+            finished, runs, depth_warnings = _alignment_pass(path, window, filter_flag, min_mapping_quality, lengths, edges)
+            parts = {"intervals": [spill.stage / "intervals.parquet"]}
+            finished.write_parquet(parts["intervals"][0])
+            if runs is not None:
+                parts["quantized"] = [spill.stage / "quantized.parquet"]
+                runs.write_parquet(parts["quantized"][0])
+            done = spill.commit(generation, parts, depth_warnings)
     warnings = done.warnings
     label, basis, label_warnings = _assembly(assembly_label, lengths)
     warnings += label_warnings
     for line in warnings:
         logger.warning("alignment depth: %s", line)
+    quantized = None
+    if edges is not None:
+        # The runs depend on no window, so the quantized facet's id leaves it out.
+        quantized_facet = CoverageFacet(
+            facet_id=_facet_id({**{k: v for k, v in source.items() if k != "window"}, **binned, "assembly_label": assembly_label}),
+            format_id=CoverageFormat.ALIGNMENT_DEPTH,
+            source_path=str(path),
+            source_sha256=sha256,
+            assembly_label=label,
+            assembly_label_basis=basis,
+            contig_lengths=lengths,
+            resolution=Resolution.BIN,
+            window=None,
+            options=options,
+            zero_filled=False,
+            dropped_fields=[],
+            warnings=list(warnings),
+            subject=subject,
+            quantize=list(edges),
+        )
+        quantized = Coverage(facet=quantized_facet, intervals=pl.scan_parquet(done.files("quantized")))
     facet = CoverageFacet(
         facet_id=facet_id,
         format_id=CoverageFormat.ALIGNMENT_DEPTH,
@@ -781,33 +822,154 @@ def alignment_coverage(
         warnings=warnings,
         subject=subject,
     )
-    return Coverage(facet=facet, intervals=pl.scan_parquet(done.files("intervals")))
+    return Coverage(facet=facet, intervals=pl.scan_parquet(done.files("intervals")), quantized=quantized)
 
 
-def _alignment_windows(
-    path: Path, window: int, filter_flag: int, min_mapping_quality: int, lengths: list[dict]
-) -> tuple[pl.DataFrame, list[str]]:
-    """polars-bio's per-base depth over `path`, folded into `COVERAGE_INTERVALS` windows, and the
-    warning for wrapped depths: the one full read of the file."""
+def _quantize_labels(edges: Sequence[int | None]) -> list[str]:
+    """mosdepth's label for each bin between `edges` (`make_lookup`): `lower:upper`, `lower:inf` for an
+    open top. mosdepth's `MOSDEPTH_Q<n>` renaming is not read: a renamed bin bounds no depth."""
+    checked = _quantize_edges(edges)
+    return [f"{low}:{'inf' if high is None else high}" for low, high in pairwise(checked)]
+
+
+def _quantize_edges(edges: Sequence[int | None]) -> list[int | None]:
+    """The edges as given, checked: two or more whole numbers, none negative, strictly rising, None only last."""
+    values = list(edges)
+    if len(values) < 2:
+        raise ValueError("quantize needs two or more bin edges, as mosdepth's --quantize 0:1:4: is (0, 1, 4, None)")
+    finite = values[:-1] if values[-1] is None else values
+    if any(value is None or isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in finite):
+        raise ValueError("quantize edges are whole numbers of reads, not negative, with None only as the last (an open top)")
+    if any(high <= low for low, high in pairwise(finite)):
+        raise ValueError("quantize edges must rise strictly")
+    return values
+
+
+def _base_partials(bases: pl.LazyFrame, window: int) -> pl.LazyFrame:
+    """Per-base depth rows (`contig, pos, coverage`) summed into window partials (`_PARTIAL_AGG`). A
+    negative depth (polars-bio's Int16 wrap) is left out of the sums and bounds and counted."""
+    readable = pl.col("coverage") >= 0
+    depth = pl.when(readable).then(pl.col("coverage").cast(pl.Int64))
+    return bases.group_by(chrom=pl.col("contig"), window=(pl.col("pos").cast(pl.Int64) - 1) // window).agg(
+        depth_sum=depth.sum().cast(pl.Int64),
+        bases=readable.sum().cast(pl.Int64),
+        depth_min=depth.min(),
+        depth_max=depth.max(),
+        unreadable_bases=(~readable).sum().cast(pl.Int64),
+    )
+
+
+_OUTSIDE_BINS = -1
+"""A run key: bases whose depth lies below the first edge or at or above a closed top (no run)."""
+_UNREADABLE = -2
+"""A run key: bases polars-bio's Int16 wrap made negative (no run; their bin is unknown)."""
+
+_BATCH_ROWS: int | None = None
+"""Rows per batch of the quantizing pass; None takes Polars' own size. A batch edge changes no window
+and no run (runs of one bin meeting across it are joined)."""
+
+
+def _bin_key(depth: pl.Expr, edges: list[int | None]) -> pl.Expr:
+    """The index of the bin `depth` falls in (`[edges[i], edges[i + 1])`), or a negative key."""
+    top = edges[-1]
+    inside = depth >= edges[0] if top is None else (depth >= edges[0]) & (depth < top)
+    index = pl.sum_horizontal([(depth >= edge).cast(pl.Int64) for edge in edges[1:] if edge is not None] or [pl.lit(0, dtype=pl.Int64)])
+    return pl.when(depth < 0).then(pl.lit(_UNREADABLE, dtype=pl.Int64)).when(~inside).then(pl.lit(_OUTSIDE_BINS, dtype=pl.Int64)).otherwise(index)
+
+
+def _merge_runs(runs: pl.DataFrame, *, by_key: bool = True) -> pl.DataFrame:
+    """`chrom, start, end, key` runs (1-based, inclusive) with each touching pair of one key joined
+    into one; with `by_key=False`, touching runs join whatever their key (the span the source wrote)."""
+    ordered = runs.sort("chrom", "start")
+    broken = (pl.col("chrom") != pl.col("chrom").shift(1)) | (pl.col("start") != pl.col("end").shift(1) + 1)
+    if by_key:
+        broken = broken | (pl.col("key") != pl.col("key").shift(1))
+    return (
+        ordered.with_columns(run=broken.fill_null(True).cum_sum())
+        .group_by("run", maintain_order=True)
+        .agg(pl.col("chrom").first(), pl.col("start").min(), pl.col("end").max(), pl.col("key").first())
+        .drop("run")
+    )
+
+
+def _batch_runs(batch: pl.DataFrame, edges: list[int | None]) -> pl.DataFrame:
+    """One batch of per-base rows as runs of one key over consecutive positions."""
+    keyed = batch.select(chrom=pl.col("contig"), start=pl.col("pos").cast(pl.Int64), key=_bin_key(pl.col("coverage").cast(pl.Int64), edges))
+    return _merge_runs(keyed.with_columns(end=pl.col("start")))
+
+
+def _quantized_runs(runs: list[pl.DataFrame], edges: list[int | None], lengths: list[dict]) -> pl.DataFrame:
+    """The batches' runs as `COVERAGE_INTERVALS` bins over the header's contigs.
+
+    A base `depth()` wrote no row for (a contig no read reached) is depth zero, as the windows read it
+    (`zero_filled`), and takes zero's bin. Runs of one bin meeting across a batch edge are joined."""
+    schema = {"chrom": pl.String, "start": pl.Int64, "end": pl.Int64, "key": pl.Int64}
+    seen = _merge_runs(pl.concat(runs) if runs else pl.DataFrame(schema=schema))
+    contigs = pl.DataFrame({"chrom": [c["source"] for c in lengths], "length": [c["length"] for c in lengths]}, schema={"chrom": pl.String, "length": pl.Int64})
+    spans = _merge_runs(seen, by_key=False).sort("chrom", "start")
+    before = spans.with_columns(gap_start=pl.col("end").shift(1).over("chrom").fill_null(0) + 1).filter(pl.col("start") > pl.col("gap_start"))
+    tails = spans.group_by("chrom").agg(pl.col("end").max()).join(contigs, on="chrom").filter(pl.col("end") < pl.col("length"))
+    gaps = pl.concat(
+        [
+            before.select("chrom", start=pl.col("gap_start"), end=pl.col("start") - 1),
+            tails.select("chrom", start=pl.col("end") + 1, end=pl.col("length")),
+            contigs.join(spans, on="chrom", how="anti").select("chrom", start=pl.lit(1, dtype=pl.Int64), end=pl.col("length")),
+        ]
+    )
+    zero = pl.DataFrame({"z": [0]}).select(key=_bin_key(pl.col("z").cast(pl.Int64), edges))["key"][0]
+    merged = _merge_runs(pl.concat([seen, gaps.with_columns(key=pl.lit(zero, dtype=pl.Int64))]))
+    labels = _quantize_labels(edges)
+    bins = pl.DataFrame(
+        {
+            "key": list(range(len(labels))),
+            "label": labels,
+            "low": edges[:-1],
+            "high": [None if edge is None else edge - 1 for edge in edges[1:]],
+        },
+        schema={"key": pl.Int64, "label": pl.String, "low": pl.UInt32, "high": pl.UInt32},
+    )
+    out = merged.join(bins, on="key", how="inner").select(
+        chrom=pl.col("chrom"),
+        pos=pl.col("start").cast(pl.UInt32),
+        end_pos=pl.col("end").cast(pl.UInt32),
+        depth_mean=pl.lit(None, dtype=pl.Float32),
+        depth_min=pl.col("low"),
+        depth_max=pl.col("high"),
+        bases=(pl.col("end") - pl.col("start") + 1).cast(pl.UInt32),
+        label=pl.col("label"),
+    )
+    return _ordered(out)
+
+
+def _alignment_pass(
+    path: Path, window: int, filter_flag: int, min_mapping_quality: int, lengths: list[dict], edges: list[int | None] | None
+) -> tuple[pl.DataFrame, pl.DataFrame | None, list[str]]:
+    """polars-bio's per-base depth over `path`, folded into `COVERAGE_INTERVALS` windows, with the
+    quantized runs when `edges` are given, and the warning for wrapped depths: the one full read of the
+    file.
+
+    Without `edges` the windows are summed by Polars' streaming engine. With them, the rows are taken
+    batch by batch (`collect_batches`, one execution of the source) and each batch is folded into both
+    window partials, by the same expressions, and runs of one bin; the batches' partials are combined
+    and their runs joined across batch edges at the end."""
     # Per-base rows, not run-length blocks: polars-bio 0.36 builds every contig's block batches before
     # it emits the first, so block mode's peak grows with the reads (22.6 GB on a 27 GB BAM, 33.6 GB on
     # a 48 GB one); per-base mode emits contig by contig from its dense arrays (13.3 GB on the first).
     bases = pb.depth(
         str(path), filter_flag=filter_flag, min_mapping_quality=min_mapping_quality, use_zero_based=False, per_base=True
     )
-    readable = pl.col("coverage") >= 0
-    depth = pl.when(readable).then(pl.col("coverage").cast(pl.Int64))
-    partial = (
-        bases.group_by(chrom=pl.col("contig"), window=(pl.col("pos").cast(pl.Int64) - 1) // window)
-        .agg(
-            depth_sum=depth.sum().cast(pl.Int64),
-            bases=readable.sum().cast(pl.Int64),
-            depth_min=depth.min(),
-            depth_max=depth.max(),
-            unreadable_bases=(~readable).sum().cast(pl.Int64),
-        )
-        .collect(engine="streaming")
-    )
+    runs: pl.DataFrame | None = None
+    if edges is None:
+        partial = _base_partials(bases, window).collect(engine="streaming")
+    else:
+        partials: list[pl.DataFrame] = []
+        batch_runs: list[pl.DataFrame] = []
+        for batch in bases.collect_batches(chunk_size=_BATCH_ROWS, engine="streaming"):
+            partials.append(_base_partials(batch.lazy(), window).collect())
+            batch_runs.append(_batch_runs(batch, edges))
+        empty = pl.DataFrame(schema={"chrom": pl.String, "window": pl.Int64, **dict.fromkeys(_PARTIAL_AGG, pl.Int64)})
+        partial = _combine(pl.concat(partials)) if partials else empty
+        runs = _quantized_runs(batch_runs, edges, lengths)
     finished = _finish_windows(partial, window, lengths=lengths, zero_filled=True)
     warnings: list[str] = []
     unreadable = int(finished["unreadable_bases"].sum())
@@ -816,8 +978,9 @@ def _alignment_windows(
         warnings.append(
             f"{unreadable:,} base(s) in {windows:,} window(s) came back with a negative depth (polars-bio writes depth as Int16, "
             "wrapping past 32,767); they are left out of those windows' depth, which then describe fewer bases"
+            + ("; no quantized run covers them, so their bin is unknown" if edges is not None else "")
         )
-    return _ordered(finished), warnings
+    return _ordered(finished), runs, warnings
 
 
 def _alignment_kind(path: Path) -> str:

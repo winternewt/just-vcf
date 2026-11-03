@@ -4,6 +4,20 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`alignment_coverage(..., quantize=(0, 1, 4, None))` gives mosdepth-style quantized runs from the
+  same depth pass** (RM278). The returned windows carry `Coverage.quantized`, a facet of
+  `resolution = bin` (`format_id = alignment_depth`, `CoverageFacet.quantize` the edges) whose
+  intervals equal what `read_coverage` gives for mosdepth's `.quantized.bed.gz` with `--quantize
+  0:1:4:` on the same reads: bins `[lower, upper)`, labels `lower:upper` / `lower:inf`, a depth under
+  the first edge or at a closed top in no run, a contig no read reached in zero's bin. The BAM is still
+  read once: with bins, `depth()`'s rows are folded batch by batch into both the windows (unchanged,
+  same `facet_id`) and the runs. Both go into the `coverage/` spill, keyed by the edges only when
+  given, so earlier spills stay valid and `COVERAGE_VERSION` stays 1. Two departures from mosdepth,
+  written in docs/SCHEMA.md for the lead to veto: a contig's last base takes its own bin (mosdepth folds
+  it into the run before it), and `MOSDEPTH_Q<n>` labels are not read. Tests:
+  `tests/test_coverage.py::test_quantized_runs_are_what_read_coverage_gives_for_mosdepths_file` (four
+  edge sets) and the six tests after it, one counting polars-bio's source executions.
+
 - **`read_coverage` reads mosdepth's thresholds file** (RM278). A `.thresholds.bed.gz`
   (`--thresholds` with `--by`) is told by its `#chrom start end region 1X ...` header and reads as
   `format_id = thresholds_bed`, `resolution = thresholds`: `intervals` holds the regions with no depth

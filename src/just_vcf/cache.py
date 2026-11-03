@@ -14,9 +14,9 @@ The cache (`cache_dir()`) holds six directories of entries:
   `…-vrs-<digest>-<MINT_VERSION>` is `mint_vrs_ids`'s (`vrs_spill`). Every spill entry, `load`'s
   included, holds one directory per generation, `<key>/`, named by the content it holds or was
   computed from and by the step's versions and file groups (`Spill`).
-- `coverage/<key>/`: `alignment_coverage`'s windows over one BAM or CRAM (`coverage_spill`, RM278), so
+- `coverage/<key>/`: `alignment_coverage`'s windows over one BAM or CRAM, and its quantized runs when asked (`coverage_spill`, RM278), so
   an alignment file is read once. `<key>` digests what the windows are computed from: the file's
-  header, index and size, the window and read filters, `COVERAGE_VERSION` and the polars-bio version.
+  header, index and size, the window and read filters, the bin edges when given, `COVERAGE_VERSION` and the polars-bio version.
 - `stats/<key>/`: one `scan_stats` result (`stats.json`, kind `scan_stats`), the counts a VCF load's
   warnings and facet take from a polars-bio pass over the records, so a load run again skips that
   pass (F26). `<key>` digests what the pass depends on: the bytes polars-bio reads, the source, the

@@ -2237,7 +2237,45 @@ and bedtools' `genomecov -bg` are one shape), `source_path`, `source_sha256`, `a
 basis, `contig_lengths`, `resolution` (`base`, `window`, `bin`, `region`, `thresholds`), `window`,
 `options` (the read filters `depth()` ran with), `zero_filled`, `dropped_fields`, `warnings`, `subject`
 (the caller's label, "Facets of one person" above), `thresholds` (a thresholds facet's thresholds,
-ascending; null otherwise). just-vcf's own shape (charter 2): GA4GH has no coverage model.
+ascending; null otherwise), `quantize` (the bin edges a quantized facet was cut at by
+`alignment_coverage`; null otherwise). just-vcf's own shape (charter 2): GA4GH has no coverage model.
+
+**Quantized runs from the depth pass** (RM278, 2026-11-03). `alignment_coverage(path,
+quantize=(0, 1, 4, None))` adds `Coverage.quantized` to the windows it returns: a second coverage
+facet, `format_id = alignment_depth`, `resolution = bin`, `window` null, `zero_filled` false,
+`quantize` the edges, its own `facet_id` (the file's identity, the read filters and the edges; no
+window, since no run depends on it). Its intervals are what `read_coverage` gives for the
+`.quantized.bed.gz` mosdepth writes with `--quantize 0:1:4:`, on the same reads: mosdepth's semantics,
+read in mosdepth.nim (`get_quantize_args`, `linear_search`, `make_lookup`, `gen_quantized`):
+
+- Edges ascend strictly; None as the last is mosdepth's trailing `:` (an open top, `inf`). A bin is
+  `[lower, upper)`, labelled `lower:upper` or `lower:inf`. A base whose depth is under the first edge,
+  or at or above a closed top, falls in no bin and is in no run, as mosdepth writes none.
+  `MOSDEPTH_Q<n>` renaming is not read: a renamed bin bounds no depth. Rejected: a string in mosdepth's
+  own syntax (`"0:1:4:"`), which a user could paste from a command line but which carries three
+  shorthands (`:1`, `60`, a trailing `:`) for one tuple to state.
+- A base `depth()` wrote no row for is depth zero, as the windows read it, and takes zero's bin. A
+  depth polars-bio wrapped negative (Int16, above) is in no run, and the pass's one warning, carried on
+  both facets, says so.
+- **One read of the file.** Without `quantize` the windows are summed by Polars' streaming engine as
+  before. With it, `depth()`'s rows are taken batch by batch (`collect_batches`, one execution of the
+  source) and each batch is folded into window partials, by the same expressions, and into runs, which
+  are joined across batch edges at the end; the windows are the same as a call without bins, under the
+  same `facet_id`. The runs of a whole genome are held until then: as many as the bins change, plus one
+  per batch. Not measured on a whole-genome BAM yet.
+- **The spill** holds both (groups `intervals` and `quantized`), and the edges enter its key only when
+  given, so the spills written before stay valid and `COVERAGE_VERSION` stays 1. A call with other
+  edges, or none, after one with edges reads the file again; one spill does not serve another's
+  parameters, as with `window`.
+- **The lead's call, for veto:** mosdepth's `gen_quantized` loops to a contig's second-to-last base and
+  ends its last run at the contig's end, so a last base whose bin differs from the one before it is
+  written in that run's bin. Here every base takes its own bin, so such a contig's last run differs
+  from mosdepth's by that one base. Rejected: copying the quirk, which writes a wrong bin for a base to
+  match a file byte for byte.
+- **The lead's call, for veto:** the quantized facet is `alignment_depth` with resolution `bin`, not
+  `quantized_bed`, since `format_id` names what a facet was read from (a BAM through `depth()`) and
+  `resolution` already says what an interval states. A quantized facet states no mean, so the depth
+  measures set it aside (`coverage_no_mean`, above), file or computed.
 
 **A thresholds facet** (`thresholds_bed`, resolution `thresholds`; RM278, 2026-11-03) is mosdepth's
 `.thresholds.bed.gz`, written with `--thresholds 1,10,20` and `--by` (mosdepth refuses the first
@@ -2305,7 +2343,7 @@ Rules:
 - **An alignment file is read once.** `alignment_coverage` spills its windows to the cache
   (`coverage/<key>/`, kind `coverage_spill`, with a manifest, swept and cleared as the loader's spills
   are, docs/ROADMAP_HISTORY.md RM268), and a later call with the same inputs reads the spill. The key
-  digests the file's header, index and size (its sha256 too, with no index), `window`, `min_mapping_quality`, `filter_flag`,
+  digests the file's header, index and size (its sha256 too, with no index), `window`, `min_mapping_quality`, `filter_flag`, `quantize` when given (quantized runs, above),
   `COVERAGE_VERSION` and the polars-bio version, so a spill made with other parameters, or by another
   `COVERAGE_VERSION` or polars-bio, is never served. `assembly_label` is left out: no window depends on
   it, and the facet built on a reused spill still carries the build the call states. The spill trusts
@@ -3395,6 +3433,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-03, RM278: quantized runs from `alignment_coverage`'s depth pass): no
+  column of `facets`, `calls` or `blocks` changes. Additive, outside the frames: `alignment_coverage`'s
+  `quantize=` (default None, nothing changes without it), `Coverage.quantized` and
+  `CoverageFacet.quantize` (both null by default), and the spill's `quantized` group, keyed by the
+  edges only when they are given ("Coverage facets" above). `COVERAGE_VERSION` stays 1: no stored
+  window changes, and a spill written before is still served.
 
 - **No version change** (2026-11-03, RM278: mosdepth's thresholds file): no column of `facets`,
   `calls` or `blocks` changes. Additive, outside the frames: `CoverageFormat.THRESHOLDS_BED`,

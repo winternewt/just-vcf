@@ -1160,6 +1160,65 @@ holding that collection and the target.
    and inside no block with another target (blocks that send the same bases to the same contig,
    strand and offset count once: Ensembl's chains list them twice, F14). The span's start then moves by the block's offset; on a
    minus-strand block the forward start is the image of the span's last base.
+
+   **2b. Across a gap of one chain** (2026-11-03, `LIFT_VERSION` 14). A sequence row (SNV, MNV,
+   indel, an SNV written in context) whose span crosses a block edge still lifts where all of these
+   hold, each failure its own reason:
+   - its first and last bases lie in blocks (`split_across_blocks` otherwise: the span runs off a
+     block into a gap's source-only bases or past the chain's end), and in blocks of one chain, with
+     no other chain's block in between (`split_across_chains`: another alignment, target contig or
+     strand on the other side). A doubly mapped stretch anywhere in the span is still
+     `multiple_targets`, judged first;
+   - each ALT's change lies inside one block (`gap_in_change` otherwise). The change is the REF bases
+     the ALT replaces after the shared first and last bases are set aside, or, for an insertion, the
+     two bases either side of the point it goes in at; and for an indel in a repeat, every place it
+     could equally sit, from its left-most placement (a common suffix trimmed first) to its right-most
+     (a common prefix trimmed first). `CA` deleted from `GCACA` with the gap after the first `A` could
+     be either `CA`, which on the target are not the same haplotype. Placements are judged inside the
+     REF span, as step 2 judges every row;
+   - every gap it crosses has fewer than `GAP_LIMIT` (50) bases on each side, `dt` (the source's own)
+     and `dq` (the target's) (`gap_too_large` otherwise).
+
+   The row then lands on the span's image, from the image of its first base to that of its last (on a
+   minus strand the forward range between them), and REF is read from the target over it (charter 10).
+   Each allele is the parent's REF carried across, each base on a block at its image, the gap's target
+   bases where the chain puts them and its source-only bases dropped, with the allele's change put in
+   at its left-most placement; reverse-complemented on a minus strand, and re-anchored there as above
+   when it is a padded indel. So `A`+`CGT` → `A`, the anchor before a gap of three target bases `xyz`
+   and `CGT` after it, lifts as `Axyz`+`CGT` → `Axyz`: the change against the source (`CGT` deleted) is
+   the change against the target. The target's REF is then compared as in step 3: equal to the carried
+   REF keeps the row, equal to a carried ALT swaps it, neither leaves it behind as
+   `ref_mismatch_after_lift` (a flank base the target reads otherwise is caught here, as on any row).
+   `gt_alleles` and `source_alleles` are carried allele by allele, never reordered (Decision 2), and
+   `end_pos` follows the lifted REF. `normalize` on the lifted facet trims the gap's bases off and
+   left-aligns the change on the target ("Normalizing", step 2). Decisions, each with what was rejected:
+   - The change follows the target, the gap does not follow the person. Rejected: keeping the source's
+     ALT as written over the target's REF (`Axyz`+`CGT` → `A`), which states the person lacks `xyz`
+     too: the assemblies' own difference written into the person's genotype.
+   - The lifted span is the source span's image, gap bases included. Rejected: keeping the source's
+     allele lengths, padding each flank with whatever target bases lie next to the change's image
+     (`zCGT` → `z`, the minus-strand re-anchoring's way); it reads target bases outside the image
+     when the gap has source-only bases, and is the same haplotype `normalize` reaches from either.
+     bcftools +liftover (`liftover.c`, `LIFTOVER_VERSION` 2026-02-06, `liftover_indel`, read
+     2026-11-03, not run) likewise places an indel across a gap by lifting its two anchors.
+   - A gap inside the change, or inside a repeat's room, leaves the row behind. Rejected: bcftools'
+     realignment through the gap (`clip_pad`, Needleman-Wunsch), which picks one of several haplotypes
+     the record does not choose between.
+   - `GAP_LIMIT` is 50, both sides of each gap. The gap's target bases go into every allele as context,
+     so the limit bounds how much sequence a lifted record states that its source never covered; no
+     tool or chain fixes that number, so this is the conservative reading at VCF practice's indel/SV
+     boundary (a change of 50 bases or more is an SV). Measured on the chains in hand (2026-11-03):
+     one-sided gaps under 50 bases are 95% (`dt`) and 96% (`dq`) of UCSC hg19ToHg38's, 81% and 94% of
+     hg38ToHg19's, 96% and 98% of Ensembl GRCh38_to_GRCh37's, 97% and 98% of hs1ToHg38's; two-sided
+     gaps 20–68%. Rejected: bcftools' `--max-indel-inc` 250, which bounds how far it lets an indel's
+     anchors drift while it realigns, another quantity; and no limit, which lets a record carry a
+     target insertion of any size as reference.
+   - One chain means one chain id. Rejected: any colinear pair of blocks on one contig and strand,
+     which would lift across two alignments that happen to sit near each other. A chain listed twice
+     (F14) still lifts once (tested).
+   - Not changed: a row whose REF span lies inside one block lifts by step 2 as before, even where an
+     insertion sits at the block's edge, next to a gap's target bases (`A` → `AT` on a block's last base
+     is put before them, though the chain would allow after).
 3. **Alleles.** On a minus-strand block every allele (`alts`, `gt_alleles`, `source_alleles`) is
    reverse-complemented, in place, so the vectors stay indexed. `ref` is read from the target over the
    lifted span. Where it equals the parent's REF (carried across, complemented on a minus block), the
@@ -1211,7 +1270,9 @@ an unanchored deletion, which `normalize` anchors first; `*`, `<*>` and symbolic
 below does not read, such as Delly's `<TRA>` or a symbolic SV beside a sequence ALT; an SV or segment
 whose REF is longer than its padding base), `split_flagged` (run
 `rejoin_split` first), `contig_not_in_chain`, `chain_contig_mismatch`, `no_chain_block`,
-`split_across_blocks`, `multiple_targets`, `target_contig_unmatched`, `indel_minus_strand` (a
+`split_across_blocks` (since `LIFT_VERSION` 14 narrowed to a span whose first or last base is in no
+block), `multiple_targets`, `target_contig_unmatched`, across a gap of one chain (step 2b)
+`split_across_chains`, `gap_in_change` and `gap_too_large`, `indel_minus_strand` (a
 minus-strand indel or SV lifted to the target contig's first base, with no base before it to
 re-anchor on), `ref_mismatch_after_lift`, for SVs `sv_end_unlifted`, `sv_ends_apart`,
 `sv_ends_reversed` and `sv_length_changed`, and for breakends `breakend_not_lifted` (an ALT with
@@ -3409,6 +3470,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-03, RM6: across a gap of one chain): `liftover` lifts a sequence row
+  whose REF span crosses a gap of one chain outside the bases it changes ("Lifting", step 2b;
+  `LIFT_VERSION` 14), where it left every such row behind as `split_across_blocks`. Three reasons are
+  added to `UNLIFTED_REASONS` (an open vocabulary, a `str` column), `split_across_chains`,
+  `gap_in_change` and `gap_too_large`, and `split_across_blocks` narrows to a span whose first or last
+  base is in no block. **Values change**: a lifted facet holds these rows, with a REF longer or
+  shorter than the source's by the gap, and its `facet_id` changes with the version.
 
 - **No version change** (2026-11-03, RM269 at the person level): `person_karyotype` weighs a
   `Person`'s facets against each other ("Sex-chromosome evidence", "Weighed against each other"):

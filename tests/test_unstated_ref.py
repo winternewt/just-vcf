@@ -26,6 +26,7 @@ from just_vcf import (
     normalize,
     query,
     reference_support,
+    rejoin_split,
     resolve_ref,
     vrs_withheld,
     write_vcf,
@@ -352,6 +353,38 @@ LIFT_CASES = {
     # allele the source never called.
     "unstated_swap": (f"1\t{MULTI_SWAP_POS}\tunstated_swap\tN\t{MULTI_BASE}\t50\tPASS\t.\tGT\t0/0", "source_ref_unstated"),
 }
+
+
+def test_rejoin_leaves_a_split_site_spelled_against_an_unstated_ref_as_written(tmp_path: Path, store: ReferenceStore) -> None:
+    """A split site whose rows' source REF is `N` (`N` → `X` and `N` → `Y`, one row per ALT) joined into
+    one row with `ref_check = not_run`, which every reader reads as written: its sequence ALTs, spelled
+    against the `N`, became readable again, and `resolve_ref` refuses a facet already read, so nothing
+    could set the row back to `unstated`. The group is now left as written, counted under its own
+    reason, as the other groups that cannot be read as one site are; a stated split site beside it
+    still joins."""
+    tag = "OLD_MULTIALLELIC=1:{}:A/G/T"
+    x, y = other(base(300)), third(base(300))
+    lines = [
+        "##fileformat=VCFv4.2",
+        f"##contig=<ID=1,length={len(SEQ['1'])}>",
+        '##INFO=<ID=OLD_MULTIALLELIC,Number=1,Type=String,Description="Original chr:pos:ref:alt encoding">',
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1",
+        f"1\t300\t.\tN\t{x}\t50\tPASS\t{tag.format(300)}\tGT\t1/0",
+        f"1\t300\t.\tN\t{y}\t50\tPASS\t{tag.format(300)}\tGT\t0/1",
+        f"1\t400\t.\t{base(400)}\t{other(base(400))}\t50\tPASS\t{tag.format(400)}\tGT\t1/0",
+        f"1\t400\t.\t{base(400)}\t{third(base(400))}\t50\tPASS\t{tag.format(400)}\tGT\t0/1",
+    ]
+    path = tmp_path / "split.vcf"
+    path.write_text("\n".join(lines) + "\n")
+    rejoined = rejoin_split(resolve_ref(load(path), store))
+    calls = {pos: group for (pos,), group in rejoined.calls.collect().group_by(["pos"])}
+    assert calls[300].select("source_ref", "ref_check", "alts", "split_signal").sort("alts").rows() == [
+        ("N", "unstated", [x], "marker"),
+        ("N", "unstated", [y], "marker"),
+    ]
+    assert calls[400]["alts"].to_list() == [sorted([other(base(400)), third(base(400))])]
+    assert "1 split site(s) left as written: a source REF of only N, which states no base (ref_check unstated)" in rejoined.warnings
 
 
 def test_liftover_lifts_unstated_rows_like_matching_ones_unless_they_spell_a_sequence_alt(tmp_path: Path, setup) -> None:  # noqa: F811

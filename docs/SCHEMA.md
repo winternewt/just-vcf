@@ -100,7 +100,9 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   `ref_unstated`: `N` → `NAC` read as `C` → `NAC` would be a delins the source never wrote. A symbolic
   ALT keeps its own reason (`sv_no_vrs_model`).
 - `normalize` leaves it as written, counted ("the source REF states no base"): trimming an ALT spelled
-  against `N` against the reference's base would rewrite an allele.
+  against `N` against the reference's base would rewrite an allele. Of two rows that differ only in
+  how the source wrote them, an `unstated` one and a `match` one, the `match` one is kept (2026-11-03,
+  `NORMALIZE_VERSION` 10; canonical order put `N` before `T` and kept the `unstated` row).
 - `query` never answers from it for a sequence allele, neither `stated` nor `site_genotyped`: its
   sequence ALTs were spelled against the `N`, and a REF the source did not state says nothing about
   which base the site holds. An allele asked at its POS, spelled by it or not, is `overlapping_call`
@@ -1129,7 +1131,11 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
    `vrs_errors`, `cipos`, `ciend`), which say how the source wrote a row, not what it states. So one indel written twice
    by the source, once already left-aligned and once further right, with the same genotype and
    evidence, is one row, and the one kept is the row that did not move, with its source REF, check and
-   GT text. Rows that state the same allele at one position and differ in anything else (genotype,
+   GT text. Which row is kept is read from `ref_check` first: `match`, then null (a REF read from the
+   reference with nothing to compare: a row that moved, a lifted or an array row), then `not_run`,
+   `unstated`, `mismatch`; then canonical order (`NORMALIZE_VERSION` 10, 2026-11-03; before, canonical
+   order alone, so of `N` → `A` and `T` → `A` over a reference `T` the `unstated` row was kept and the
+   stated `match` dropped, as `C` → `A`, a `mismatch`, was). Rows that state the same allele at one position and differ in anything else (genotype,
    phasing, the likelihoods, depths, quality, filters, ids) are all kept, with a warning (charter 8).
    Then canonical order (Decision 11).
 

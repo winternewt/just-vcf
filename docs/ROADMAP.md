@@ -6,6 +6,30 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM287 — Imputed facets read back
+Severity: low · Status: blocked: desk #180, yes after a present (filed by the lead 2026-11-03 from the person's question whether imputation belongs in just-vcf or downstream; the lead's recommendation on #180 is downstream, and this item is the read-back half, which is inside the charter under any answer) · Owner: lead
+
+Imputation runs elsewhere (the charter: imputation servers make the facets, just-vcf reads what they
+produced). What reading one back already does, checked 2026-11-03: `callset.imputation_marker` names a file
+`imputed` from its header (minimac's R2/ER2/IMPUTED/TYPED, Beagle's DR2/IMP, a `##source` naming
+`loimpute`), and `absence_means` follows; `evidence.genotype_evidence` grades a row by GP first and by DS
+(`dosage`, `GradeBasis.DOSAGE`) when nothing richer is there. What it does not do:
+
+- **Per-site imputation quality is not kept.** INFO R2, ER2 and DR2 are read only as header markers; the
+  rows carry no per-site value, so a site imputed at R2 0.2 grades as its GP says, the same as one at 0.99.
+  Wanted: the value on the row (a column of its own, named for what it holds, null where the file writes
+  none), and a decision, the lead's, on whether the grade reads it.
+- **No lineage link says an imputed facet came from a chip facet.** `links.LINEAGE_RELATIONS` holds only
+  just-vcf's own steps (liftover, normalize, split-rejoin, merge, consensus), each written by the step
+  itself. Wanted: a relation a caller states for a step that ran outside the library (`imputed_from`, with
+  the tool and panel in provenance), so `same_person` and `consensus` do not read the imputed facet and its
+  chip as two independent witnesses of the same typed sites.
+- **The way out is not checked against an imputation server's rules.** `resolve_ref`, `liftover` and
+  `write_vcf` write a chip as a GRCh38 VCF with REF from the reference; A/T and C/G sites stay strand
+  ambiguous (RM6), which servers such as Michigan's refuse or flip. Wanted: a test that writes a PGP-HMS
+  chip export and checks it against a server's published input checks, and the strand gap named where it
+  bites.
+
 ## RM274 — Relatedness and families
 Severity: medium · Status: in progress (shipped 2026-10-23: KING-robust relatedness, `same_person` as RM273's default check, the somalier wrapper and GA4GH Pedigree reading, merge 6dd3591; a pedigree checked against measured bands (`expected_kinship`, `check_pedigree`, `people(..., pedigree=...)`) and the Genos exome's offset settled as site selection (`variant_sites_only`), merge f43768e. Left: running somalier for real waits on desk #88 (no docs/TRUST.md row for its binary); the first-degree split by IBS0 (`parent_child`, `full_siblings`, KING's 0.005/0.008, `first_degree` when not told) is built on merge 323bf7f, awaiting the lead's merge; a pedigree measured on real relatives waits for data, since docs/LIVE_SAMPLES.md names no related people, and with it the split's behaviour on real facets, whose error can read a parent and child as siblings) · Owner: lead
 

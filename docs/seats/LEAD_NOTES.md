@@ -29,9 +29,11 @@ each reset.
    own-sample test, merge 6eed88a (2026-10-26). The roadmap's stale "awaiting the lead's merge" lines (RM274,
    RM276, RM5) corrected 2026-11-03.
 0. **Running 2026-11-03** (two builders): RM278's mosdepth thresholds file and a quantized output from
-   `alignment_coverage`'s depth pass; RM269's person-level roll-up (liftovers of one callset answer once, a
-   merge or consensus set aside, any disagreement between independent callsets withholds as `facets_disagree`,
-   no ranking of measured over estimated, which is left open). Merges 1 and 2 of the 6 before audit 15.
+   `alignment_coverage`'s depth pass; RM6's lift across a small gap of one chain. RM269's person-level roll-up
+   merged as 6bebc0c (merge 1 of 6 before audit 15); its builder's nine calls beyond the pinned ones (an X or
+   Y line from a withheld callset still contradicts, a torn callset withholds the person, `x_copies` weighed
+   too, the member saying most stands for a callset, and five more) are in its commit df943ad and in
+   docs/LAYERS.md layer 4 for the person's veto; measured over estimated stays open.
 0. **Imputation** (the person asked 2026-11-03 whether it belongs here or downstream): desk #180, default
    downstream, nothing built here. The read-back half is RM287 (per-site R2/DR2, an `imputed_from` link, the
    way out checked against a server's input rules), blocked on #180, yes after a present.

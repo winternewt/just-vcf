@@ -167,6 +167,13 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   reference for SNVs. No file in hand writes such rows: every copy-number file writes symbolic ALTs
   or none, and its `sv` count is as stated. A recount at `resolve_ref` would change a load-time count
   in a resolve step, and is not made (`tests/test_unstated_ref.py` pins the count).
+- `rejoin_split` leaves a split site as written, counted ("a source REF of only N, which states no
+  base"), when a row of it spells a sequence ALT against an `N` (2026-11-03, `REJOIN_VERSION` 6;
+  before, on a facet whose REF was read, the joined row took `ref_check = not_run`, which every reader
+  reads as written, so its sequence ALTs became readable again, and `resolve_ref` refuses a facet read
+  once, so nothing could mark it `unstated` again). On a facet not yet read every row is `not_run` and
+  the join is made; `resolve_ref` then compares the joined REF as any other (F34 records what a join
+  after `resolve_ref` costs a `match` row).
 - No other reader: loaders, `rejoin_split` and `consensus` write `not_run` or null; `liftover` and
   `normalize` null it on a row they move or re-derive (`liftover` moves none with a sequence ALT); the
   facet guard (`tests/test_load_seams.py`) reads `facets` columns only.
@@ -1050,8 +1057,10 @@ parquet spill of `calls`, three columns, so they cost no second parse of the VCF
 
 A position stays as written, its rows still flagged, when it cannot be read as one site: two ALTs in
 one slot, rows of different ploidy, a symbolic allele, REFs that are not prefixes of one another, an
-index past a row's ALTs, a row with no genotype, or a row with no `source_ref` (one `normalize` moved).
-Each reason is one warning with a count. Not done:
+index past a row's ALTs, a row with no genotype, a row with no `source_ref` (one `normalize` moved),
+or a row whose sequence ALT was spelled against a source REF of only `N` (`ref_check = unstated`,
+Decision 2; `REJOIN_VERSION` 6). Each reason is one warning with a count. A joined row's `ref` is null
+and its `ref_check` `not_run`, so a facet whose REF was read is rejoined at a cost (F34). Not done:
 grouping by the bcftools marker's original record, which would also catch split indels that
 left-alignment moved to another POS.
 

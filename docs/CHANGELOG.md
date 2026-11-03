@@ -4,6 +4,19 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 ## Unreleased
 
+- **`rejoin_split` leaves a split site spelled against an `N` as written** (merge audit 14, finding
+  4). On a facet whose REF was read, a split site whose rows' source REF is `N` (`ref_check =
+  unstated`, sequence ALTs) joined into one row with `ref_check = not_run`, which every reader reads as
+  written, so the sequence ALTs spelled against the `N` became readable again; `resolve_ref` refuses a
+  facet read once, so nothing could mark the row `unstated` again. Such a group now stays as written,
+  counted ("a source REF of only N, which states no base (ref_check unstated)"), as the other groups
+  that cannot be read as one site do. `REJOIN_VERSION` 6, since a facet holding such a group emits other
+  rows, which renames every rejoined facet. On a facet not yet read nothing changes. What a join after
+  `resolve_ref` costs a `match` row (its `ref` and VRS ids, for good) is a separate finding, F34, left
+  open with three candidate repairs. Test:
+  `tests/test_unstated_ref.py::test_rejoin_leaves_a_split_site_spelled_against_an_unstated_ref_as_written`,
+  failing on the code before.
+
 - **The sex-chromosome measures read an `unstated` row per GT slot** (merge audit 14, findings 2 and
   3). `karyotype.measure` dropped the whole row from its ALT counts when any ALT was a sequence allele,
   so `N` → `<DEL>,G` with GT `0/1` lost its symbolic call from the diploid ALT, het and depth counts,

@@ -17,13 +17,14 @@ import polars as pl
 from just_vcf import cache
 from just_vcf.links import SPLIT_REJOINED, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_parts
-from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck
+from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck, unstated_sequence_alt
 
-REJOIN_VERSION = 5
+REJOIN_VERSION = 6
 """Part of the derived `facet_id`: bumped whenever the join rule changes what it emits (2: the SV
 columns kept, RM282; 3: schema 0.0.15's `phase_set_ordinals` and `phase_set_qualities` kept where
 the split rows agree; 4: schema 0.0.19's `hq` kept where they agree; 5: `hq` joined per GT slot, so
-the rows `normalize` splits, which keep a score only on their own slots, give it back)."""
+the rows `normalize` splits, which keep a score only on their own slots, give it back; 6: a group
+with a sequence ALT spelled against a source REF of only `N`, `ref_check = unstated`, kept as written)."""
 
 RELATION = SPLIT_REJOINED
 """The derived facet's `relation`."""
@@ -34,6 +35,11 @@ _KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordina
 _PER_ALT = {"cipos": 2, "ciend": 2, "alt_copy_numbers": 1}
 """Columns holding this many values per ALT: a joined row concatenates them in its `alts` order."""
 
+_UNSTATED = "_unstated"
+_UNSTATED_REASON = "a source REF of only N, which states no base (ref_check unstated)"
+"""Why a group with a row whose sequence ALT was spelled against an `N` (`schema.unstated_sequence_alt`)
+stays as written."""
+
 
 def rejoin_split(loaded: Loaded) -> Loaded:
     """A derived facet in which each position's split-flagged rows are one site again.
@@ -43,7 +49,8 @@ def rejoin_split(loaded: Loaded) -> Loaded:
     REF bases it lacks); `alts` are the distinct extended alleles, sorted; each GT slot takes the one
     allele the rows place there, `0` when none places an ALT and a row says `0`, and null when every row
     is null there. A group that cannot be read so (two different ALTs in one slot, rows of different
-    ploidy, a symbolic allele, REFs that disagree) keeps its rows as written, counted in the warnings.
+    ploidy, a symbolic allele, REFs that disagree, a sequence ALT spelled against a source REF of only
+    `N` on a facet whose REF was read) keeps its rows as written, counted in the warnings.
     """
     cache.sweep_stale(cache.REJOIN_SPILL, _VERSIONS)
     parent = loaded.facets.collect()
@@ -57,9 +64,14 @@ def rejoin_split(loaded: Loaded) -> Loaded:
     kept: list[dict] = []
     unjoined: Counter[str] = Counter()
     # Plain rows grouped in Python: a DataFrame per group costs far more than the join itself.
-    for _, group in groupby(flagged.sort("chrom", "pos").iter_rows(named=True), key=lambda row: (row["chrom"], row["pos"])):
+    ordered = flagged.with_columns(unstated_sequence_alt().alias(_UNSTATED)).sort("chrom", "pos")
+    for _, group in groupby(ordered.iter_rows(named=True), key=lambda row: (row["chrom"], row["pos"])):
         rows = list(group)
-        result = _join(rows)
+        # A row whose sequence ALT was spelled against a source REF of only `N` (F23): joined, it would
+        # carry `ref_check = not_run`, which every reader reads as written, and `resolve_ref` refuses a
+        # facet already read, so nothing could mark it `unstated` again.
+        spelled_against_n = [row.pop(_UNSTATED) for row in rows]
+        result = _UNSTATED_REASON if any(spelled_against_n) else _join(rows)
         if isinstance(result, str):
             unjoined[result] += 1
             kept += rows

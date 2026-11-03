@@ -105,3 +105,34 @@ none made: write the set's remaining rows unphased, which drops phase the source
 the set at the skipped row into two sets, which states a break the source did not; or refuse a set with
 a skipped member and count it, which loses rows `resolved_only` promises to write. Which of the three is
 a judgement on what a written set may claim.
+
+## F34 — `rejoin_split` on a facet whose REF was read loses the joined rows' REF for good
+
+Severity: low · Found 2026-11-03 by the builder fixing merge audit 14's finding 4 (`rejoin_split` and
+the `unstated` rule).
+
+`rejoin_split` builds each joined row from its split rows' `source_ref` alone: `ref` null, `ref_check =
+not_run`, no VRS ids. On a facet straight from `load` that is what every row has, and `resolve_ref` reads
+it next. On a facet already through `resolve_ref`, the facet keeps its `ref_seqcol_digest`, so a second
+`resolve_ref` refuses it ("already read"), and the joined rows can never be read: measured on a synthetic
+split site whose two rows were both `match`, the joined row came back `ref` null, `ref_check = not_run`,
+and `mint_vrs_ids` withheld all three of its alleles as `ref_unchecked`, while the unsplit row beside it
+kept `match` and its ids. `liftover` leaves such a row behind (`ref_unread`) and `normalize` does not
+align it. Nothing is wrong in what is stated: `not_run` is the honest value for a REF no step compared.
+The order "rejoin before `resolve_ref`" is written in `normalize`'s docstring, not enforced. (A group
+with a row spelled against an `N`, `ref_check = unstated`, is no longer joined at all, audit 14: there
+`not_run` would have made its sequence ALT readable again.)
+
+Repairs, none made:
+
+- Carry `ref` and `match` over when every row of the group is `match` and the joined REF is the
+  longest row's own `ref`. A joined row's `ref` then comes from the split rows' reads, not a read of the
+  joined span; that holds where the REFs are prefixes of one another (the join requires it), but the
+  row's `ref_check = match` would describe a comparison made on other rows, which is a check reported
+  for a representation it never saw. VRS ids would still need minting again.
+- Let `resolve_ref` read the `not_run` rows of a facet already read, against its own collection. It
+  breaks the rule that a facet is read once, the guard against reading one facet against two
+  collections, and needs a rule for which rows a second pass may touch.
+- Make `rejoin_split` refuse a facet whose REF was read, as `resolve_ref` refuses one twice, naming the
+  order. The cheapest and the most honest, but a caller holding only a resolved facet (a store's) has no
+  way back to the split rows' parent short of reloading the file.

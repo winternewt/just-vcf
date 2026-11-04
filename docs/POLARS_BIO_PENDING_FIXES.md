@@ -635,7 +635,8 @@ code path, which is likely but not read in the source. Comment only alongside an
 *Shared upstream (2026-11-04).* just-dna-compiler also stands on polars 1.44.2, for its parquet
 writes. Under the kit's rule that a defect in a shared upstream goes up once with every repository's
 reproduction, its liaison was asked on the seats' chat (topic `upstream polars`) whether it sees the
-same fallback. A reproduction of theirs joins the #24393 comment. Their answer is not in yet.
+same fallback. It does not: its one `replace_strict` runs on an eager frame and no sunk plan maps
+with `replace`. The #24393 comment stays just-vcf's alone.
 
 ## Harvested and closed without an entry (2026-09-30)
 

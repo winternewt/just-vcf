@@ -632,6 +632,11 @@ comment would add, with 1.44.2 and the `map_batches` form. Nothing to file new. 
 person on its own: the mitigation holds, and the issue's fix covers ours if `replace` shares the
 code path, which is likely but not read in the source. Comment only alongside another batch.
 
+*Shared upstream (2026-11-04).* just-dna-compiler also stands on polars 1.44.2, for its parquet
+writes. Under the kit's rule that a defect in a shared upstream goes up once with every repository's
+reproduction, its liaison was asked on the seats' chat (topic `upstream polars`) whether it sees the
+same fallback. A reproduction of theirs joins the #24393 comment. Their answer is not in yet.
+
 ## Harvested and closed without an entry (2026-09-30)
 
 Items the sibling sweep found that need nothing from upstream now.

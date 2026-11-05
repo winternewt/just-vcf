@@ -28,6 +28,8 @@ from just_vcf.store import FRAMES, Store, StoreConflictError, StoreError, StoreV
 from just_vcf.store_migration import MIGRATIONS, STORE_FIRST_VERSION, migration_chain, version_key
 from test_load_cgi import LOCI, var_text
 from test_load_cgi import write as write_cgi
+from test_imputation_quality import COLUMNS as IMPUTED_COLUMNS
+from test_imputation_quality import MINIMAC_META
 from test_load_vcf import vcf_text
 from test_load_vcf import write as write_vcf_text
 from test_person import _array_file
@@ -36,7 +38,7 @@ from test_unstated_ref import RECORDS
 from test_unstated_ref import vcf as unstated_vcf
 from test_unstated_ref import write_fasta as unstated_fasta
 
-VERSIONS = ("0.0.14", "0.0.15", "0.0.16", "0.0.17", "0.0.18", "0.0.19", "0.0.20", "0.0.21", "0.0.22")
+VERSIONS = ("0.0.14", "0.0.15", "0.0.16", "0.0.17", "0.0.18", "0.0.19", "0.0.20", "0.0.21", "0.0.22", "0.0.23")
 """Every schema version a store can have been written under: the store shipped under 0.0.14 (merge
 6830fb7, 2026-10-23, between 0.0.14's merge 04c5db3 and 0.0.15's 8b72a46)."""
 
@@ -47,6 +49,7 @@ ADDED: dict[str, dict[str, tuple[str, ...]]] = {
     "0.0.19": {"calls": ("hq",)},
     "0.0.20": {"facets": ("resolve_version",)},
     "0.0.21": {"facets": ("resolve_inputs",)},
+    "0.0.23": {"calls": ("imputation_r2", "imputation_empirical_r2")},
 }
 """The columns each bump since the store shipped added (SCHEMA.md "Changes since sign-off")."""
 
@@ -57,6 +60,11 @@ REF_CHECK_BEFORE_0022 = pl.Enum(["not_run", "match", "mismatch"])
 """`calls.ref_check` before 0.0.22 added `unstated`."""
 
 SCHEMAS = dict(zip(FRAMES, (FACETS, CALLS, BLOCKS, LINKS)))
+
+IMPUTED_RECORDS = [
+    "1\t100\t.\tA\tG\t.\tPASS\tAF=0.1;R2=0.95;IMPUTED\tGT:DS\t0|1:1.02",
+    "1\t200\t.\tC\tT\t.\tPASS\tAF=0.2;R2=0.88;ER2=0.91;TYPED\tGT:DS\t0|0:0.05",
+]
 
 PHASED = [
     "1\t100\t.\tA\tG\t50\tPASS\t.\tGT:PS\t0|1:100",
@@ -311,6 +319,30 @@ def test_a_facet_with_an_all_n_ref_migrated_to_0022_keeps_mismatch_and_is_named(
     assert got.filter(all_n & (pl.col("ref_check") == "mismatch")).height == left_mismatch, "kept, not rewritten"
     with pytest.raises(StoreConflictError, match=f"RESOLVE_VERSION {RESOLVE_VERSION - 1}"):
         Store.open(root).add(cnv)
+
+
+def test_an_imputed_facet_migrated_to_0023_has_its_quality_named_not_read(tmp_path: Path) -> None:
+    """A 0.0.22 load left INFO R2 and ER2 out (in `dropped_fields`): the step to 0.0.23 adds the two
+    columns null and names that facet, and only it, since a reload reads them; a VCF that never wrote
+    them loses nothing."""
+    imputed = load(write_vcf_text(tmp_path, "\n".join([*MINIMAC_META, IMPUTED_COLUMNS, *IMPUTED_RECORDS]) + "\n", "minimac.dose.vcf"), subject=SUBJECT)
+    assert imputed.calls.select(pl.col("imputation_r2").is_not_null().sum()).collect().item() == len(IMPUTED_RECORDS)
+    # As a 0.0.22 load left it: the keys not carried, so listed as dropped.
+    left = imputed.model_copy(
+        update={"facets": imputed.facets.with_columns(pl.concat_list("dropped_fields", pl.lit(["INFO/ER2", "INFO/R2"])).list.sort().alias("dropped_fields"))}
+    )
+    plain = load(write_vcf_text(tmp_path, vcf_text(PHASED, fmt=("GT", "PS")), "phased.vcf"), subject=SUBJECT)
+    root = tmp_path / "store"
+    expected = _old_store(root, "0.0.22", [left, plain])
+    facet_id = imputed.facets.collect()["facet_id"].item()
+
+    report = migrate_store(root)
+    assert [(entry.version, entry.frame, entry.columns, entry.facet_ids) for entry in report.filled_unknown] == [
+        ("0.0.23", "calls", ("imputation_r2", "imputation_empirical_r2"), (facet_id,))
+    ]
+    got = _read_back(Store.open(root))
+    assert all(got[name].equals(expected[name]) for name in FRAMES)
+    assert got["calls"].filter(pl.col("facet_id") == facet_id)["imputation_r2"].null_count() == len(IMPUTED_RECORDS), "not read, never invented"
 
 
 def test_a_newer_store_is_refused_never_downgraded(tmp_path: Path) -> None:

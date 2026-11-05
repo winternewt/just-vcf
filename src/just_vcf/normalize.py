@@ -353,6 +353,9 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
         sliced_gl.alias("gl"),
         pl.lit(None, dtype=CALLS["gp"]).alias("gp"),
         pl.lit(None, dtype=CALLS["dosage"]).alias("dosage"),
+        # A site's imputation r² is the site's, not one ALT's: withheld with its dosage.
+        pl.lit(None, dtype=CALLS["imputation_r2"]).alias("imputation_r2"),
+        pl.lit(None, dtype=CALLS["imputation_empirical_r2"]).alias("imputation_empirical_r2"),
         pl.lit(None, dtype=CALLS["source_gt"]).alias("source_gt"),
         # One row of a site that had two or more ALTs; a site left with one beside `<*>` is an
         # ordinary biallelic row, with nothing for rejoin_split to join.

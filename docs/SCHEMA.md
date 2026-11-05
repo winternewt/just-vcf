@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.22.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.23.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -936,6 +936,8 @@ With Decisions 1–5 as recommended:
 | `gl` | `list[f32]` | no likelihoods given |
 | `gp` | `list[f32]` | no posteriors given |
 | `dosage` | `f32` | no dosage given |
+| `imputation_r2` | `f32` | the source wrote no INFO `R2` or `DR2` on the row, or several values (one per ALT of a multi-allelic site), or `R2` and `DR2` that differ (each counted). The imputation tool's estimate of the squared correlation between the site's imputed dosage and the true genotype: minimac's `R2`, Beagle's `DR2`, as written (rule below, "Imputation quality") |
+| `imputation_empirical_r2` | `f32` | the source wrote no INFO `ER2` on the row: minimac writes it only on the sites the chip typed. minimac's empirical, leave-one-out r² there, as written |
 | `evidence_basis` | `Enum` | never null. Origin only: `assay`, `ref_block`, `absence` (Decision 3) |
 | `gq` | `u16` | not given, or outside 0..65535 (counted in the warnings) |
 | `hq` | `list[u16]` | no slot has a score. Parallel to `gt`: a phred-scaled confidence in each haplotype's call (VCF's reserved FORMAT `HQ`, haplotype qualities). From CGI's native files, `varScoreEAF` per haplotype, the lowest of a `var` haplotype's sub-rows (rule in "CGI's allele scores", below); from a VCF, FORMAT `HQ` per GT allele (rule in "A VCF's haplotype qualities", below). An element null on an uncalled (`.`, `?`) or partly called slot, where the source gave none, or outside 0..65535 (counted). `write_vcf` writes it as FORMAT `HQ` (`Number=2`; a haploid row as `51,.`; a row of more than two GT alleles left out, counted), `write_vcf_zarr` as `call_HQ` on the ploidy dimension |
@@ -950,6 +952,42 @@ With Decisions 1–5 as recommended:
 | `ciend` | `list[i32]` | as `cipos`, from INFO `CIEND`: offsets from the end. Never filled from `cipos`, though VCF 4.5 says a missing CIEND matches it |
 | `copy_number` | `f32` | the source wrote no FORMAT `CN`: this sample's copy number of the segment |
 | `alt_copy_numbers` | `list[f32]` | the source wrote no INFO `CN`, or not one value per ALT. Parallel to `alts`: VCF 4.5's copy number of each ALT allele; a VCF 4.2 INFO CN (`Number=1`, the copy number of the segment) is the one-ALT list |
+
+**Imputation quality (`imputation_r2`, `imputation_empirical_r2`, 0.0.23, RM287).** An imputation
+server's output states, per site, how well it thinks it imputed: minimac (Michigan, TOPMed) writes INFO
+`R2` on every site, its estimated r² between the imputed dosage and the true genotype, and `ER2` on the
+sites the chip typed, the empirical r² from leaving that site out and imputing it from the rest;
+Beagle writes `DR2`, its estimate of the same r² as minimac's `R2`, one value per ALT (`Number=A`).
+Before 0.0.23 the loader read these keys only as header markers (`callset.imputation_marker`) and listed
+them in `dropped_fields`, so a site imputed at r² 0.2 and one at 0.99 looked the same on the row. Now
+the VCF loaders read them (`loaders.vcf.IMPUTATION_QUALITY`):
+
+- `imputation_r2` is the row's `R2`, else its `DR2`. A row writing both keeps them where they are equal
+  and withholds the column where they differ, counted in a load warning: two tools' estimates, neither
+  outranking the other. Which tool wrote the value is the facet's to say (`caller` and `method_steps`,
+  where the header names the tool; `source` reads minimac's `##source`, not yet Beagle's).
+- `imputation_empirical_r2` is `ER2`, null on the sites the chip did not type.
+- A row writing several values for a key (Beagle's `DR2` on a multi-allelic site) has that column
+  withheld, counted: one column holds one value per row, as `dosage` holds `DS` only on a site with one
+  ALT. A value that is no number is left out, counted. Values are kept as written, not range-checked.
+- `normalize` withholds both on the rows it splits from a multi-allelic site (the r² is the site's, not
+  one ALT's), as it withholds `dosage`; `rejoin_split` leaves them null on a joined row, as a load does
+  on a multi-allelic record writing one per ALT; `liftover` carries them, a swapped row included (the r²
+  of a dosage does not depend on which allele it counts). `write_vcf` and `write_vcf_zarr` do not
+  write them: VCF reserves no key for them and VCF Zarr no field, so writing them is a decision of its
+  own, not taken here.
+- **The grade does not read them** (the lead's decision, 2026-11-05, listed for the person's veto):
+  `genotype_evidence` grades an imputed row by GP, else DS, as before, so a site at r² 0.2 still grades
+  as its GP says. The columns are additive; whether, and how, a grade discounts a low r² is open.
+
+The builder's call, for the lead's veto: **two columns by quantity, not by key.** minimac's `R2` and
+Beagle's `DR2` are one quantity estimated by two tools, so they share a column; `ER2` is another
+quantity (measured, not estimated, and only on typed sites), so it has its own. Rejected: one column
+per key (`r2`, `er2`, `dr2`), which gives two synonyms a reader has to coalesce and a new column for
+every tool's spelling of the same estimate; and one column plus the key it came from, which takes `ER2`
+for a second source of the same number and on a typed site would have to drop either `R2` or `ER2`. A
+per-ALT list (as `alt_copy_numbers`) was not taken either: minimac writes one value per site, and
+Beagle's per-ALT values meet only multi-allelic sites, which reference panels mostly split already.
 
 **CGI's allele scores (`hq`, 0.0.19).** A Complete Genomics `var` or masterVarBeta file scores each
 haplotype's call: `varScoreVAF` and `varScoreEAF` per `var` sub-row, `allele<n>VarScoreVAF/EAF` per
@@ -1058,8 +1096,9 @@ parquet spill of `calls`, three columns, so they cost no second parse of the VCF
   row's values concatenated in the joined `alts` order; null when a row does not state them for each
   of its ALTs, or two rows giving one ALT disagree.
 - Withheld: `gl`, `gp`, `ad`, `gq`, `dosage`, `source_alleles` (split rows hold REF against one ALT,
-  and the full vectors would need the reads, which is calling genotypes), and `source_gt` (no file
-  wrote the joined text).
+  and the full vectors would need the reads, which is calling genotypes), `imputation_r2` and
+  `imputation_empirical_r2` (one value per row cannot hold one per ALT, as at load), and `source_gt`
+  (no file wrote the joined text).
 
 A position stays as written, its rows still flagged, when it cannot be read as one site: two ALTs in
 one slot, rows of different ploidy, a symbolic allele, REFs that are not prefixes of one another, an
@@ -1089,7 +1128,8 @@ from the same collection (`ref_seqcol_digest`) of the same store. In order:
      where no GT slot holds another ALT. Where one does, no entry of the slice is the genotype the
      caller chose, and the slice alone would point at one it rejected, so it is withheld;
    - `gp` and `dosage` are withheld: a posterior over part of the genotypes does not sum to 1, and
-     rescaling it would change the values;
+     rescaling it would change the values; so are `imputation_r2` and `imputation_empirical_r2`, which
+     are the site's, not one ALT's (0.0.23);
    - `source_alleles` is the row's `[REF, ALT]` where any vector is kept, null otherwise.
    `<*>` beside concrete ALTs (DeepVariant writes it on every variant record of a gVCF, and
    `<NON_REF>`, loaded as `<*>`, in its VCF) names no allele, so it gets no row: the concrete ALTs are
@@ -1247,7 +1287,8 @@ holding that collection and the target.
    indexes `[ref] + alts`. `gl`, `gp`, `ad` and the order of `source_alleles` are the parent's (Decision
    2: never reordered). A swapped row's `dosage` is null, since it counted the other allele, and so
    are its `alt_copy_numbers`: the swapped ALT's slot holds the old REF, whose copy number the source
-   did not state. A row
+   did not state. Its `imputation_r2` and `imputation_empirical_r2` carry: the r² of a dosage does
+   not depend on which allele it counts. A row
    lifted to another contig than its source's has `phased`, `phase_sets` and `phase_set_kinds` null: a
    PS set is keyed per contig, and two sets would otherwise merge. `ids`, `filters`, `qual`, `gq`, `dp`
    and `evidence_basis` are kept. Re-mint ids on the target with `mint_vrs_ids`.
@@ -2498,6 +2539,10 @@ stays. The shape is just-vcf's own (charter 2): VRS 2.x has no genotype model an
 graded-evidence value. Rejected: a stored column, which would freeze today's rules (the prior, the GQ
 reading) into every cache spill and need a version bump each time they move.
 
+An imputed row's per-site r² (`imputation_r2`, `imputation_empirical_r2`, 0.0.23) is not read by any
+grade: an imputed row grades by its GP, else its DS, whatever the tool's r² says (the lead's decision,
+2026-11-05, for the person's veto; Decision 6, "Imputation quality").
+
 `genotype_evidence(loaded)` gives one row per `calls` row and per `blocks` row (`GENOTYPE_EVIDENCE`):
 `facet_id`, `chrom`, `pos`, `end_pos`, `evidence_basis` (the origin, Decision 3: `assay` or
 `ref_block`), `block_kind`, and
@@ -2859,6 +2904,7 @@ a step fails it.
 | 0.0.19 → 0.0.20 | facets | adds `resolve_version` (null) after `ref_seqcol_digest` | facets whose REF was read (`ref_seqcol_digest` set): null means not recorded, not "REF not read", so the store refuses the same facet resolved today as another state of it |
 | 0.0.20 → 0.0.21 | facets | adds `resolve_inputs` (null) after `resolve_version` | array facets (`family = genotype_table`) whose REF was read: null means not recorded, not "no manifest", so the store refuses the same facet resolved today with manifests as another state of it; consensus facets: null means the parents' REF states were not recorded, so the store refuses the same consensus built today |
 | 0.0.21 → 0.0.22 | calls | casts `ref_check` to the enum with `unstated` | facets whose REF was read and that hold a row with a source REF of only `N` and `ref_check = mismatch`: kept as `mismatch` where today's rule reads `unstated`, so `liftover` leaves those rows behind; the facet records `RESOLVE_VERSION` 12, so the store refuses it resolved today. A caveat may name rows as well as facets (`Caveat.rows`), and this is the first that does |
+| 0.0.22 → 0.0.23 | calls | adds `imputation_r2`, `imputation_empirical_r2` (null) after `dosage` | facets whose `dropped_fields` list INFO `R2`, `ER2` or `DR2` (imputation output, and anything derived from it): the two columns null mean not read, not "the source wrote none" |
 
 A step never invents a value: an added column is null, and where that null (or a value an older loader
 left) reads differently from what a load of the same source gives today, the facets it applies to are
@@ -3605,6 +3651,18 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **Two calls columns, landed in 0.0.23** (2026-11-05, RM287: imputed facets read back):
+  `calls.imputation_r2` and `calls.imputation_empirical_r2` (`f32`, null where the source wrote
+  none), after `dosage`: minimac's INFO `R2` or Beagle's `DR2`, and minimac's `ER2` (Decision 6,
+  "Imputation quality"). Additive, but a new column changes the `calls` schema, so pre-1.0 it breaks a
+  consumer that checks the frame's exact columns. INFO `R2`, `ER2` and `DR2` leave `dropped_fields`.
+  Rules: `normalize` withholds both on the rows it splits, `rejoin_split` leaves them null on a joined
+  row, `liftover` carries them; no step's version moves, since no row any step wrote before changes.
+  `REWRITE_VERSION` 18: a rewritten copy declares and keeps the three keys. **No grade changes**:
+  `genotype_evidence` does not read them (the lead's decision, for the person's veto). A store of
+  0.0.22 migrates with both null, named as not read on the facets whose `dropped_fields` list one of
+  the three keys.
+
 - **No version change** (2026-11-03, RM6: across a gap of one chain): `liftover` lifts a sequence row
   whose REF span crosses a gap of one chain outside the bases it changes ("Lifting", step 2b;
   `LIFT_VERSION` 14), where it left every such row behind as `split_across_blocks`. Three reasons are
@@ -4065,6 +4123,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
 
+- **0.0.23** (2026-11-05, RM287): `calls.imputation_r2` and `calls.imputation_empirical_r2` (`f32` or
+  null), each site's imputation quality (the entry at the top of this list).
+
 - **0.0.22** (2026-10-27, F23): `RefCheck.UNSTATED`, a member of `calls.ref_check`'s enum (the entry
   at the top of this list).
 
@@ -4177,7 +4238,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   Vectors are indexed over `source_alleles` and never reordered.
 - Evidence: `gl` (likelihoods), `gp` (posteriors) and `dosage` never mixed, and a row can have more
   than one. `evidence_basis` is the origin only (`assay`, `ref_block`, `absence`). Array calls have no
-  vector until concordance can measure one.
+  vector until concordance can measure one. An imputed row also carries its tool's r²
+  (`imputation_r2`, `imputation_empirical_r2`), which no grade reads yet.
 - Identity: `vrs_allele_ids` parallel to `[ref] + alts`, minted by `mint_vrs_ids` once REF is read.
   `vrs_errors` stores only what minting reported; why an id is missing is computed by
   `vrs_withheld()`. `seqcol_digest` per facet. SV alleles have no id (`sv_no_vrs_model`); what the

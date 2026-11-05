@@ -150,11 +150,23 @@ INFO_KEYS: dict[str, tuple[str, str]] = {
     "CIPOS": (".", "Integer"),
     "CIEND": (".", "Integer"),
     "CN": ("A", "Float"),
+    "R2": ("1", "Float"),
+    "ER2": ("1", "Float"),
+    "DR2": ("A", "Float"),
 }
 """INFO keys the loader reads, with the Number and Type VCF 4.5 gives them: END and SVLEN for
 `end_pos`, and the structural-variant keys the SV columns carry (RM282). VCF 4.5 deprecates SVTYPE
 as redundant with ALT; it is read because callers write a type ALT does not say (DRAGEN's `CNV` on a
-`<DEL>`, Canvas's `LOH`)."""
+`<DEL>`, Canvas's `LOH`). And the imputation tools' per-site quality (RM287), which VCF does not
+reserve, with the Number and Type the tools declare: minimac's R2 and ER2, Beagle's DR2
+(`IMPUTATION_QUALITY`)."""
+
+IMPUTATION_QUALITY: dict[str, str] = {"R2": "imputation_r2", "DR2": "imputation_r2", "ER2": "imputation_empirical_r2"}
+"""The imputation tools' per-site INFO keys → the `calls` column each is read into (SCHEMA.md Decision 6,
+"Imputation quality"). minimac's R2 and Beagle's DR2 are two tools' estimates of one quantity, the
+squared correlation between the imputed dosage and the true genotype; minimac's ER2 is another, the
+empirical (leave-one-out) r² on the sites the chip typed. A column holds a row's one value: a row
+writing several (DR2 on a multi-allelic site, one per ALT) has it withheld, counted."""
 
 V43_RESERVED_TYPES: dict[str, str] = {"FORMAT/CN": "Integer", "INFO/CN": "Integer"}
 """The carried keys whose Type VCF 4.3 reserves differently from VCF 4.5 (CN is Float from 4.4 on).
@@ -224,9 +236,10 @@ declared with another Type is not carried (`refused_types`), except GT, which th
 have no definition in that version and are read under any Type. 4.3's CN is Integer
 (`V43_RESERVED_TYPES`)."""
 
-_LIST_INFO = ("SVLEN", "CIPOS", "CIEND", "CN")
+_LIST_INFO = ("SVLEN", "CIPOS", "CIEND", "CN", *IMPUTATION_QUALITY)
 """INFO keys read as lists. One declared `Number=1` (VCF 4.2's INFO CN, an older caller's SVLEN) is
-read as the one-value list of a one-ALT record."""
+read as the one-value list of a one-ALT record. The imputation quality keys are read as lists whatever their
+Number (minimac's R2 is `1`, Beagle's DR2 `A`), so a row's count of values is known (`_one_value`)."""
 
 SPLIT_MARKER_ID = "OLD_MULTIALLELIC"
 """The INFO key vt decompose and Glow write on a record split off a multi-allelic site."""
@@ -266,7 +279,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 17
+REWRITE_VERSION = 18
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -296,7 +309,10 @@ read.
 otherwise `Number=.` with the reserved Type (`skipped_declarations`, `READER_DEFINITIONS`), Flags and GT
 excepted; a copy from 16 declared only the carried keys it left out, so a reserved key never carried
 (FORMAT MQ `60.5`, INFO DP `30.5` under 4.3) was parsed under the version's definition and failed the
-retry."""
+retry.
+18: the imputation quality keys (INFO R2, ER2, DR2) are carried (RM287), so a copy declares them where
+the rows use them undeclared, and a structural copy keeps them; a copy from 17 dropped their lines,
+and polars-bio panics on a requested key its header does not declare."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -1382,6 +1398,7 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
             for key in ("CIPOS", "CIEND")
         ],
         (pl.col("info_CN").is_not_null() & _per_alt("info_CN", alts).is_null()).sum().alias("unfit_info_CN"),
+        *_imputation_quality_stats(),
         alts.list.eval(~pl.element().str.contains(_VCF_ALLELE_OR_DASH)).list.any().sum().alias("not_allele_alts"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).is_not_null().sum().alias("gp_rows"),
         (pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).list.sum() - 1.0).abs().gt(0.02).sum().alias("gp_off_one"),
@@ -1419,7 +1436,7 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
     return row
 
 
-STATS_VERSION = 1
+STATS_VERSION = 2
 """Bumped whenever `scan_stats` could return something else for the same file under the same request:
 its own expressions and helpers (`_hq_slots`, `_end_stats`, `_psl_stats`, `_fits`, `_alts_expr`,
 `past_alts`, `past_gt`…), how `read_records` shapes the records before the pass sees them
@@ -1427,7 +1444,7 @@ its own expressions and helpers (`_hq_slots`, `_end_stats`, `_psl_stats`, `_fits
 them. A key in the cached stats' manifest and in their key (`stats_key`), so a result an older version
 computed is never read, and the sweep retires its entry. The source of this module and of
 `loaders/text.py` is in the key as well (`_STATS_CODE`): an edit that forgets the bump costs a pass,
-never a stale count."""
+never a stale count. 2: the imputation quality keys' counts (`_imputation_quality_stats`, RM287)."""
 
 POLARS_BIO_VERSION = version("polars-bio")
 """The polars-bio that read the records the cached stats count: in their key and their manifest."""
@@ -1825,6 +1842,7 @@ def to_rows(
             )
     if stats.get("unfit_info_CN"):
         warnings.append(f"{stats['unfit_info_CN']} INFO CN value(s) not one per ALT set to null")
+    warnings += imputation_quality_warnings(stats)
     if stats.get("dash_alts"):
         warnings.append(
             f"{stats['dash_alts']} record(s) write a deletion as ALT `-`, which VCF has no allele for (F12): read as "
@@ -1909,6 +1927,8 @@ def to_rows(
         .then(pl.col("fmt_DS").cast(pl.List(pl.Float32), strict=False).list.first())
         .otherwise(None)
         .alias("dosage"),
+        _imputation_r2().alias("imputation_r2"),
+        _one_value("ER2").alias("imputation_empirical_r2"),
         _bounded("GQ", pl.UInt16).alias("gq"),
         _hq(hq_type(records)),
         _bounded("DP", pl.UInt32).alias("dp"),
@@ -1986,6 +2006,55 @@ def _per_alt(name: str, alts: pl.Expr) -> pl.Expr:
     """An INFO list with one value per ALT (`Number=A`) as Float32, null where its count is not that."""
     values = pl.col(name).cast(pl.List(pl.Float32), strict=False)
     return pl.when(values.list.len() == alts.list.len()).then(values).otherwise(None)
+
+
+def _one_value(key: str) -> pl.Expr:
+    """An imputation quality key's value on the row (`IMPUTATION_QUALITY`) as Float32: null where the
+    row writes none, several (one per ALT of a multi-allelic site, counted), or one that is no number
+    (counted). Kept as written, not range-checked."""
+    values = pl.col(f"info_{key}")
+    return pl.when(values.list.len() == 1).then(values.list.first().cast(pl.Float32, strict=False))
+
+
+def _imputation_r2() -> pl.Expr:
+    """`imputation_r2`: minimac's R2 or Beagle's DR2, whichever the row writes; withheld where it writes
+    both and they differ (counted), since neither tool's estimate outranks the other's."""
+    r2, dr2 = _one_value("R2"), _one_value("DR2")
+    return pl.when(r2.is_not_null() & dr2.is_not_null() & (r2 != dr2)).then(None).otherwise(pl.coalesce(r2, dr2))
+
+
+def _imputation_quality_stats() -> list[pl.Expr]:
+    """`scan_stats`' counts behind `imputation_quality_warnings`, per key: rows writing several values,
+    and rows whose one value is no number; and rows writing R2 and DR2 that differ."""
+    counts = []
+    for key in IMPUTATION_QUALITY:
+        values = pl.col(f"info_{key}")
+        first = values.list.first()
+        counts += [
+            ((values.list.len() > 1) & (values.list.drop_nulls().list.len() > 0)).sum().alias(f"several_info_{key}"),
+            ((values.list.len() == 1) & first.is_not_null() & first.cast(pl.Float32, strict=False).is_null()).sum().alias(f"not_number_info_{key}"),
+        ]
+    r2, dr2 = _one_value("R2"), _one_value("DR2")
+    return [*counts, (r2.is_not_null() & dr2.is_not_null() & (r2 != dr2)).sum().alias("r2_dr2_differ")]
+
+
+def imputation_quality_warnings(stats: dict) -> list[str]:
+    """The load warnings for the imputation quality keys, one line per reason with its count."""
+    warnings = []
+    for key, column in IMPUTATION_QUALITY.items():
+        if stats.get(f"several_info_{key}"):
+            warnings.append(
+                f"{stats[f'several_info_{key}']} INFO {key} value(s) withheld: the row writes several (one per ALT of a "
+                f"multi-allelic site), and {column} holds one per row"
+            )
+        if stats.get(f"not_number_info_{key}"):
+            warnings.append(f"{stats[f'not_number_info_{key}']} INFO {key} value(s) not a number left out")
+    if stats.get("r2_dr2_differ"):
+        warnings.append(
+            f"{stats['r2_dr2_differ']} row(s) write INFO R2 and DR2 that differ: imputation_r2 withheld there, since "
+            "they are two tools' estimates of one quantity"
+        )
+    return warnings
 
 
 def _has_sv(alts: pl.Expr) -> pl.Expr:

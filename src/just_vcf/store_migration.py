@@ -321,6 +321,22 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
             ),
         ),
     ),
+    MigrationStep(
+        "0.0.22",
+        "0.0.23",
+        "per-site imputation quality: calls.imputation_r2 and imputation_empirical_r2",
+        frames={"calls": _add_after("dosage", {"imputation_r2": pl.Float32, "imputation_empirical_r2": pl.Float32})},
+        added=("calls.imputation_r2", "calls.imputation_empirical_r2"),
+        caveats=(
+            Caveat(
+                "calls",
+                ("imputation_r2", "imputation_empirical_r2"),
+                _dropped("INFO/R2", "INFO/ER2", "INFO/DR2"),
+                "the load left out INFO R2, ER2 and DR2 (in dropped_fields), which 0.0.23 reads as each site's "
+                f"imputation quality: imputation_r2 and imputation_empirical_r2 null here mean not read; {_RELOAD}",
+            ),
+        ),
+    ),
 )
 """One step per schema version bump since the store shipped, in order."""
 

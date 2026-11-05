@@ -7,9 +7,17 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM287 — Imputed facets read back
-**State:** building: the read-back half (per-site imputation quality kept, an `imputed_from` link), inside the charter under any answer to desk #180, which stayed open through the person's present on 2026-11-05 · **Owner:** lead
+**State:** unattended: the strand check against an imputation server's input rules (RM6's A/T and C/G item) · **Owner:** lead
 
-Severity: low · Status: blocked: desk #180, yes after a present (filed by the lead 2026-11-03 from the person's question whether imputation belongs in just-vcf or downstream; the lead's recommendation on #180 is downstream, and this item is the read-back half, which is inside the charter under any answer)
+Severity: low · Status: read-back shipped 2026-11-05 on a builder's branch, for the lead's merge: schema
+0.0.23's `calls.imputation_r2` (minimac R2 or Beagle DR2) and `calls.imputation_empirical_r2`
+(minimac ER2), read by no grade (the lead's decision, for the person's veto), with the store migration
+step; and `imputed_from`, a one-parent lineage relation the caller states with `state_imputed_from`
+(tool and panel in the link's provenance), which `person_karyotype`, `Person` and `consensus` read as
+one callset. docs/SCHEMA.md Decision 6 "Imputation quality" and Decision 12 "A stated lineage" hold the
+builder's calls for veto. Left: the third bullet below, which waits on RM6's strand item. Desk #180
+(whether imputation itself belongs here; the lead recommends downstream) does not bear on what shipped,
+which is inside the charter under any answer.
 
 Imputation runs elsewhere (the charter: imputation servers make the facets, just-vcf reads what they
 produced). What reading one back already does, checked 2026-11-03: `callset.imputation_marker` names a file
@@ -17,11 +25,11 @@ produced). What reading one back already does, checked 2026-11-03: `callset.impu
 `loimpute`), and `absence_means` follows; `evidence.genotype_evidence` grades a row by GP first and by DS
 (`dosage`, `GradeBasis.DOSAGE`) when nothing richer is there. What it does not do:
 
-- **Per-site imputation quality is not kept.** INFO R2, ER2 and DR2 are read only as header markers; the
+- *Shipped 2026-11-05 (schema 0.0.23).* **Per-site imputation quality is not kept.** INFO R2, ER2 and DR2 are read only as header markers; the
   rows carry no per-site value, so a site imputed at R2 0.2 grades as its GP says, the same as one at 0.99.
   Wanted: the value on the row (a column of its own, named for what it holds, null where the file writes
   none), and a decision, the lead's, on whether the grade reads it.
-- **No lineage link says an imputed facet came from a chip facet.** `links.LINEAGE_RELATIONS` holds only
+- *Shipped 2026-11-05 (`state_imputed_from`).* **No lineage link says an imputed facet came from a chip facet.** `links.LINEAGE_RELATIONS` holds only
   just-vcf's own steps (liftover, normalize, split-rejoin, merge, consensus), each written by the step
   itself. Wanted: a relation a caller states for a step that ran outside the library (`imputed_from`, with
   the tool and panel in provenance), so `same_person` and `consensus` do not read the imputed facet and its

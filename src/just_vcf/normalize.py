@@ -60,7 +60,7 @@ import polars as pl
 
 from just_vcf import cache
 from just_vcf.liftover import RELATION as LIFT_RELATION
-from just_vcf.links import NORMALIZED, derived_links
+from just_vcf.links import NORMALIZED, STATED_RELATIONS, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_batches
 from just_vcf.reference import Contig, ReferenceMismatchError, ReferenceStore
 from just_vcf.schema import CALLS, EMPTY_ALLELE, SCHEMA_VERSION, RefCheck, SplitSignal, canonical_order, empty
@@ -148,7 +148,8 @@ def normalize(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = 
             parts: list[Path] = []
             source = pl.scan_parquet(staged)
             rereads = facet["relation"] in REREADS_REF
-            from_file = facet["derived_from"] is None
+            # An imputed facet stated as made from its chip was still read from its own file.
+            from_file = facet["derived_from"] is None or facet["relation"] in STATED_RELATIONS
             # A part per group of whole contigs (`canonical_batches`), read in one scan and written as one
             # file (F24). A contig the collection holds is aligned on its own, against its one sequence;
             # the rows on every other contig of the group are split, deduplicated and sorted together,
@@ -205,7 +206,7 @@ def _normalize_contig(
     the rows of any number of contigs the collection does not hold, which are split, deduplicated and
     sorted alike and not aligned (`_align` counts them). `rereads`: the facet's relation read
     every row's REF from its collection (`REREADS_REF`). `from_file`: the facet was read from a file
-    (no `derived_from`), so a row's `ref` was written by `resolve_ref` alone."""
+    (no `derived_from`, or a lineage the caller stated, `links.STATED_RELATIONS`), so a row's `ref` was written by `resolve_ref` alone."""
     if rows.is_empty():
         return rows
     flagged = pl.col("split_signal").is_not_null()
@@ -353,6 +354,9 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
         sliced_gl.alias("gl"),
         pl.lit(None, dtype=CALLS["gp"]).alias("gp"),
         pl.lit(None, dtype=CALLS["dosage"]).alias("dosage"),
+        # A site's imputation r² is the site's, not one ALT's: withheld with its dosage.
+        pl.lit(None, dtype=CALLS["imputation_r2"]).alias("imputation_r2"),
+        pl.lit(None, dtype=CALLS["imputation_empirical_r2"]).alias("imputation_empirical_r2"),
         pl.lit(None, dtype=CALLS["source_gt"]).alias("source_gt"),
         # One row of a site that had two or more ALTs; a site left with one beside `<*>` is an
         # ordinary biallelic row, with nothing for rejoin_split to join.

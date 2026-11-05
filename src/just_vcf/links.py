@@ -28,19 +28,28 @@ Documented; no step emits it yet."""
 CONSENSUS = "consensus"
 """just-vcf's: several parents, one facet whose rows are computed from all of them: a posterior per
 allele that weighs each parent's evidence (`consensus`, RM280). The parents keep their own calls."""
+IMPUTED_FROM = "imputed_from"
+"""just-vcf's: the `to` facet is imputation output (an imputation server's VCF) made from the `from`
+facet, the chip or low-pass genome that went in (RM287). The one lineage relation a caller states,
+for a step that ran outside the library (`just_vcf.imputation.state_imputed_from`); no step writes it
+and nothing infers it. The link's provenance names the tool and the reference panel."""
 CALLER_SPLIT = "caller_split"
 """just-vcf's: facets holding one caller's rows each of a file merging several callers (Decision 8)."""
 APPENDED_EXPORT = "appended_export"
 """just-vcf's: an export appended to a file after another one, read as its own facet (F3). GA4GH has
 no term for two exports in one file."""
 
-LINEAGE_RELATIONS: frozenset[str] = frozenset({LIFTOVER_TO, NORMALIZED, SPLIT_REJOINED, MERGE, CONSENSUS})
+LINEAGE_RELATIONS: frozenset[str] = frozenset({LIFTOVER_TO, NORMALIZED, SPLIT_REJOINED, MERGE, CONSENSUS, IMPUTED_FROM})
 """Relations where the `to` facet was made from the `from` facet."""
 MULTI_PARENT_RELATIONS: frozenset[str] = frozenset({MERGE, CONSENSUS})
 """Lineage relations a facet holds with two or more parents, so `facets.derived_from` stays null."""
 SINGLE_PARENT_RELATIONS: frozenset[str] = LINEAGE_RELATIONS - MULTI_PARENT_RELATIONS
 """Lineage relations with one parent, the ones `facets.derived_from` holds: a facet linked so is its
-parent's callset, made again (lifted, normalized, rejoined)."""
+parent's callset, made again (lifted, normalized, rejoined), or imputed from it (stated by the caller):
+its rows are not independent evidence beside its parent's."""
+STATED_RELATIONS: frozenset[str] = frozenset({IMPUTED_FROM})
+"""Lineage relations a caller states for a step that ran outside just-vcf: the facet was still read
+from a file of its own, so its rows are what that file wrote (`normalize` reads it as read from a file)."""
 KIN_RELATIONS: frozenset[str] = frozenset({CALLER_SPLIT, APPENDED_EXPORT})
 """Relations between facets of one source, neither made from the other."""
 RELATIONS: frozenset[str] = LINEAGE_RELATIONS | KIN_RELATIONS

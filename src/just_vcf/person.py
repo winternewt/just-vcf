@@ -23,7 +23,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
 from just_vcf.coverage import Coverage
-from just_vcf.links import MULTI_PARENT_RELATIONS, canonical_links
+from just_vcf.links import MULTI_PARENT_RELATIONS, SINGLE_PARENT_RELATIONS, canonical_links
 from just_vcf.loading import Loaded
 from just_vcf.pedigree import BAND_ORDER, EXPECTED_KINSHIP, PEDIGREE_REASONS, Pedigree, expected_kinship
 from just_vcf.relatedness import (
@@ -117,9 +117,11 @@ class Person(BaseModel):
         A facet without a subject, or facets under two subjects, are refused with `SubjectError`; so is
         one `facet_id` given twice, whose rows would then count twice. Facets of one source (the same
         bytes, archive member and sample: a file and the facets derived from it, or the facets one file
-        loads as) are one person by construction and are not checked against each other. Every other
-        pair of sources is checked once, each source standing as its facet read from the file (else
-        its lowest `facet_id`).
+        loads as) are one person by construction and are not checked against each other; nor are
+        facets joined by one-parent lineage across files (an imputed facet and the chip the caller
+        stated it was imputed from, `state_imputed_from`), whose rows are not independent evidence.
+        Every other pair of such callsets is checked once, each standing as a facet read from a file
+        with no lineage (the chip before its imputation), else its lowest `facet_id`.
 
         `coverage` is coverage facets of the same subject, carried on `Person.coverage`. One without a
         subject, or under another subject than the facets, is refused with `SubjectError`; one
@@ -150,7 +152,8 @@ class Person(BaseModel):
         order = sorted(range(len(pieces)), key=lambda i: ids[i])
         pieces = [pieces[i] for i in order]
         facets = [facets[i] for i in order]
-        checks, warnings = _check(pieces, facets, check)
+        links = canonical_links(pl.concat([piece.links for piece in pieces], how="vertical"))
+        checks, warnings = _check(pieces, facets, links.collect(), check)
         for warning in warnings:
             logger.warning("%s", warning)
         return cls(
@@ -158,7 +161,7 @@ class Person(BaseModel):
             facets=pl.concat([piece.facets for piece in pieces], how="vertical"),
             calls=pl.concat([piece.calls for piece in pieces], how="vertical"),
             blocks=pl.concat([piece.blocks for piece in pieces], how="vertical"),
-            links=canonical_links(pl.concat([piece.links for piece in pieces], how="vertical")),
+            links=links,
             checks=checks,
             warnings=tuple(warnings),
             schema_version=versions[0],
@@ -291,8 +294,9 @@ def check_pedigree(
     for index in sorted(range(len(rows)), key=lambda i: rows[i]["facet_id"]):
         if rows[index]["subject"] in listed:
             by_subject[rows[index]["subject"]].append(index)
+    links = canonical_links(pl.concat([piece.links for piece in pieces], how="vertical")).collect() if pieces else empty(LINKS).collect()
     standing = {
-        subject: [indices[i] for i in _standing([rows[index] for index in indices])] for subject, indices in by_subject.items()
+        subject: [indices[i] for i in _standing([rows[index] for index in indices], links)] for subject, indices in by_subject.items()
     }
 
     used = sorted({index for indices in standing.values() for index in indices})
@@ -428,15 +432,49 @@ def _source(facet: dict) -> tuple:
     return (facet["source_sha256"], facet["member"], facet["sample"])
 
 
-def _standing(facets: list[dict]) -> list[int]:
-    """The index of the facet standing for each source, in `facets` order (which is `facet_id` order)."""
-    standing: dict[tuple, int] = {}
+def _callset_keys(facets: list[dict], links: pl.DataFrame) -> list[str]:
+    """Per facet, in `facets` order, a key shared by every facet of one source and every facet joined to
+    it by one-parent lineage (`links.SINGLE_PARENT_RELATIONS`, from `links` and `derived_from`), over
+    every id the links name, as `karyotype.person_karyotype` groups a callset. A liftover or a normalize
+    shares its parent's source already; the lineage joins what a caller stated across two files (an
+    imputed facet and its chip, `imputed_from`)."""
+    leader: dict[str, str] = {}
+
+    def find(node: str) -> str:
+        leader.setdefault(node, node)
+        while leader[node] != node:
+            leader[node] = leader[leader[node]]
+            node = leader[node]
+        return node
+
+    def join(a: str, b: str) -> None:
+        first, second = find(a), find(b)
+        if first != second:
+            leader[max(first, second)] = min(first, second)
+
+    edges = {
+        (row["from_facet_id"], row["to_facet_id"])
+        for row in links.filter(pl.col("relation").is_in(sorted(SINGLE_PARENT_RELATIONS))).iter_rows(named=True)
+    }
+    edges |= {(facet["derived_from"], facet["facet_id"]) for facet in facets if facet["derived_from"] is not None}
+    for facet in facets:
+        join(f"facet:{facet['facet_id']}", f"source:{_source(facet)!r}")
+    for a, b in sorted(edges):
+        join(f"facet:{a}", f"facet:{b}")
+    return [find(f"facet:{facet['facet_id']}") for facet in facets]
+
+
+def _standing(facets: list[dict], links: pl.DataFrame) -> list[int]:
+    """The index of the facet standing for each callset (`_callset_keys`), in `facets` order (which is
+    `facet_id` order)."""
+    keys = _callset_keys(facets, links)
+    standing: dict[str, int] = {}
     for index, facet in enumerate(facets):
         # A facet made from several of them is no evidence of its own: checked against its parents it
         # would agree with what it was computed from.
         if facet["relation"] in MULTI_PARENT_RELATIONS:
             continue
-        key = _source(facet)
+        key = keys[index]
         held = standing.get(key)
         # A facet read from the file stands for its source over one derived from it; facets are in
         # `facet_id` order, so ties go to the lowest id.
@@ -445,9 +483,11 @@ def _standing(facets: list[dict]) -> list[int]:
     return sorted(standing.values())
 
 
-def _check(pieces: list[Loaded], facets: list[dict], check: SameSubjectCheck | None) -> tuple[pl.DataFrame, list[str]]:
-    """The pair checks of one person's sources, and the warnings they give."""
-    stand = _standing(facets)
+def _check(
+    pieces: list[Loaded], facets: list[dict], links: pl.DataFrame, check: SameSubjectCheck | None
+) -> tuple[pl.DataFrame, list[str]]:
+    """The pair checks of one person's callsets, and the warnings they give."""
+    stand = _standing(facets, links)
 
     rows: list[dict] = []
     for a, b in combinations(stand, 2):

@@ -6,10 +6,40 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 The first release. It loads 32 formats (consumer array and table exports, VCF, BCF and gVCF, and the
 older sequencing outputs PGP-HMS carries) into the facets, calls, blocks and links frames (schema
-0.0.22), with build, callset type, vendor, caller and chip described per facet; reads REF from a refget
+0.0.23), with build, callset type, vendor, caller and chip described per facet; reads REF from a refget
 store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; compares facets
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
+
+- **`state_imputed_from`: the caller states which chip an imputed facet came from** (RM287). A new
+  lineage relation, `imputed_from`, which just-vcf never infers: the server's file does not say which
+  export went in. `state_imputed_from(imputed, chip, tool=, tool_version=, panel=, panel_sha256=)`
+  returns the imputed facet with `derived_from` the chip, `relation = imputed_from`, the panel in
+  `derivation_inputs`, and the link `chip → imputed` with the tool as `provenance.step`; its id and rows
+  are unchanged. Stated, the two are one callset: `person_karyotype` answers once for them, `Person.of`
+  and `check_pedigree` no longer check the pair against each other (the chip stands for both against
+  the person's other files), and `consensus` refuses them together. `ancestry.consensus` reads no
+  facet lineage and is unchanged. A store already holding the imputed facet keeps it without the
+  link, so state it before the first add. docs/SCHEMA.md Decision 12, "A stated lineage", has the
+  builder's calls for the lead's veto. Tests: `tests/test_imputed_from.py`.
+
+- **Schema 0.0.23, a breaking change pre-1.0: `calls` gains `imputation_r2` and
+  `imputation_empirical_r2`** (RM287). An imputation server's VCF says per site how well it imputed:
+  minimac's INFO `R2` (estimated r², every site) and `ER2` (empirical r², typed sites only), Beagle's
+  `DR2` (the same estimate as `R2`). The VCF loaders read them only as header markers and dropped the
+  values; now `imputation_r2` holds `R2` or `DR2` and `imputation_empirical_r2` holds `ER2`, null where
+  the row writes none. Withheld, with a load warning that counts them: a row writing several values
+  (Beagle's per-ALT `DR2` on a multi-allelic site), a value that is no number, and a row whose `R2`
+  and `DR2` differ. The three keys leave `dropped_fields`. `normalize` withholds both on the rows it
+  splits, `rejoin_split` leaves a joined row's null, `liftover` carries them; `write_vcf` and
+  `write_vcf_zarr` do not write them. Additive, but a consumer checking the exact `calls` columns
+  meets two new ones. **No grade changes**: `genotype_evidence` does not read them (the lead's
+  decision, listed for the person's veto), so a site imputed at r² 0.2 still grades by its GP or DS.
+  `REWRITE_VERSION` 18 and the stats cache's `STATS_VERSION` 2, so cached copies and counts are read
+  anew. `migrate_store` adds both columns null to a 0.0.22 store and names the facets whose
+  `dropped_fields` list one of the keys as not read. docs/SCHEMA.md Decision 6, "Imputation quality",
+  has the rule and the builder's call on the shape (two columns by quantity, not by key), for the
+  lead's veto. Tests: `tests/test_imputation_quality.py`, `tests/test_store_migration.py`.
 
 - `README.md` (the PyPI page) brought up to date for the release: it names coverage (`read_coverage`,
   `alignment_coverage`), sex-chromosome karyotype (`sex_chromosome_evidence`, `person_karyotype`) and

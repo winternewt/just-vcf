@@ -219,8 +219,10 @@ variant. Measured 2026-11-03 on the chains in hand: one-sided gaps under 50 base
 97% and 98% of hs1ToHg38's; two-sided gaps 20-68%. bcftools +liftover's `--max-indel-inc` (250) bounds
 another thing, how far it lets an indel's anchors drift while it realigns the indel through a gap."""
 
-PARENT_COLUMNS_KEPT = ("ids", "phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "gl", "gp", "dosage", "evidence_basis", "gq", "hq", "dp", "ad", "qual", "filters", "sample_filters", "split_signal")
-"""`calls` columns a lifted row carries from its parent as they were (phase sets and dosage aside, below)."""
+PARENT_COLUMNS_KEPT = ("ids", "phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "gl", "gp", "dosage", "imputation_r2", "imputation_empirical_r2", "evidence_basis", "gq", "hq", "dp", "ad", "qual", "filters", "sample_filters", "split_signal")
+"""`calls` columns a lifted row carries from its parent as they were (phase sets and dosage aside, below).
+An imputation r² is carried on a swapped row too: the squared correlation of a dosage and the truth is
+the same whichever allele the dosage counts."""
 
 REPORT = pl.Schema(
     {

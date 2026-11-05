@@ -15,13 +15,14 @@ from just_vcf.callset import (
     MIN_PANEL_SITES,
     MIN_WES_SITES,
     MIN_WGS_BREADTH,
+    MIN_WGS_INDEL_SITES,
     MIN_WGS_SITES,
     absence_means,
     classify,
     imputation_marker,
     spread,
 )
-from just_vcf.schema import AbsenceMeans, CallsetType
+from just_vcf.schema import AbsenceMeans, CallsetType, ContentFilter
 
 AUTOSOMES = [str(n) for n in range(1, 23)]
 READS = ["GT", "GQ", "DP", "AD", "PL"]
@@ -89,6 +90,41 @@ def test_genome_shaped_but_short_of_the_wgs_floor_is_unknown() -> None:
     inferred = classify(genome_shaped(600_000), READS, None)
     assert not inferred and inferred.callset_type is None
     assert inferred.sites == 600_000 - 600_000 % 22 and inferred.breadth > MIN_WGS_BREADTH
+
+
+def test_a_genome_cut_to_its_indels_meets_a_floor_of_its_own() -> None:
+    """RM4: an indel-only half of a genome reads `wgs` at `MIN_WGS_INDEL_SITES` and a genome's breadth;
+    the same rows with no filter are short of `MIN_WGS_SITES`, and an SNV-only half keeps that floor."""
+    assert MIN_WGS_INDEL_SITES < MIN_WGS_SITES
+    rows = genome_shaped(MIN_WGS_INDEL_SITES + 22)
+    cut = classify(rows, READS, None, ContentFilter.INDEL_ONLY)
+    assert cut.callset_type is CallsetType.WGS and cut.sites >= MIN_WGS_INDEL_SITES and cut.breadth >= MIN_WGS_BREADTH
+    assert "indels" in cut.reason
+    assert classify(rows, READS, None).callset_type is None
+    assert classify(rows, READS, None, ContentFilter.SNV_ONLY).callset_type is None
+    assert classify(rows, READS, None, ContentFilter.SV_ONLY).callset_type is None
+    short = classify(genome_shaped(MIN_WGS_INDEL_SITES - 22), READS, None, ContentFilter.INDEL_ONLY)
+    assert short.callset_type is None and short.breadth >= MIN_WGS_BREADTH
+
+
+def test_an_snv_only_half_reads_as_it_did() -> None:
+    above, below = genome_shaped(MIN_WGS_SITES + 22), genome_shaped(600_000)
+    assert classify(above, READS, None, ContentFilter.SNV_ONLY).callset_type is CallsetType.WGS
+    assert classify(below, READS, None, ContentFilter.SNV_ONLY).callset_type is None
+
+
+def test_an_exome_cut_to_its_indels_is_not_wgs() -> None:
+    """Breadth keeps a clustered callset out whatever its filter: enough sites for the indel floor,
+    in an exome's clusters, read `wes`, never `wgs`."""
+    inferred = classify(clustered(220), READS, None, ContentFilter.INDEL_ONLY)
+    assert inferred.sites >= MIN_WGS_INDEL_SITES and inferred.breadth <= MAX_TARGETED_BREADTH
+    assert inferred.callset_type is CallsetType.WES
+
+
+def test_the_header_still_decides_before_the_indel_floor() -> None:
+    rows = genome_shaped(MIN_WGS_INDEL_SITES + 22)
+    assert classify(rows, ["GT", "GP", "DS"], None, ContentFilter.INDEL_ONLY).callset_type is None
+    assert classify(rows, READS, "the header names an imputation tool", ContentFilter.INDEL_ONLY).callset_type is CallsetType.IMPUTED
 
 
 def test_millions_of_clustered_sites_are_not_wgs() -> None:

@@ -260,7 +260,7 @@ def _load_site_table(sniffed: Sniffed) -> Loaded:
         warnings += class_warnings
     else:
         classes = {}
-    inference = callset.classify(calls, read.read_evidence, None)
+    inference = callset.classify(calls, read.read_evidence, None, _content_filter(classes))
     logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
     kind = inference.callset_type
     build = read.build or sniffed.build
@@ -306,7 +306,7 @@ def _load_nirvana_copy(sniffed: Sniffed, sample: str | None, source_sha256: str,
     warnings = nirvana.warnings_for(counts, other)
     classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
     warnings += class_warnings
-    inference = callset.classify(spilled, list(nirvana.READ_EVIDENCE), None)
+    inference = callset.classify(spilled, list(nirvana.READ_EVIDENCE), None, _content_filter(classes))
     logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
     kind = inference.callset_type
     source_chroms = sorted(set(pl.scan_ndjson(copy, schema={"chromosome": pl.String}).select(pl.col("chromosome").unique()).collect()["chromosome"].drop_nulls().to_list()))
@@ -361,11 +361,12 @@ def _load_keyvalue_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Orig
         facet_id = _facet_id(source_sha256, sniffed.member, sniffed.format, options={"caller_index": index})
         calls = keyvalue.to_calls_frame(keyvalue.caller_rows(rows, prefix), facet_id)
         spilled, _ = _spill(facet_id, calls, empty(BLOCKS), origin)
-        inference = callset.classify(spilled, ["DP"], None)
+        # No header line records a filtering command here; the member's own name is read for its words only.
+        # The filter comes first: a facet cut to its indels has a whole genome's floor of its own (RM4).
+        classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
+        inference = callset.classify(spilled, ["DP"], None, _content_filter(classes))
         logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
         kind = inference.callset_type if inference else None
-        # No header line records a filtering command here; the member's own name is read for its words only.
-        classes, class_warnings = _variant_classes(facet_id, spilled, [], callset.named_content_filter(sniffed.member or sniffed.path.name))
         facets.append(
             {
                 "facet_id": facet_id,
@@ -459,7 +460,7 @@ def _load_cgi_copy(sniffed: Sniffed, source_sha256: str, origin: cache.Origin, b
         kind: CallsetType | None = CallsetType.WGS
     else:
         # The header is silent (28 of 250 PGP-HMS files have no #TITLE): the rows say, as for a VCF (RM4).
-        inference = callset.classify(spilled, list(cgi.READ_EVIDENCE), None)
+        inference = callset.classify(spilled, list(cgi.READ_EVIDENCE), None, _content_filter(classes))
         logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
         kind = inference.callset_type
     facet = {
@@ -916,10 +917,14 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         spilled = pl.scan_parquet(calls_paths)
         flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
         part_warnings += vcf.split_warnings(flagged, marker_rows, header)
+        # The filter comes first: a facet cut to its indels has a whole genome's floor of its own (RM4).
+        classes, class_warnings = _variant_classes(facet_id, spilled, stated_filters, named_filter)
+        part_warnings += class_warnings
         if source.callset_type:
             kind = source.callset_type
         else:
-            inference = callset.classify(spilled, list(header.format), callset.imputation_marker(header.meta, list(header.info)))
+            imputed_by = callset.imputation_marker(header.meta, list(header.info))
+            inference = callset.classify(spilled, list(header.format), imputed_by, _content_filter(classes))
             logger.info("%s: callset type %s (%s)", facet_id, inference.callset_type.value if inference else "unknown", inference.reason)
             kind = inference.callset_type if inference else None
         if omitted_called_reference and kind is not CallsetType.WGS:
@@ -927,8 +932,6 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
                 f"{source.caller} leaves out the positions it called reference, but the rows do not show a whole genome "
                 f"(callset type {kind.value if kind else 'unknown'}): absence is not read as reference"
             )
-        classes, class_warnings = _variant_classes(facet_id, spilled, stated_filters, named_filter)
-        part_warnings += class_warnings
         caller = part.caller if part.split else source.caller
         # After the read: a retry may have left GL or PL out (`Header.unparsed`).
         likelihoods = vcf.gl_source(header)
@@ -1019,6 +1022,13 @@ def _variant_classes(
         "content_filter_basis": content.basis.value if content.basis else None,
     }
     return columns, list(content.warnings)
+
+
+def _content_filter(classes: dict) -> ContentFilter | None:
+    """The `content_filter` `_variant_classes` wrote, as the member `callset.classify` reads (null for a
+    facet whose classes were not counted)."""
+    kept = classes.get("content_filter")
+    return ContentFilter(kept) if kept else None
 
 
 def _concat(frames: list[pl.LazyFrame]) -> pl.LazyFrame:

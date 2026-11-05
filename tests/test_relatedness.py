@@ -284,6 +284,26 @@ def test_an_array_absence_is_not_reference(family, tmp_path: Path) -> None:
     assert relatedness(unknown, vcf, panel).n_sites == sum(pair != (0, 0) for pair in people["a"])
 
 
+def test_a_genome_cut_to_its_indels_says_nothing_at_an_snv_site(family, tmp_path: Path) -> None:
+    """A whole genome cut to one class (RM4): an indel-only half's silence at a panel's SNV sites is
+    unknown (`absence_is_reference` says the class was cut), while an SNV-only half's still reads as
+    reference, as it did before the indel half could read `wgs`."""
+    panel, _, people = family
+    vcf = wgs(write_vcf(tmp_path / "a.vcf", panel, people["a"]))
+
+    def cut(kept: str) -> Loaded:
+        facets = vcf.facets.with_columns(
+            pl.lit("wgs").cast(FACETS["callset_type"]).alias("callset_type"),
+            pl.lit(kept).cast(FACETS["content_filter"]).alias("content_filter"),
+            pl.lit("rows").cast(FACETS["content_filter_basis"]).alias("content_filter_basis"),
+        )
+        return Loaded(facets=facets, calls=vcf.calls, blocks=vcf.blocks)
+
+    carried = sum(pair != (0, 0) for pair in people["a"])
+    assert relatedness(cut("snv_only"), vcf, panel).n_sites == N_SITES
+    assert relatedness(cut("indel_only"), vcf, panel).n_sites == carried < N_SITES
+
+
 def test_a_facet_known_only_where_it_carries_the_alt_is_not_banded(family, tmp_path: Path) -> None:
     """A variant-only VCF whose silence says nothing (an exome gVCF with only no-call blocks reads the
     same): its genotype chose the shared sites, which moves the kinship (on PGP's Genos exome, up;

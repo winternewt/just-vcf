@@ -11,6 +11,24 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **A genome cut to its indels reads `wgs`** (RM4, the lead's call). A facet whose `content_filter` is
+  `indel_only` is typed `wgs` at `MIN_WGS_INDEL_SITES` (116,000) sites on the primary assembly and the
+  usual 75% breadth, where it needed the 1,000,000 sites an unsplit genome does: a genome carries about
+  a tenth as many indels as SNVs, and the floor keeps the ported floor's ratio (1,000,000 is 4.3x below
+  the smallest genome just-dna-lite measured; 500,000 indels / 4.3 = 116,279). Every loader now decides
+  the filter before the type, and `callset.classify` takes it. The filter, not the label, still gates
+  absence: `absence_is_reference` is `None` for the indels without `force=True` and for the classes cut
+  away with it. An exome cut to its indels stays out by its breadth; an SNV-only half reads as before.
+  The panel reads (`site_genotypes`, used by `infer_ancestry` and `relatedness`, and somalier's
+  `--unknown`) take a whole genome's silence at an SNV site as reference only where
+  `absence_is_reference(facet, "snv", force=True)` is True, so an indel half's is unknown, and so is
+  that of a facet that wrote no SNV or whose classes were not counted. Values change on files that
+  already load (the PGP-HMS DRAGEN indel halves read `wgs`); no version moves. Tests:
+  `tests/test_callset.py::test_a_genome_cut_to_its_indels_meets_a_floor_of_its_own`,
+  `tests/test_content_filter.py::test_load_reads_an_indel_only_genome_as_wgs_and_holds_its_absences_back`,
+  `tests/test_relatedness.py::test_a_genome_cut_to_its_indels_says_nothing_at_an_snv_site`, each failing
+  on the code before.
+
 - **A chip's way out checked against the imputation servers' input rules** (RM287). Tests only; no
   library change. A synthetic 23andMe export goes through `resolve_ref`, `liftover` and `write_vcf`, and
   `tests/imputation_rules.py` reads the file as Michigan's and TOPMed's servers do, rule by rule (sources

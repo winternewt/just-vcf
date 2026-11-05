@@ -11,6 +11,18 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **`Person.of` checks a stated chip and imputation pair once** (merge audit 15). Since RM287 the
+  chip and the imputed facet stated as made from it (`state_imputed_from`) are one callset, checked
+  only against the person's other callsets, so a chip of another person stated as the source went
+  unchecked. The statement is now checked once, the chip (or, where it is not given, a facet the
+  library made from it) against the imputed facet, its row in `Person.checks` read as any other:
+  `different` makes `one_person` False and is warned, an unknown answer or no check keeps it from
+  True. They stay one callset against everyone else; a liftover or normalize is never checked
+  against its parent. A consumer counting `Person.checks` rows meets one more per statement. Tests:
+  `tests/test_imputed_from.py::test_a_stated_pairs_check_is_read_as_any_pairs`,
+  `tests/test_imputed_from.py::test_a_chip_stated_for_another_persons_imputation_reads_as_two_people`,
+  each failing on the code before.
+
 - **`consensus` refuses two parents made from one ancestor** (merge audit 15). It refused a parent made
   from another given parent, but not two given parents sharing an ancestor, so a chip's normalized
   facet beside an imputation stated from the chip (`state_imputed_from`), or two derivations of one
@@ -51,7 +63,8 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
   `derivation_inputs`, and the link `chip → imputed` with the tool as `provenance.step`; its id and rows
   are unchanged. Stated, the two are one callset: `person_karyotype` answers once for them, `Person.of`
   and `check_pedigree` no longer check the pair against each other (the chip stands for both against
-  the person's other files), and `consensus` refuses them together. `ancestry.consensus` reads no
+  the person's other files; `Person.of` checks the statement itself once since merge audit 15, above),
+  and `consensus` refuses them together. `ancestry.consensus` reads no
   facet lineage and is unchanged. A store already holding the imputed facet keeps it without the
   link, so state it before the first add. docs/SCHEMA.md Decision 12, "A stated lineage", has the
   builder's calls for the lead's veto. Tests: `tests/test_imputed_from.py`.

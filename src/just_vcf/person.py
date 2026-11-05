@@ -23,7 +23,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
 from just_vcf.coverage import Coverage
-from just_vcf.links import MULTI_PARENT_RELATIONS, SINGLE_PARENT_RELATIONS, canonical_links
+from just_vcf.links import MULTI_PARENT_RELATIONS, SINGLE_PARENT_RELATIONS, STATED_RELATIONS, canonical_links
 from just_vcf.loading import Loaded
 from just_vcf.pedigree import BAND_ORDER, EXPECTED_KINSHIP, PEDIGREE_REASONS, Pedigree, expected_kinship
 from just_vcf.relatedness import (
@@ -121,7 +121,10 @@ class Person(BaseModel):
         facets joined by one-parent lineage across files (an imputed facet and the chip the caller
         stated it was imputed from, `state_imputed_from`), whose rows are not independent evidence.
         Every other pair of such callsets is checked once, each standing as a facet read from a file
-        with no lineage (the chip before its imputation), else its lowest `facet_id`.
+        with no lineage (the chip before its imputation), else its lowest `facet_id`. A caller's
+        statement is checked too, once: the chip's side (the chip, or a facet the library made from
+        it) against the imputed facet's, its row read as any other, so a chip of another person reads
+        `different`. A statement whose chip is not given has nothing to be checked against.
 
         `coverage` is coverage facets of the same subject, carried on `Person.coverage`. One without a
         subject, or under another subject than the facets, is refused with `SubjectError`; one
@@ -432,12 +435,12 @@ def _source(facet: dict) -> tuple:
     return (facet["source_sha256"], facet["member"], facet["sample"])
 
 
-def _callset_keys(facets: list[dict], links: pl.DataFrame) -> list[str]:
-    """Per facet, in `facets` order, a key shared by every facet of one source and every facet joined to
-    it by one-parent lineage (`links.SINGLE_PARENT_RELATIONS`, from `links` and `derived_from`), over
-    every id the links name, as `karyotype.person_karyotype` groups a callset. A liftover or a normalize
-    shares its parent's source already; the lineage joins what a caller stated across two files (an
-    imputed facet and its chip, `imputed_from`)."""
+def _grouping(facets: list[dict], links: pl.DataFrame, *, stated: bool = True) -> Callable[[str], str]:
+    """A union-find over facet ids (every id `links` names, held or not) and the facets' sources: each
+    held facet joined to its source, and every pair joined by one-parent lineage
+    (`links.SINGLE_PARENT_RELATIONS`, from `links` and `derived_from`). With `stated=False` the
+    lineage a caller states (`links.STATED_RELATIONS`, `imputed_from`) is left out, so what remains
+    is what one file holds and what the library made from it. Returns the key of an id's group."""
     leader: dict[str, str] = {}
 
     def find(node: str) -> str:
@@ -452,45 +455,80 @@ def _callset_keys(facets: list[dict], links: pl.DataFrame) -> list[str]:
         if first != second:
             leader[max(first, second)] = min(first, second)
 
-    edges = {
-        (row["from_facet_id"], row["to_facet_id"])
-        for row in links.filter(pl.col("relation").is_in(sorted(SINGLE_PARENT_RELATIONS))).iter_rows(named=True)
+    relations = SINGLE_PARENT_RELATIONS if stated else SINGLE_PARENT_RELATIONS - STATED_RELATIONS
+    edges = {(row["from_facet_id"], row["to_facet_id"]) for row in links.filter(pl.col("relation").is_in(sorted(relations))).iter_rows(named=True)}
+    edges |= {
+        (facet["derived_from"], facet["facet_id"])
+        for facet in facets
+        if facet["derived_from"] is not None and (stated or facet["relation"] not in STATED_RELATIONS)
     }
-    edges |= {(facet["derived_from"], facet["facet_id"]) for facet in facets if facet["derived_from"] is not None}
     for facet in facets:
         join(f"facet:{facet['facet_id']}", f"source:{_source(facet)!r}")
     for a, b in sorted(edges):
         join(f"facet:{a}", f"facet:{b}")
-    return [find(f"facet:{facet['facet_id']}") for facet in facets]
+    return lambda facet_id: find(f"facet:{facet_id}")
+
+
+def _callset_keys(facets: list[dict], links: pl.DataFrame) -> list[str]:
+    """Per facet, in `facets` order, a key shared by every facet of one source and every facet joined to
+    it by one-parent lineage (`links.SINGLE_PARENT_RELATIONS`, from `links` and `derived_from`), over
+    every id the links name, as `karyotype.person_karyotype` groups a callset. A liftover or a normalize
+    shares its parent's source already; the lineage joins what a caller stated across two files (an
+    imputed facet and its chip, `imputed_from`)."""
+    key = _grouping(facets, links)
+    return [key(facet["facet_id"]) for facet in facets]
+
+
+def _stand(facets: list[dict], keys: list[str], read: Callable[[dict], bool]) -> dict[str, int]:
+    """Per group key, the index of the facet standing for it: never a facet made from several (checked
+    against its parents it would agree with what it was computed from); a facet `read` from the file
+    over one derived from it; else, facets being in `facet_id` order, the lowest id."""
+    standing: dict[str, int] = {}
+    for index, facet in enumerate(facets):
+        if facet["relation"] in MULTI_PARENT_RELATIONS:
+            continue
+        held = standing.get(keys[index])
+        if held is None or (not read(facets[held]) and read(facet)):
+            standing[keys[index]] = index
+    return standing
 
 
 def _standing(facets: list[dict], links: pl.DataFrame) -> list[int]:
     """The index of the facet standing for each callset (`_callset_keys`), in `facets` order (which is
-    `facet_id` order)."""
-    keys = _callset_keys(facets, links)
-    standing: dict[str, int] = {}
-    for index, facet in enumerate(facets):
-        # A facet made from several of them is no evidence of its own: checked against its parents it
-        # would agree with what it was computed from.
-        if facet["relation"] in MULTI_PARENT_RELATIONS:
-            continue
-        key = keys[index]
-        held = standing.get(key)
-        # A facet read from the file stands for its source over one derived from it; facets are in
-        # `facet_id` order, so ties go to the lowest id.
-        if held is None or (facets[held]["derived_from"] is not None and facet["derived_from"] is None):
-            standing[key] = index
-    return sorted(standing.values())
+    `facet_id` order): one read from a file with no lineage (the chip, not its imputation)."""
+    return sorted(_stand(facets, _callset_keys(facets, links), lambda facet: facet["derived_from"] is None).values())
+
+
+def _stated_pairs(facets: list[dict], links: pl.DataFrame) -> list[tuple[int, int]]:
+    """Each lineage a caller stated (`links.STATED_RELATIONS`: an imputed facet and the chip it was
+    imputed from), as the pair of held facets standing for its two sides, in `facets` order. A side is
+    what one file holds and what the library made from it (`_grouping(stated=False)`), standing as a
+    facet read from its file (no lineage, or only a stated one). A statement with a side holding no
+    facet here (the chip not given) has no pair."""
+    side = _grouping(facets, links, stated=False)
+    standing = _stand(
+        facets, [side(facet["facet_id"]) for facet in facets], lambda facet: facet["derived_from"] is None or facet["relation"] in STATED_RELATIONS
+    )
+    edges = {(row["from_facet_id"], row["to_facet_id"]) for row in links.filter(pl.col("relation").is_in(sorted(STATED_RELATIONS))).iter_rows(named=True)}
+    edges |= {(facet["derived_from"], facet["facet_id"]) for facet in facets if facet["relation"] in STATED_RELATIONS and facet["derived_from"] is not None}
+    pairs = set()
+    for a, b in edges:
+        first, second = standing.get(side(a)), standing.get(side(b))
+        if first is not None and second is not None and first != second:
+            pairs.add((min(first, second), max(first, second)))
+    return sorted(pairs)
 
 
 def _check(
     pieces: list[Loaded], facets: list[dict], links: pl.DataFrame, check: SameSubjectCheck | None
 ) -> tuple[pl.DataFrame, list[str]]:
-    """The pair checks of one person's callsets, and the warnings they give."""
+    """The pair checks of one person: each pair of its callsets once, and each lineage a caller stated
+    once, its two sides against each other (the chip against its imputed facet), and the warnings
+    they give."""
     stand = _standing(facets, links)
 
     rows: list[dict] = []
-    for a, b in combinations(stand, 2):
+    for a, b in sorted(set(combinations(stand, 2)) | set(_stated_pairs(facets, links))):
         if check is None:
             outcome = SubjectCheckOutcome.NOT_RUN
         else:

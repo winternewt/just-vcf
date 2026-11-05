@@ -1954,7 +1954,8 @@ as its own parent, an imputed facet with lineage already (state it on the facet 
 server's file), a chip made from the imputed facet, and two subjects. The facet was still read from a
 file of its own (`links.STATED_RELATIONS`), which `normalize` honours. What reads it:
 `person_karyotype` and `Person` take the two as one callset (below, "Facets of one person" and
-"Weighed against each other"), and `consensus` refuses them together, as any parent beside its child.
+"Weighed against each other"), `Person` checking the statement itself once, the chip against the
+imputed facet, and `consensus` refuses them together, as any parent beside its child.
 `ancestry.consensus` reads no facet lineage at all: its witnesses are panels.
 
 The builder's calls, for the lead's veto: the provenance carries the tool in `step` (for a step just-vcf
@@ -2081,9 +2082,14 @@ library checks the claim and warns, and it never infers a subject or moves a fac
   its caller stated, `imputed_from`, Decision 12), whose rows are not independent evidence: checked,
   they would agree by construction and count as a confirmation. Every other pair of such callsets is
   checked once, each standing as its facet read from a file with no lineage (the chip, not its
-  imputation), else its lowest `facet_id`. The builder's call, for the lead's veto: this gives up
-  checking the caller's `imputed_from` statement against the rows (a chip of another person would
-  read `different`); the subject label is still checked against every other callset. `Person.checks` holds one row per pair (`facet_id`, `other_facet_id`,
+  imputation), else its lowest `facet_id`. The caller's statement is checked too, once per stated
+  link, its two sides against each other: the chip's file (the chip, or where it is not given a facet
+  the library made from it) against the imputed facet's, each standing as the facet read from its
+  file (2026-11-05, merge audit 15; before, a chip of another person stated as the source went
+  unchecked). Its row is read as any other: `different` makes the person `False` and is warned, an
+  unknown or a check not run keeps it from `True`. A statement whose chip is not among the facets
+  has nothing here to be checked against and makes no row. A step the library ran (a liftover, a
+  normalize) is not a statement and is never checked against its parent. `Person.checks` holds one row per pair (`facet_id`, `other_facet_id`,
   `outcome`: `same`, `different`, `could_not_tell`, `not_run`), and `Person.one_person` is their Kleene
   AND: `False` when any pair is `different`, `True` only when every pair is `same`, `None` otherwise,
   one source alone included. `different` and `could_not_tell` pairs are warnings naming both facet ids;
@@ -3777,6 +3783,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-05, merge audit 15: a stated lineage checked): no column changes.
+  `Person.of` checks each `imputed_from` statement once, the chip against the imputed facet, beside
+  the checks between callsets, which are unchanged ("Facets of one person", "Checked"). **Values
+  change**: `Person.checks` gains that row, so a person holding a chip and the imputation stated from
+  it reads `one_person` from it too, `False` where the chip is another person's.
 
 - **No version change** (2026-11-05, merge audit 15: two parents of one ancestor): no column changes.
   `consensus` refuses two parents whose lineages meet, one made from the other or both made from one

@@ -6,12 +6,13 @@ source to a person's relatedness checks, and a parent and child to `consensus`. 
 synthetic.
 """
 
+import sys
 from pathlib import Path
 
 import polars as pl
 import pytest
 
-from just_vcf import Person, consensus, normalize, state_imputed_from
+from just_vcf import Person, consensus, load, normalize, state_imputed_from
 from just_vcf.links import IMPUTED_FROM, LIFTOVER_TO, LINEAGE_RELATIONS, MULTI_PARENT_RELATIONS, SINGLE_PARENT_RELATIONS, derived_links, link_disagreements
 from just_vcf.loading import Loaded
 from just_vcf.person import SubjectError, _callset_keys, _pieces
@@ -20,6 +21,8 @@ from just_vcf.store import Store
 from test_consensus import TRIANGLE, facet, snv
 from test_consensus import store as store  # noqa: F401 - the fixture
 from test_karyotype import XY, callset, callsets, made_from, weighed
+from test_relatedness import family as family  # noqa: F401 - the fixture
+from test_relatedness import write_23andme, write_vcf
 
 TOOL = {"tool": "Minimac4", "tool_version": "1.0.2", "panel": "HRC r1.1", "panel_sha256": None}
 
@@ -115,12 +118,50 @@ def checked_pairs(*loaded: Loaded) -> list[frozenset[str]]:
 
 
 def test_a_person_checks_a_chip_and_its_stated_imputation_as_one_source() -> None:
+    """Stated, the chip and its imputation are one callset against the person's other files, the chip
+    standing for both, and the statement itself is checked once: the chip against the imputed facet."""
     chip, imputed, genome = callset("c", *XY), callset("i", *XY), callset("g", *XY)
-    assert checked_pairs(chip, stated(imputed, chip), genome) == [frozenset({"c", "g"})], "the chip stands for both"
-    # Unstated, every pair of the three files is checked.
+    assert checked_pairs(chip, stated(imputed, chip), genome) == [frozenset({"c", "g"}), frozenset({"c", "i"})]
+    # Unstated, every pair of the three files is checked, the same pairs and one more.
     assert sorted(checked_pairs(chip, imputed, genome), key=sorted) == [frozenset(p) for p in (("c", "g"), ("c", "i"), ("g", "i"))]
-    # The imputed facet stands for its callset when the person does not hold the chip.
+    # The imputed facet stands for its callset when the person does not hold the chip; the statement
+    # has no chip here to be checked against.
     assert checked_pairs(stated(imputed, chip), genome) == [frozenset({"g", "i"})]
+    # A step the library ran on the chip stands for it when the chip itself is not given (one file);
+    # the library's own derivation is never checked against the chip it was made from.
+    lifted = made_from(chip, "l", *XY)
+    assert checked_pairs(lifted, stated(imputed, chip), genome) == [frozenset({"g", "i"}), frozenset({"i", "l"})]
+    assert checked_pairs(chip, lifted) == []
+
+
+@pytest.mark.parametrize(("answer", "outcome", "one_person"), [(True, "same", True), (False, "different", False), (None, "could_not_tell", None)])
+def test_a_stated_pairs_check_is_read_as_any_pairs(answer: bool | None, outcome: str, one_person: bool | None) -> None:
+    """The statement's check is a row of `Person.checks` like any other: a `different` or an unknown
+    answer is warned naming both facets and makes `one_person` False or unknown (Kleene); no check run
+    is `not_run`, never a pass."""
+    chip, imputed = callset("c", *XY), callset("i", *XY)
+    person = Person.of(chip, stated(imputed, chip), check=lambda a, b: answer)
+    assert (person.checks.rows(), person.one_person) == ([("c", "i", outcome)], one_person)
+    assert len(person.warnings) == (answer is not True) and all("c/i" in warning for warning in person.warnings)
+    unchecked = Person.of(chip, stated(imputed, chip), check=None)
+    assert (unchecked.checks.rows(), unchecked.one_person) == ([("c", "i", "not_run")], None)
+
+
+def test_a_chip_stated_for_another_persons_imputation_reads_as_two_people(family, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """By the default check, `same_person`: an imputation stated from the person's own chip reads as
+    one person; stated from a stranger's chip under the same label, as two, kept and warned."""
+    panel, _, people = family
+    # The default check reads the package's panel; point it at the fixture's sites instead.
+    monkeypatch.setattr(sys.modules["just_vcf.relatedness"], "packaged_panel", lambda assembly: panel if assembly == "GRCh37" else None)
+    imputed = load(write_vcf(tmp_path / "imputed.vcf", panel, people["a"], variant_only=False), subject="p")
+    own = load(write_23andme(tmp_path / "a.txt", panel, people["a"]), subject="p")
+    stranger = load(write_23andme(tmp_path / "u.txt", panel, people["u"]), subject="p")
+    one = Person.of(own, stated(imputed, own))
+    assert (one.checks["outcome"].to_list(), one.one_person, one.warnings) == (["same"], True, ())
+    two = Person.of(stranger, stated(imputed, stranger))
+    assert (two.checks["outcome"].to_list(), two.one_person) == (["different"], False)
+    (warning,) = two.warnings
+    assert "read as two people" in warning and facet_id(stranger) in warning and facet_id(imputed) in warning
 
 
 def test_a_consensus_refuses_a_chip_beside_its_stated_imputation(tmp_path: Path, store) -> None:  # noqa: F811

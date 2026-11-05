@@ -147,8 +147,9 @@ meanwhile. The desk carries the ones filed there.
   before testing it, an apparent truvari bug; not reported upstream, the person's call). Mates are found by the
   ends each record states, Manta's within each other's CIPOS (F28), not by MATEID, which the schema drops; a pair
   of mates is one row. Single breakends are counted as `single_breakend`, as truvari's default leaves them out.
-  The `breakend` exclusion reason is gone (pre-1.0 break, in the changelog). Left for the person: whether a
-  symbolic `<DEL>`/`<DUP>`/`<INV>` should meet the breakends another caller writes for it (truvari's `decompose`).
+  The `breakend` exclusion reason is gone (pre-1.0 break, in the changelog). A symbolic `<DEL>`/`<DUP>`/`<INV>`
+  meeting the breakends another caller writes for it (truvari's `decompose`): the lead's judgement, built
+  2026-11-05 (key `decomposed`); its calls for veto are in docs/ROADMAP.md, RM282.
 - **Layer 3, the lead's calls on breakends in a lift (built, listed for veto):** the mate lifts through the chain and
   the brackets turn by each end's own strand per VCF 4.3 §5.4 (liftoverSV lifts the mate but drops the strand, so
   never turns a bracket; Picard, CrossMap and bcftools +liftover lift no mate). The mate is named as the target

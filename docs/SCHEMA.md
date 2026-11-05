@@ -3161,7 +3161,7 @@ reading `reference` or a block as `0/0` would turn graded absence into a call.
 | `chrom`, `pos`, `ref`, `alt` | `str`, `u32`, `str`, `str` | the allele as the facet stating it wrote it, `a` first |
 | `variant_class` | `Enum` | `snv`, `mnv`, `indel` or `sv` (Decision 5's rule) |
 | `vrs_allele_id` | `str` | either facet's id for the allele; null where neither minted one |
-| `key` | `Enum` | `vrs`, `position`, `site`, `extent` (an SV pair), `breakend` (a pair of breakend adjacencies); null on a one-sided allele |
+| `key` | `Enum` | `vrs`, `position`, `site`, `extent` (an SV pair), `breakend` (a pair of breakend adjacencies), `decomposed` (a symbolic `<DEL>`, `<DUP>` or `<INV>` met by another facet's breakends, below); null on a one-sided allele |
 | `agreement` | `Enum` | above |
 | `absence` | `Enum` | above; null where both facets state the allele |
 | `basis` | `Enum` | `gl_flat_prior`, `gp`, `hard`; null on a one-sided allele |
@@ -3171,13 +3171,16 @@ reading `reference` or a block as `0/0` would turn graded absence into a call.
 | `a_copies`, `b_copies` | `u8` | copies of the allele; null where a haplotype is uncalled or unreadable |
 | `ploidy_differs` | `bool` | the two genotypes were written with different numbers of haplotypes; null on a one-sided allele |
 | `a_filters`, `b_filters`, `a_gq`, `b_gq` | `list[str]`, `u16` | each row's FILTER and GQ, so a consumer can restrict to PASS |
-| `sv_kind` | `str` | an SV allele's type as matched (below), `BND` for a breakend; null on a sequence allele |
-| `b_alt` | `str` | on an `extent` or `breakend` pair, `b`'s ALT as written (`<DUP>` beside `a`'s `<DUP:TANDEM>`); null otherwise |
+| `sv_kind` | `str` | an SV allele's type as matched (below), `BND` for a breakend; on a `decomposed` pair the symbolic allele's type (`DEL`, `DUP`, `INV`), whichever side states it; null on a sequence allele |
+| `b_alt` | `str` | on an `extent`, `breakend` or `decomposed` pair, `b`'s ALT as written (`<DUP>` beside `a`'s `<DUP:TANDEM>`); null otherwise |
 | `a_end_pos`, `b_end_pos` | `u32` | an SV allele's `end_pos` on each side stating it (a breakend's own position); null on a sequence allele |
-| `size_similarity`, `reciprocal_overlap` | `f64` | truvari's measures of an `extent` pair (below); `size_similarity` null where either size is unknown; null on a `breakend` pair |
-| `ci_needed` | `bool` | on an `extent` or `breakend` pair, True where the two met only once CIPOS/CIEND widened them; null otherwise |
+| `size_similarity`, `reciprocal_overlap` | `f64` | truvari's measures of an `extent` pair (below); `size_similarity` null where either size is unknown; null on a `breakend` or `decomposed` pair |
+| `ci_needed` | `bool` | on an `extent`, `breakend` or `decomposed` pair, True where the two met only once CIPOS/CIEND widened them; null otherwise |
 
-The last seven columns came with RM282 (2026-10-26), after the rest: added, nothing redefined.
+The last seven columns came with RM282 (2026-10-26), after the rest: added, nothing redefined. The
+key `decomposed` came with it on 2026-11-05: a value added to `key`'s Enum, nothing redefined. The
+frame is a measurement, not stored (`SCHEMA_VERSION` is unchanged); a consumer that matched on `key`'s
+categories meets a new one.
 
 **`summary`** (`summarize(sites)`) counts alleles per `(agreement, ploidy_differs, key, absence,
 variant_class, sv_kind, basis)` with the mean `p_same`; its counts sum to the height of `sites`. Run it on a filtered `sites`
@@ -3238,11 +3241,10 @@ What differs from truvari, each with its reason:
   symbolic allele carries one in the frame, so it is never run, as with `--pctseq 0`. A deletion
   written out base by base is an `indel`, compared allele by allele above, never against a symbolic
   call: matching across the two representations is not built.
-- **A symbolic allele never meets a breakend.** truvari's default `decompose` turns a `<DEL>`,
-  `<DUP>` or `<INV>` into the breakends it implies to meet another caller's breakends
-  (`VariantRecord.cpx_match`). Not built: whether a `<DEL>` and the breakend pair one caller writes
-  for it are one call is a judgement the roadmap has not made (RM282, open). Breakends meet
-  breakends ("Breakends", below).
+- **A symbolic allele meets a breakend only once nothing of its own kind took it.** truvari's
+  default `decompose` meets a `<DEL>`, `<DUP>` or `<INV>` with another caller's breakends, and here
+  too ("Symbolic alleles against breakends", below), but after the pairs of one representation, not
+  in one pick with them.
 - **No size filter.** truvari leaves out calls under `sizemin` (50). A symbolic allele is an SV by
   its writer's statement whatever its length, and every one is compared.
 
@@ -3258,7 +3260,9 @@ graded `p_same` above. A haplotype holding another allele of its record (`<CN2>`
 `1/2`) is not a copy: a symbolic allele has no bases for the sequence reading above to trim.
 
 **A one-sided SV** reads the silent facet's SVs first: an SV of its own whose extent lies within
-`refdist` of this one's (widened as above), of any type or size, makes `other_alleles`. Otherwise the
+`refdist` of this one's (widened as above), of any type or size, makes `other_alleles`, and so does a
+breakend of its own whose position window meets one this allele implies ("Symbolic alleles against
+breakends", below). Otherwise the
 facet's rule for the `sv` class (`absence_is_reference`): `reference` only for a whole-genome
 callset without blocks that counted `sv` alleles and was not filtered to one class, `unknown`
 otherwise. So an array, an exome, a small-variant WGS callset, a `.sv.` or `.cnv.` file (filtered to
@@ -3324,8 +3328,10 @@ single`), ties to each side's record order. Key `breakend`, `sv_kind` `BND`; `si
 `reciprocal_overlap` are null, and `a_end_pos`/`b_end_pos` are the positions (a breakend's `end_pos`).
 Genotypes compare as for symbolic alleles. A one-sided adjacency reads the silent facet's breakends
 whose position window meets one of its records' (truvari's first test, any mate or form;
-`other_alleles`), else the facet's absence rule for `sv` on a contig it declared, at both ends. A
-symbolic SV of the other facet near a breakend does not make `other_alleles`.
+`other_alleles`; a breakend the other facet's symbolic `<DEL>`, `<DUP>` or `<INV>` implies counts,
+below), else the facet's absence rule for `sv` on a contig it declared, at both ends. Another symbolic
+SV of the other facet near a breakend (an `<INS>`, a `<CNV>`, which imply none) does not make
+`other_alleles`.
 
 What differs from truvari, each with its reason:
 
@@ -3355,6 +3361,83 @@ Measured 2026-10-26 (aggregates only): hu416394's Manta file (GRCh38, 3,350 brea
 meets the 467 adjacencies that kept a record and leaves the 147 that kept none `only_a`, none
 `only_b`. Manta against Canvas leaves all 1,675 `only_a`, `unknown`: Canvas writes no breakends. No
 person here has two breakend facets, so no two callers' breakends were compared.
+
+**Symbolic alleles against breakends (RM282, 2026-11-05)** meet as truvari bench's default
+`decompose` meets them (truvari 5.5, MIT; `truvari/variant_record.py`, `VariantRecord.decompose`,
+`cpx_match` and `match`; `truvari/bench.py`, `--no-decompose`; read from the v5.5.0 tag 2026-11-05).
+One caller writes a deletion as `<DEL>`, another as the pair of breakends that joins its two ends: the
+two describe one adjacency, and left apart they would count one event as an `only_a` and an `only_b`
+row. A symbolic allele is turned into the breakend records it implies, each a copy of its record, and
+those meet the other facet's breakend records by the rule above ("Breakends"). POS and END are the
+frame's `pos` and `end_pos`, 1-based, as truvari's `pos` and `end` are:
+
+| Type | Junctions | Records implied |
+|---|---|---|
+| `<DEL>` | POS joined to END + 1 | `t[END+1[` at POS, `]POS]t` at END + 1 |
+| `<DUP>` (tandem) | END joined back to POS + 1 (the duplicated bases are POS + 1 to END) | `]END]t` at POS + 1, `t[POS+1[` at END |
+| `<INV>` | POS to END and POS + 1 to END + 1, each reverse-complemented: two adjacencies | `t]END]` at POS, `[END+1[t` at POS + 1, `t]POS]` at END, `[POS+1[t` at END + 1 |
+
+The inversion's four are VCF 4.3 section 5.4.3's own (`bnd_W`, `bnd_V`, `bnd_U`, `bnd_X` for `<INV>`
+at 2:321681, END 421681); the deletion's are VCF 4.5's `DEL_split_bp_cn` (`delbp1`, and `delbp2` at
+the POS its mate states, 5, where the spec prints 2); no spec writes a duplication as breakends, so
+its records follow VCF 4.5's "the end of the duplicated region be adjacent to the start". The tests
+pin each record to these coordinates (tests/test_concordance_decompose.py).
+
+A symbolic allele and an adjacency meet when any record the allele implies meets any record of the
+adjacency (truvari's `cpx_match` keeps the best of the implied records' matches). The row is the
+symbolic allele's and the adjacency's, key `decomposed`: `sv_kind` is the symbolic allele's type
+(`DEL`, `DUP`, `INV`) whichever facet states it, `alt` and `b_alt` are each side's ALT as written (a
+breakend record's on its side), `a_pos`/`b_pos` the symbolic allele's POS and the breakend record that
+met best (by truvari's score, then the nearer start and mate, then the implied record earlier in the
+table, then the breakend record at its adjacency's first end), `size_similarity` and
+`reciprocal_overlap` null, `ci_needed` as for breakends. Genotypes compare as for symbolic alleles,
+each side's copies of its own ALT. Each symbolic allele and each adjacency is taken at most once, best
+first (`--pick single`), ties to each side's record order.
+
+A one-sided adjacency whose record's position window meets a record the other facet's symbolic
+allele implies reads `other_alleles` (any mate or form, as with a real breakend), and a one-sided
+symbolic allele one of whose implied records' window meets a breakend record of the other facet does
+too. A symbolic allele that implies no breakend (an `<INS>`, a `<CNV>`, a `<CNn>`, or one of those
+below that is not decomposed) is not near a breakend.
+
+What differs from truvari, each with its reason:
+
+- **One representation first, then decomposition.** truvari builds one match matrix over every call
+  of a chunk and picks the best pairs from it, so a `<DEL>` that meets both another `<DEL>` and a
+  breakend pair goes to whichever scores higher. Its scores are not comparable across the two: a
+  symbolic pair's TruScore, `(seqsim + sizesim + ovlpct) / 3 * 100` with no sequence to compare, is at
+  most 66.7, and a breakend match scores up to 100, so a `<DEL>` agreeing with another `<DEL>` in type,
+  size and extent would go to a breakend near it instead. Here symbolic alleles meet symbolic ones and
+  adjacencies meet adjacencies first, each as above; decomposition meets only what is left.
+- **A record's own SVTYPE gates it, the ALT types it.** truvari decomposes what it reads as DEL, DUP or
+  INV, reading INFO SVTYPE first. Here the type is the ALT's (above), and an allele is decomposed only
+  where SVTYPE is absent or names the same type: DRAGEN's copy-number caller writes `<DEL>` and `<DUP>`
+  with `SVTYPE=CNV`, an abundance claim with no junction (VCF 4.5's `SVCLAIM=D`), which truvari does not
+  decompose either. Such alleles are counted in a warning when the other facet has breakends. VCF 4.5's
+  `SVCLAIM` itself is not read: the frame does not keep it (`dropped_fields`), so a 4.5 `<DEL>` with
+  `SVCLAIM=D` and no SVTYPE is decomposed.
+- **Only a tandem duplication.** truvari assumes every DUP is tandem, subtypes dropped. Here `<DUP>`
+  and `<DUP:TANDEM>` are decomposed and another subtype is not: VCF 4.5's `<DUP:DISPERSED>` puts its
+  copy elsewhere, so its end is not joined to its start. `<DEL>` and `<INV>` of any subtype are.
+- **An inversion is taken once.** truvari's `--pick single` matches a `<INV>` with one breakend record
+  of the four another caller writes for it; here, with adjacencies as the unit, with one of the two
+  adjacencies. The other is left one-sided, `other_alleles` (the inversion implies it). Rejected:
+  taking an `<INV>` once per adjacency it implies, which would make one allele two rows and count its
+  genotype twice.
+
+Followed as truvari runs it:
+
+- **Each implied record carries the symbolic record's intervals.** truvari's records are `copy()`s,
+  so each widens its own position by the symbolic record's `|CIPOS[1]|` and its mate's by
+  `|CIEND[1]|`, the records standing at END or END + 1 included, whose own position is the one CIEND
+  speaks for and whose mate is the one CIPOS speaks for. A missing CIEND
+  widens the mate by nothing, as for breakends (VCF 4.5's "assume CIPOS" is not applied, unlike the
+  symbolic rule above).
+- **No `bnddist` of its own.** The implied records meet under `SvMatching.bnddist`, as truvari's do.
+
+Built on synthetic records only (tests/test_concordance_decompose.py), not measured on a real pair:
+the one person here with two SV facets (hu416394) has Manta's, whose symbolic alleles and breakends
+sit in one file, beside Canvas's copy-number alleles, which imply no breakend.
 
 ## A method-error atlas (RM279)
 
@@ -3683,6 +3766,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-05, RM282: symbolic alleles against breakends): no stored column
+  changes. `concordance`'s `sites` frame, a measurement that is not stored, gains a value of `key`,
+  `decomposed`: a `<DEL>`, `<DUP>` or `<INV>` of one facet met by the breakends the other wrote for it,
+  as truvari's default `decompose` meets them ("Symbolic alleles against breakends"). **Values
+  change**: such a pair was an `only_a` and an `only_b` row and is one row; a lone breakend near a
+  breakend the other facet's symbolic allele implies, and a lone symbolic allele whose implied
+  breakend lies near the other facet's breakend, read `other_alleles` where they read `reference` or
+  `unknown`.
 
 - **No version change** (2026-11-05, RM287: `imputed_from`, a lineage the caller states): no column
   changes. `relation` (a `str`) gains a documented value, `imputed_from`, in

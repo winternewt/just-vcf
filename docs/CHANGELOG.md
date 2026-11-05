@@ -11,6 +11,18 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **`concordance` meets a symbolic `<DEL>`, `<DUP>` or `<INV>` with the breakends another caller
+  writes for it** (RM282), as truvari 5.5's default `decompose` does: the symbolic allele is turned
+  into the breakend records it implies (a deletion joins POS to END + 1, a tandem duplication END to
+  POS + 1, an inversion POS to END and POS + 1 to END + 1, each pinned to the VCF 4.3 and 4.5 specs'
+  own records) and those meet the other facet's records by `bnd_match`. Such a pair was an `only_a` and
+  an `only_b` row; it is one row with the new `key` value `decomposed` and `sv_kind` the symbolic
+  type. A lone breakend near an implied one, and a lone symbolic allele whose implied breakend lies near
+  the other facet's breakend, read `other_alleles`. Where it differs from truvari (like meets like
+  first, SVTYPE=CNV and dispersed duplications not decomposed, an inversion taken once) is in
+  docs/SCHEMA.md, "Symbolic alleles against breakends". A consumer matching on `key`'s categories meets
+  a new one; no stored frame changes. Tests: `tests/test_concordance_decompose.py`.
+
 - **`state_imputed_from`: the caller states which chip an imputed facet came from** (RM287). A new
   lineage relation, `imputed_from`, which just-vcf never infers: the server's file does not say which
   export went in. `state_imputed_from(imputed, chip, tool=, tool_version=, panel=, panel_sha256=)`

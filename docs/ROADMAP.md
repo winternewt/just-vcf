@@ -7,7 +7,7 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM287 — Imputed facets read back
-**State:** unattended: the opt-in server-rules test run on a PGP-HMS chip export (aggregates only), and the lead's call on each of the eight rules a written chip does not meet (docs/SCHEMA.md "What an imputation server checks"); whether to settle the A/T and C/G gap is desk #212 · **Owner:** lead
+**State:** unattended: the opt-in server-rules test on a PGP-HMS chip export (aggregates only; needs a GRCh37 reference store, empty since 2026-11-05); the lead kept six unmet rules as documented failures, and asks two on the desk: #213 (ALT for hom-ref chip rows, which the servers drop) and #214 (code 25 written as X); A/T and C/G is #212 · **Owner:** lead
 
 Severity: low · Status: read-back shipped 2026-11-05 on a builder's branch, for the lead's merge: schema
 0.0.23's `calls.imputation_r2` (minimac R2 or Beagle DR2) and `calls.imputation_empirical_r2`

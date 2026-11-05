@@ -48,6 +48,14 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-06: RM287's server-rules test merged as b18dd66 (merge 1 of 6 toward audit 16)**, tests only; suite
+   2598 passed, 77 skipped, 8 xfailed. Of the eight rules a written chip fails (strict xfails), the lead keeps six
+   as documented failures, for the person's veto: VCF 4.3 (no server code checks it), one contig per file (filter
+   the calls), 20 samples (the input's), a two-non-reference call, duplicate probes (charter 8), `chr` names on
+   GRCh38 (`contig_names="chr"`). Two to the desk: #213 hom-ref rows written ALT `.` (the servers drop most of a
+   chip; default no change, recommended a writer option filling ALT from the manifest) and #214 code 25 as `XY`
+   (refused; default no change, recommended X in the file). Also found: `contig_names="chr"` writes `chrM`, not the
+   servers' `chrMT`; the servers count A/T and C/G and keep them unflipped (RM287's "refuse or flip" corrected).
 0. **2026-11-05, RM6's A/T and C/G strand to desk #212** (default: left unread). F13's measurement already
    showed no manifest strand column predicts FTDNA's flips (each splits ~50/50), so only allele frequencies could
    settle them, a new data source. Not filed (the lead's reading): a flip confined to palindromic probes in a

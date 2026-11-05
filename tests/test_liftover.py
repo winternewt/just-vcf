@@ -623,6 +623,42 @@ def test_rows_across_a_gap_lift_alike_through_a_chain_listed_twice(tmp_path: Pat
     assert twice.loaded.calls.drop("facet_id").collect().equals(once.loaded.calls.drop("facet_id").collect())
 
 
+PARTLY_SOURCE = random_bases(100)
+PARTLY_GAP = "GG"
+PARTLY_TARGET = PARTLY_SOURCE[:10] + PARTLY_GAP + PARTLY_SOURCE[10:]
+PARTLY_A = "chain 100 1 100 + 0 20 1 102 + 0 22 {id}\n10 0 2\n10\n\n"
+"""Source [0, 10) to target [0, 10) and source [10, 20) to target [12, 22): one chain across a two-base target gap."""
+PARTLY_B = {
+    "same": "chain 50 1 100 + 0 10 1 102 + 0 10 {id}\n10\n\n",
+    "shorter": "chain 50 1 100 + 0 8 1 102 + 0 8 {id}\n8\n\n",
+    "both_shorter": "chain 50 1 100 + 0 20 1 102 + 0 22 {id}\n8 2 4\n10\n\n",
+}
+"""A second chain repeating chain A's first mapping: the whole block, or its first eight bases only; or
+both of A's mappings, the first again on its first eight bases only, so the row's first base is in A alone."""
+
+
+@pytest.mark.parametrize("duplicate", sorted(PARTLY_B))
+def test_a_row_across_a_gap_lifts_alike_whichever_chain_repeats_part_of_it(tmp_path: Path, duplicate: str) -> None:
+    """A row spans chain A's gap, its change in A's second block; chain B repeats only A's first
+    mapping. A alone holds the whole span, so the row lifts across A's gap, as it does with no B, in
+    either order of the two chains: blocks repeating one mapping count once (F14), whichever of them
+    the axis kept."""
+    x0 = 8
+    ref = PARTLY_SOURCE[x0 : x0 + 4]
+    alt = ref[:2] + other(ref[2]) + ref[3]
+    record = f"1\t{x0 + 1}\tpartly\t{ref}\t{alt}\t50\tPASS\t.\tGT\t0/1"
+    a, b = PARTLY_A, PARTLY_B[duplicate]
+    results = {}
+    for name, chain in (("alone", a.format(id=1)), ("a_first", a.format(id=1) + b.format(id=2)), ("b_first", b.format(id=1) + a.format(id=2))):
+        (tmp_path / name).mkdir()
+        lifted = one_contig_lift(tmp_path / name, PARTLY_SOURCE, PARTLY_TARGET, chain, [record])
+        r = lifted.report.collect().row(0, named=True)
+        calls = lifted.loaded.calls.collect()
+        results[name] = (r["lift_reason"], [(c["pos"], c["ref"], c["alts"]) for c in calls.iter_rows(named=True)])
+    expected = (None, [(x0 + 1, ref[:2] + PARTLY_GAP + ref[2:], [ref[:2] + PARTLY_GAP + alt[2:]])])
+    assert results == {"alone": expected, "a_first": expected, "b_first": expected}
+
+
 def test_a_lifted_row_across_a_gap_normalizes_on_the_target(tmp_path: Path, setup) -> None:
     """The gap's own bases ride in every allele as context; `normalize` trims them off, and what is
     left is the change on its own, left-aligned in the target's sequence."""

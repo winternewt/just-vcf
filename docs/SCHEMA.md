@@ -1205,10 +1205,16 @@ holding that collection and the target.
    indel, an SNV written in context) whose span crosses a block edge still lifts where all of these
    hold, each failure its own reason:
    - its first and last bases lie in blocks (`split_across_blocks` otherwise: the span runs off a
-     block into a gap's source-only bases or past the chain's end), and in blocks of one chain, with
-     no other chain's block in between (`split_across_chains`: another alignment, target contig or
-     strand on the other side). A doubly mapped stretch anywhere in the span is still
-     `multiple_targets`, judged first;
+     block into a gap's source-only bases or past the chain's end), and one chain holds every piece
+     of the span a block covers, each piece whole inside one of its blocks (`split_across_chains`
+     otherwise: another alignment, target contig or strand on the other side). Another chain
+     repeating some of those blocks (the same target contig, strand and offset, F14) changes nothing:
+     the row is judged by every block of each mapping, never by the one the axis keeps for it, so it
+     lifts alike in either order of the chains (`LIFT_VERSION` 15, merge audit 15: a chain repeating
+     only the first of two blocks left the row `split_across_chains`, or in one order raised a
+     `TypeError`, by which chain's block the axis happened to keep). Where several chains hold every
+     piece, each gives the same lift, and the lowest chain id is read. A doubly mapped stretch
+     anywhere in the span is still `multiple_targets`, judged first;
    - each ALT's change lies inside one block (`gap_in_change` otherwise). The change is the REF bases
      the ALT replaces after the shared first and last bases are set aside, or, for an insertion, the
      two bases either side of the point it goes in at; and for an indel in a repeat, every place it
@@ -1255,7 +1261,7 @@ holding that collection and the target.
      target insertion of any size as reference.
    - One chain means one chain id. Rejected: any colinear pair of blocks on one contig and strand,
      which would lift across two alignments that happen to sit near each other. A chain listed twice
-     (F14) still lifts once (tested).
+     (F14) still lifts once, and so does one whose blocks another chain repeats in part (both tested).
    - Not changed: a row whose REF span lies inside one block lifts by step 2 as before, even where an
      insertion sits at the block's edge, next to a gap's target bases (`A` → `AT` on a block's last base
      is put before them, though the chain would allow after).
@@ -3766,6 +3772,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-05, merge audit 15: a chain repeating part of another): no column
+  changes. `liftover` judges a row across a gap of one chain ("Lifting", step 2b) by the chains that
+  hold each piece of its span, where it read the chain of the one block per mapping the axis kept;
+  `LIFT_VERSION` 15. **Values change** only on a chain in which one chain repeats some of another's
+  blocks: a row its gap-spanning chain holds whole lifts, in either order of the chains, where it was
+  `split_across_chains` (or, in one order, a `TypeError`). A lifted facet's `facet_id` changes with
+  the version.
 
 - **No version change** (2026-11-05, RM282: symbolic alleles against breakends): no stored column
   changes. `concordance`'s `sites` frame, a measurement that is not stored, gains a value of `key`,

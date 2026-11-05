@@ -11,6 +11,17 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **`liftover` lifts a row across a gap whichever chain repeats part of its blocks** (merge audit 15,
+  `LIFT_VERSION` 15). A row across a gap of one chain was judged by the one block the chain axis keeps
+  per mapping, the last of the blocks repeating it, so a second chain repeating only the first of two
+  blocks made the row `split_across_chains` in one order of the chains and lifted it in the other;
+  where that second chain repeated both mappings with a shorter first block, the lift raised a
+  `TypeError`. The row is now judged by every block of each mapping: it lifts where one chain holds
+  each piece of its span, in either order (docs/SCHEMA.md "Lifting", step 2b). Lifted facets' ids
+  change with the version. Test:
+  `tests/test_liftover.py::test_a_row_across_a_gap_lifts_alike_whichever_chain_repeats_part_of_it`, three
+  chains, each failing on the code before.
+
 - **`concordance` meets a symbolic `<DEL>`, `<DUP>` or `<INV>` with the breakends another caller
   writes for it** (RM282), as truvari 5.5's default `decompose` does: the symbolic allele is turned
   into the breakend records it implies (a deletion joins POS to END + 1, a tandem duplication END to

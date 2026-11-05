@@ -48,6 +48,14 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-06: RM4's indel-only genome merged as a merge of 406b728 (merge 2 of 6 toward audit 16)**; suite 2605
+   passed, 77 skipped, 8 xfailed. The lead's call, for the person's veto: an indel-only half reads `wgs` at
+   `MIN_WGS_INDEL_SITES` 116,000 (the ported floor's 0.233 ratio on 0.5M indels), absences still held by the
+   filter. The builder also gated the panel reads (site genotypes, somalier `--unknown`) on the SNV class with
+   `force=True`. Measured (counts): four of the five loadable PGP-HMS indel halves now read `wgs`. Building
+   (merge 3 of 6): the karyotype withholds an indel-only facet (`filtered_content`), since its het share is not
+   the calibrated quantity; SNV halves unchanged. Found, not fixed: panel reads of an SNV half lift the
+   `content_filter_held` hold without the caller's `force` (existed before).
 0. **2026-11-06: RM287's server-rules test merged as b18dd66 (merge 1 of 6 toward audit 16)**, tests only; suite
    2598 passed, 77 skipped, 8 xfailed. Of the eight rules a written chip fails (strict xfails), the lead keeps six
    as documented failures, for the person's veto: VCF 4.3 (no server code checks it), one contig per file (filter

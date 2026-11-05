@@ -234,7 +234,7 @@ Forward/Design alleles (its manifest, HumanOmni2.5-8v1_A, is not on disk); exact
 real data (no PGP-HMS export's chip has its own manifest on disk).
 
 ## RM282 — Structural-variant facets
-**State:** unattended: a symbolic SV meeting another caller's breakends is built (decompose, 2026-11-05), its calls listed for the person's veto; the copy-number allele against `<DEL>`/`<DUP>` goes to the desk; VRS copy-number ids wait on desk #89 · **Owner:** lead
+**State:** blocked: desk #208, #89 (the decompose is built, 2026-11-05, its calls listed for the person's veto; #208 is the copy-number allele against `<DEL>`/`<DUP>`, default strict; #89 the VRS copy-number ids) · **Owner:** lead
 
 Severity: low · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; loading and the `write_vcf` round trip shipped 2026-10-23, merge 04c5db3, schema 0.0.14; `concordance` compares symbolic SV alleles by type and extent under truvari's matching, 2026-10-26, merged; breakends in `concordance` by truvari's `bnd_match`, one row per adjacency, 2026-10-26, merge 43dd717; a symbolic `<DEL>`/`<DUP>`/`<INV>` meeting the breakends another caller writes for it, truvari's default `decompose`, the lead's judgement, 2026-11-05. Left: whether a copy-number allele (`<CN0>`, `<CN3>`) should meet a `<DEL>` or `<DUP>` as a loss or a gain, the person's call (below); a check against a DELLY or Sniffles file waits for one (none on disk, synthetic tests only); minting VRS 2 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` waits on desk #89, meanwhile `sv_no_vrs_model`)
 

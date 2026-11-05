@@ -48,11 +48,14 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
-0. **Building 2026-11-05: RM282's decompose** (Opus builder in a worktree; merge 6 of 6, then audit 15): the
-   lead's call is that a symbolic `<DEL>`/`<DUP>`/`<INV>` meets another caller's breakends as truvari's default
-   `decompose` does, the row saying so, and a lone breakend near a symbolic SV reads `other_alleles`. Filed the
-   same day: desk #208 (a copy-number allele against `<DEL>`/`<DUP>`, default strict) and #209 (a callset
-   recording its BAM, default no change). At merge, point RM282's State at #208.
+0. **Done 2026-11-05: RM282's decompose merged as 2b7c403 (merge 6 of 6: audit 15 is due)**: a symbolic
+   `<DEL>`/`<DUP>`/`<INV>` meets another caller's breakends as truvari's default `decompose` does (key
+   `decomposed`), a lone breakend near one reads `other_alleles`, and the mirror. The builder's ten calls for veto
+   are in docs/SCHEMA.md "Symbolic alleles against breakends" (like meets like first; SVTYPE=CNV not decomposed;
+   only `<DUP>`/`<DUP:TANDEM>`; an `<INV>` taken once; truvari's CI copying kept). Found, not fixed: `SVCLAIM`
+   not kept, so a 4.5 `<DEL>` with `SVCLAIM=D` is still decomposed; the not-decomposed warning also counts a null
+   `end_pos`. RM282 is blocked on desk #208 (a copy-number allele against `<DEL>`/`<DUP>`, default strict) and
+   #89; #209 (a callset recording its BAM, default no change) holds RM278's last question.
 0. **Done 2026-11-03, nothing running**: RM5's consensus merged as 6b5503c (merge 4 of 6): one panel's methods
    are one witness, averaged; only panels the caller declares disjoint multiply; its calls for veto in
    docs/SCHEMA.md "Combining ancestry estimates" (disjointness never inferred, every reading weighed alike,

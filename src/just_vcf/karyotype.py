@@ -1524,8 +1524,9 @@ def person_karyotype(
     unchanged (`evidence`); this only combines them.
 
     **A callset** is the facets joined by one-parent lineage (`links.SINGLE_PARENT_RELATIONS`:
-    `liftover_to`, `normalized`, `split_rejoined`, read from `person.links` and `facets.derived_from`)
-    back to one file as loaded, which names it (`root_facet_id`, held by the person or only named by
+    `liftover_to`, `normalized`, `split_rejoined`, and `imputed_from` where the caller stated an
+    imputed facet's chip, read from `person.links` and `facets.derived_from`) back to one file as
+    loaded, which names it (`root_facet_id`, held by the person or only named by
     its links). It answers once (`CallsetKaryotype`): the root's answer where it says the most, else the
     nearest member's that does (`CALLSET_BASES`). Members that say different things withhold it
     (`members_disagree`); a withheld member is neither agreement nor disagreement. Kin facets

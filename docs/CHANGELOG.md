@@ -11,6 +11,18 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **`state_imputed_from`: the caller states which chip an imputed facet came from** (RM287). A new
+  lineage relation, `imputed_from`, which just-vcf never infers: the server's file does not say which
+  export went in. `state_imputed_from(imputed, chip, tool=, tool_version=, panel=, panel_sha256=)`
+  returns the imputed facet with `derived_from` the chip, `relation = imputed_from`, the panel in
+  `derivation_inputs`, and the link `chip → imputed` with the tool as `provenance.step`; its id and rows
+  are unchanged. Stated, the two are one callset: `person_karyotype` answers once for them, `Person.of`
+  and `check_pedigree` no longer check the pair against each other (the chip stands for both against
+  the person's other files), and `consensus` refuses them together. `ancestry.consensus` reads no
+  facet lineage and is unchanged. A store already holding the imputed facet keeps it without the
+  link, so state it before the first add. docs/SCHEMA.md Decision 12, "A stated lineage", has the
+  builder's calls for the lead's veto. Tests: `tests/test_imputed_from.py`.
+
 - **Schema 0.0.23, a breaking change pre-1.0: `calls` gains `imputation_r2` and
   `imputation_empirical_r2`** (RM287). An imputation server's VCF says per site how well it imputed:
   minimac's INFO `R2` (estimated r², every site) and `ER2` (empirical r², typed sites only), Beagle's

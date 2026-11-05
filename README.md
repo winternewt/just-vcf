@@ -37,6 +37,12 @@ break is recorded in the changelog.
 - **Compares** facets: `concordance` allele by allele, `relatedness` (KING-robust) and `same_person`,
   and `people` to group one person's files and check they agree. `query` answers counts and presence
   questions about a genome without returning a row.
+- **Reads coverage** as a facet of its own: `read_coverage` takes what mosdepth or `samtools depth` /
+  `samtools coverage` already wrote, and `alignment_coverage` measures depth over a BAM or CRAM with
+  polars-bio's `depth()`, in fixed windows.
+- **Estimates sex-chromosome karyotype**: `sex_chromosome_evidence` per facet, and `person_karyotype`
+  for one answer per person across their files, where a liftover of a file counts once and files that
+  disagree withhold the answer.
 
 ## Install
 
@@ -46,8 +52,9 @@ pip install just-vcf
 uv add just-vcf
 ```
 
-Python 3.13 or later. Ancestry estimation (`just_vcf.ancestry`, PCA projection onto a reference
-panel) needs numpy, which comes with the `ancestry` extra:
+Python 3.13 or later. Ancestry estimation (`just_vcf.ancestry`: PCA projection onto a reference
+panel, and `consensus` across several estimates, where one panel's methods count as one witness)
+needs numpy, which comes with the `ancestry` extra:
 
 ```bash
 pip install "just-vcf[ancestry]"

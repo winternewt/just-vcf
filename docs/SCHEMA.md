@@ -1205,10 +1205,16 @@ holding that collection and the target.
    indel, an SNV written in context) whose span crosses a block edge still lifts where all of these
    hold, each failure its own reason:
    - its first and last bases lie in blocks (`split_across_blocks` otherwise: the span runs off a
-     block into a gap's source-only bases or past the chain's end), and in blocks of one chain, with
-     no other chain's block in between (`split_across_chains`: another alignment, target contig or
-     strand on the other side). A doubly mapped stretch anywhere in the span is still
-     `multiple_targets`, judged first;
+     block into a gap's source-only bases or past the chain's end), and one chain holds every piece
+     of the span a block covers, each piece whole inside one of its blocks (`split_across_chains`
+     otherwise: another alignment, target contig or strand on the other side). Another chain
+     repeating some of those blocks (the same target contig, strand and offset, F14) changes nothing:
+     the row is judged by every block of each mapping, never by the one the axis keeps for it, so it
+     lifts alike in either order of the chains (`LIFT_VERSION` 15, merge audit 15: a chain repeating
+     only the first of two blocks left the row `split_across_chains`, or in one order raised a
+     `TypeError`, by which chain's block the axis happened to keep). Where several chains hold every
+     piece, each gives the same lift, and the lowest chain id is read. A doubly mapped stretch
+     anywhere in the span is still `multiple_targets`, judged first;
    - each ALT's change lies inside one block (`gap_in_change` otherwise). The change is the REF bases
      the ALT replaces after the shared first and last bases are set aside, or, for an insertion, the
      two bases either side of the point it goes in at; and for an indel in a repeat, every place it
@@ -1255,7 +1261,7 @@ holding that collection and the target.
      target insertion of any size as reference.
    - One chain means one chain id. Rejected: any colinear pair of blocks on one contig and strand,
      which would lift across two alignments that happen to sit near each other. A chain listed twice
-     (F14) still lifts once (tested).
+     (F14) still lifts once, and so does one whose blocks another chain repeats in part (both tested).
    - Not changed: a row whose REF span lies inside one block lifts by step 2 as before, even where an
      insertion sits at the block's edge, next to a gap's target bases (`A` → `AT` on a block's last base
      is put before them, though the chain would allow after).
@@ -1948,7 +1954,8 @@ as its own parent, an imputed facet with lineage already (state it on the facet 
 server's file), a chip made from the imputed facet, and two subjects. The facet was still read from a
 file of its own (`links.STATED_RELATIONS`), which `normalize` honours. What reads it:
 `person_karyotype` and `Person` take the two as one callset (below, "Facets of one person" and
-"Weighed against each other"), and `consensus` refuses them together, as any parent beside its child.
+"Weighed against each other"), `Person` checking the statement itself once, the chip against the
+imputed facet, and `consensus` refuses them together, as any parent beside its child.
 `ancestry.consensus` reads no facet lineage at all: its witnesses are panels.
 
 The builder's calls, for the lead's veto: the provenance carries the tool in `step` (for a step just-vcf
@@ -2075,9 +2082,14 @@ library checks the claim and warns, and it never infers a subject or moves a fac
   its caller stated, `imputed_from`, Decision 12), whose rows are not independent evidence: checked,
   they would agree by construction and count as a confirmation. Every other pair of such callsets is
   checked once, each standing as its facet read from a file with no lineage (the chip, not its
-  imputation), else its lowest `facet_id`. The builder's call, for the lead's veto: this gives up
-  checking the caller's `imputed_from` statement against the rows (a chip of another person would
-  read `different`); the subject label is still checked against every other callset. `Person.checks` holds one row per pair (`facet_id`, `other_facet_id`,
+  imputation), else its lowest `facet_id`. The caller's statement is checked too, once per stated
+  link, its two sides against each other: the chip's file (the chip, or where it is not given a facet
+  the library made from it) against the imputed facet's, each standing as the facet read from its
+  file (2026-11-05, merge audit 15; before, a chip of another person stated as the source went
+  unchecked). Its row is read as any other: `different` makes the person `False` and is warned, an
+  unknown or a check not run keeps it from `True`. A statement whose chip is not among the facets
+  has nothing here to be checked against and makes no row. A step the library ran (a liftover, a
+  normalize) is not a statement and is never checked against its parent. `Person.checks` holds one row per pair (`facet_id`, `other_facet_id`,
   `outcome`: `same`, `different`, `could_not_tell`, `not_run`), and `Person.one_person` is their Kleene
   AND: `False` when any pair is `different`, `True` only when every pair is `same`, `None` otherwise,
   one source alone included. `different` and `could_not_tell` pairs are warnings naming both facet ids;
@@ -3542,8 +3554,13 @@ model for a cross-callset posterior. It adds no column to any frame, so `SCHEMA_
 
 **Parents.** A `Person` (refused when its check read two people, warned when not every pair read as
 one) or `Loaded`s of one subject: two facets or more, none given twice, no consensus facet among
-them, and none made from another given one (its lineage, through `links` and `derived_from`): a facet
-and its `normalize`d child are the same reads twice. Kin facets (a PGP merge's freeBayes and VarScan2)
+them, and no two whose lineages meet (each facet itself and every ancestor, through `links`' lineage
+relations, `imputed_from` among them, and `derived_from`): a facet and its `normalize`d child are the
+same reads twice, and so are two facets made from one ancestor not given itself (a chip's `normalize`d
+facet beside an imputation stated from the chip, a normalize and a liftover of one file, two
+imputations stated from one chip). The refusal names the nearest shared ancestor (merge audit 15:
+only a parent made from another given one was refused). No `CONSENSUS_VERSION` change: a refusal
+alters no consensus facet that is still made. Kin facets (a PGP merge's freeBayes and VarScan2)
 are allowed. All on one assembly: equal `ref_seqcol_digest`s, or, where any facet's REF was not read,
 one equal `assembly_label` with a warning (charter 3). Anything else is `ReferenceMismatchError`:
 lift first.
@@ -3766,6 +3783,25 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-05, merge audit 15: a stated lineage checked): no column changes.
+  `Person.of` checks each `imputed_from` statement once, the chip against the imputed facet, beside
+  the checks between callsets, which are unchanged ("Facets of one person", "Checked"). **Values
+  change**: `Person.checks` gains that row, so a person holding a chip and the imputation stated from
+  it reads `one_person` from it too, `False` where the chip is another person's.
+
+- **No version change** (2026-11-05, merge audit 15: two parents of one ancestor): no column changes.
+  `consensus` refuses two parents whose lineages meet, one made from the other or both made from one
+  facet not given ("A consensus posterior", "Parents"), where it refused only the first. Nothing it
+  still makes changes, so `CONSENSUS_VERSION` stays 5.
+
+- **No version change** (2026-11-05, merge audit 15: a chain repeating part of another): no column
+  changes. `liftover` judges a row across a gap of one chain ("Lifting", step 2b) by the chains that
+  hold each piece of its span, where it read the chain of the one block per mapping the axis kept;
+  `LIFT_VERSION` 15. **Values change** only on a chain in which one chain repeats some of another's
+  blocks: a row its gap-spanning chain holds whole lifts, in either order of the chains, where it was
+  `split_across_chains` (or, in one order, a `TypeError`). A lifted facet's `facet_id` changes with
+  the version.
 
 - **No version change** (2026-11-05, RM282: symbolic alleles against breakends): no stored column
   changes. `concordance`'s `sites` frame, a measurement that is not stored, gains a value of `key`,

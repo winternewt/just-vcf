@@ -11,6 +11,39 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **`Person.of` checks a stated chip and imputation pair once** (merge audit 15). Since RM287 the
+  chip and the imputed facet stated as made from it (`state_imputed_from`) are one callset, checked
+  only against the person's other callsets, so a chip of another person stated as the source went
+  unchecked. The statement is now checked once, the chip (or, where it is not given, a facet the
+  library made from it) against the imputed facet, its row in `Person.checks` read as any other:
+  `different` makes `one_person` False and is warned, an unknown answer or no check keeps it from
+  True. They stay one callset against everyone else; a liftover or normalize is never checked
+  against its parent. A consumer counting `Person.checks` rows meets one more per statement. Tests:
+  `tests/test_imputed_from.py::test_a_stated_pairs_check_is_read_as_any_pairs`,
+  `tests/test_imputed_from.py::test_a_chip_stated_for_another_persons_imputation_reads_as_two_people`,
+  each failing on the code before.
+
+- **`consensus` refuses two parents made from one ancestor** (merge audit 15). It refused a parent made
+  from another given parent, but not two given parents sharing an ancestor, so a chip's normalized
+  facet beside an imputation stated from the chip (`state_imputed_from`), or two derivations of one
+  file, counted the same reads as two witnesses. It now refuses any two parents whose lineages (each
+  facet and its ancestors, through the lineage relations and `derived_from`) meet, naming the nearest
+  shared ancestor. No consensus it still makes changes, so `CONSENSUS_VERSION` stays 5. `Person.of`
+  already took such facets as one callset (tested). Test:
+  `tests/test_imputed_from.py::test_a_consensus_refuses_two_facets_made_from_one_ancestor`, its three
+  pairs each failing on the code before.
+
+- **`liftover` lifts a row across a gap whichever chain repeats part of its blocks** (merge audit 15,
+  `LIFT_VERSION` 15). A row across a gap of one chain was judged by the one block the chain axis keeps
+  per mapping, the last of the blocks repeating it, so a second chain repeating only the first of two
+  blocks made the row `split_across_chains` in one order of the chains and lifted it in the other;
+  where that second chain repeated both mappings with a shorter first block, the lift raised a
+  `TypeError`. The row is now judged by every block of each mapping: it lifts where one chain holds
+  each piece of its span, in either order (docs/SCHEMA.md "Lifting", step 2b). Lifted facets' ids
+  change with the version. Test:
+  `tests/test_liftover.py::test_a_row_across_a_gap_lifts_alike_whichever_chain_repeats_part_of_it`, three
+  chains, each failing on the code before.
+
 - **`concordance` meets a symbolic `<DEL>`, `<DUP>` or `<INV>` with the breakends another caller
   writes for it** (RM282), as truvari 5.5's default `decompose` does: the symbolic allele is turned
   into the breakend records it implies (a deletion joins POS to END + 1, a tandem duplication END to
@@ -30,7 +63,8 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
   `derivation_inputs`, and the link `chip → imputed` with the tool as `provenance.step`; its id and rows
   are unchanged. Stated, the two are one callset: `person_karyotype` answers once for them, `Person.of`
   and `check_pedigree` no longer check the pair against each other (the chip stands for both against
-  the person's other files), and `consensus` refuses them together. `ancestry.consensus` reads no
+  the person's other files; `Person.of` checks the statement itself once since merge audit 15, above),
+  and `consensus` refuses them together. `ancestry.consensus` reads no
   facet lineage and is unchanged. A store already holding the imputed facet keeps it without the
   link, so state it before the first add. docs/SCHEMA.md Decision 12, "A stated lineage", has the
   builder's calls for the lead's veto. Tests: `tests/test_imputed_from.py`.

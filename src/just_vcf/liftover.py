@@ -18,7 +18,8 @@ short:
    target ambiguous; blocks repeating one mapping count once, F14).
    Otherwise it is unlifted: no block at all, a span that crosses a block edge, or more than one
    target. **Across a gap of one chain** (2b) a sequence row still lifts where its first and last
-   bases lie in blocks of one chain, every gap between has fewer than `GAP_LIMIT` bases on each side,
+   bases lie in blocks and one chain holds every piece of the span a block covers (whichever other
+   chain repeats some of those blocks, F14), every gap between has fewer than `GAP_LIMIT` bases on each side,
    and each ALT's change (the bases it changes, or for an indel in a repeat every place it could
    equally sit) lies inside one block. Its lifted span runs from the image of its first base to the
    image of its last; REF is read there, and each allele is the target's sequence there with that
@@ -108,7 +109,7 @@ from just_vcf.schema import BLOCKS, CALLS, FACETS, SCHEMA_VERSION, AbsenceMeans,
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 14
+LIFT_VERSION = 15
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
 row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
 `phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
@@ -119,7 +120,9 @@ minus strand, a source SV with CIEND and no CIPOS gets `ciend = [0, 0]`, its pre
 12: a breakend whose mate is a contig of the `##assembly` file, `<ctg1>`, lifted by POS alone, the mate
 kept as written; 13: a row whose source REF states no base, `ref_check = unstated`, with a sequence ALT
 left behind as `source_ref_unstated`; 14: a sequence row whose REF span crosses a gap of one chain lifted,
-REF read over the lifted span and each ALT's change carried into the target's sequence there)."""
+REF read over the lifted span and each ALT's change carried into the target's sequence there; 15: such a
+row judged by the chains that hold each piece of its span, not by the one block per mapping the axis kept,
+so a chain repeating only part of another's blocks no longer leaves it `split_across_chains`)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -174,7 +177,7 @@ REASON_TEXT: dict[str, str] = {
     "chain_contig_mismatch": "a contig whose size in the chain differs from the source assembly's",
     "no_chain_block": "no chain block covers it (a gap in the alignment)",
     "split_across_blocks": "its REF span runs off a chain block: its first or last base is in no block (a gap's source-only bases, or past the chain's end)",
-    "split_across_chains": "its REF span starts and ends in blocks of different chains (another alignment, target contig or strand), or crosses a block of another chain",
+    "split_across_chains": "no one chain holds every block-covered piece of its REF span: its ends lie in blocks of different chains (another alignment, target contig or strand), or it crosses a block of another chain",
     "gap_in_change": (
         "its REF span crosses a gap of one chain inside the bases an allele changes, or where an indel in a repeat could equally be placed, "
         "so the change has no one place on the target"
@@ -350,6 +353,9 @@ def _segments(blocks: pl.DataFrame) -> pl.DataFrame:
     """One source contig's axis cut where the set of targets changes: `seg_start`, how many distinct
     targets cover the segment (`depth`), a block giving it when exactly one does, and running counts of
     covered and multiply-covered segments, so a span over several segments is judged by two lookups.
+    That block stands for its mapping only: where several blocks repeat the mapping it is any one of
+    them, of any chain, and need not cover the whole segment, so a reader takes its offset, never its
+    chain or extent (`_gap_plan` reads the chains from every block of the mapping).
 
     A target is a mapping, not a block: blocks with the same target contig, strand and offset
     (`q_start - t_start`) send every shared base to the same place, so they count once. Ensembl's
@@ -1458,23 +1464,45 @@ class _GapPlan:
     """Per gap: the span offset of the last base before it, and the chain-strand range of its target bases."""
 
 
-def _gap_plan(s0: int, e0: int, segments: list[tuple[int | None, int]], info: dict[int, dict], ref: str, alleles: list[str], targets: dict[str, Contig]) -> "_GapPlan | str":
+def _mapping(block: dict) -> tuple[str, bool, int]:
+    """A block's mapping: target contig, strand and offset, what `_segments` counts once."""
+    return block["q_chrom"], block["q_minus"], block["q_start"] - block["t_start"]
+
+
+def _gap_plan(
+    s0: int, e0: int, segments: list[tuple[int | None, int, int]], info: dict[int, dict], same: dict[tuple, list[dict]], ref: str, alleles: list[str], targets: dict[str, Contig]
+) -> "_GapPlan | str":
     """How a row whose REF span `[s0, e0)` crosses block edges lies across gaps of one chain, or why it
-    cannot be lifted so. `segments` are the chain axis segments the span touches, in order, as (the one
-    block giving each or None, its start); `info` the blocks by id; `alleles` every allele but REF."""
+    cannot be lifted so. `segments` are the chain axis segments the span touches, in order, as (the
+    block the axis kept for each or None, its start, its end); `info` those blocks by id; `same` every
+    block of the contig by mapping; `alleles` every allele but REF.
+
+    The axis keeps one block per mapping, whichever of the blocks repeating it (F14) came last, so
+    which chain it names says nothing. The row lifts where one chain holds each piece of the span a
+    segment covers, whole, in one block of that segment's mapping; any such chain gives the same
+    plan (a piece that is not the span's first or last ends where its segment does, and so does every
+    block holding it), and the lowest chain id is taken."""
     if segments[0][0] is None or segments[-1][0] is None:
         return "split_across_blocks"
-    ids: list[int] = []
-    for block, _ in segments:
-        if block is not None and (not ids or ids[-1] != block):
-            ids.append(block)
-    first = info[ids[0]]
-    if any(info[block]["chain"] != first["chain"] for block in ids):
+    holders: list[dict[int, dict]] = []
+    for block, start, end in segments:
+        if block is None:
+            continue
+        p0, p1 = max(s0, start), min(e0, end)
+        holders.append({b["chain"]: b for b in same[_mapping(info[block])] if b["t_start"] <= p0 and p1 <= b["t_end"]})
+    common = set.intersection(*(set(held) for held in holders))
+    if not common:
         return "split_across_chains"
+    chain = min(common)
+    chosen: list[dict] = []
+    for held in holders:
+        if not chosen or chosen[-1]["block"] != held[chain]["block"]:
+            chosen.append(held[chain])
+    first = chosen[0]
     chrom = canonical_chrom(first["q_chrom"])
     if chrom not in targets:
         return "target_contig_unmatched"
-    blocks = [(info[block]["t_start"], info[block]["t_end"], info[block]["q_start"]) for block in ids]
+    blocks = [(block["t_start"], block["t_end"], block["q_start"]) for block in chosen]
 
     def block_of(x: int) -> int | None:
         return next((index for index, (start, end, _) in enumerate(blocks) if start <= x < end), None)
@@ -1560,19 +1588,25 @@ def _place_gap(rows: pl.DataFrame, blocks: pl.DataFrame, segments: pl.DataFrame,
         .join(last.select("_row", "_seg_e"), on="_row")
         .with_columns(pl.int_ranges(pl.col("_seg_s"), pl.col("_seg_e") + 1, dtype=pl.UInt32).alias("seg"))
         .explode("seg", empty_as_null=False)
-        .join(axis.select("seg", "seg_start", "seg_block"), on="seg", how="left")
+        .join(axis.select("seg", "seg_start", "seg_end", "seg_block"), on="seg", how="left")
         .sort("_row", "seg")
         .group_by("_row", maintain_order=True)
-        .agg("seg_block", "seg_start")
+        .agg("seg_block", "seg_start", "seg_end")
     )
-    spans = {row: list(zip(block_ids, starts)) for row, block_ids, starts in touched.iter_rows()}
-    ids = {block for span in spans.values() for block, _ in span if block is not None}
+    spans = {row: list(zip(block_ids, starts, ends)) for row, block_ids, starts, ends in touched.iter_rows()}
+    ids = {block for span in spans.values() for block, _, _ in span if block is not None}
     info = {row["block"]: row for row in blocks.filter(pl.col("block").is_in(list(ids))).iter_rows(named=True)}
+    # Every block repeating a mapping the axis kept, so a span is judged by the chains, not by which block was kept.
+    kept = pl.DataFrame(sorted({_mapping(block) for block in info.values()}), schema={"q_chrom": pl.String, "q_minus": pl.Boolean, "_offset": pl.Int64}, orient="row")
+    repeating = blocks.with_columns((pl.col("q_start") - pl.col("t_start")).alias("_offset")).join(kept, on=["q_chrom", "q_minus", "_offset"], how="semi")
+    same: dict[tuple, list[dict]] = {}
+    for block in repeating.sort("block").iter_rows(named=True):
+        same.setdefault(_mapping(block), []).append(block)
 
     plans: dict[int, _GapPlan | str] = {}
     for row, s0, e0, ref, alts in rows.select("_row", "_s0", "_e0", pl.col("ref").str.to_uppercase(), "alts").iter_rows():
         alleles = sorted({allele.upper() for allele in alts or []} - {ref})
-        plans[row] = _gap_plan(s0, e0, spans[row], info, ref, alleles, targets)
+        plans[row] = _gap_plan(s0, e0, spans[row], info, same, ref, alleles, targets)
     reads: dict[int, str] = {}
     for chrom in sorted({plan.chrom for plan in plans.values() if isinstance(plan, _GapPlan)}):
         wanted = [(row, plan) for row, plan in plans.items() if isinstance(plan, _GapPlan) and plan.chrom == chrom]

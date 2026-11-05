@@ -30,6 +30,14 @@ each reset.
 0. **Shipped since, kept out of Open**: F23 as schema 0.0.22 (2026-10-27); audit 12's fixes and the loosened
    own-sample test, merge 6eed88a (2026-10-26). The roadmap's stale "awaiting the lead's merge" lines (RM274,
    RM276, RM5) corrected 2026-11-03.
+0. **Running 2026-11-05: RM287's builder** (Opus, worktree): per-site R2/ER2/DR2 kept on the calls frame (schema
+   0.0.23 with its migration step) and a caller-stated `imputed_from` single-parent link. It became buildable when
+   desk #180 stayed open through the person's present on 2026-11-05 (`yes after a present`); the grade does not
+   read the new column (the lead's call, for veto). Its merge is 5 of 6 before audit 15. The strand check stays
+   with RM6. **The changelog has no Unreleased section**: every merge until 0.1.0 is published adds its lines at
+   the top of the 0.1.0 section, and the README is checked against each merge. Every roadmap item carries a
+   `**State:**` line since ea6a199, read by the plan watcher (8c0314f); the `## Items` heading it flags stays,
+   since `item-next` anchors its rows on it (kit #281).
 0. **Done 2026-11-03, nothing running**: RM5's consensus merged as 6b5503c (merge 4 of 6): one panel's methods
    are one witness, averaged; only panels the caller declares disjoint multiply; its calls for veto in
    docs/SCHEMA.md "Combining ancestry estimates" (disjointness never inferred, every reading weighed alike,

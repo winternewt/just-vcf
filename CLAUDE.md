@@ -25,7 +25,9 @@ decision turned on. Delegation is for finding things, never for deciding them.
    amendments go through a procedure, only when the user signs it off. Edits to it are still the user's
    call, never an agent's own initiative.
 2. **docs/ROADMAP.md** — active-only, forward-only. One `## RMn — name` section per *open* item with a
-   severity/status/owner line. Claim new ids with the kit's `item-next.py`, never by grepping (§8).
+   `**State:** … · **Owner:** …` first paragraph in the kit's
+   grammar (unattended, urgent, building, waits until, after, blocked: desk #N), read by the plan
+   watcher, then its severity/status line. Claim new ids with the kit's `item-next.py`, never by grepping (§8).
 3. **docs/CHANGELOG.md** — what actually shipped, newest first.
 4. **docs/DOGFOODING.md** — open findings from using the shipped surface for real work. Read it before
    touching the tool or API surface.

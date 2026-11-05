@@ -234,9 +234,9 @@ Forward/Design alleles (its manifest, HumanOmni2.5-8v1_A, is not on disk); exact
 real data (no PGP-HMS export's chip has its own manifest on disk).
 
 ## RM282 — Structural-variant facets
-**State:** unattended: the lead's judgement on a symbolic SV meeting another caller's breakends; the copy-number allele against `<DEL>`/`<DUP>` goes to the desk; VRS copy-number ids wait on desk #89 · **Owner:** lead
+**State:** unattended: a symbolic SV meeting another caller's breakends is built (decompose, 2026-11-05), its calls listed for the person's veto; the copy-number allele against `<DEL>`/`<DUP>` goes to the desk; VRS copy-number ids wait on desk #89 · **Owner:** lead
 
-Severity: low · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; loading and the `write_vcf` round trip shipped 2026-10-23, merge 04c5db3, schema 0.0.14; `concordance` compares symbolic SV alleles by type and extent under truvari's matching, 2026-10-26, merged; breakends in `concordance` by truvari's `bnd_match`, one row per adjacency, 2026-10-26, merge 43dd717. Left: whether a symbolic `<DEL>`/`<DUP>`/`<INV>` should meet the breakends another caller writes for it (truvari's default `decompose`), a judgement not made (below); whether a copy-number allele (`<CN0>`, `<CN3>`) should meet a `<DEL>` or `<DUP>` as a loss or a gain, the person's call (below); a check against a DELLY or Sniffles file waits for one (none on disk, synthetic tests only); minting VRS 2 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` waits on desk #89, meanwhile `sv_no_vrs_model`)
+Severity: low · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; loading and the `write_vcf` round trip shipped 2026-10-23, merge 04c5db3, schema 0.0.14; `concordance` compares symbolic SV alleles by type and extent under truvari's matching, 2026-10-26, merged; breakends in `concordance` by truvari's `bnd_match`, one row per adjacency, 2026-10-26, merge 43dd717; a symbolic `<DEL>`/`<DUP>`/`<INV>` meeting the breakends another caller writes for it, truvari's default `decompose`, the lead's judgement, 2026-11-05. Left: whether a copy-number allele (`<CN0>`, `<CN3>`) should meet a `<DEL>` or `<DUP>` as a loss or a gain, the person's call (below); a check against a DELLY or Sniffles file waits for one (none on disk, synthetic tests only); minting VRS 2 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` waits on desk #89, meanwhile `sv_no_vrs_model`)
 
 The person chose load with ids withheld (E11): SV calls load as rows with type and `end_pos`, VRS ids withheld with a reason (VRS 2.x has no SV model; charter: never a non-conforming GA4GH value).
 
@@ -271,11 +271,27 @@ exactly the 467 adjacencies that kept one. No person has two
 breakend facets, so no two callers were compared. The dogfood ran into F29, resolved the same day (`concordance` against
 hu416394's Manta file with one-sided sequence alleles exhausts memory), which is not RM282's.
 
-**Left:** whether a symbolic `<DEL>`, `<DUP>` or `<INV>` should meet the breakends another caller
-writes for the same junction (truvari's default `decompose` turns the symbolic call into breakends;
-not built, and whether the two are one call is a judgement this entry has not made); whether a
-nearby symbolic SV should make a lone breakend's absence `other_alleles` (it does not now); no
-DELLY, Sniffles or second breakend file exists to check against (synthetic tests only); whether a
+**Built 2026-11-05, decompose:** the lead judged that a symbolic `<DEL>`, `<DUP>` or `<INV>` and the
+breakends another caller writes for the same junction describe one adjacency, as truvari's default
+`decompose` reads them; refusing the match counted one event as an `only_a` and an `only_b` row.
+`concordance` now turns the symbolic allele into the breakend records truvari's
+`VariantRecord.decompose` writes and meets them with the other facet's by `bnd_match` (key
+`decomposed`, `sv_kind` the symbolic type; docs/SCHEMA.md, "Symbolic alleles against breakends"). A
+lone breakend near an implied one reads `other_alleles`, and so does a lone symbolic allele whose
+implied breakend lies near the other facet's breakend. The junctions are pinned by tests to the VCF
+4.3 inversion example and VCF 4.5's split deletion; the tandem duplication's follows 4.5's prose (no
+spec writes one as breakends). The builder's calls, for the person's veto: like meets like first and
+decomposition takes only what is left (truvari picks in one matrix, where a symbolic pair's score
+caps at 66.7 against a breakend pair's 100); a record whose SVTYPE names another type (DRAGEN's CNV
+`<DEL>`) and a duplication subtype other than TANDEM are not decomposed; an `<INV>` is taken once,
+with one of its two adjacencies, the other left `other_alleles`; each implied record carries the
+symbolic record's CIPOS and CIEND as truvari's copies do; the mirror of the lone-breakend rule, a
+lone symbolic allele near the other's breakends, was added beside the one asked for. Synthetic tests
+only: no person here has a symbolic SV facet beside another caller's breakends.
+
+**Left:** no DELLY, Sniffles or second breakend file exists to check against (synthetic tests only);
+VCF 4.5's SVCLAIM is not kept by the frame, so a `<DEL>` claiming abundance only (`SVCLAIM=D`, no
+SVTYPE) is decomposed; whether a
 copy-number allele should meet a deletion or duplication as a loss or a gain (it
 needs the expected copy number at the locus, which differs on X and Y, and is the person's call:
 built is the strict reading, type from the ALT's name, reversible by adding a mapping in

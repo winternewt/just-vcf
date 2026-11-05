@@ -52,8 +52,11 @@ each reset.
    Cursor): Grok found nothing; Sol two, both confirmed by reading: a partly duplicated chain makes `_segments`
    pick representatives from two chains, so a gap-spanning lift is refused as `split_across_chains` and depends on
    chain order (liftover.py); `consensus` refuses a parent made from another given parent but not two given
-   facets sharing an ancestor (`normalize(c)` beside `i` imputed from `c`, or two derivations of `c`). One fix
-   builder is on both plus the stated pair's same-person check below. Next audit after 6 more merges.
+   facets sharing an ancestor (`normalize(c)` beside `i` imputed from `c`, or two derivations of `c`). Fixed and
+   merged as 307e96e (suite 2586 passed, 76 skipped), with the stated pair's same-person check below and a
+   TypeError the liftover test found (a shorter repeated block); `LIFT_VERSION` 15. The fix builder's calls for veto:
+   the lowest common chain id taken; a stated pair checked only when its chip is given; `check_pedigree` gets no
+   stated-pair row. Next audit after 6 more merges (0 of 6 now).
 0. **Done 2026-11-05: RM282's decompose merged as 2b7c403 (merge 6 of 6: audit 15 is due)**: a symbolic
    `<DEL>`/`<DUP>`/`<INV>` meets another caller's breakends as truvari's default `decompose` does (key
    `decomposed`), a lone breakend near one reads `other_alleles`, and the mirror. The builder's ten calls for veto

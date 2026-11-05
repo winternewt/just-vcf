@@ -43,7 +43,8 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
 
 - `README.md` (the PyPI page) brought up to date for the release: it names coverage (`read_coverage`,
   `alignment_coverage`), sex-chromosome karyotype (`sex_chromosome_evidence`, `person_karyotype`) and
-  the ancestry `consensus`, which landed after the first README pass.
+  the ancestry `consensus`, which landed after the first README pass, and imputed files' per-site quality
+  and `state_imputed_from` (RM287).
 - **`liftover` lifts a sequence row across a gap of one chain** (RM6, `LIFT_VERSION` 14; docs/SCHEMA.md
   "Lifting", step 2b). An SNV in context, MNV or indel whose REF span crosses a chain gap, with both
   ends in blocks of one chain, every crossed gap under `GAP_LIMIT` (50) bases each side, and each ALT's

@@ -24,7 +24,8 @@ break is recorded in the changelog.
 - **Describes each facet** it loads: the genome build (stated by the file or inferred from it, and
   unknown when it cannot tell, never a default), the callset type (whole genome, exome, panel, array
   or imputed), the vendor and caller, and for arrays the chip. A chip's absent site is unknown, not
-  reference.
+  reference. An imputation server's output keeps its per-site quality (minimac's R2 and ER2, Beagle's
+  DR2), and `state_imputed_from` records which chip it was made from, so the two count once.
 - **Reads REF from a reference** (`resolve_ref`) kept in a local [refget](https://ga4gh.github.io/refget/)
   store; a FASTA is added to it once. The source's own REF is checked against it, never trusted, and
   never written from the genotype.

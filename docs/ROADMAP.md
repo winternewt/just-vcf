@@ -7,7 +7,7 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM287 — Imputed facets read back
-**State:** unattended: the strand check against an imputation server's input rules (RM6's A/T and C/G item) · **Owner:** lead
+**State:** unattended: a test writing a chip export through `resolve_ref`, `liftover` and `write_vcf` and checking it against an imputation server's published input rules, the A/T and C/G gap counted where it bites (whether to settle that gap is desk #212) · **Owner:** lead
 
 Severity: low · Status: read-back shipped 2026-11-05 on a builder's branch, for the lead's merge: schema
 0.0.23's `calls.imputation_r2` (minimac R2 or Beagle DR2) and `calls.imputation_empirical_r2`
@@ -1049,7 +1049,7 @@ target's `assembly_label`, so lifting first is the path; the ancestry functions 
 `assembly_mismatch` for a facet on another assembly and do not lift it themselves. Not tested end to end.
 
 ## RM6 — Normalization and VCF writing
-**State:** unattended: strand resolution of A/T and C/G sites; quality filters need a lead design call first · **Owner:** lead
+**State:** unattended: quality filters need a lead design call first; A/T and C/G strand is desk #212 (default: left unread, since F13 measured that no manifest strand column predicts a vendor's flips, and only allele frequencies could) · **Owner:** lead
 
 Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f), INFO SVLEN in `write_vcf` as `end_pos - pos` per length-type SV allele (2026-10-26; the frame keeps no SVLEN of its own, so an `<INS>` length is not written; whether to keep one is the person's call, docs/SCHEMA.md "Structural variants"), `blocks` in a lift, cut at every chain gap and edge, `LIFT_VERSION` 8, and symbolic SVs in a lift by both ends, `LIFT_VERSION` 9 (2026-10-26, docs/SCHEMA.md "Lifting blocks", "Lifting symbolic SVs"); breakends in a lift by their own position and each mate's, the mate's contig renamed inside ALT and the brackets turned per strand, `LIFT_VERSION` 11 (2026-10-26, merged; docs/SCHEMA.md "Lifting breakends"); copy-number rows whose REF is `N` lifted as `ref_check = unstated` (F23, schema 0.0.22, 2026-10-27). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Sequence rows across a gap of one chain lifted, the change carried into the target's sequence there, gaps under `GAP_LIMIT` (50) bases, `LIFT_VERSION` 14 (2026-11-03, docs/SCHEMA.md "Lifting", step 2b; synthetic tests only, no real callset re-lifted yet). Left, buildable now: strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable)
 

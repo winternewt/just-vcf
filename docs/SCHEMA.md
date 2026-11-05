@@ -3548,8 +3548,13 @@ model for a cross-callset posterior. It adds no column to any frame, so `SCHEMA_
 
 **Parents.** A `Person` (refused when its check read two people, warned when not every pair read as
 one) or `Loaded`s of one subject: two facets or more, none given twice, no consensus facet among
-them, and none made from another given one (its lineage, through `links` and `derived_from`): a facet
-and its `normalize`d child are the same reads twice. Kin facets (a PGP merge's freeBayes and VarScan2)
+them, and no two whose lineages meet (each facet itself and every ancestor, through `links`' lineage
+relations, `imputed_from` among them, and `derived_from`): a facet and its `normalize`d child are the
+same reads twice, and so are two facets made from one ancestor not given itself (a chip's `normalize`d
+facet beside an imputation stated from the chip, a normalize and a liftover of one file, two
+imputations stated from one chip). The refusal names the nearest shared ancestor (merge audit 15:
+only a parent made from another given one was refused). No `CONSENSUS_VERSION` change: a refusal
+alters no consensus facet that is still made. Kin facets (a PGP merge's freeBayes and VarScan2)
 are allowed. All on one assembly: equal `ref_seqcol_digest`s, or, where any facet's REF was not read,
 one equal `assembly_label` with a warning (charter 3). Anything else is `ReferenceMismatchError`:
 lift first.
@@ -3772,6 +3777,11 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-05, merge audit 15: two parents of one ancestor): no column changes.
+  `consensus` refuses two parents whose lineages meet, one made from the other or both made from one
+  facet not given ("A consensus posterior", "Parents"), where it refused only the first. Nothing it
+  still makes changes, so `CONSENSUS_VERSION` stays 5.
 
 - **No version change** (2026-11-05, merge audit 15: a chain repeating part of another): no column
   changes. `liftover` judges a row across a gap of one chain ("Lifting", step 2b) by the chains that

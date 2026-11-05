@@ -37,6 +37,7 @@ import math
 from collections import Counter
 from collections.abc import Iterable
 from enum import Enum
+from itertools import combinations
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -604,26 +605,39 @@ def _parents(person: Person | Loaded | Iterable[Loaded]) -> tuple[list[Loaded], 
 
 
 def _refuse_lineage(rows: list[dict], links: pl.DataFrame) -> None:
-    """Refuse a parent made from another parent: the same reads would count twice."""
+    """Refuse two parents whose lineages meet: one made from the other, or both made from one facet
+    (a chip's normalized facet beside an imputation stated from the chip, two derivations of one
+    file). The same reads would count twice. Each facet's lineage is itself and every ancestor, through
+    the lineage relations (`links.LINEAGE_RELATIONS`, `imputed_from` among them) and `derived_from`."""
     parents: dict[str, set[str]] = {}
     for link in links.filter(pl.col("relation").is_in(sorted(LINEAGE_RELATIONS))).iter_rows(named=True):
         parents.setdefault(link["to_facet_id"], set()).add(link["from_facet_id"])
     for row in rows:
         if row["derived_from"] is not None:
             parents.setdefault(row["facet_id"], set()).add(row["derived_from"])
-    given = {row["facet_id"] for row in rows}
-    for row in rows:
+
+    def lineage(facet_id: str) -> set[str]:
         seen: set[str] = set()
-        todo = list(parents.get(row["facet_id"], ()))
+        todo = [facet_id]
         while todo:
-            ancestor = todo.pop()
-            if ancestor in seen:
-                continue
-            seen.add(ancestor)
-            todo += list(parents.get(ancestor, ()))
-        hit = sorted(seen & given)
-        if hit:
-            raise ValueError(f"facet {row['facet_id']} was made from facet(s) {', '.join(hit)}, also given; pass one of them, not both")
+            node = todo.pop()
+            if node not in seen:
+                seen.add(node)
+                todo += list(parents.get(node, ()))
+        return seen
+
+    ids = sorted(row["facet_id"] for row in rows)
+    lineages = {facet_id: lineage(facet_id) for facet_id in ids}
+    for a, b in combinations(ids, 2):
+        shared = lineages[a] & lineages[b]
+        if not shared:
+            continue
+        for child, parent in ((a, b), (b, a)):
+            if parent in lineages[child]:
+                raise ValueError(f"facet {child} was made from facet(s) {parent}, also given; pass one of them, not both")
+        # The nearest: a shared ancestor that is no ancestor of another shared one.
+        nearest = sorted(node for node in shared if not any(node in lineage(other) for other in shared - {node}))
+        raise ValueError(f"facets {a} and {b} were both made from facet(s) {', '.join(nearest)}; its reads would count twice, so pass one of them, not both")
 
 
 def _assembly(rows: list[dict], warnings: list[str]) -> tuple[str | None, str | None]:
@@ -1062,7 +1076,8 @@ def consensus(
     docstring, docs/SCHEMA.md "A consensus posterior").
 
     `person` is a `Person` (refused when its check read two people) or `Loaded`s of one subject, two
-    facets or more, none made from another (the same reads would count twice), all on one assembly
+    facets or more, none made from another and no two made from one ancestor (the same reads would
+    count twice), all on one assembly
     (equal `ref_seqcol_digest`, else one equal `assembly_label` with a warning; otherwise lift first).
     `atlas` is a `method_atlas` table; its pair rates become per-method rates (`method_error_rates`,
     rows of `scope`). `regions` places each allele in its region classes, and a facet is weighted by

@@ -11,6 +11,16 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **`consensus` refuses two parents made from one ancestor** (merge audit 15). It refused a parent made
+  from another given parent, but not two given parents sharing an ancestor, so a chip's normalized
+  facet beside an imputation stated from the chip (`state_imputed_from`), or two derivations of one
+  file, counted the same reads as two witnesses. It now refuses any two parents whose lineages (each
+  facet and its ancestors, through the lineage relations and `derived_from`) meet, naming the nearest
+  shared ancestor. No consensus it still makes changes, so `CONSENSUS_VERSION` stays 5. `Person.of`
+  already took such facets as one callset (tested). Test:
+  `tests/test_imputed_from.py::test_a_consensus_refuses_two_facets_made_from_one_ancestor`, its three
+  pairs each failing on the code before.
+
 - **`liftover` lifts a row across a gap whichever chain repeats part of its blocks** (merge audit 15,
   `LIFT_VERSION` 15). A row across a gap of one chain was judged by the one block the chain axis keeps
   per mapping, the last of the blocks repeating it, so a second chain repeating only the first of two

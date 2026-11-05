@@ -44,6 +44,10 @@ each reset.
    adds its lines at the top of the 0.1.0 section, and the README is checked against each merge. Every roadmap
    item carries a `**State:**` line since ea6a199, read by the plan watcher (8c0314f); the `## Items` heading it
    flags stays, since `item-next` anchors its rows on it (kit #281).
+0. **Done 2026-11-05: RM276 closed by the lead's call, moved to history** (no builder, not a merge): a migrated
+   VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
+   `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
+   rejected in docs/SCHEMA.md "Store migration", for the person's veto.
 0. **Done 2026-11-03, nothing running**: RM5's consensus merged as 6b5503c (merge 4 of 6): one panel's methods
    are one witness, averaged; only panels the caller declares disjoint multiply; its calls for veto in
    docs/SCHEMA.md "Combining ancestry estimates" (disjointness never inferred, every reading weighed alike,

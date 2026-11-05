@@ -2939,6 +2939,11 @@ left) reads differently from what a load of the same source gives today, the fac
 named, with the reason. Loading the source again is the only way to get those values. Rejected:
 deriving `gl_source` from whether a facet's rows have `gl` (it would still guess GL against PL), and
 writing `method_steps = []` for a VCF facet (`[]` says the header was read and recorded no step).
+Rejected too (the lead, 2026-11-05, RM276): a value of their own for a migrated VCF facet's
+`method_steps` and `gl_source` (a `not_recorded` member of `gl_source`'s enum, a marker step in the
+list). It would widen an enum and a struct list that every reader handles, for a state only a migrated
+store holds and that loading the source again ends; the manifest's `migrations` record and `loaded()`'s
+warning already name each such facet, with the reason.
 A value changed by a rule under one version ("No version change" below) is not a bump, so it gets no
 step: a store keeps the values its load gave until the source is loaded again.
 

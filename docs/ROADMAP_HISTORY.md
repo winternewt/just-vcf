@@ -3,6 +3,25 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM276 — A durable per-person store
+Severity: medium · Status: shipped 2026-11-05 (the lead kept a migrated VCF facet's null `method_steps` and `gl_source`, told apart by the manifest's record and `loaded()`'s warning, docs/SCHEMA.md "Store migration"; was: in progress, decided by the person in the Part 2 interview, 2026-10-23; `Store` and `write_vcf_zarr` shipped 2026-10-23, merge 6830fb7; `call_HQ` in the Zarr export 2026-10-24, merge fbcb3a9; `variant_CIPOS`, `variant_CIEND` and `variant_CN` in the Zarr export 2026-10-26, an interval holding -1 or -2, the spec's integer sentinels, written missing and counted; 2026-10-26, `migrate_store`: a store of an older schema version rewritten to this one by a step per bump since 0.0.14 (`just_vcf.store_migration`), written beside, checked and swapped, what it cannot carry named as filled unknown, docs/SCHEMA.md "Store migration", merge 401cbf0. Nothing buildable left. For the lead: whether `method_steps` and `gl_source` null on a migrated VCF facet (not read) should get its own value instead of sharing null with "not a VCF" / "no likelihoods", which only the manifest and `loaded()`'s warnings tell apart now) · Owner: lead
+
+The person chose both (E13): a directory per person holding parquet per facet, the links frame and a manifest, read lazily; and a VCF Zarr export (its spec has no gVCF blocks, so blocks stay parquet-only). Facets accumulate; nothing is overwritten (invariant 5).
+
+**Built:** `Store` (docs/SCHEMA.md, "The durable store"): parquet per facet, links per facet, a
+manifest, a lock, lazy reads into `Loaded` and `Person`; and `write_vcf_zarr`, one facet's calls as
+VCF Zarr 0.4, blocks counted and left in the store. **Left:** a migration between schema versions (a
+store of another version is refused, not migrated); `cipos`, `ciend` and `alt_copy_numbers` in the
+Zarr export; whether `Person` should carry the links (`store.loaded().links` has them).
+*Corrected 2026-10-26:* `cipos`, `ciend` and `alt_copy_numbers` are written (docs/SCHEMA.md, "VCF
+Zarr export").
+*Corrected 2026-10-26:* `Person` carries `links` (merge b8bef07, 2026-10-23, "Person and the CLI keep
+links"), and `Store.person()` builds it from `loaded()`, so its links are the store's; that question is
+closed.
+*Corrected 2026-10-26:* the migration is built: `migrate_store(path)` rewrites an older store by the
+steps in `just_vcf.store_migration` and reports what it filled unknown (docs/SCHEMA.md, "Store
+migration").
+
 ## RM277 — Concordance between facets
 Severity: medium · Status: shipped 2026-10-23 (merge 2446c53; F21 and F22 followed the same day, merge c6da26c; was: open, decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
 

@@ -3860,9 +3860,10 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `site_genotypes` and somalier's `--unknown` read a `weak_reference` or `reference` silence at a panel
   site only where `absence_is_reference(facet, "snv", force=True)` is True. **Values change** on files
   that already load: a genome cut to its indels with 116,000 sites or more and a genome's breadth reads
-  `callset_type = wgs` and `absence_means = weak_reference` where it read null and `unknown` (the two
-  PGP-HMS DRAGEN indel halves of 953,506 and 958,046 sites at 91% breadth do; the other two PGP-HMS
-  indel halves were not re-measured for breadth); `absence_is_reference` stays
+  `callset_type = wgs` and `absence_means = weak_reference` where it read null and `unknown` (measured
+  2026-11-06 on the six PGP-HMS files named as indel halves, counts only: four of the five that load read
+  `wgs`, `indel_only`, `weak_reference`, the two DRAGEN halves among them, at 380,099–960,454 rows; one of
+  312,286 rows stays null; the sixth is not a loadable format); `absence_is_reference` stays
   `None` for every class without `force`, and for `snv` and `sv` with it. A panel read of a
   `weak_reference` or `reference` facet that wrote no SNV, or whose classes were not counted, now reads
   its absent sites unknown. No version moves: `callset_type` is computed at each load and no cache entry holds a facet row, and a

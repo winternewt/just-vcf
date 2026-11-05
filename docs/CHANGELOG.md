@@ -11,6 +11,19 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **A chip's way out checked against the imputation servers' input rules** (RM287). Tests only; no
+  library change. A synthetic 23andMe export goes through `resolve_ref`, `liftover` and `write_vcf`, and
+  `tests/imputation_rules.py` reads the file as Michigan's and TOPMed's servers do, rule by rule (sources
+  and outcomes in docs/SCHEMA.md, "What an imputation server checks"). Met: bgzip, sorting, GT, REF
+  from the reference, FILTER, call rate, chrX ploidy, and `chr` names on GRCh38 with
+  `contig_names="chr"`. Not met, each a strict xfail for the lead's decision: one file holds every
+  contig; array code 25 is written as contig `XY`, which the servers refuse; one sample where 20 are
+  the minimum; VCF 4.3 where TOPMed asks for 4.2 or lower; a hom-ref call written ALT `.`, which the
+  servers' QC drops as an invalid allele; a two-ALT array call; two probes at one position; and the
+  default contig names on a GRCh38 facet. A/T and C/G sites are counted, written and withheld, in a
+  forward and a mixed-strand export; the servers' QC keeps them unflipped. An opt-in test runs the
+  same check on a real export (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_TEST_REFERENCE_DIR`).
+
 - **`Person.of` checks a stated chip and imputation pair once** (merge audit 15). Since RM287 the
   chip and the imputed facet stated as made from it (`state_imputed_from`) are one callset, checked
   only against the person's other callsets, so a chip of another person stated as the source went

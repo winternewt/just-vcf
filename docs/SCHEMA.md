@@ -3045,6 +3045,64 @@ beside it and renamed into place.
   store, which polars-bio counts back in 2.4 s. The same person's 11 facets (60 M calls, 27 M
   blocks) make a 1.26 GB parquet store, each add taking seconds after its load.
 
+## What an imputation server checks (RM287)
+
+A chip export's way to an imputation server is `load` → `resolve_ref` → `liftover` → `write_vcf`.
+`tests/test_imputation_server.py` takes a synthetic 23andMe export down that path and reads the
+written file with `tests/imputation_rules.py` (a test helper, not API), which reports each rule as
+met, not met, or not checked, with counts. Not checked is never passed. A rule the output does not
+meet is a strict xfail with its reason; each fix is the lead's call. An opt-in test runs the same
+helper over a real export under `JUST_VCF_SAMPLES_DIR` against `JUST_VCF_TEST_REFERENCE_DIR`.
+
+Sources, read 2026-11-05 (the code as text, never run):
+
+- MIS2 docs: [data preparation](https://genepi.github.io/michigan-imputationserver/prepare-your-data),
+  [getting started](https://genepi.github.io/michigan-imputationserver/getting-started),
+  [pipeline](https://genepi.github.io/michigan-imputationserver/pipeline),
+  [allele swaps](https://genepi.github.io/michigan-imputationserver/qc-allele-swaps).
+- TOPMed (TIS v2) docs: [data preparation](https://statgen.github.io/tis-v2-docs/imputation/data-preparation),
+  [pipeline overview](https://statgen.github.io/tis-v2-docs/imputation/pipeline-overview).
+- The servers' code: [genepi/imputationserver-utils](https://github.com/genepi/imputationserver-utils)
+  at `621293a1` (`VcfFileUtil`, `InputValidationCommand`, `QualityControlCommand`,
+  `fastqc/StatisticsTask`, `util/GenomicTools`, `vcf/VCFLineParser`) and
+  [genepi/imputationserver2](https://github.com/genepi/imputationserver2) at `5506abe3`
+  (`nextflow.config`).
+- [checkVCF](https://github.com/zhanxw/checkVCF) at `f26d497c`, which the MIS2 data preparation page
+  recommends running "to ensure that the VCF files are valid".
+
+"Docs" is what a page states, "code" what the code read does; two rules differ between them.
+
+| Rule | Where | just-vcf's output |
+|---|---|---|
+| bgzip-compressed | docs (MIS2, TOPMed) | met: BGZF by default |
+| VCF 4.2 or lower | docs (TOPMed only); no check in the code read | **not met**: VCF 4.3 (4.5 with PSL). xfail |
+| one chromosome per file | docs; code (`VcfFileUtil.load`: "contains more than one chromosome", after removing `chr`) | **not met** by a facet's write. xfail. Met by writing the calls frame filtered to one contig |
+| chromosome in the server's list: 1–23, X, MT, each also with `chr` | code (`validChromosomes`; "Invalid chromosome found") | **not met**: array code 25 is written as contig `XY`, which the list lacks (as X it would be split into PAR1 or PAR2). xfail. Y is not in it either; under `contig_names="chr"` MT is written `chrM`, which the list lacks (`chrMT` is in it); not exercised, since `GRCh37` cannot vouch for an array's MT |
+| `20` on GRCh37, `chr20` on GRCh38 | docs (TOPMed); code (`InputValidationCommand`, by the job's build) | met on GRCh37 by default and on GRCh38 with `contig_names="chr"`; **not met** by the default on a GRCh38 facet. xfail |
+| sorted by position | docs; no check in the code read | met |
+| GT in FORMAT | docs (TOPMed); checkVCF | met |
+| REF differs from ALT | code (`VcfFileUtil.load`) | met |
+| at least 20 samples | docs (TOPMed); code (`min_samples = 20`, "At least … samples must be uploaded.") | **not met**: one person is one sample. xfail. Not a writer fix: the file goes up beside others' |
+| unique sample ids | code; checkVCF | met |
+| only A, C, G and T alleles | docs; code (`GenomicTools.isValid`; `VCFLineParser` keeps ALT as written) | **not met**: every hom-ref array call is written ALT `.`, which the QC drops (765 of the fixture's 1,424 records). xfail. checkVCF accepts `.`; the server's QC does not |
+| no multi-allelic site | code (`StatisticsTask`) | **not met** where an array calls two non-reference bases. xfail |
+| FILTER `PASS` or `.` | code (`VCFLineParser`, `StatisticsTask`) | met: arrays are written `.` |
+| no indel | docs; code | met by an SNV chip (an `I`/`D` row without a manifest is never written) |
+| no monomorphic site | docs; code applies it only to more than one sample | met (not applied to one sample) |
+| no duplicate position | docs ("DUP filter or (pos - 1 == pos)"); the code read checks only FILTER `DUP`; checkVCF flags a `chrom:pos` seen before | **not met** where two probes share a position (both written, charter 8). xfail |
+| site call rate 90% | docs; code (no-call share above 0.10) | met: a `--` row is never written (`ref_unresolved`, so a chip needs `resolved_only=True`) |
+| REF is the reference's base | checkVCF | met, against the test's own sequences |
+| chrX nonPAR: no sample haploid and then diploid | docs; code (`checkPloidy`, nonPAR 2,699,520–154,931,044 on hg19, 2,781,479–155,701,383 on hg38) | met by a haploid male export. The export's ploidy is written as held, so one diploid call after haploid ones fails the job (tested) |
+| chrX nonPAR: under 10% mixed genotypes (`1/.`) | docs; code | met on the fixtures |
+| panel rules: 50% of a chunk in the panel, at least 3 variants a chunk, allele switches and strand flips past the panel's limit (100 in the docs) fail the job, allele mismatches excluded, each sample called at 50% of a chunk, allele frequencies | docs; code (limits read from the panel) | not checkable: they need the panel's legend |
+| A/T and C/G sites | code (`complicatedGenotypes`: counted and kept, neither excluded nor flipped) | counted, not checkable. A het A/T or C/G call reads the same on either strand; a homozygous one does not. A `forward` facet writes both kinds; a `mixed` one writes the hets and withholds the rest (`alts_unresolved`, F13). Whether to settle them is desk #212 |
+
+The servers keep A/T and C/G sites (the code read counts them and goes on; the allele-swap page says
+the handling before MIS2's change filtered "ambiguous SNPs" out). So an A/T or C/G probe's
+homozygous call read on the wrong strand reaches the imputation unflipped, and nothing on the server
+says so. Chip phasing is not a file rule: an unphased chip passes validation when the job keeps a
+phasing engine (eagle by default) and is refused only under "no phasing".
+
 ## Concordance between two facets (RM277)
 
 `concordance(a, b, *, region=None, reference=None)` (`just_vcf.concordance`) compares two facets of

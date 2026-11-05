@@ -7,7 +7,7 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM287 — Imputed facets read back
-**State:** unattended: a test writing a chip export through `resolve_ref`, `liftover` and `write_vcf` and checking it against an imputation server's published input rules, the A/T and C/G gap counted where it bites (whether to settle that gap is desk #212) · **Owner:** lead
+**State:** unattended: the opt-in server-rules test run on a PGP-HMS chip export (aggregates only), and the lead's call on each of the eight rules a written chip does not meet (docs/SCHEMA.md "What an imputation server checks"); whether to settle the A/T and C/G gap is desk #212 · **Owner:** lead
 
 Severity: low · Status: read-back shipped 2026-11-05 on a builder's branch, for the lead's merge: schema
 0.0.23's `calls.imputation_r2` (minimac R2 or Beagle DR2) and `calls.imputation_empirical_r2`
@@ -15,7 +15,9 @@ Severity: low · Status: read-back shipped 2026-11-05 on a builder's branch, for
 step; and `imputed_from`, a one-parent lineage relation the caller states with `state_imputed_from`
 (tool and panel in the link's provenance), which `person_karyotype`, `Person` and `consensus` read as
 one callset. docs/SCHEMA.md Decision 6 "Imputation quality" and Decision 12 "A stated lineage" hold the
-builder's calls for veto. Left: the third bullet below, which waits on RM6's strand item. Desk #180
+builder's calls for veto. The server-rules test (third bullet) built 2026-11-05 on a builder's branch,
+for the lead's merge. Left: running its opt-in test on a public export, and a decision on each rule it
+marks xfail. Desk #180
 (whether imputation itself belongs here; the lead recommends downstream) does not bear on what shipped,
 which is inside the charter under any answer.
 
@@ -34,11 +36,17 @@ produced). What reading one back already does, checked 2026-11-03: `callset.impu
   itself. Wanted: a relation a caller states for a step that ran outside the library (`imputed_from`, with
   the tool and panel in provenance), so `same_person` and `consensus` do not read the imputed facet and its
   chip as two independent witnesses of the same typed sites.
-- **The way out is not checked against an imputation server's rules.** `resolve_ref`, `liftover` and
-  `write_vcf` write a chip as a GRCh38 VCF with REF from the reference; A/T and C/G sites stay strand
-  ambiguous (RM6), which servers such as Michigan's refuse or flip. Wanted: a test that writes a PGP-HMS
-  chip export and checks it against a server's published input checks, and the strand gap named where it
-  bites.
+- *Built 2026-11-05 (tests only, `tests/test_imputation_server.py`).* **The way out is not checked
+  against an imputation server's rules.** `resolve_ref`, `liftover` and `write_vcf` write a chip as a
+  GRCh38 VCF with REF from the reference; A/T and C/G sites stay strand ambiguous (RM6). *Corrected
+  2026-11-05:* the servers do not refuse or flip them: the QC code read (`complicatedGenotypes`) counts
+  them and keeps them unflipped. Wanted: a test that writes a PGP-HMS chip export and checks it against
+  a server's published input checks, and the strand gap named where it bites. Built on a synthetic
+  export, with an opt-in test for a real one; docs/SCHEMA.md "What an imputation server checks" has the
+  rules and outcomes. Not met, each a strict xfail: every contig in one file; array code 25 written as
+  contig `XY`, which the servers refuse; one sample against a minimum of 20; VCF 4.3 against TOPMed's
+  4.2; hom-ref calls written ALT `.`, which the QC drops as invalid alleles; two-ALT array calls; two
+  probes at one position; stored contig names on a GRCh38 facet by default.
 
 ## RM274 — Relatedness and families
 **State:** blocked: desk #88, #178 (somalier); a pedigree measured on real relatives also waits for data · **Owner:** lead

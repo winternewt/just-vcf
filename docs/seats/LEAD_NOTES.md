@@ -48,6 +48,14 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-05, RM6's A/T and C/G strand to desk #212** (default: left unread). F13's measurement already
+   showed no manifest strand column predicts FTDNA's flips (each splits ~50/50), so only allele frequencies could
+   settle them, a new data source. Not filed (the lead's reading): a flip confined to palindromic probes in a
+   `forward` facet, which F13's check cannot see, since no reporting convention flips only those; 42 of 43
+   measured exports read forward with at most one complement het. Building: RM287's server-rules test (merge 1
+   of 6 toward audit 16). **Found: both reference stores on disk are empty** (`~/.cache/just-vcf/reference`,
+   `/data/just-dna-cache/reference`), so a real-data `resolve_ref` re-run needs the FASTAs added again (GRCh37,
+   GRCh38, hg18 for FTDNA's GRCh36 exports) before the lead's aggregate runs.
 0. **Audit 15 done 2026-11-05** (bf4b4f4..57489ba, a public-repo copy after repo-prep, Sol via Codex and Grok via
    Cursor): Grok found nothing; Sol two, both confirmed by reading: a partly duplicated chain makes `_segments`
    pick representatives from two chains, so a gap-spanning lift is refused as `split_across_chains` and depends on

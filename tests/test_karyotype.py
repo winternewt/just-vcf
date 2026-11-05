@@ -72,7 +72,7 @@ from just_vcf.links import (
     link_disagreements,
     links_frame,
 )
-from just_vcf.schema import CALLS, AssemblyLabelBasis, CallsetType, conform, empty
+from just_vcf.schema import CALLS, AssemblyLabelBasis, CallsetType, ContentFilter, conform, empty
 from test_reference import write_fasta
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
@@ -294,8 +294,10 @@ def y_calls(n: int, dp: int | None, gt: list[int | None] = [1, 1]) -> pl.DataFra
     return rows("Y", Y_START, n, gt, dp, step=20)
 
 
-def evidence(calls: pl.LazyFrame, build: str | None = "GRCh38", kind: CallsetType | None = CallsetType.WGS) -> SexChromosomeEvidence:
-    return estimate(measure(calls, build), "f", build, kind)
+def evidence(
+    calls: pl.LazyFrame, build: str | None = "GRCh38", kind: CallsetType | None = CallsetType.WGS, content_filter: ContentFilter | None = None
+) -> SexChromosomeEvidence:
+    return estimate(measure(calls, build), "f", build, kind, content_filter=content_filter)
 
 
 XX = (x_calls(1200, 800, REF_DP), y_calls(1000, 6))
@@ -496,6 +498,41 @@ def test_no_estimate_without_a_build_or_a_genome(build: str | None, kind: Callse
         assert found.x_heterozygosity.het_share == 0.6
 
 
+@pytest.mark.parametrize("cut", [ContentFilter.INDEL_ONLY, ContentFilter.SV_ONLY])
+def test_a_genome_cut_away_from_its_snvs_is_measured_but_not_estimated(cut: ContentFilter) -> None:
+    """RM4 lets a genome cut to its indels read `wgs`. The X het share and the call-site depths were
+    calibrated on unsplit genomes; on indels alone they are other quantities, so the estimate waits."""
+    found = evidence(frame(chr20(), XX[0], XY[1]), content_filter=cut)
+    assert (found.inferred_karyotypic_sex, found.reason, found.x_copies, found.y_present) == (
+        KaryotypicSex.UNKNOWN_KARYOTYPE, "filtered_content", None, None,
+    )  # fmt: skip
+    assert (found.x_copies_reason, found.y_reason, found.content_filter) == ("filtered_content", "filtered_content", cut)
+    # Measured and reported, as on a build without thresholds.
+    assert found.region_set == REGION_SET["GRCh38"]
+    assert (found.x_heterozygosity.het_share, found.depth.x_ratio, found.depth.y_ratio) == (0.6, 1.0, 18 / REF_DP)
+    assert "X het share 0.600" in found.detail and "X-degenerate Y depth ratio 0.600" in found.detail
+
+
+def test_a_genome_cut_to_its_snvs_is_estimated_as_an_unsplit_one() -> None:
+    """A pin: SNVs are most of a genome's alleles, so an SNV-only half's het share is the calibrated
+    quantity and its answer is the unsplit genome's."""
+    unsplit = evidence(frame(chr20(), XX[0], XY[1]))
+    found = evidence(frame(chr20(), XX[0], XY[1]), content_filter=ContentFilter.SNV_ONLY)
+    assert found.inferred_karyotypic_sex is KaryotypicSex.XXY and found.content_filter is ContentFilter.SNV_ONLY
+    assert found.model_copy(update={"content_filter": None}) == unsplit
+
+
+def test_the_content_filter_is_read_off_the_facet() -> None:
+    facets = conform(
+        pl.LazyFrame({"facet_id": ["f", "g"], "assembly_label": ["GRCh38"] * 2, "callset_type": ["wgs"] * 2, "content_filter": ["indel_only", None]}),
+        FACETS,
+    )
+    calls = pl.concat([frame(chr20(), XX[0], XY[1]), frame(chr20(), XX[0], XY[1]).with_columns(facet_id=pl.lit("g"))])
+    cut, whole = sex_chromosome_evidence(Loaded(facets=facets, calls=calls, blocks=empty(BLOCKS)))
+    assert (cut.reason, cut.content_filter, cut.inferred_karyotypic_sex) == ("filtered_content", ContentFilter.INDEL_ONLY, KaryotypicSex.UNKNOWN_KARYOTYPE)
+    assert (whole.reason, whole.content_filter, whole.inferred_karyotypic_sex) == (None, None, KaryotypicSex.XXY)
+
+
 T2T_Y_START = 2_500_000  # inside T2T-CHM13's first X-degenerate interval (2,458,321–2,727,072)
 
 
@@ -544,7 +581,7 @@ def test_reasons_are_a_closed_list_checked_on_the_model() -> None:
     found = evidence(frame(chr20(), *XX), None)
     with pytest.raises(ValueError, match="unknown reason"):
         SexChromosomeEvidence(**{**found.model_dump(), "reason": "nearest_class"})
-    assert {"no_build", "y_unusable", "caller_asserted_only", "too_few_sites", "intermediate", "not_wgs"} <= UNKNOWN_REASONS
+    assert {"no_build", "y_unusable", "caller_asserted_only", "too_few_sites", "intermediate", "not_wgs", "filtered_content"} <= UNKNOWN_REASONS
 
 
 def test_karyotypic_sex_is_the_phenopackets_vocabulary() -> None:
@@ -1153,10 +1190,17 @@ def test_the_label_source_is_a_closed_list_checked_on_the_model() -> None:
 # --- A person's coverage facets paired with its callsets (RM278) -----------------------------------
 
 
-def callset(facet_id: str, x: pl.DataFrame, y: pl.DataFrame, *, build: str = "GRCh38", subject: str = "person-a") -> Loaded:
+def callset(
+    facet_id: str, x: pl.DataFrame, y: pl.DataFrame, *, build: str = "GRCh38", subject: str = "person-a", content_filter: str | None = None
+) -> Loaded:
     """One whole-genome facet under `subject`, a source of its own (its own `source_sha256`)."""
     facets = conform(
-        pl.LazyFrame({"facet_id": [facet_id], "assembly_label": [build], "callset_type": ["wgs"], "subject": [subject], "source_sha256": [facet_id * 64]}),
+        pl.LazyFrame(
+            {
+                "facet_id": [facet_id], "assembly_label": [build], "callset_type": ["wgs"], "subject": [subject],
+                "source_sha256": [facet_id * 64], "content_filter": [content_filter],
+            }
+        ),
         FACETS,
     )
     calls = frame(chr20(), x, y).with_columns(facet_id=pl.lit(facet_id))
@@ -1408,6 +1452,15 @@ def test_only_withheld_callsets_withhold_with_their_own_reason() -> None:
         KaryotypicSex.UNKNOWN_KARYOTYPE, "all_withheld", None, "all_withheld",
     )  # fmt: skip
     assert [item.reason for item in found.callsets] == ["too_few_sites", "too_few_sites"]
+
+
+def test_an_indel_only_callset_is_withheld_as_any_withheld_callset_is() -> None:
+    # Estimated, the indel half's rows would read XXY against the other callset's XY.
+    found, _ = weighed(callset("a", *XY), callset("b", XX[0], XY[1], content_filter="indel_only"))
+    assert (callsets(found)["b"].reason, callsets(found)["b"].x_copies) == ("filtered_content", None)
+    assert (found.inferred_karyotypic_sex, found.reason, found.supported_by, found.x_copies_supported_by) == (KaryotypicSex.XY, None, ("a",), ("a",))
+    alone, _ = weighed(callset("b", XX[0], XY[1], content_filter="indel_only"))
+    assert (alone.reason, alone.x_copies_reason, alone.callsets[0].reason) == ("all_withheld", "all_withheld", "filtered_content")
 
 
 def test_a_consensus_and_what_is_made_from_it_are_set_aside_and_its_parents_still_count() -> None:

@@ -11,6 +11,17 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **A genome cut to its indels is measured, not estimated, for its karyotype** (RM4 follow-up, the lead's
+  call). Since a whole genome cut to its indels can read `wgs`, `sex_chromosome_evidence` (and so
+  `person_karyotype`) would have run the unsplit genomes' X het share and call-site depth thresholds on
+  it, quantities that mean something else on indels alone. A facet whose `content_filter` keeps a class
+  other than SNVs now answers `UNKNOWN_KARYOTYPE` with a new reason, `filtered_content`, its
+  measurements still reported as for `uncalibrated_build`; `SexChromosomeEvidence` carries the facet's
+  `content_filter`. An `snv_only` half is estimated as before. At the person level such a callset is
+  withheld like any other. Tests: `tests/test_karyotype.py::test_a_genome_cut_away_from_its_snvs_is_measured_but_not_estimated`,
+  `::test_the_content_filter_is_read_off_the_facet`,
+  `::test_an_indel_only_callset_is_withheld_as_any_withheld_callset_is`, each failing on the code
+  before; `::test_a_genome_cut_to_its_snvs_is_estimated_as_an_unsplit_one` pins the SNV half.
 - **A genome cut to its indels reads `wgs`** (RM4, the lead's call). A facet whose `content_filter` is
   `indel_only` is typed `wgs` at `MIN_WGS_INDEL_SITES` (116,000) sites on the primary assembly and the
   usual 75% breadth, where it needed the 1,000,000 sites an unsplit genome does: a genome carries about

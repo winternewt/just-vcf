@@ -2220,6 +2220,14 @@ with none of these (NCBI35, or one a caller wrote) answers unknown (`unsupported
 thresholds were measured on GRCh37 and GRCh38 genomes only, so a T2T-CHM13 facet, or a GRCh36 one
 that is not an array, is grouped and measured, and its estimate withheld (`uncalibrated_build`, RM286, RM269) until callsets of known
 karyotype on it are measured. A coverage facet on such a build is set aside with the same reason.
+A whole genome whose `content_filter` cut its SNVs away (`indel_only`, which reads `wgs` since RM4,
+Decision 5; or `sv_only`) is measured and reported the same way, its estimate withheld as
+`filtered_content` (2026-11-06): the het share and the call-site depths were calibrated on unsplit
+genomes, where SNVs are about 80% of the alleles, and on indels alone they are other quantities, from
+another site set. The gate reads the class the filter keeps (`just_vcf.schema.CONTENT_FILTER_KEEPS`),
+so an `snv_only` half, whose het share is the calibrated quantity, is estimated as an unsplit genome
+is. The result carries the facet's `content_filter` (null by default). Rejected: estimating an indel
+half on the unsplit bands, which no indel-only genome of known karyotype has checked.
 Rules and thresholds: `just_vcf/karyotype.py` and docs/ROADMAP.md RM269.
 
 `sex_chromosome_evidence(loaded, coverage=…)` takes a coverage facet (RM278) of the same person and
@@ -3852,6 +3860,17 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-06, RM4 follow-up: the karyotype of a genome cut to its indels): no
+  column changes. `sex_chromosome_evidence` withholds the estimate of a facet whose `content_filter`
+  keeps a class other than SNVs (`indel_only`, `sv_only`) with a new reason, `filtered_content`, in
+  `just_vcf.karyotype.UNKNOWN_REASONS` (an open vocabulary), its measurements still reported
+  ("Sex-chromosome evidence"); `SexChromosomeEvidence` gains `content_filter` (null by default).
+  **Values change**: an indel-only genome half that reads `wgs` since RM4 (above) answers
+  `UNKNOWN_KARYOTYPE` with `filtered_content`, where it would have been estimated on the unsplit
+  genomes' thresholds; at the person level its callset is withheld as any withheld callset is, neither
+  support nor contradiction. An `snv_only` half answers as before. Computed, not stored: no version
+  moves.
 
 - **No version change** (2026-11-06, RM4: an indel-only genome half reads `wgs`): no column changes.
   Rule changed (Decision 5): a facet whose `content_filter` is `indel_only` reads `wgs` at

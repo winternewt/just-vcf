@@ -9,7 +9,8 @@ sample name of its own (`f0`, `f1`, …), so two facets of one person that both 
 stay apart. `somalier extract` reads each one against the panel's sites VCF and a FASTA of the facet's
 assembly (somalier reads bases from a FASTA; a refget store cannot stand in). A facet whose
 `absence_means` is `weak_reference` is extracted with `--unknown`, which reads its silence as
-homozygous reference, as `just_vcf.site_genotypes` does; any other facet's silence stays unknown.
+homozygous reference, as `just_vcf.site_genotypes` does, where that silence speaks for SNVs
+(`Facet.silent_snv_is_reference`: not an indel-only genome half); any other facet's silence stays unknown.
 `somalier relate` then compares them all, and its `pairs.tsv` is read back by `read_somalier_pairs`.
 
 somalier's `relatedness` column is `2 (shared_hets - 2 ibs0) / het_ab`: on the scale where one person is
@@ -157,7 +158,7 @@ def somalier_relate(
                 vcf = root / f"{name}.vcf.gz"
                 write_vcf(one, vcf, sample=name, resolved_only=True)
                 command = [str(binary), "extract", "-d", str(extracted), "--sites", str(sites_vcf), "-f", str(fasta)]
-                if facet.absence_means == AbsenceMeans.WEAK_REFERENCE.value:
+                if facet.absence_means == AbsenceMeans.WEAK_REFERENCE.value and facet.silent_snv_is_reference:
                     command.append("--unknown")
                 subprocess.run([*command, str(vcf)], check=True, capture_output=True)
         prefix = root / "related"

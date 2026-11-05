@@ -11,6 +11,7 @@ from just_vcf.callset import (
     MAX_FILTER_RESIDUE,
     MIN_FILTER_ALLELES,
     MIN_UNFILTERED_RESIDUE,
+    MIN_WGS_INDEL_SITES,
     MIN_WGS_SITES,
     READS_REFERENCE,
     infer_content_filter,
@@ -310,9 +311,10 @@ HEADER = [
 COLUMNS = "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1"
 
 
-def genome_vcf(path: Path, indel_every: int | None) -> Path:
-    """A whole-genome-shaped VCF of SNVs, with an insertion every `indel_every` rows (None: none)."""
-    per = (MIN_WGS_SITES + 22) // len(AUTOSOMES)
+def genome_vcf(path: Path, indel_every: int | None, total: int = MIN_WGS_SITES + 22) -> Path:
+    """A whole-genome-shaped VCF of `total` SNVs (rounded down to a multiple of 22), with an insertion
+    every `indel_every` rows (None: none; 1: insertions only)."""
+    per = total // len(AUTOSOMES)
     step = 100_000_000 // per
     rows = pl.concat(
         pl.DataFrame({"chrom": pl.repeat(chrom, per, eager=True), "pos": pl.int_range(0, per, eager=True) * step + 1})
@@ -347,6 +349,31 @@ def test_load_keeps_an_snv_only_genome_wgs_and_holds_its_absences_back(tmp_path:
     assert absence_is_reference(row, "snv") is None
     assert absence_is_reference(row, "snv", force=True) is True
     assert absence_is_reference(row, "indel", force=True) is None
+
+
+def test_load_reads_an_indel_only_genome_as_wgs_and_holds_its_absences_back(tmp_path: Path) -> None:
+    """RM4, the lead's call: a genome cut to its indels has a genome's breadth and a tenth of its sites.
+    It reads `wgs` once its filter is known, and the filter, not the label, gates its absences."""
+    total = (MIN_WGS_INDEL_SITES + 22_000) // 22 * 22
+    assert total < MIN_WGS_SITES
+    loaded = load(genome_vcf(tmp_path / "sample.vcf", indel_every=1, total=total))
+    row = loaded.facets.collect().row(0, named=True)
+    assert row["variant_classes"] == [{"variant_class": "indel", "alleles": total}]
+    assert (row["content_filter"], row["content_filter_basis"]) == ("indel_only", "rows")
+    assert (row["callset_type"], row["absence_means"]) == ("wgs", "weak_reference")
+    assert absence_support(row, "indel").reason is AbsenceReason.CONTENT_FILTER_HELD
+    assert absence_support(row, "indel", force=True).reason is AbsenceReason.CONTENT_FILTER_FORCED
+    for asked in ("snv", "sv"):
+        assert absence_support(row, asked, force=True).reason is AbsenceReason.CLASS_CUT_BY_FILTER
+
+
+def test_load_reads_the_same_sites_mixed_as_short_of_a_genome(tmp_path: Path) -> None:
+    """The same spread of SNVs with an insertion every eighth row is no filtered genome: the ported floor
+    holds, and it reads unknown."""
+    total = (MIN_WGS_INDEL_SITES + 22_000) // 22 * 22
+    row = load(genome_vcf(tmp_path / "sample.vcf", indel_every=8, total=total)).facets.collect().row(0, named=True)
+    assert row["content_filter"] is None
+    assert (row["callset_type"], row["absence_means"]) == (None, "unknown")
 
 
 def test_load_reads_a_mixed_genome_as_unfiltered(tmp_path: Path) -> None:

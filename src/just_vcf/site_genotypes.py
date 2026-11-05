@@ -28,7 +28,11 @@ Per panel site, in this order:
    gVCF) does so only inside a `ref` block; `reference` (CGI's VCF, whose producer called what it
    omits reference) does so outside every block, a no-call block being no omission; `unknown`, or
    null, leaves it unknown. Absence is read as reference only on the autosomes, where homozygous
-   means two copies.
+   means two copies. `weak_reference` and `reference` hold only where the facet's silence speaks for
+   SNVs, a panel's sites (`callset.absence_is_reference(facet, "snv", force=True)`): a facet that wrote
+   no SNV, or a genome cut to its indels (`content_filter = indel_only`), leaves it unknown. `force`
+   is passed because a panel read has always read an SNV-only half's silence through its filter's
+   hold; a class the filter cut is not lifted by it.
 
 The panel's first allele is taken as the reference allele; a panel whose first allele is not the
 assembly's REF would turn every absence into the wrong genotype. Panel loaders state where their
@@ -40,8 +44,9 @@ from enum import Enum
 
 import polars as pl
 
+from just_vcf.callset import absence_is_reference
 from just_vcf.loading import Loaded
-from just_vcf.schema import CONTIG_ALIASES, AbsenceMeans, BlockKind, unstated_sequence_alt
+from just_vcf.schema import CONTIG_ALIASES, AbsenceMeans, BlockKind, VariantClass, unstated_sequence_alt
 
 AUTOSOMES: frozenset[str] = frozenset(str(n) for n in range(1, 23))
 """Canonical `chrom` names on which an absence can be read as homozygous reference."""
@@ -74,12 +79,26 @@ class Facet:
     facet_id: str
     assembly_label: str | None
     absence_means: str | None
+    silent_snv_is_reference: bool
+    """`absence_is_reference(facet, "snv", force=True) is True`: the facet's silence speaks for SNVs, so
+    `weak_reference` and `reference` may read an absent panel site as reference (module docstring)."""
+
+
+_ABSENCE_COLUMNS = ("facet_id", "assembly_label", "absence_means", "callset_type", "variant_classes", "content_filter")
 
 
 def facets_of(loaded: Loaded) -> list[Facet]:
     """Every facet of `loaded`, in its `facets` order."""
-    rows = loaded.facets.select("facet_id", "assembly_label", "absence_means").collect().iter_rows(named=True)
-    return [Facet(row["facet_id"], row["assembly_label"], None if row["absence_means"] is None else str(row["absence_means"])) for row in rows]
+    rows = loaded.facets.select(_ABSENCE_COLUMNS).collect().iter_rows(named=True)
+    return [
+        Facet(
+            row["facet_id"],
+            row["assembly_label"],
+            None if row["absence_means"] is None else str(row["absence_means"]),
+            absence_is_reference(row, VariantClass.SNV, force=True) is True,
+        )
+        for row in rows
+    ]
 
 
 def facet_of(loaded: Loaded, facet_id: str | None = None) -> Facet:
@@ -180,6 +199,10 @@ def _absent_as_reference(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> p
     reference. Only sites with no row take it; the caller applies that."""
     autosomal = pl.col("chrom").is_in(list(AUTOSOMES))
     frame = sites.lazy().select("_site", "chrom", "pos")
+    silence = (AbsenceMeans.WEAK_REFERENCE.value, AbsenceMeans.REFERENCE.value)
+    if facet.absence_means in silence and not facet.silent_snv_is_reference:
+        # No SNV written, or the SNVs cut away (an indel-only genome half): the silence says nothing here.
+        return frame.select("_site", _reference=pl.lit(False))
     if facet.absence_means == AbsenceMeans.WEAK_REFERENCE.value:
         return frame.select("_site", _reference=autosomal)
     if facet.absence_means == AbsenceMeans.BLOCKS.value:

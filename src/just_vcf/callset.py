@@ -9,7 +9,9 @@ weak evidence never lands in the nearest class.
 The classes, by what the calls look like:
 
 - `wgs`: at least `MIN_WGS_SITES` sites on the primary assembly and at least `MIN_WGS_BREADTH` of the
-  span within `FLANK_BP` of a call (the ported rule, thresholds unchanged).
+  span within `FLANK_BP` of a call (the ported rule, thresholds unchanged). A facet whose
+  `content_filter` is `indel_only` (a genome cut to its indels) needs `MIN_WGS_INDEL_SITES` sites
+  instead, at the same breadth: a genome carries about a tenth as many indels as SNVs.
 - `wes`: an exome's spread. Between `MIN_WES_SITES` and `MAX_WES_SITES` sites, on every autosome, and
   clustered (breadth at most `MAX_TARGETED_BREADTH`).
 - `panel`: calls confined to a small region set. Between `MIN_PANEL_SITES` and `MAX_PANEL_SITES` sites,
@@ -46,6 +48,13 @@ FLANK_BP = 10_000
 
 MIN_WGS_SITES = 1_000_000
 """just-dna-lite `MIN_WGS_SITES`: about 4x below the WGS floor it measured (4.3–4.7M sites)."""
+
+MIN_WGS_INDEL_SITES = 116_000
+"""The site floor of a genome cut to its indels (`content_filter = indel_only`), at `MIN_WGS_SITES`'s
+ratio: that floor is 1,000,000 / 4,300,000 = 0.233 of the smallest whole genome just-dna-lite measured,
+and a genome carries 0.5–0.6M indels (1000 Genomes), so 0.233 x 500,000 = 116,279, rounded down to
+116,000. The four PGP-HMS indel halves measured hold 0.32M–1.05M ALT alleles. Breadth stays
+`MIN_WGS_BREADTH`, and it is what keeps an exome cut to indels out: its sites cluster."""
 
 MIN_WGS_BREADTH = 0.75
 """just-dna-lite `MIN_WGS_BREADTH`: WGS measured 0.942–0.950 there, a clustered callset 0.21."""
@@ -147,8 +156,17 @@ def spread(calls: pl.LazyFrame, flank_bp: int = FLANK_BP) -> dict:
     }
 
 
-def classify(calls: pl.LazyFrame, format_keys: list[str], imputed_by: str | None) -> CallsetInference:
-    """The callset type of a VCF facet from its `calls` (`chrom`, `pos`, `alts`) and its header."""
+def classify(
+    calls: pl.LazyFrame,
+    format_keys: list[str],
+    imputed_by: str | None,
+    content_filter: ContentFilter | None = None,
+) -> CallsetInference:
+    """The callset type of a VCF facet from its `calls` (`chrom`, `pos`, `alts`) and its header.
+
+    `content_filter` is the facet's own (`infer_content_filter`), decided before the type: a facet cut
+    to its indels meets `MIN_WGS_INDEL_SITES` rather than `MIN_WGS_SITES`. Every other class and band
+    is the same whatever the filter."""
     if imputed_by:
         return CallsetInference(callset_type=CallsetType.IMPUTED, reason=imputed_by)
     measured = spread(calls)
@@ -161,8 +179,9 @@ def classify(calls: pl.LazyFrame, format_keys: list[str], imputed_by: str | None
     evidence = sorted(READ_EVIDENCE_KEYS & set(format_keys))
     if not evidence:
         return answer(None, "unknown, the header declares no read-evidence FORMAT key (AD, DP, GQ, PL, GL, MIN_DP), so the calls may not come from reads")
-    if n >= MIN_WGS_SITES and breadth >= MIN_WGS_BREADTH:
-        return answer(CallsetType.WGS, "whole genome")
+    indels_only = content_filter is ContentFilter.INDEL_ONLY
+    if n >= (MIN_WGS_INDEL_SITES if indels_only else MIN_WGS_SITES) and breadth >= MIN_WGS_BREADTH:
+        return answer(CallsetType.WGS, f"whole genome cut to its indels (at least {MIN_WGS_INDEL_SITES:,} sites)" if indels_only else "whole genome")
     if MIN_WES_SITES <= n <= MAX_WES_SITES and breadth <= MAX_TARGETED_BREADTH and autosomes == len(_AUTOSOMES):
         return answer(CallsetType.WES, "exome")
     if MIN_PANEL_SITES <= n <= MAX_PANEL_SITES and reach <= MAX_PANEL_REACH_BP:

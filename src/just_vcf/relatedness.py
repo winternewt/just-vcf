@@ -17,7 +17,8 @@ carries one for GRCh37 and one for GRCh38, derived from somalier's published sit
 `scripts/relatedness_sites.py` (docs/PROVENANCE.md): common sites, so an array, an exome and a whole
 genome all have a share of them. Each facet's genotype at a site is read by
 `just_vcf.site_genotypes`, the same reading population inference uses: a row's literal alleles against
-the panel's two, an absence as homozygous reference only where the facet's `absence_means` says so.
+the panel's two, an absence as homozygous reference only where the facet's `absence_means` says so
+and its silence speaks for SNVs (not a genome cut to its indels).
 Sites are matched by position and alleles on one assembly; two facets whose `assembly_label`s differ,
 or that have none, are not compared (`assembly_mismatch`, `assembly_unknown`). Where both facets carry
 minted VRS ids for the panel's ALT at a site (`mint_vrs_ids`), the ids are compared too, and a site

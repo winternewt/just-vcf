@@ -725,7 +725,12 @@ symbolic ALT says nothing about SVs. And a whole genome cut down to one class ke
 `callset_type = wgs` (the assay did not change) but gets a `content_filter` (`snv_only`, `indel_only`,
 `sv_only`). Its absences say nothing about the classes cut away, even where a residue of them is
 present (`bcftools view -v snps` keeps a multi-allelic site whose other ALT is an indel), and the cut
-holds them back for the kept class too.
+holds them back for the kept class too. That holds for an indel-only half as for an SNV-only one: it
+reads `wgs` at a floor of its own (Decision 5), since the label says what was sequenced and the filter
+says what was kept, and only the filter gates absence. The panel reads
+(`just_vcf.site_genotypes`, and somalier's `--unknown`) take a weak or omitted reference as an SNV's
+only where `absence_is_reference(facet, "snv", force=True)` is True, so an indel-only half's silence at
+an SNV site is unknown.
 
 `absence_is_reference(facet_row, variant_class, force=False)` is the rule in code, for just-vcf and
 for consumers that restore hom-ref themselves (just-prs, just-dna-lite). A position is absent when no
@@ -886,7 +891,13 @@ its reasons there, or the loaders fill it.
 
 **`callset_type` and `absence_means` for a VCF (RM4).** From the spread of the facet's calls on the
 primary assembly (`just_vcf.callset`, ported from just-dna-lite `detect_callset_scope`): `wgs` needs
-at least 1,000,000 sites and 75% of the span within 10 kb of a call; `wes` 10,000–400,000 sites on
+at least 1,000,000 sites and 75% of the span within 10 kb of a call, or, for a facet whose
+`content_filter` is `indel_only` (a genome cut to its indels), at least 116,000 sites at the same
+breadth (`MIN_WGS_INDEL_SITES`: 1,000,000 sits 4.3x below the 4.3M sites of the smallest genome
+just-dna-lite measured, and a genome carries 0.5–0.6M indels, so 500,000 / 4.3 = 116,279, rounded
+down). The filter is decided first (Decision 4), from the same rows, so the floor reads the facet's own
+column; breadth keeps an exome cut to its indels out, since its sites cluster. An SNV-only or
+SV-only facet keeps the 1,000,000 floor. `wes` 10,000–400,000 sites on
 all 22 autosomes with at most 60% breadth; `panel` 50–5,000 sites reaching at most 50 Mb. A region
 extract of a larger callset reads as `panel`, which is what its absences then mean. `imputed` when the
 header names an imputation tool or declares an imputation INFO key. Every sequencing class needs a
@@ -3841,6 +3852,21 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-06, RM4: an indel-only genome half reads `wgs`): no column changes.
+  Rule changed (Decision 5): a facet whose `content_filter` is `indel_only` reads `wgs` at
+  `MIN_WGS_INDEL_SITES` (116,000) sites and the same 75% breadth; the filter is now decided before
+  the type in every loader (the VCF and key=value loaders decided it after). Rule stated (Decision 4):
+  `site_genotypes` and somalier's `--unknown` read a `weak_reference` or `reference` silence at a panel
+  site only where `absence_is_reference(facet, "snv", force=True)` is True. **Values change** on files
+  that already load: a genome cut to its indels with 116,000 sites or more and a genome's breadth reads
+  `callset_type = wgs` and `absence_means = weak_reference` where it read null and `unknown` (the two
+  PGP-HMS DRAGEN indel halves of 953,506 and 958,046 sites at 91% breadth do; the other two PGP-HMS
+  indel halves were not re-measured for breadth); `absence_is_reference` stays
+  `None` for every class without `force`, and for `snv` and `sv` with it. A panel read of a
+  `weak_reference` or `reference` facet that wrote no SNV, or whose classes were not counted, now reads
+  its absent sites unknown. No version moves: `callset_type` is computed at each load and no cache entry holds a facet row, and a
+  store keeps the values its load gave until the source is loaded again (above).
 
 - **No version change** (2026-11-05, merge audit 15: a stated lineage checked): no column changes.
   `Person.of` checks each `imputed_from` statement once, the chip against the imputed facet, beside

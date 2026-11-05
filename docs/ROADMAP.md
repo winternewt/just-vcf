@@ -846,9 +846,9 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-**State:** unattended: an FTDNA X-only export read across with the same person's autosomal one; the lead's call on an indel-only genome half as `wgs` · **Owner:** lead
+**State:** unattended: an FTDNA X-only export read across with the same person's autosomal one · **Owner:** lead
 
-Severity: medium · Status: in progress (a VCF facet's `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null), the `absence_means` that follows, and `assembly_label` from its contig lengths, merge ee4d5d1, 2026-10-22; an array's build from its rows in `resolve_ref` (F9, RM3), merge 2ff9b00, its row sample limited to rows over one base so a Genos insertion site is not scored as an SNV at its anchor, 2026-10-26; chip from the header or, for 23andMe, the rows, with F13, merge 9d18bcb; variant classes and `content_filter`, merge 3dfeaad; chip by marker overlap for FTDNA, MyHeritage and unstated Final Reports, merge 7451089, 2026-10-23; RefSeq and GenBank accessions as contig names, merge cec1831; GRCh36 in `assembly.ASSEMBLY_LENGTHS` from NCBI's NCBI36 assembly report, so a build-36 VCF's `##contig` lengths name it, 2026-10-26; NCBI36's RefSeq accessions (`NC_000001.9`) as contig names, from the same report through `scripts/contig_names.py`, 2026-10-26, merged. Not built, the lead's call 2026-10-26: a genotype table's variant classes stay null, since an array writes no REF or ALT at load, its `AA` is hom-ref or hom-alt until `resolve_ref`, and counting after it would put carried alleles in a column that counts written ones (rejected: counting after `resolve_ref`, and counting probe shapes at load, a new meaning or column). Left, buildable now: pairing an FTDNA X-only export with the same person's autosomal one, which a caller-supplied subject (RM273) can now group but nothing reads across. Waiting for data: more manifests (other OmniExpress and GSA versions, an Affymetrix one for the 2010 FTDNA layout). Open, no desk number: whether an indel-only genome half should read as `wgs`)
+Severity: medium · Status: in progress (a VCF facet's `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null), the `absence_means` that follows, and `assembly_label` from its contig lengths, merge ee4d5d1, 2026-10-22; an array's build from its rows in `resolve_ref` (F9, RM3), merge 2ff9b00, its row sample limited to rows over one base so a Genos insertion site is not scored as an SNV at its anchor, 2026-10-26; chip from the header or, for 23andMe, the rows, with F13, merge 9d18bcb; variant classes and `content_filter`, merge 3dfeaad; chip by marker overlap for FTDNA, MyHeritage and unstated Final Reports, merge 7451089, 2026-10-23; RefSeq and GenBank accessions as contig names, merge cec1831; GRCh36 in `assembly.ASSEMBLY_LENGTHS` from NCBI's NCBI36 assembly report, so a build-36 VCF's `##contig` lengths name it, 2026-10-26; NCBI36's RefSeq accessions (`NC_000001.9`) as contig names, from the same report through `scripts/contig_names.py`, 2026-10-26, merged. Not built, the lead's call 2026-10-26: a genotype table's variant classes stay null, since an array writes no REF or ALT at load, its `AA` is hom-ref or hom-alt until `resolve_ref`, and counting after it would put carried alleles in a column that counts written ones (rejected: counting after `resolve_ref`, and counting probe shapes at load, a new meaning or column). Left, buildable now: pairing an FTDNA X-only export with the same person's autosomal one, which a caller-supplied subject (RM273) can now group but nothing reads across. Waiting for data: more manifests (other OmniExpress and GSA versions, an Affymetrix one for the 2010 FTDNA layout). An indel-only genome half reads `wgs` at a floor of its own, the lead's call, 2026-11-06)
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
@@ -1030,10 +1030,35 @@ and `None` for `indel` either way; the unsplit DRAGEN and DeepVariant genomes ha
 answer `True` for `snv` and `indel`, `None` for `sv`; a `.snp.` half reached under a name saying
 `.indel.` keeps `snv_only` from the rows, with one warning quoting the word.
 
-Left from it: an indel-only genome half reads as `callset_type` null, so its absences are unknown
-anyway. Four PGP-HMS indel halves of 0.32M–1.05M ALT alleles did; the two DRAGEN ones reach 91% of
-the span but hold 953,506 and 958,046 sites, just under `MIN_WGS_SITES`. Whether an indel half
-should read as `wgs` (and so be gated by its filter instead) is open. A genotype table's classes are
+**Built 2026-11-06: an indel-only genome half reads `wgs`** (the lead's call, for the person's veto;
+`just_vcf.callset.classify`, docs/SCHEMA.md Decisions 4 and 5). It read `callset_type` null: four
+PGP-HMS indel halves of 0.32M–1.05M ALT alleles did, and the two DRAGEN ones reach 91% of the span
+with 953,506 and 958,046 sites, just under `MIN_WGS_SITES`. A facet whose `content_filter` is
+`indel_only` now reads `wgs` at `MIN_WGS_INDEL_SITES` = 116,000 sites and the usual 75% breadth. The
+floor keeps the ported one's ratio: 1,000,000 is 4.3x below the smallest genome just-dna-lite measured
+(4.3M sites), and a genome carries 0.5–0.6M indels (1000 Genomes), so 500,000 / 4.3 = 116,279, rounded
+down. The reason for the person's veto: the label says what was sequenced, the filter says what was
+kept, and only the filter gates absence, so the label adds information without letting absence read
+as reference. `absence_is_reference` stays `None` for its indels without `force=True` and for `snv`
+and `sv` with it. Decisions, each with what was rejected:
+
+- The filter is decided before the type, in every loader (the VCF and key=value loaders decided it
+  after), and `classify` takes the facet's own `content_filter`. Rejected: reading the indel share
+  from the class counts inside `classify`, a second rule beside the filter's that could disagree
+  with it.
+- Breadth is unchanged and keeps an exome cut to its indels out (it reads as its sites and
+  clusters, never `wgs`). Rejected: a breadth of its own, which nothing measured asks for (91% on the DRAGEN halves).
+- An SNV-only or SV-only facet keeps the 1,000,000 floor. Rejected: one floor for every filtered
+  facet, which would move an SNV half's reading.
+- The panel reads that took `absence_means = weak_reference` (and `reference`) as reference at every
+  absent SNV site, `site_genotypes` and somalier's `--unknown`, now ask `absence_is_reference(facet,
+  "snv", force=True)`, so an indel half's silence at an SNV site, a class it cut, stays unknown.
+  Rejected: leaving them on `absence_means`, which would have read every absent panel site of an
+  indel half as hom-ref the moment the half read `wgs`; and dropping `force`, which would change an
+  SNV half's ancestry and relatedness, a separate question.
+
+Not changed: `person_karyotype` runs its whole-genome thresholds on a facet that reads `wgs`, an
+indel half now included, though they were measured on unsplit genomes. A genotype table's classes are
 not counted.
 
 ## RM5 — Population inference

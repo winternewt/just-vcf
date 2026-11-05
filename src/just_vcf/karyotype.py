@@ -57,9 +57,11 @@ The estimate:
   reading from before counts were measured stands: a het share's two or more reads two, a Y shown
   only by the calls reads one (so `XY` and `XXY` from calls alone, which cannot tell XY from XYY);
   more than two X with no coverage line to count them is unknown (`copies_uncounted`). A value in an
-  unknown band, lines that disagree, too few sites, a facet that is not a whole genome, a build
-  without a region set, or one whose thresholds were never measured (T2T-CHM13, and GRCh36 for
-  anything but an array: measured and reported only) all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
+  unknown band, lines that disagree, too few sites, a facet that is not a whole genome, a whole genome
+  cut to a class other than SNVs (`content_filter`: its het share and call-site depths are not the
+  quantities the thresholds were measured on), a build without a region set, or one whose thresholds
+  were never measured (T2T-CHM13, and GRCh36 for anything but an array) all answer `UNKNOWN_KARYOTYPE` with the reason, never the nearest class.
+  The cut genome and the uncalibrated build are measured and reported all the same.
   `x_copies` is still answered wherever the X lines settle it.
 - **An array facet** (`callset_type = array`) has no depth; its lines are read from the letters as
   written (`array`, `ArrayLines`), so no REF is needed. X: the het share of two-letter base calls on
@@ -109,7 +111,15 @@ from just_vcf.coverage import Coverage, Resolution
 from just_vcf.links import LIFTOVER_TO, MULTI_PARENT_RELATIONS, SINGLE_PARENT_RELATIONS
 from just_vcf.loading import Loaded
 from just_vcf.person import Person
-from just_vcf.schema import SEQUENCE_ALLELE, AssemblyLabelBasis, CallsetType, unstated_sequence_alt
+from just_vcf.schema import (
+    CONTENT_FILTER_KEEPS,
+    SEQUENCE_ALLELE,
+    AssemblyLabelBasis,
+    CallsetType,
+    ContentFilter,
+    VariantClass,
+    unstated_sequence_alt,
+)
 
 # --- Regions -----------------------------------------------------------------------------------
 # Derived from GIAB genome stratifications v3.6, `XY` group, and for T2T-CHM13's X-degenerate Y from the
@@ -330,6 +340,7 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
         "unsupported_build",
         "uncalibrated_build",
         "not_wgs",
+        "filtered_content",
         "too_few_sites",
         "intermediate",
         "lines_disagree",
@@ -357,6 +368,10 @@ UNKNOWN_REASONS: frozenset[str] = frozenset(
   with it (`coverage.reason`).
 - `not_wgs`: `callset_type` is neither `wgs` nor `array` (an array has its own lines); the depth
   thresholds were measured on whole genomes.
+- `filtered_content`: a whole genome whose `content_filter` cut its SNVs away (`indel_only`, which
+  reads `wgs` since RM4, or `sv_only`). The het share and the call-site depths were calibrated on
+  unsplit genomes, where SNVs are most of the alleles; on another class they are other quantities. The
+  measurements are reported, the estimate is withheld. An `snv_only` half is estimated as before.
 - `too_few_sites`: a line had fewer sites than its minimum.
 - `intermediate`: a value fell in the unknown band between two classes, or outside every band.
 - `lines_disagree`: the het share and the X depth ratio point to different X counts.
@@ -602,6 +617,9 @@ class SexChromosomeEvidence(BaseModel):
     callset_type: CallsetType | None
     caller: str | None
     """`facets.caller`, carried for context."""
+    content_filter: ContentFilter | None = None
+    """`facets.content_filter`, verbatim: the one variant class a whole genome was cut down to. A cut
+    that kept no SNVs withholds the estimate (`filtered_content`)."""
     ploidy_statements: list[str] | None
     """`facets.ploidy_statements`, verbatim: the header's own ploidy lines (DRAGEN's
     `##referenceSexKaryotype`, GATK's `--sample-ploidy`). With `x_heterozygosity.haploid_alt_sites`
@@ -693,7 +711,7 @@ def sex_chromosome_evidence(
     """
     facets = loaded.facets.select(
         "facet_id", "assembly_label", "assembly_label_basis", "relation", "header_contigs", "vcf_version", "ref_seqcol_digest",
-        "callset_type", "caller", "ploidy_statements", "vendor",
+        "callset_type", "caller", "ploidy_statements", "vendor", "content_filter",
     ).collect()
     measured = measure_coverage(coverage) if coverage is not None else None
     return tuple(
@@ -710,6 +728,7 @@ def sex_chromosome_evidence(
             assembly_label_source=assembly_label_source(facet),
             ref_seqcol_digest=facet["ref_seqcol_digest"],
             vendor=facet["vendor"],
+            content_filter=ContentFilter(facet["content_filter"]) if facet["content_filter"] is not None else None,
         )
         for facet in facets.iter_rows(named=True)
     )
@@ -1032,6 +1051,7 @@ def estimate(
     assembly_label_source: str | None = None,
     ref_seqcol_digest: str | None = None,
     vendor: str | None = None,
+    content_filter: ContentFilter | None = None,
 ) -> SexChromosomeEvidence:
     """Turn `measure`'s numbers into the evidence and the estimate (rules in the module docstring).
 
@@ -1040,7 +1060,9 @@ def estimate(
     `coverage` is a coverage facet's line (`measure_coverage`); it counts only without a `reason`.
     `assembly_label_basis`, `assembly_label_source` and `ref_seqcol_digest` say where `assembly_label`
     came from; they are carried, and decide nothing. `vendor` is the facet's `facets.vendor`: with
-    `array_y` None it decides whether an array facet's Y probes are read (`ARRAY_Y_VENDORS`)."""
+    `array_y` None it decides whether an array facet's Y probes are read (`ARRAY_Y_VENDORS`).
+    `content_filter` is the facet's `facets.content_filter`: a whole genome cut to a class other than
+    SNVs is measured and not estimated (`filtered_content`)."""
     groups = measured["groups"]
     empty = {"rows": 0, "one": 0, "two": 0, "more": 0}
     names = ["autosomes", "x_nonpar", "y_nonpar", "par", "mt"] if measured["supported"] else ["autosomes", "mt"]
@@ -1053,6 +1075,7 @@ def estimate(
         "ref_seqcol_digest": ref_seqcol_digest,
         "callset_type": callset_type,
         "caller": caller,
+        "content_filter": content_filter,
         "ploidy_statements": ploidy_statements,
         "rows_counted": int(sum(row["rows"] for row in groups.values())),
         "ploidy": ploidy,
@@ -1121,11 +1144,19 @@ def estimate(
     if callset_type is not CallsetType.WGS:
         kind = callset_type.value if callset_type else "unknown"
         return unknown("not_wgs", f"callset type {kind}; the thresholds were measured on whole genomes", **known)
-    if assembly_label not in ESTIMATE_BUILDS:
-        measured_here = (
-            f"X het share {_fmt(x_het.het_share)}, X depth ratio {_fmt(depth.x_ratio)}, "
-            f"X-degenerate Y depth ratio {_fmt(depth.y_ratio)}"
+    measured_here = (
+        f"X het share {_fmt(x_het.het_share)}, X depth ratio {_fmt(depth.x_ratio)}, "
+        f"X-degenerate Y depth ratio {_fmt(depth.y_ratio)}"
+    )
+    kept = CONTENT_FILTER_KEEPS[content_filter] if content_filter is not None else None
+    if kept is not None and kept is not VariantClass.SNV:
+        return unknown(
+            "filtered_content",
+            f"the genome was cut to its {kept.value} calls (content filter {content_filter.value}); the thresholds were "
+            f"measured on unsplit genomes, whose alleles are mostly SNVs; measured: {measured_here}",
+            **known,
         )
+    if assembly_label not in ESTIMATE_BUILDS:
         calibrated = " and ".join(sorted(ESTIMATE_BUILDS))
         return unknown("uncalibrated_build", f"the thresholds were measured on {calibrated} genomes, none on {assembly_label}; measured: {measured_here}", **known)
 

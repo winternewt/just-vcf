@@ -48,6 +48,10 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-06: the karyotype's `filtered_content` merged as 34e04e5 (merge 3 of 6 toward audit 16)**; suite 2610
+   passed, 77 skipped, 8 xfailed. RM286's call, the lead's: store-chm13 stays its own opt-in store and `store`
+   keeps GRCh37 and GRCh38 only (the default suite reads no store; a third collection in `store` would be
+   considered by every `resolve_ref` for files that are rarely T2T); RM286 then waits for a T2T callset with DP.
 0. **2026-11-06: RM4's indel-only genome merged as a merge of 406b728 (merge 2 of 6 toward audit 16)**; suite 2605
    passed, 77 skipped, 8 xfailed. The lead's call, for the person's veto: an indel-only half reads `wgs` at
    `MIN_WGS_INDEL_SITES` 116,000 (the ported floor's 0.233 ratio on 0.5M indels), absences still held by the
@@ -69,9 +73,7 @@ each reset.
    settle them, a new data source. Not filed (the lead's reading): a flip confined to palindromic probes in a
    `forward` facet, which F13's check cannot see, since no reporting convention flips only those; 42 of 43
    measured exports read forward with at most one complement het. Building: RM287's server-rules test (merge 1
-   of 6 toward audit 16). **Found: both reference stores on disk are empty** (`~/.cache/just-vcf/reference`,
-   `/data/just-dna-cache/reference`), so a real-data `resolve_ref` re-run needs the FASTAs added again (GRCh37,
-   GRCh38, hg18 for FTDNA's GRCh36 exports) before the lead's aggregate runs.
+   of 6 toward audit 16). *Corrected 2026-11-06:* the stores are not empty; the lead had opened their parent folder. They are `/data/just-dna-cache/reference/store` (GRCh37, GRCh38), `store-chm13` (T2T-CHM13 too) and `store-ncbi36`.
 0. **Audit 15 done 2026-11-05** (bf4b4f4..57489ba, a public-repo copy after repo-prep, Sol via Codex and Grok via
    Cursor): Grok found nothing; Sol two, both confirmed by reading: a partly duplicated chain makes `_segments`
    pick representatives from two chains, so a gap-spanning lift is refused as `split_across_chains` and depends on

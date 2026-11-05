@@ -7,7 +7,7 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM287 — Imputed facets read back
-**State:** unattended: the opt-in server-rules test on a PGP-HMS chip export (aggregates only; needs a GRCh37 reference store, empty since 2026-11-05); the lead kept six unmet rules as documented failures, and asks two on the desk: #213 (ALT for hom-ref chip rows, which the servers drop) and #214 (code 25 written as X); A/T and C/G is #212 · **Owner:** lead
+**State:** unattended: the opt-in server-rules test on a PGP-HMS chip export (aggregates only; against `/data/just-dna-cache/reference/store`); the lead kept six unmet rules as documented failures, and asks two on the desk: #213 (ALT for hom-ref chip rows, which the servers drop) and #214 (code 25 written as X); A/T and C/G is #212 · **Owner:** lead
 
 Severity: low · Status: read-back shipped 2026-11-05 on a builder's branch, for the lead's merge: schema
 0.0.23's `calls.imputation_r2` (minimac R2 or Beagle DR2) and `calls.imputation_empirical_r2`
@@ -326,9 +326,9 @@ for Good upload: 45 of 46 withheld `symbolic`); whether a block per window or pe
 sequence alleles is wanted is the person's call.
 
 ## RM286 — T2T-CHM13
-**State:** unattended: the lead's call on CHM13 as a test store; the karyotype thresholds on T2T wait for a callset with FORMAT DP · **Owner:** lead
+**State:** waits until 2026-12-06 (look again for a public T2T callset of known karyotype carrying FORMAT DP, to calibrate the karyotype thresholds on; the test-store call is made: store-chm13 stays opt-in, 2026-11-06) · **Owner:** lead
 
-Severity: low · Status: in progress (shipped 2026-10-23, merge 795874f, with the UCSC scaffold aliases it met as F19, merge cec1831. Left: calibrating the karyotype thresholds on T2T callsets of known karyotype carrying FORMAT DP, which waits for data (GIAB's HG002 benchmark has no DP), and then `ESTIMATE_BUILDS` takes T2T-CHM13; making store-chm13 the default test store or adding CHM13 to `store` is the lead's own call, no desk)
+Severity: low · Status: in progress (shipped 2026-10-23, merge 795874f, with the UCSC scaffold aliases it met as F19, merge cec1831. Left: calibrating the karyotype thresholds on T2T callsets of known karyotype carrying FORMAT DP, which waits for data (GIAB's HG002 benchmark has no DP), and then `ESTIMATE_BUILDS` takes T2T-CHM13; making store-chm13 the default test store or adding CHM13 to `store` is the lead's own call, no desk; made 2026-11-06: neither, store-chm13 stays its own opt-in store, since the default suite reads no store and `store` serves the GRCh37 and GRCh38 files nearly every input is)
 
 The person chose after GRCh37/38 (E10): CHM13 in the reference store, the assembly table, liftover chains and the sex-chromosome regions.
 

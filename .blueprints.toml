@@ -55,6 +55,12 @@ wake_from = "just-vcf/triage just-vcf/upstream-liaison just-vcf/tooling */secret
 [seat.lead.watch.desk]
 cmd = "sh kit:bin/py.sh kit:classes/desk/watch-answers.py just-vcf lead"
 
+# The plan's items that need the lead (the kit's D116, RM62): no state or owner, a waits-until date come, a
+# blocked item with no desk question, a desk question answered, and the person leaving with unattended items.
+# Reads the **State:** line every RM item opens with (ea6a199). Hourly; each said once.
+[seat.lead.watch.plan]
+cmd = "sh kit:bin/py.sh kit:classes/lead/plan-watch.py --plan docs/ROADMAP.md"
+
 [seat.lead.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"
 

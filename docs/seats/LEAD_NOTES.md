@@ -17,7 +17,9 @@ each reset.
    pt 2 interview goes to 0.2 and doesn't block 2 and 3"). Option 2, the CLI, shipped as f00bb1f; the Part 2
    interview was held 2026-10-23. Option 3 is the prep: CHANGELOG's Unreleased cut as 0.1.0, a README pass,
    and a check that the built sdist and wheel carry no private-derived document. The publish, and the
-   `v0.1.0` tag that would mark it, stay the person's.
+   `v0.1.0` tag that would mark it, stay the person's. Brought up to date 2026-11-05: the
+   Unreleased entries folded into 0.1.0 with schema 0.0.22 (d9c3c43), the README names coverage, karyotype
+   and the consensus (c8f891f), `tests/test_package.py` green on that code.
 0. **Audit 14 done** (2026-11-03, b58f033..bf4b4f4, Sol via Codex and Grok via Cursor): six findings, all
    confirmed. Four merged as 040fcea (karyotype per GT slot and array letters, rejoin leaves an unstated split
    site as written with F34 filed, normalize keeps the matched duplicate, query's variant_class). The fifth,

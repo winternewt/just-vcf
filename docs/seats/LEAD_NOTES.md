@@ -48,6 +48,12 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **Audit 15 done 2026-11-05** (bf4b4f4..57489ba, a public-repo copy after repo-prep, Sol via Codex and Grok via
+   Cursor): Grok found nothing; Sol two, both confirmed by reading: a partly duplicated chain makes `_segments`
+   pick representatives from two chains, so a gap-spanning lift is refused as `split_across_chains` and depends on
+   chain order (liftover.py); `consensus` refuses a parent made from another given parent but not two given
+   facets sharing an ancestor (`normalize(c)` beside `i` imputed from `c`, or two derivations of `c`). One fix
+   builder is on both plus the stated pair's same-person check below. Next audit after 6 more merges.
 0. **Done 2026-11-05: RM282's decompose merged as 2b7c403 (merge 6 of 6: audit 15 is due)**: a symbolic
    `<DEL>`/`<DUP>`/`<INV>` meets another caller's breakends as truvari's default `decompose` does (key
    `decomposed`), a lone breakend near one reads `other_alleles`, and the mirror. The builder's ten calls for veto

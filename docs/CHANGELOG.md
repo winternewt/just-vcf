@@ -14,8 +14,8 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
 - **`concordance` meets a symbolic `<DEL>`, `<DUP>` or `<INV>` with the breakends another caller
   writes for it** (RM282), as truvari 5.5's default `decompose` does: the symbolic allele is turned
   into the breakend records it implies (a deletion joins POS to END + 1, a tandem duplication END to
-  POS + 1, an inversion POS to END and POS + 1 to END + 1, each pinned to the VCF 4.3 and 4.5 specs'
-  own records) and those meet the other facet's records by `bnd_match`. Such a pair was an `only_a` and
+  POS + 1, an inversion POS to END and POS + 1 to END + 1; the inversion's and the deletion's records
+  pinned to the VCF 4.3 and 4.5 specs' own, the duplication's to 4.5's prose) and those meet the other facet's records by `bnd_match`. Such a pair was an `only_a` and
   an `only_b` row; it is one row with the new `key` value `decomposed` and `sv_kind` the symbolic
   type. A lone breakend near an implied one, and a lone symbolic allele whose implied breakend lies near
   the other facet's breakend, read `other_alleles`. Where it differs from truvari (like meets like

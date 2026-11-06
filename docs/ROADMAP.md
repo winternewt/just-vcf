@@ -7,7 +7,7 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM287 — Imputed facets read back
-**State:** unattended: the opt-in server-rules test on a PGP-HMS chip export (aggregates only; against `/data/just-dna-cache/reference/store`); the lead kept six unmet rules as documented failures, and asks two on the desk: #213 (ALT for hom-ref chip rows, which the servers drop) and #214 (code 25 written as X); A/T and C/G is #212 · **Owner:** lead
+**State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
 
 Severity: low · Status: read-back shipped 2026-11-05 on a builder's branch, for the lead's merge: schema
 0.0.23's `calls.imputation_r2` (minimac R2 or Beagle DR2) and `calls.imputation_empirical_r2`
@@ -16,8 +16,10 @@ step; and `imputed_from`, a one-parent lineage relation the caller states with `
 (tool and panel in the link's provenance), which `person_karyotype`, `Person` and `consensus` read as
 one callset. docs/SCHEMA.md Decision 6 "Imputation quality" and Decision 12 "A stated lineage" hold the
 builder's calls for veto. The server-rules test (third bullet) built 2026-11-05 on a builder's branch,
-for the lead's merge. Left: running its opt-in test on a public export, and a decision on each rule it
-marks xfail. Desk #180
+for the lead's merge. Run 2026-11-06 on one PGP-HMS 23andMe export (GRCh37, `store`; counts only): 953,411 written, 7,202
+left `ref_unresolved`, strand forward; unmet: VCF 4.3, 23 contigs in one file, 21 records at a previous
+position, one sample, 4 multi-allelic, 490,696 (51%) with ALT `.` (desk #213); A/T and C/G written: 1,663
+hets, 1,498 hom-alt. The lead's call on the eight xfails: six documented, two on the desk. Desk #180
 (whether imputation itself belongs here; the lead recommends downstream) does not bear on what shipped,
 which is inside the charter under any answer.
 

@@ -512,9 +512,12 @@ def test_replicates_are_not_shrunk_toward_the_origin(autosome_panel) -> None:
     assert blocks == list(AUTOSOME_LAYOUT.items())
     sizes = [size for _, size in blocks]
     replicates = np.stack([project_restricted(model.pca, w, chroms != chrom) for chrom, _ in blocks])
+    # The two structure PCs of three symmetric populations are near-degenerate, so either can sit near 0
+    # for one person; shrinkage scales every coordinate, so the larger of the two is enough to see it.
+    largest = int(np.argmax(np.abs(full[:2])))
+    inside = int((np.abs(replicates[:, largest]) < abs(full[largest])).sum())
+    assert 0 < inside < len(blocks), (largest, inside)
     for pc in (0, 1):
-        inside = int((np.abs(replicates[:, pc]) < abs(full[pc])).sum())
-        assert 0 < inside < len(blocks), (pc, inside)
         estimate, se = weighted_block_jackknife(float(full[pc]), replicates[:, pc].tolist(), sizes)
         assert abs(estimate - full[pc]) <= 3 * se, (pc, estimate, float(full[pc]), se)
 

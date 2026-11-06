@@ -77,8 +77,8 @@ facet is read as homozygous for it.
 `infer_ancestry` reports the neighbour vote and its margin, the centroid proportions and the projected
 PC coordinates, and by default their uncertainty from a leave-one-chromosome-out jackknife: the facet
 projected again with each shared autosome left out, giving a standard error per PC coordinate
-(`pc_errors`) and per proportion (`proportion_errors`), and the share of those 22 replicates whose vote
-agrees (`vote_stability`). A facet that reads sites on fewer than five autosomes gets none, with
+(`pc_errors`) and per proportion (`proportion_errors`), and the share of those replicates, one per
+shared autosome, whose vote agrees (`vote_stability`). A facet that reads sites on fewer than five autosomes gets none, with
 `jackknife_reason = too_few_blocks`; `jackknife=False` skips it. The method, what each replicate
 recomputes and the minimum are in docs/SCHEMA.md, "The PCA path's uncertainty". Its tests use
 synthetic panels (`tests/test_ancestry.py`); no run on a real panel is recorded yet.

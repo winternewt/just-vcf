@@ -48,6 +48,12 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-06, the lead's calls without a builder, for the person's veto**: RM6's quality filters are not built
+   as a filter (charter invariant 7: no row-dropping cut-off; consumers threshold `genotype_evidence`; a `write_vcf`
+   edge threshold is a new item on a consumer's ask); RM269's somalier point answered in the roadmap (somalier's
+   sex rule is binary, reads no Y and only its own sites, so it is not the karyotype's source). Left unattended,
+   each needing data or a design read first: RM5's `aadr_ho` overlapping regions, RM279's PGP pairs, RM281's
+   WGS-learned I/D orientation (CGI `var` loads take about 25 min each from Krypton), RM4's FTDNA X-only export.
 0. **2026-11-06, later**: RM278's quantizing pass measured on a 27 GB WGS BAM (12.5 min, 13.5 GB peak, as the plain
    pass), so RM278 waits on desk #209 only. RM287's opt-in run on a PGP-HMS 23andMe export: 51% of written records
    carry ALT `.` (added to desk #213). RM5's PCA uncertainty merged as e1b6600 (merge 4 of 6): the lead's call of method, a

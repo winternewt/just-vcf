@@ -1708,7 +1708,8 @@ somalier's own sex rule (`relate.nim`, `add_parents_and_check_sex`, read as text
 is binary: male where the X het count over the X hom-alt count is below 0.05, female above 0.4, with
 more than 10 X sites with depth, and nothing in between; it reads no Y and has no class for XXY, X0,
 XYY or a mosaic, which are the cases this item exists for (desk #61's full label). It reads only its
-own site list (about 17,000 sites per build, hg19 and hg38, so a few hundred on X), where this
+own site list (published for hg19 and hg38; its size, recalled as about 17,000 sites, is not checked
+here), where this
 estimate reads every non-PAR X call of a genome, an array's letters, and a coverage facet's depth, on
 GRCh36, GRCh37, GRCh38 and T2T-CHM13. Its het-over-hom ratio is the same quantity as this item's het
 share, so taking its sites would only shrink the sample. somalier stays what it is here, the

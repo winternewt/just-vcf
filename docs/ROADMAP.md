@@ -58,7 +58,7 @@ Severity: medium · Status: in progress (shipped 2026-10-23: KING-robust related
 The person chose both (E6): somalier (MIT) as an optional subprocess, skipped cleanly when absent, and just-vcf's own relatedness on the frames (IBS/KING-style over a validated site panel, so arrays work too). Pedigrees as supplied GA4GH Pedigree data. Feeds RM273's check.
 
 ## RM278 — Coverage as a facet
-**State:** unattended: the quantizing pass measured on a whole-genome BAM, aggregates only; whether a callset records its alignment is desk #209, default no change · **Owner:** lead
+**State:** blocked: desk #209 (whether a callset records the BAM it was called from; default no change); the quantizing pass is measured, 2026-11-06 · **Owner:** lead
 
 Severity: medium · Status: in progress (shipped 2026-10-23: the readers, BAM depth and callable, with XX and XO from coverage depth for RM269, merge dd11011; per-base depth mode 583409a, the BED3 refusal d23a484; 2026-10-26, the cache spill of `alignment_coverage`'s windows, so a BAM is read once (`coverage/`, kind `coverage_spill`, keyed by the file's header, index and size, the window, the read filters, `COVERAGE_VERSION` and polars-bio's version); 2026-10-26, a `Person` carrying its coverage facets by the caller's `subject=`, and `person_sex_chromosome_evidence` pairing them with callsets by build, the choice and its reason on `coverage_pairing`, none used where two usable ones share a build unless `pairs` states one; 2026-11-03, mosdepth's thresholds file read (`thresholds_bed`, its counts on `Coverage.thresholds`, never in a depth column), and a coverage facet that states no mean (quantized bins, thresholds) set aside by the depth measures as `coverage_no_mean`, docs/SCHEMA.md "Coverage facets"; 2026-11-03, a quantized output from the same depth pass, `alignment_coverage(quantize=...)` giving `Coverage.quantized`, equal to `read_coverage` of mosdepth's quantized file on the same reads and spilled beside the windows (keyed by the edges when given), with the lead's two calls for veto in docs/SCHEMA.md (a last base in its own bin, the facet named `alignment_depth`). The substrate findings below are P17–P20 in docs/POLARS_BIO_PENDING_FIXES.md, the upstream-liaison seat's: P17–P19 not filed, P20 not reproduced on a small BAM, so nothing to file yet. Nothing buildable is left without a decision; not measured yet: the quantizing pass on a whole-genome BAM. Waiting on the person: whether a callset should record the alignment it was called from (a BAM's header digest on the facet), which would let the pairing match an alignment rather than a build)
 
@@ -111,6 +111,7 @@ the machine shared with about eleven other sessions, load average 17–60):
 | 48.3 GB | blocks | 38.3 min | 33.6 GB | 96.7 GB | 3,099,848 |
 | 42.1 GB | per-base | 20.4 min | 16.3 GB | 83.1 GB | 3,099,848 |
 | 39.2 GB | per-base | 16.7 min | 13.6 GB | 78.5 GB | 3,099,848 |
+| 27.4 GB | per-base, `quantize=[0, 1, 4, 100, 200, None]` (2026-11-06, load average about 44) | 12.5 min | 13.5 GB | not recorded | 3,099,848; 1,552,197 quantized runs |
 
 The four come from three person folders (the 48.3 and 39.2 GB BAMs are two libraries in one folder,
 which docs/LIVE_SAMPLES.md says are different people).

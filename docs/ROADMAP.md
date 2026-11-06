@@ -1617,7 +1617,7 @@ aggregates only; every expected id computed by vrs-python at test time:
   directly for `refused` in the synthetic suite.
 
 ## RM269 — Karyotype finding and the caller's ploidy model
-**State:** unattended: the lead's answer to the critique's somalier question; desk #135 open; the lead's calls in docs/LAYERS.md layer 4 open for veto · **Owner:** lead
+**State:** blocked: desk #135 (the critique's somalier point is answered, 2026-11-06; the lead's calls in docs/LAYERS.md layer 4 stay open for the person's veto) · **Owner:** lead
 
 Severity: high · Status: in progress (the person chose the full label, desk #61, 2026-10-22. Shipped: half 1 as the `source` detector's caller, version and `ploidy_statements` (RM2, merge bd5c02e, 2026-10-22); the evidence layer, X copies and an XY/XXY estimate per WGS facet, merge 7384428, 2026-10-22, checked on 27 PGP-HMS VCFs; XX and XO from a coverage facet, merge dd11011 (RM278), 2026-10-23; XXX, XYY, XXYY and XXXY from a coverage facet's copy counts, and arrays' X from their hets with Y behind `array_y`, merge 5ccbffc, 2026-10-25, checked on 270 PGP-HMS exports; the build's source on the result, with tables that state no build estimated on `resolve_ref`'s output, merge e73b320, 2026-10-25, checked on 109 PGP-HMS tables; GRCh36's region set, its arrays estimated and its genomes measured only, merge 3a80fc0, 2026-10-25, checked on 250 PGP-HMS 23andMe exports and 69 resolved tables; an array's Y read by default per vendor, on for AncestryDNA alone (`ARRAY_Y_VENDORS`, desk #136 answered by the person, 2026-10-26); a person's facets weighed against each other, liftovers of one callset answering once, a merge or a consensus set aside and independent callsets that differ withheld as `facets_disagree` (`person_karyotype`, 2026-11-03, synthetic facets only, no real genome run). Waiting on the person: desk #135 (whether a VCF alone may name XY and XXY); the lead's calls listed for veto in docs/LAYERS.md, layer 4 (`OTHER_KARYOTYPE`, the 3/4 array two-X expectation against PLINK's shape, `x_copy_count`/`y_copy_count`, GRCh36 genomes left `uncalibrated_build`). Buildable now: an answer to the critique's somalier question. Open, no desk number: whether GRCh37's last X-degenerate interval reaches about 99 kb into NCBI's PAR2 (docs/PROVENANCE.md); whether a measured answer (a genome's calls and depth, a coverage facet's counts) should outrank an estimated one (an array's letters) at the person level, where the lead's call, open for veto in docs/SCHEMA.md, ranks none. Exomes answer unknown)
 
@@ -1702,6 +1702,17 @@ critic's recollection, not checked here):
   expose first.
 - LANDSCAPE names somalier for sex checks: say why this is built here, or take its sites. Arrays may do
   better than planned (female Y probes are no-calls; AncestryDNA doubles X letters).
+
+*Answered 2026-11-06 (the lead), the somalier point:* built here, and somalier's sites not taken.
+somalier's own sex rule (`relate.nim`, `add_parents_and_check_sex`, read as text from its source)
+is binary: male where the X het count over the X hom-alt count is below 0.05, female above 0.4, with
+more than 10 X sites with depth, and nothing in between; it reads no Y and has no class for XXY, X0,
+XYY or a mosaic, which are the cases this item exists for (desk #61's full label). It reads only its
+own site list (about 17,000 sites per build, hg19 and hg38, so a few hundred on X), where this
+estimate reads every non-PAR X call of a genome, an array's letters, and a coverage facet's depth, on
+GRCh36, GRCh37, GRCh38 and T2T-CHM13. Its het-over-hom ratio is the same quantity as this item's het
+share, so taking its sites would only shrink the sample. somalier stays what it is here, the
+relatedness tool (`just_vcf.somalier`), not the karyotype's source.
 
 Constraints: list length stays the number of haplotypes the source wrote (Decision 2). The finding sits
 beside the facets and is never a rewrite of `calls`: no GT is collapsed to haploid by the loader. An

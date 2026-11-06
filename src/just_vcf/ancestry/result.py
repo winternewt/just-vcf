@@ -41,6 +41,25 @@ ANCESTRY_REASONS: frozenset[str] = frozenset(
   those groups has nothing to read.
 """
 
+ERROR_METHODS: frozenset[str] = frozenset({"block_bootstrap", "chromosome_jackknife"})
+"""How an estimate's standard errors (`proportion_errors`, `pc_errors`) were computed. Grows additively.
+
+- `block_bootstrap`: `prive_qp`'s, a bootstrap over contiguous blocks of the sites read; Privé's
+  projection and centroids are sums over sites, so a resample is one weighted sum.
+- `chromosome_jackknife`: `pca_knn`'s, a weighted delete-one-block jackknife whose blocks are the
+  autosomes the facet and the panel share (Busing, Meijer and van der Leeden 1999, as ADMIXTOOLS uses
+  it); each replicate projects the facet again by OADP on the other autosomes' sites
+  (`pca.chromosome_jackknife`).
+"""
+
+JACKKNIFE_REASONS: frozenset[str] = frozenset({"not_requested", "too_few_blocks"})
+"""Why a `pca_knn` estimate that answered carries no jackknife (`jackknife_reason`). Grows additively.
+
+- `not_requested`: the caller passed `jackknife=False`.
+- `too_few_blocks`: fewer autosomes with a site read than `MIN_JACKKNIFE_BLOCKS`
+  (`n_jackknife_blocks` says how many), too few for a standard error worth reporting.
+"""
+
 PROPORTION_METHODS: frozenset[str] = frozenset({"pca_nnls", "prive_qp"})
 """How `proportions` were computed. Either way they are a projection-space approximation, not
 haplotype-level admixture."""
@@ -139,7 +158,10 @@ class AncestryEstimate(BaseModel):
     """Group proportions summing to 1, an approximation in PC space."""
     proportion_method: str | None = None
     proportion_errors: dict[str, float] | None = None
-    """Block-bootstrap standard error per proportion, where the method allows one (`prive_qp`)."""
+    """Standard error per proportion, computed as `error_method` says: a block bootstrap (`prive_qp`) or
+    a leave-one-chromosome-out jackknife (`pca_knn`). Null where none ran, never 0."""
+    error_method: str | None = None
+    """How `proportion_errors` and `pc_errors` were computed (`ERROR_METHODS`); null when neither was."""
     group_to_continental: dict[str, str | None] = {}
     """Each group of this panel folded onto `CANONICAL_SUPERPOPS`, None where none fits (Middle
     Eastern groups). The consensus reads it."""
@@ -150,6 +172,20 @@ class AncestryEstimate(BaseModel):
     """`consensus` only: the witnesses it combined, each with the readings pooled into it."""
     pc_coords: tuple[float, ...] | None = None
     """The projected principal-component coordinates. Their signs depend on the panel's build."""
+    pc_errors: tuple[float, ...] | None = None
+    """`pca_knn`: the jackknife standard error of each of `pc_coords`, in the same order. Null where the
+    jackknife did not run (`jackknife_reason`), never 0."""
+    vote_stability: float | None = None
+    """`pca_knn`: the share of the jackknife's replicates, one per autosome left out, whose neighbour vote
+    names `estimate`. 1.0 means no single chromosome's sites decide the vote. Null where the jackknife did
+    not run."""
+    n_jackknife_blocks: int | None = None
+    """`pca_knn`: the autosomes the facet and the panel share, each with at least one site read: the
+    jackknife's blocks. Set when they were counted (the jackknife ran, or was withheld as
+    `too_few_blocks`); null when it was not requested or the estimate did not answer."""
+    jackknife_reason: str | None = None
+    """`pca_knn` only: why an estimate that answered carries no jackknife (`JACKKNIFE_REASONS`). Null when
+    the jackknife ran, and on an estimate that did not answer (its `reason` says why)."""
 
     n_sites_panel: int | None = None
     n_sites_used: int | None = None
@@ -191,6 +227,20 @@ class AncestryEstimate(BaseModel):
             raise ValueError(f"unknown proportion method {value!r}; known: {sorted(PROPORTION_METHODS)}")
         return value
 
+    @field_validator("error_method")
+    @classmethod
+    def _known_error_method(cls, value: str | None) -> str | None:
+        if value is not None and value not in ERROR_METHODS:
+            raise ValueError(f"unknown error method {value!r}; known: {sorted(ERROR_METHODS)}")
+        return value
+
+    @field_validator("jackknife_reason")
+    @classmethod
+    def _known_jackknife_reason(cls, value: str | None) -> str | None:
+        if value is not None and value not in JACKKNIFE_REASONS:
+            raise ValueError(f"unknown jackknife reason {value!r}; known: {sorted(JACKKNIFE_REASONS)}")
+        return value
+
     @field_validator("combination")
     @classmethod
     def _known_combination(cls, value: str | None) -> str | None:
@@ -202,6 +252,10 @@ class AncestryEstimate(BaseModel):
     def _answer_or_reason(self) -> "AncestryEstimate":
         if (self.estimate is None) == (self.reason is None):
             raise ValueError("an estimate carries exactly one of `estimate` and `reason`")
+        if self.jackknife_reason is not None and (
+            self.estimate is None or self.pc_errors is not None or self.vote_stability is not None
+        ):
+            raise ValueError("`jackknife_reason` says why an answered estimate has no jackknife; it cannot sit beside one")
         return self
 
     def __bool__(self) -> bool:

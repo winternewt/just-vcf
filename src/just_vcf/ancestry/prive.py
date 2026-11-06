@@ -211,6 +211,7 @@ def prive_proportions(
         proportions=proportions,
         proportion_method="prive_qp",
         proportion_errors=errors,
+        error_method="block_bootstrap" if errors is not None else None,
         group_to_continental={group: continental_of(group) for group in groups},
     )
 

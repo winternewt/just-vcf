@@ -11,6 +11,22 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **The PCA path reports its uncertainty** (RM5, the lead's call of method). `infer_ancestry` runs a
+  leave-one-chromosome-out jackknife by default: the facet is projected again by OADP with each shared
+  autosome left out, the reference's SVD recomputed on the kept sites from the panel's stored factors
+  and the result fitted into the full projection's frame, and the weighted delete-one-block jackknife
+  (Busing, Meijer and van der Leeden 1999, as ADMIXTOOLS uses it, blocks weighted by their sites read)
+  gives `pc_errors` per PC coordinate and `proportion_errors` per centroid proportion; `vote_stability`
+  is the share of replicates whose vote names the estimate. Fewer than five autosomes read
+  (`MIN_JACKKNIFE_BLOCKS`): withheld with `jackknife_reason = too_few_blocks`; `jackknife=False` skips
+  it (`not_requested`). New optional fields `pc_errors`, `vote_stability`, `error_method`,
+  `n_jackknife_blocks`, `jackknife_reason`; `prive_qp` now names its errors `block_bootstrap`. Additive;
+  the formula is `just_vcf.jackknife`. Not yet timed on a real or realistic panel. Tests:
+  `tests/test_jackknife.py` (the formula against a weighted mean's exact pseudo-values and the ordinary
+  jackknife; fails with `h_j` in place of `h_j - 1`), `tests/test_ancestry.py::test_a_genome_on_every_autosome_carries_its_jackknife`,
+  `::test_the_jackknife_needs_its_minimum_of_autosomes`, `::test_a_replicate_that_keeps_every_site_is_the_full_projection`,
+  `::test_replicates_are_not_shrunk_toward_the_origin`, `::test_jackknife_blocks_are_the_autosomes_read_in_canonical_order`,
+  `::test_a_jackknife_reason_stands_only_where_no_jackknife_does`.
 - **A genome cut to its indels is measured, not estimated, for its karyotype** (RM4 follow-up, the lead's
   call). Since a whole genome cut to its indels can read `wgs`, `sex_chromosome_evidence` (and so
   `person_karyotype`) would have run the unsplit genomes' X het share and call-site depth thresholds on

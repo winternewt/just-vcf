@@ -3796,6 +3796,54 @@ likelihood by default (Decision 3: a posterior already holds its source's prior,
 once per facet); one rate for every reading, which would let a whole genome's silence (one-sided
 rates of 1 to 30%, docs/METHOD_ATLAS.md) weigh like a stated genotype (0.05 to 3%).
 
+## The PCA path's uncertainty: a leave-one-chromosome-out jackknife (RM5)
+
+`infer_ancestry` (`method = pca_knn`) projects a facet onto a reference PCA by OADP, votes among the k
+nearest reference samples and fits centroid proportions. Its vote and margin say how the neighbours
+split, not how much the placement rests on the sites read. A site bootstrap as `prive_qp` runs does not
+carry over: Privé's projection is a sum over sites, so a resample is a reweighted sum, while OADP
+augments an SVD and fits a Procrustes transform, which a reweighting does not reach. Since 2026-11-06
+the PCA path reports a **weighted delete-one-block jackknife** (the lead's call), computed, not stored.
+
+- **Blocks: the autosomes the facet and the panel share**, each with at least one site read
+  (observed or absent read as reference); a chromosome with panel sites but none read is no block.
+  Whole chromosomes, so linkage inside one is never taken for independent sites. Sites off the
+  autosomes (X, a panel's other contigs) stay in every replicate. The replicates run in the canonical
+  contig order (`CONTIG_RANK`), never the panel's row order.
+- **Each replicate** leaves one autosome out, every panel site on it, and projects the facet again on
+  the rest. Recomputed per replicate: the reference's SVD on the kept sites, from the panel's stored
+  rank-`dim_online` factors (the panel holds `U diag(s) V^T`, not the genotypes: the eigendecomposition
+  of `diag(s) U_kept^T U_kept diag(s)` gives the kept sites' singular values, orthonormal loadings and
+  sample eigenvectors), then OADP's online augmentation with the facet and its Procrustes fit. Not
+  recomputed: each site's mean and standard deviation (per-site quantities, so the facet is
+  standardised once), and the Procrustes target, which stays the full panel's reference PCs, so every
+  replicate lands in the full projection's frame and is voted against the same reference coordinates;
+  the fit's scale takes up the kept sites' smaller singular values. Handing OADP the kept sites'
+  loadings beside the full singular values was rejected: the loadings lose norm with the sites and the
+  singular values do not, which shrinks every replicate toward the panel's centre.
+- **Standard errors** by the weighted block jackknife of Busing, Meijer and van der Leeden (1999,
+  "Delete-m jackknife for unequal m", Statistics and Computing 9, 3-8), as ADMIXTOOLS uses it, each
+  block weighted by its count of sites read (`just_vcf.jackknife`): with `n` sites over `g` blocks,
+  `h_j = n / m_j`, pseudo-values `h_j θ - (h_j - 1) θ_-j`, variance
+  `(1/g) Σ (pseudo-value - θ_J)² / (h_j - 1)`.
+- **Fields** on `AncestryEstimate`, all optional and null by default: `pc_errors` (the standard error of
+  each of `pc_coords`), `vote_stability` (the share of replicates whose vote names `estimate`),
+  `proportion_errors` (over the unrounded centroid proportions; the field Privé's bootstrap already
+  filled), `error_method` (`ERROR_METHODS`: `chromosome_jackknife`, or `block_bootstrap` on `prive_qp`),
+  `n_jackknife_blocks`, and `jackknife_reason` (`JACKKNIFE_REASONS`) on an answered estimate that
+  carries none. Null where the jackknife did not run, never 0.
+- **The minimum: five blocks** (`MIN_JACKKNIFE_BLOCKS`). A jackknife over g blocks estimates its
+  variance with about g - 1 degrees of freedom, so its standard error is itself uncertain by about
+  `1 / sqrt(2 (g - 1))`: 0.35 at five, 0.5 at three. Below five the uncertainty is withheld
+  (`jackknife_reason = too_few_blocks`, the blocks found still counted). A genome or an array covers
+  all 22 autosomes. A choice, not a calibration.
+- **On by default**; `infer_ancestry(..., jackknife=False)` skips it (`not_requested`). It costs about
+  one projection per autosome, 22 for a genome, plus a small eigendecomposition and a pass over the
+  kept loadings each; not yet timed (the build had no numpy), so the default rests on that count
+  against a placement whose load dominates (41 s on `aadr_ho`, docs/ANCESTRY_PANELS.md).
+- The replicates measure how much a placement rests on one chromosome's sites. They do not measure how
+  well the panel's groups stand for the person's ancestry, nor the panel's own sampling of people.
+
 ## Combining ancestry estimates: computed, not stored (RM5)
 
 `just_vcf.ancestry.consensus(estimates, prior=None, smoothing=1e-3, *, disjoint_panels=())` combines
@@ -3860,6 +3908,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-06, RM5: the PCA path's uncertainty): no column of `facets`, `calls`
+  or `blocks` changes. `infer_ancestry` runs a leave-one-chromosome-out jackknife by default ("The PCA
+  path's uncertainty"); `AncestryEstimate` gains `pc_errors`, `vote_stability`, `error_method`,
+  `n_jackknife_blocks` and `jackknife_reason` (all null by default), `proportion_errors` is filled on
+  `pca_knn` too, and `prive_qp` states `error_method = block_bootstrap` where it bootstrapped. New
+  vocabularies `ERROR_METHODS` and `JACKKNIFE_REASONS`. Additive: every field an estimate had keeps its
+  value.
 
 - **No version change** (2026-11-06, RM4 follow-up: the karyotype of a genome cut to its indels): no
   column changes. `sex_chromosome_evidence` withholds the estimate of a facet whose `content_filter`

@@ -32,11 +32,17 @@ from just_vcf.ancestry._projection import (
     ReferencePCA,
     build_reference_pca,
     project_samples,
+    ref_aug_procrustes,
+    standardize,
+    svd_eigcov,
+    svd_online,
 )
 from just_vcf.ancestry.consensus import continental_of
 from just_vcf.ancestry.result import AncestryEstimate
-from just_vcf.ancestry.sites import facet_of, panel_sites, site_dosages
+from just_vcf.ancestry.sites import AUTOSOMES, facet_of, panel_sites, site_dosages
+from just_vcf.jackknife import weighted_block_jackknife
 from just_vcf.loading import Loaded
+from just_vcf.schema import CONTIG_RANK
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +68,14 @@ PANEL_META_KEYS: frozenset[str] = frozenset(
     }
 )
 """The keys `build_pca_panel` writes to a panel's meta file; a builder's `extra_meta` may not use them."""
+
+MIN_JACKKNIFE_BLOCKS = 5
+"""The fewest autosomes with a site read for which `infer_ancestry` reports a jackknife. A delete-one-block
+jackknife over g blocks estimates its variance with about g - 1 degrees of freedom, so the standard
+error is itself uncertain by a factor of about 1 / sqrt(2 (g - 1)): 0.35 at five blocks, 0.5 at three,
+0.71 at two. Below five the error would be as unsure as the estimate it qualifies, and is withheld
+(`too_few_blocks`). A genome or an array covers all 22 autosomes; a facet below five is a targeted
+panel or a file cut to a few chromosomes. A choice, not a calibration."""
 
 RESOLUTIONS: frozenset[str] = frozenset({"superpop", "population"})
 """`superpop`: the panel's broad groups. `population`: its fine populations, where it has them."""
@@ -269,6 +283,7 @@ def infer_ancestry(
     facet_id: str | None = None,
     resolution: str = "superpop",
     coverage_floor: float = DEFAULT_COVERAGE_FLOOR,
+    jackknife: bool = True,
 ) -> AncestryEstimate:
     """Place a facet on a reference-PCA panel: the nearest group by a neighbour vote, and proportions.
 
@@ -276,6 +291,11 @@ def infer_ancestry(
     (`facets.assembly_label`). A facet with no assembly label, or one the panel does not have, gets an
     unknown estimate saying so; nothing is lifted or assumed. A facet whose sites cover less than
     `coverage_floor` of the panel gets `too_few_sites`.
+
+    With `jackknife` (the default) an estimate that answered carries its uncertainty from a
+    leave-one-chromosome-out jackknife (`chromosome_jackknife`): `pc_errors`, `vote_stability` and
+    `proportion_errors`, or `jackknife_reason = too_few_blocks` below `MIN_JACKKNIFE_BLOCKS` autosomes.
+    `jackknife=False` skips it (`jackknife_reason = not_requested`).
     """
     if resolution not in RESOLUTIONS:
         raise ValueError(f"resolution {resolution!r}; known: {sorted(RESOLUTIONS)}")
@@ -327,6 +347,11 @@ def infer_ancestry(
     leader, votes = knn_vote(model.pca.pcs_ref, labels, pcs, model.knn_k)
     proportions = centroid_proportions(model.pca.pcs_ref, labels, pcs)
     rollup = _population_rollup(model) if resolution == "population" else {}
+    uncertainty = (
+        chromosome_jackknife(model, counts.dosage, labels, pcs, leader)
+        if jackknife
+        else {"jackknife_reason": "not_requested"}
+    )
     return AncestryEstimate(
         **measured,
         estimate=leader,
@@ -336,7 +361,115 @@ def infer_ancestry(
         proportion_method="pca_nnls",
         group_to_continental={group: continental_of(rollup.get(group, group)) for group in sorted(set(labels.tolist()))},
         pc_coords=tuple(float(x) for x in pcs),
+        **uncertainty,
     )
+
+
+def jackknife_blocks(chroms: np.ndarray, used: np.ndarray) -> list[tuple[str, int]]:
+    """The jackknife's blocks: each autosome with at least one site read, and its count of sites read.
+
+    `chroms` is the panel's canonical `chrom` per site and `used` whether the facet's dosage there was
+    read. In the canonical contig order (`schema.CONTIG_RANK`), so the replicates' order, and the float
+    sums over them, never depend on the panel's row order (charter invariant 12). A chromosome with panel
+    sites but none read is no block: leaving it out would change nothing.
+    """
+    present = sorted({str(chrom) for chrom in chroms[used].tolist()} & AUTOSOMES, key=CONTIG_RANK.__getitem__)
+    return [(chrom, int(np.count_nonzero(used & (chroms == chrom)))) for chrom in present]
+
+
+def project_restricted(pca: ReferencePCA, w: np.ndarray, keep: np.ndarray) -> np.ndarray:
+    """OADP projection of a standardised target `w` (sites x 1) using only the sites `keep`, in the
+    full panel's PC frame.
+
+    Recomputed on the kept sites, as `project_samples` computes them on all of them:
+
+    - the reference's SVD. The panel stores the rank-`dim_online` factors `U diag(s) V^T` of the
+      standardised reference matrix, not the matrix, so the kept sites' SVD is that of
+      `U[keep] diag(s) V^T`: the eigendecomposition `Q diag(s')^2 Q^T` of the small
+      `diag(s) U[keep]^T U[keep] diag(s)` gives the singular values `s'`, loadings
+      `U[keep] diag(s) Q / s'` (orthonormal again) and sample eigenvectors `V Q`. Handing OADP
+      `U[keep]` with the full `s` instead would shrink every replicate toward the origin: `U[keep]`'s
+      columns are no longer of unit norm while `s` is still on the full sites' scale;
+    - OADP's online augmentation of that SVD with the target, and its Procrustes fit.
+
+    Not recomputed: each site's `mean` and `std` (a per-site quantity, the same on any subset of sites,
+    so the caller standardises the target once), and the Procrustes target, which stays the full
+    panel's reference PCs (`pca.pcs_ref`): every replicate lands in one frame with the full projection
+    and is voted against the same reference coordinates. The fit has a scale, which takes up the kept
+    sites' smaller singular values. With every site kept this is `project_samples`, up to rounding.
+    """
+    loadings = pca.U[keep]
+    s = np.asarray(pca.s, dtype=np.float64).reshape(-1)
+    s_kept, rotation = svd_eigcov((s[:, None] * (loadings.T @ loadings)) * s[None, :])
+    s_safe = np.where(s_kept == 0, 1.0, s_kept)
+    loadings_kept = loadings @ (s[:, None] * rotation / s_safe[None, :])
+    s_aug, V_aug = svd_online(loadings_kept, s_kept, pca.V @ rotation, w[keep].reshape((-1, 1)))
+    pcs_aug = V_aug[:, : pca.dim_stu] * s_aug[: pca.dim_stu]
+    return ref_aug_procrustes(pca.pcs_ref, pcs_aug)[: pca.dim_ref]
+
+
+def chromosome_jackknife(
+    model: PcaPanel,
+    dosage: np.ndarray,
+    labels: np.ndarray,
+    pcs: np.ndarray,
+    leader: str,
+    *,
+    min_blocks: int = MIN_JACKKNIFE_BLOCKS,
+) -> dict:
+    """The PCA path's uncertainty, a leave-one-chromosome-out jackknife, as `AncestryEstimate` fields.
+
+    `dosage` is the facet's effect-allele dosage per panel site (`DEFAULT_MISSING` where unread), `pcs`
+    its full projection and `leader` its full vote among `labels`. The blocks are the autosomes the
+    facet and the panel share (`jackknife_blocks`), so linkage inside a chromosome is never taken for
+    independent sites. Each replicate leaves one out, every panel site on it, and projects the facet
+    again on the rest (`project_restricted` says what is recomputed); sites off the autosomes (X, a
+    panel's other contigs) stay in every replicate. From the replicates, in canonical chromosome order:
+
+    - `pc_errors`: the standard error of each projected coordinate by the weighted delete-one-block
+      jackknife, each block weighted by its count of sites read (Busing, Meijer and van der Leeden 1999,
+      "Delete-m jackknife for unequal m", as ADMIXTOOLS uses it; `just_vcf.jackknife`);
+    - `vote_stability`: the share of replicates whose neighbour vote, against the full reference PCs and
+      `labels`, names `leader`;
+    - `proportion_errors`: the same jackknife over the centroid proportions, unrounded per replicate.
+
+    Fewer than `min_blocks` blocks: nothing is projected and `jackknife_reason = too_few_blocks`. The
+    replicates measure how much the placement rests on any one chromosome's sites; they do not measure
+    how well the panel's groups stand for the person's ancestry.
+    """
+    used = dosage != DEFAULT_MISSING
+    chroms = model.sites["chrom"].cast(pl.String).to_numpy()
+    blocks = jackknife_blocks(chroms, used)
+    if len(blocks) < min_blocks:
+        return {"n_jackknife_blocks": len(blocks), "jackknife_reason": "too_few_blocks"}
+    w = dosage.astype(np.float64).reshape((-1, 1))
+    standardize(w, model.pca.mean, model.pca.std, miss=DEFAULT_MISSING)
+    groups, centroids = group_centroids(model.pca.pcs_ref, labels)
+    full_weights = simplex_lstsq(centroids, pcs)
+    replicate_pcs = []
+    replicate_weights = []
+    same_vote = 0
+    for chrom, _ in blocks:
+        replicate = project_restricted(model.pca, w, chroms != chrom)
+        replicate_pcs.append(replicate)
+        replicate_weights.append(simplex_lstsq(centroids, replicate))
+        same_vote += knn_vote(model.pca.pcs_ref, labels, replicate, model.knn_k)[0] == leader
+    sizes = [size for _, size in blocks]
+    pc_errors = tuple(
+        weighted_block_jackknife(float(pcs[i]), [float(r[i]) for r in replicate_pcs], sizes)[1] for i in range(pcs.size)
+    )
+    proportion_errors = {
+        group: round(weighted_block_jackknife(float(full_weights[i]), [float(r[i]) for r in replicate_weights], sizes)[1], 4)
+        for i, group in enumerate(groups)
+    }
+    logger.info("jackknife over %d autosomes: the vote held in %d", len(blocks), same_vote)
+    return {
+        "pc_errors": pc_errors,
+        "vote_stability": same_vote / len(blocks),
+        "proportion_errors": proportion_errors,
+        "error_method": "chromosome_jackknife",
+        "n_jackknife_blocks": len(blocks),
+    }
 
 
 def _population_rollup(model: PcaPanel) -> dict[str, str]:
@@ -393,10 +526,15 @@ def centroid_proportions(ref_pcs: np.ndarray, ref_labels: np.ndarray, pcs: np.nd
     An admixed genome lies between clusters, so this approximates group fractions in PC space. It is
     not haplotype-level admixture.
     """
-    groups = sorted({str(x) for x in ref_labels.tolist()})
-    centroids = np.column_stack([ref_pcs[ref_labels == group].mean(axis=0) for group in groups])
+    groups, centroids = group_centroids(ref_pcs, ref_labels)
     weights = simplex_lstsq(centroids, pcs)
     return {group: round(float(w), 4) for group, w in zip(groups, weights, strict=True)}
+
+
+def group_centroids(ref_pcs: np.ndarray, ref_labels: np.ndarray) -> tuple[list[str], np.ndarray]:
+    """The groups in sorted order and their PC centroids, one column per group."""
+    groups = sorted({str(x) for x in ref_labels.tolist()})
+    return groups, np.column_stack([ref_pcs[ref_labels == group].mean(axis=0) for group in groups])
 
 
 def loo_accuracy(ref_pcs: np.ndarray, ref_labels: np.ndarray, k: int) -> float:

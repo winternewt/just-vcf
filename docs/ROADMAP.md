@@ -1065,9 +1065,9 @@ indel half now included, though they were measured on unsplit genomes. A genotyp
 not counted.
 
 ## RM5 — Population inference
-**State:** unattended: an uncertainty for the PCA path beyond the vote, and `aadr_ho`'s overlapping regions; Privé as a fixture waits on desk #73 · **Owner:** lead
+**State:** unattended: `aadr_ho`'s overlapping regions; Privé as a fixture waits on desk #73 · **Owner:** lead
 
-Severity: medium · Status: in progress (PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped 2026-10-22 as `just_vcf.ancestry`, merge 4c6c9c1; panels in docs/ANCESTRY_PANELS.md. The AADR Human Origins builder (`build_aadr_panel`, from just-prs `aadr.py`, `eigenstrat.py`) shipped 2026-10-26 merged 2026-10-26: the first real reference-PCA panel, `aadr_ho` (2,556 present-day West Eurasians, 184,833 sites, built in under a minute from the Krypton files; hu6ABACE placed in Europe, population GBR). Rule 5 keeps AADR's numbered sub-groups (the person's decision) since 2026-10-26, merge 6eed88a: 2,567 individuals, 184,882 sites. `consensus` takes one panel's methods as one witness since 2026-11-03: the mean inside a witness, a product only across panels the caller declares disjoint (docs/SCHEMA.md "Combining ancestry estimates"; disjointness declared, never inferred, is the lead's call for veto). Left, buildable now: an uncertainty for the PCA path beyond the vote and its margin; `aadr_ho`'s regions overlap along clines (Eastern Asia 0/32 in leave-one-out, the first Central Asian sample placed in Europe); `test_ancestry_panels.py`'s own-sample check now accepts a sample on its region's border with one other (the person's option 1, 2026-10-26, merge 6eed88a), and still fails a label-shuffled copy. Waiting for data: a 1000 Genomes or HGDP reference-PCA panel (a just-prs `1000g`/`hgdp_1kg` build), none on this machine. Waiting on the person: desk #73, whether Privé's files may be a fixture)
+Severity: medium · Status: in progress (PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped 2026-10-22 as `just_vcf.ancestry`, merge 4c6c9c1; panels in docs/ANCESTRY_PANELS.md. The AADR Human Origins builder (`build_aadr_panel`, from just-prs `aadr.py`, `eigenstrat.py`) shipped 2026-10-26 merged 2026-10-26: the first real reference-PCA panel, `aadr_ho` (2,556 present-day West Eurasians, 184,833 sites, built in under a minute from the Krypton files; hu6ABACE placed in Europe, population GBR). Rule 5 keeps AADR's numbered sub-groups (the person's decision) since 2026-10-26, merge 6eed88a: 2,567 individuals, 184,882 sites. `consensus` takes one panel's methods as one witness since 2026-11-03: the mean inside a witness, a product only across panels the caller declares disjoint (docs/SCHEMA.md "Combining ancestry estimates"; disjointness declared, never inferred, is the lead's call for veto). The PCA path reports a leave-one-chromosome-out jackknife since 2026-11-06 (docs/SCHEMA.md "The PCA path's uncertainty"). Left, buildable now: timing that jackknife on a realistic panel; `aadr_ho`'s regions overlap along clines (Eastern Asia 0/32 in leave-one-out, the first Central Asian sample placed in Europe); `test_ancestry_panels.py`'s own-sample check now accepts a sample on its region's border with one other (the person's option 1, 2026-10-26, merge 6eed88a), and still fails a label-shuffled copy. Waiting for data: a 1000 Genomes or HGDP reference-PCA panel (a just-prs `1000g`/`hgdp_1kg` build), none on this machine. Waiting on the person: desk #73, whether Privé's files may be a fixture)
 
 Port the just-prs `ancestry/` package (PCA projection, KNN, proportions, consensus) behind the
 `[ancestry]` extra, without the `PRSCatalog` wrappers or the Hugging Face pull.
@@ -1075,9 +1075,16 @@ Port the just-prs `ancestry/` package (PCA projection, KNN, proportions, consens
 Left: `infer_ancestry` has run on one real panel, `aadr_ho` (built 2026-10-26 by `build_aadr_panel`,
 docs/ANCESTRY_PANELS.md), which covers West Eurasia only, by geographic regions that overlap where the
 populations form a cline; no 1000 Genomes or HGDP panel is on this machine (a just-prs
-`1000g`/`hgdp_1kg` build fetched by hand would be the first worldwide one); there is no uncertainty for
-the PCA path beyond the vote and its margin (a site bootstrap does not apply to OADP as it does to
-Privé's sums); a facet on another assembly waits for RM6's liftover.
+`1000g`/`hgdp_1kg` build fetched by hand would be the first worldwide one); the PCA path's jackknife
+is untimed beyond the synthetic test panels; a facet on another assembly waits for RM6's liftover.
+*Built 2026-11-06:* the PCA path's uncertainty, the lead's method: a leave-one-chromosome-out
+jackknife (a site bootstrap does not reach OADP as it reaches Privé's sums). Each shared autosome left
+out in turn, the facet projected again with the reference's SVD recomputed on the kept sites from the
+panel's stored factors and fitted into the full frame; `pc_errors` and `proportion_errors` by the
+weighted block jackknife (Busing et al. 1999, as ADMIXTOOLS), `vote_stability` the share of replicates
+whose vote agrees; withheld below five autosomes (`too_few_blocks`); on by default, `jackknife=False`
+skips it (docs/SCHEMA.md "The PCA path's uncertainty"). Built in a worktree without numpy, so its
+numpy tests and its timing were not run there.
 *Done 2026-11-03:* the consensus no longer multiplies methods from one panel as if independent
 (one witness per group of panels not declared disjoint, their readings averaged).
 *Corrected 2026-10-26:* `liftover` shipped 2026-10-22 (merge 047f0f2). A lifted facet carries its

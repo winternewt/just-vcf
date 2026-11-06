@@ -7,6 +7,7 @@ well separated. Every person is drawn from one population's frequencies, written
 
 import gzip
 import json
+import math
 import os
 import subprocess
 import sys
@@ -21,6 +22,9 @@ from just_vcf import FACETS, Loaded, load  # noqa: E402
 from just_vcf.ancestry import (  # noqa: E402
     ANCESTRY_REASONS,
     CANONICAL_SUPERPOPS,
+    ERROR_METHODS,
+    JACKKNIFE_REASONS,
+    MIN_JACKKNIFE_BLOCKS,
     AncestryEstimate,
     build_pca_panel,
     consensus,
@@ -32,10 +36,11 @@ from just_vcf.ancestry import (  # noqa: E402
     panel_assemblies,
     prive_proportions,
 )
-from just_vcf.ancestry._projection import DEFAULT_MISSING, build_reference_pca  # noqa: E402
-from just_vcf.ancestry.pca import PANEL_META_KEYS, panel_paths  # noqa: E402
+from just_vcf.ancestry._projection import DEFAULT_MISSING, build_reference_pca, project_samples, standardize  # noqa: E402
+from just_vcf.ancestry.pca import PANEL_META_KEYS, jackknife_blocks, panel_paths, project_restricted  # noqa: E402
 from just_vcf.ancestry.sites import facet_of, panel_sites, site_dosages  # noqa: E402
 from just_vcf.assembly import ASSEMBLY_LENGTHS  # noqa: E402
+from just_vcf.jackknife import weighted_block_jackknife  # noqa: E402
 from just_vcf.reference import resolve_ref  # noqa: E402
 from just_vcf.schema import BLOCKS, conform  # noqa: E402
 from test_unstated_ref import SITE_RECORDS, site_panel, store, with_facet  # noqa: E402, F401 (store is a fixture)
@@ -54,15 +59,20 @@ def _length(assembly: str, contig: str) -> int:
     return next(iter(ASSEMBLY_LENGTHS[assembly][contig]))
 
 
-def synthetic_panel(seed: int) -> tuple[pl.DataFrame, dict[str, np.ndarray], np.ndarray, pl.DataFrame]:
-    """Sites, per-population ALT frequencies, the reference genotype matrix and its labels."""
+def synthetic_panel(
+    seed: int, layout: dict[str, int] | None = None, n_per_population: int = N_PER_POPULATION
+) -> tuple[pl.DataFrame, dict[str, np.ndarray], np.ndarray, pl.DataFrame]:
+    """Sites, per-population ALT frequencies, the reference genotype matrix and its labels.
+
+    `layout` is the number of sites per contig, by default `SITES_PER_CONTIG` on each of `CONTIGS`."""
+    layout = layout or dict.fromkeys(CONTIGS, SITES_PER_CONTIG)
     rng = np.random.default_rng(seed)
-    n = SITES_PER_CONTIG * len(CONTIGS)
+    n = sum(layout.values())
     pairs = [ALLELE_PAIRS[i] for i in rng.integers(0, len(ALLELE_PAIRS), n)]
     sites = pl.DataFrame(
         {
-            "chrom": [c for c in CONTIGS for _ in range(SITES_PER_CONTIG)],
-            "pos": [10_000 + 1_000 * i for _ in CONTIGS for i in range(SITES_PER_CONTIG)],
+            "chrom": [c for c, count in layout.items() for _ in range(count)],
+            "pos": [10_000 + 1_000 * i for count in layout.values() for i in range(count)],
             "ref": [r for r, _ in pairs],
             "alt": [a for _, a in pairs],
         }
@@ -75,13 +85,13 @@ def synthetic_panel(seed: int) -> tuple[pl.DataFrame, dict[str, np.ndarray], np.
         freq[redrawn] = rng.uniform(0.05, 0.95, redrawn.size)
         freqs[group] = freq
     genotypes = np.hstack(
-        [rng.binomial(2, freqs[group][:, None] * np.ones((1, N_PER_POPULATION))) for group in POPULATIONS]
+        [rng.binomial(2, freqs[group][:, None] * np.ones((1, n_per_population))) for group in POPULATIONS]
     ).astype(np.int8)
     labels = pl.DataFrame(
         {
-            "iid": [f"{group}{i}" for group in POPULATIONS for i in range(N_PER_POPULATION)],
-            "superpop": [group for group in POPULATIONS for _ in range(N_PER_POPULATION)],
-            "population": [POPULATIONS[group] for group in POPULATIONS for _ in range(N_PER_POPULATION)],
+            "iid": [f"{group}{i}" for group in POPULATIONS for i in range(n_per_population)],
+            "superpop": [group for group in POPULATIONS for _ in range(n_per_population)],
+            "population": [POPULATIONS[group] for group in POPULATIONS for _ in range(n_per_population)],
         }
     )
     return sites, freqs, genotypes, labels
@@ -100,10 +110,18 @@ def person(freqs: dict[str, np.ndarray], group: str, seed: int) -> np.ndarray:
     return np.random.default_rng(seed).binomial(2, freqs[group]).astype(np.int8)
 
 
-def write_vcf(path: Path, sites: pl.DataFrame, dosage: np.ndarray, *, contigs: bool = True, variant_only: bool = False) -> Path:
+def write_vcf(
+    path: Path,
+    sites: pl.DataFrame,
+    dosage: np.ndarray,
+    *,
+    contigs: bool = True,
+    variant_only: bool = False,
+    header_contigs: tuple[str, ...] = CONTIGS,
+) -> Path:
     meta = ["##fileformat=VCFv4.2"]
     if contigs:
-        meta += [f"##contig=<ID={c},length={_length('GRCh37', c)}>" for c in CONTIGS]
+        meta += [f"##contig=<ID={c},length={_length('GRCh37', c)}>" for c in header_contigs]
     meta.append('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">')
     lines = [*meta, "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "S1"])]
     for (chrom, pos, ref, alt), d in zip(sites.iter_rows(), dosage.tolist(), strict=True):
@@ -163,6 +181,9 @@ def test_each_population_is_placed_from_a_full_vcf(panel, tmp_path: Path, group:
     assert result.n_sites_absent_as_reference == 0 and result.n_sites_unusable == 0 and result.n_sites_ref_unstated == 0
     assert result.coverage == 1.0 and result.panel_assembly == result.facet_assembly == "GRCh37"
     assert result.group_to_continental == {g: g for g in POPULATIONS}
+    # Three contigs are fewer blocks than a jackknife is reported on: withheld with a reason, never 0.
+    assert result.n_jackknife_blocks == len(CONTIGS) < MIN_JACKKNIFE_BLOCKS
+    assert result.jackknife_reason == "too_few_blocks" and result.pc_errors is None and result.proportion_errors is None
     assert infer_ancestry(loaded, panel_dir, "synth") == result
 
 
@@ -381,6 +402,132 @@ def test_estimate_holds_an_answer_or_a_reason() -> None:
     with pytest.raises(ValueError, match="unknown ancestry reason"):
         AncestryEstimate(method="pca_knn", panel="p", reason="no_idea")
     assert "too_few_sites" in ANCESTRY_REASONS
+
+
+def test_a_jackknife_reason_stands_only_where_no_jackknife_does() -> None:
+    answered = {"method": "pca_knn", "panel": "p", "estimate": "EUR"}
+    with pytest.raises(ValueError, match="cannot sit beside"):
+        AncestryEstimate(**answered, jackknife_reason="too_few_blocks", pc_errors=(0.1,))
+    with pytest.raises(ValueError, match="cannot sit beside"):
+        AncestryEstimate(**answered, jackknife_reason="too_few_blocks", vote_stability=1.0)
+    with pytest.raises(ValueError, match="cannot sit beside"):
+        AncestryEstimate(method="pca_knn", panel="p", reason="too_few_sites", jackknife_reason="not_requested")
+    with pytest.raises(ValueError, match="unknown jackknife reason"):
+        AncestryEstimate(**answered, jackknife_reason="tired")
+    with pytest.raises(ValueError, match="unknown error method"):
+        AncestryEstimate(**answered, error_method="guess")
+    assert AncestryEstimate(**answered, jackknife_reason="not_requested").pc_errors is None
+    assert {"not_requested", "too_few_blocks"} <= JACKKNIFE_REASONS
+    assert {"block_bootstrap", "chromosome_jackknife"} <= ERROR_METHODS
+
+
+AUTOSOME_LAYOUT = {str(c): 30 + 4 * (23 - c) for c in range(1, 23)}
+"""Every autosome, fewer sites on the higher numbers (118 on chromosome 1 down to 34 on 22), as on a
+real panel: blocks of unequal size, so the jackknife's weights matter."""
+AUTOSOME_CONTIGS = tuple(AUTOSOME_LAYOUT)
+JACKKNIFE_FIELDS = {"pc_errors", "vote_stability", "proportion_errors", "error_method", "n_jackknife_blocks", "jackknife_reason"}
+
+
+@pytest.fixture(scope="module")
+def autosome_panel(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, pl.DataFrame, dict[str, np.ndarray]]:
+    """Panel `synth22` on GRCh37 over all 22 autosomes, 100 reference samples per population."""
+    panel_dir = tmp_path_factory.mktemp("panels22")
+    sites, freqs, genotypes, labels = synthetic_panel(SEED + 22, AUTOSOME_LAYOUT, n_per_population=100)
+    build_pca_panel(genotypes, sites, labels, panel="synth22", assembly="GRCh37", panel_dir=panel_dir)
+    return panel_dir, sites, freqs
+
+
+def _autosome_vcf(path: Path, sites: pl.DataFrame, dosage: np.ndarray, chroms: tuple[str, ...] = AUTOSOME_CONTIGS) -> Loaded:
+    """A VCF of `dosage` at the panel's sites on `chroms` only, its header naming all 22 autosomes."""
+    keep = sites["chrom"].is_in(list(chroms)).to_numpy()
+    return load(write_vcf(path, sites.filter(pl.Series(keep)), dosage[keep], header_contigs=AUTOSOME_CONTIGS))
+
+
+def _standardised(model, dosage: np.ndarray) -> np.ndarray:
+    w = dosage.astype(np.float64).reshape((-1, 1))
+    standardize(w, model.pca.mean, model.pca.std)
+    return w
+
+
+def test_a_genome_on_every_autosome_carries_its_jackknife(autosome_panel, tmp_path: Path) -> None:
+    """One block per autosome; a standard error per PC coordinate and per proportion, none 0; a vote no
+    chromosome decides; the same answer twice. `jackknife=False` changes nothing but those fields."""
+    panel_dir, sites, freqs = autosome_panel
+    loaded = _autosome_vcf(tmp_path / "p.vcf", sites, person(freqs, "EUR", seed=22))
+    result = infer_ancestry(loaded, panel_dir, "synth22")
+    assert result.estimate == "EUR" and result.n_jackknife_blocks == len(AUTOSOME_LAYOUT)
+    assert result.error_method == "chromosome_jackknife" and result.jackknife_reason is None
+    assert len(result.pc_errors) == len(result.pc_coords)
+    assert all(math.isfinite(e) and e > 0 for e in result.pc_errors)
+    assert result.vote_stability == 1.0
+    assert set(result.proportion_errors) == set(result.proportions)
+    assert all(math.isfinite(e) and e >= 0 for e in result.proportion_errors.values())
+    assert infer_ancestry(loaded, panel_dir, "synth22") == result
+
+    plain = infer_ancestry(loaded, panel_dir, "synth22", jackknife=False)
+    assert plain.jackknife_reason == "not_requested"
+    assert all(getattr(plain, field) is None for field in JACKKNIFE_FIELDS - {"jackknife_reason"})
+    assert plain.model_dump(exclude=JACKKNIFE_FIELDS) == result.model_dump(exclude=JACKKNIFE_FIELDS)
+
+
+@pytest.mark.parametrize("n_chroms", [MIN_JACKKNIFE_BLOCKS - 1, MIN_JACKKNIFE_BLOCKS])
+def test_the_jackknife_needs_its_minimum_of_autosomes(autosome_panel, tmp_path: Path, n_chroms: int) -> None:
+    """Below `MIN_JACKKNIFE_BLOCKS` autosomes with a site read the uncertainty is withheld with a reason,
+    and the blocks found are still counted; at the minimum it runs."""
+    panel_dir, sites, freqs = autosome_panel
+    loaded = _autosome_vcf(tmp_path / "p.vcf", sites, person(freqs, "AFR", seed=21), AUTOSOME_CONTIGS[:n_chroms])
+    result = infer_ancestry(loaded, panel_dir, "synth22")
+    assert result and result.n_jackknife_blocks == n_chroms
+    if n_chroms < MIN_JACKKNIFE_BLOCKS:
+        assert result.jackknife_reason == "too_few_blocks"
+        assert all(getattr(result, field) is None for field in JACKKNIFE_FIELDS - {"jackknife_reason", "n_jackknife_blocks"})
+    else:
+        assert result.jackknife_reason is None and result.error_method == "chromosome_jackknife"
+        assert len(result.pc_errors) == len(result.pc_coords) and result.vote_stability is not None
+
+
+def test_a_replicate_that_keeps_every_site_is_the_full_projection(autosome_panel) -> None:
+    """The kept sites' SVD recomputed from the panel's factors, with nothing left out, is the panel's own:
+    the replicate machinery adds no shift of its own."""
+    panel_dir, _, freqs = autosome_panel
+    model = load_pca_panel(panel_dir, "synth22", "GRCh37")
+    dosage = person(freqs, "EAS", seed=23).astype(np.float64)
+    full = project_samples(model.pca, dosage.reshape((-1, 1)).copy())[0]
+    kept = project_restricted(model.pca, _standardised(model, dosage), np.ones(dosage.size, dtype=bool))
+    assert kept == pytest.approx(full, rel=1e-4, abs=1e-4)
+
+
+def test_replicates_are_not_shrunk_toward_the_origin(autosome_panel) -> None:
+    """Leaving a chromosome out must not by itself pull the projection toward the panel's centre. Handed
+    the kept sites' loadings beside the full sites' singular values, OADP would place every replicate
+    inside the full projection (the loadings lose norm with the sites, the singular values do not), and
+    the jackknife would read that shrinkage as a bias the size of the coordinate itself."""
+    panel_dir, _, freqs = autosome_panel
+    model = load_pca_panel(panel_dir, "synth22", "GRCh37")
+    dosage = person(freqs, "AFR", seed=24).astype(np.float64)
+    full = project_samples(model.pca, dosage.reshape((-1, 1)).copy())[0]
+    w = _standardised(model, dosage)
+    chroms = model.sites["chrom"].cast(pl.String).to_numpy()
+    blocks = jackknife_blocks(chroms, np.ones(dosage.size, dtype=bool))
+    assert blocks == list(AUTOSOME_LAYOUT.items())
+    sizes = [size for _, size in blocks]
+    replicates = np.stack([project_restricted(model.pca, w, chroms != chrom) for chrom, _ in blocks])
+    # The two structure PCs of three symmetric populations are near-degenerate, so either can sit near 0
+    # for one person; shrinkage scales every coordinate, so the larger of the two is enough to see it.
+    largest = int(np.argmax(np.abs(full[:2])))
+    inside = int((np.abs(replicates[:, largest]) < abs(full[largest])).sum())
+    assert 0 < inside < len(blocks), (largest, inside)
+    for pc in (0, 1):
+        estimate, se = weighted_block_jackknife(float(full[pc]), replicates[:, pc].tolist(), sizes)
+        assert abs(estimate - full[pc]) <= 3 * se, (pc, estimate, float(full[pc]), se)
+
+
+def test_jackknife_blocks_are_the_autosomes_read_in_canonical_order() -> None:
+    """Contig rank, not string order (`10` after `2`); a chromosome with no site read, and anything off
+    the autosomes, is no block."""
+    chroms = np.array(["10", "2", "X", "1", "2", "10", "MT", "3"], dtype=object)
+    used = np.array([True, True, True, True, True, False, True, False])
+    assert jackknife_blocks(chroms, used) == [("1", 1), ("2", 2), ("10", 1)]
 
 
 def _readings(*estimates: AncestryEstimate) -> list[dict[str, float]]:
@@ -632,6 +779,7 @@ def test_prive_proportions_of_each_group(prive, tmp_path: Path, group: str) -> N
     assert sum(result.proportions.values()) == pytest.approx(1.0, abs=0.01)
     assert set(result.proportion_errors) == set(PRIVE_NAMES.values())
     assert all(0 < e < 0.1 for e in result.proportion_errors.values())
+    assert result.error_method == "block_bootstrap"
     assert result.n_sites_used == result.n_sites_observed == sites.height
     assert result.group_to_continental == {name: g for g, name in PRIVE_NAMES.items()}
     assert prive_proportions(loaded, reference) == result
@@ -678,7 +826,7 @@ def test_prive_gates_and_floor(prive, tmp_path: Path) -> None:
     few = prive_proportions(loaded, reference, min_sites=sites.height + 1)
     assert not few and few.reason == "too_few_sites" and few.n_sites_used == sites.height
     plain = prive_proportions(loaded, reference, n_bootstrap=0)
-    assert plain.proportion_errors is None
+    assert plain.proportion_errors is None and plain.error_method is None
     assert plain.proportions == prive_proportions(loaded, reference).proportions
 
 

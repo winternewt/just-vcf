@@ -3839,8 +3839,9 @@ the PCA path reports a **weighted delete-one-block jackknife** (the lead's call)
   all 22 autosomes. A choice, not a calibration.
 - **On by default**; `infer_ancestry(..., jackknife=False)` skips it (`not_requested`). It costs about
   one projection per autosome, 22 for a genome, plus a small eigendecomposition and a pass over the
-  kept loadings each; not yet timed (the build had no numpy), so the default rests on that count
-  against a placement whose load dominates (41 s on `aadr_ho`, docs/ANCESTRY_PANELS.md).
+  kept loadings each. Timed 2026-11-06 on a synthetic panel of `aadr_ho`'s shape (2,565 samples, 184,882
+  sites): 4.8 s for 22 replicates per target against a 0.15 s projection, beside a placement whose load
+  takes 41 s on `aadr_ho` (docs/ANCESTRY_PANELS.md), so it stays on.
 - The replicates measure how much a placement rests on one chromosome's sites. They do not measure how
   well the panel's groups stand for the person's ancestry, nor the panel's own sampling of people.
 

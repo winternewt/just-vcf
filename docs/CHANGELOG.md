@@ -21,7 +21,7 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
   (`MIN_JACKKNIFE_BLOCKS`): withheld with `jackknife_reason = too_few_blocks`; `jackknife=False` skips
   it (`not_requested`). New optional fields `pc_errors`, `vote_stability`, `error_method`,
   `n_jackknife_blocks`, `jackknife_reason`; `prive_qp` now names its errors `block_bootstrap`. Additive;
-  the formula is `just_vcf.jackknife`. Not yet timed on a real or realistic panel. Tests:
+  the formula is `just_vcf.jackknife`. About 4.8 s per target at `aadr_ho`'s shape (22 replicates). Tests:
   `tests/test_jackknife.py` (the formula against a weighted mean's exact pseudo-values and the ordinary
   jackknife; fails with `h_j` in place of `h_j - 1`), `tests/test_ancestry.py::test_a_genome_on_every_autosome_carries_its_jackknife`,
   `::test_the_jackknife_needs_its_minimum_of_autosomes`, `::test_a_replicate_that_keeps_every_site_is_the_full_projection`,

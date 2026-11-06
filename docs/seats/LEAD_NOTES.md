@@ -48,6 +48,11 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-06, later**: RM278's quantizing pass measured on a 27 GB WGS BAM (12.5 min, 13.5 GB peak, as the plain
+   pass), so RM278 waits on desk #209 only. RM287's opt-in run on a PGP-HMS 23andMe export: 51% of written records
+   carry ALT `.` (added to desk #213). Building (merge 4 of 6): RM5's PCA uncertainty, the lead's call of method: a
+   leave-one-autosome-out weighted block jackknife (SE per PC, vote stability); its builder's venv lacks numpy, so
+   the ancestry tests are first run at merge.
 0. **2026-11-06: the karyotype's `filtered_content` merged as 34e04e5 (merge 3 of 6 toward audit 16)**; suite 2610
    passed, 77 skipped, 8 xfailed. RM286's call, the lead's: store-chm13 stays its own opt-in store and `store`
    keeps GRCh37 and GRCh38 only (the default suite reads no store; a third collection in `store` would be

@@ -1092,7 +1092,7 @@ target's `assembly_label`, so lifting first is the path; the ancestry functions 
 `assembly_mismatch` for a facet on another assembly and do not lift it themselves. Not tested end to end.
 
 ## RM6 — Normalization and VCF writing
-**State:** unattended: quality filters need a lead design call first; A/T and C/G strand is desk #212 (default: left unread, since F13 measured that no manifest strand column predicts a vendor's flips, and only allele frequencies could) · **Owner:** lead
+**State:** blocked: desk #212 (A/T and C/G strand; default left unread, since F13 measured that no manifest strand column predicts a vendor's flips); quality filters settled by the charter, 2026-11-06, below · **Owner:** lead
 
 Severity: high · Status: in progress (shipped 2026-10-22: `write_vcf`, merge a1f3317; `normalize`, merge 9469c6b, and its follow-ups, merge 16277e8; `liftover` for SNVs, MNVs and indels through a chain, merge 047f0f2; the tabix index, gVCF output and minus-strand indels re-anchored, merge 8ca6f40; `normalize` re-aligning lifted rows, merge 6ce13b0, 2026-10-23. Since then: SV columns written back (RM282, merge 04c5db3), PSL/PSO/PSQ under VCF 4.5 (RM284, merge 8b72a46), a T2T-CHM13 lift through UCSC's hs1 chains (RM286, merge 795874f), INFO SVLEN in `write_vcf` as `end_pos - pos` per length-type SV allele (2026-10-26; the frame keeps no SVLEN of its own, so an `<INS>` length is not written; whether to keep one is the person's call, docs/SCHEMA.md "Structural variants"), `blocks` in a lift, cut at every chain gap and edge, `LIFT_VERSION` 8, and symbolic SVs in a lift by both ends, `LIFT_VERSION` 9 (2026-10-26, docs/SCHEMA.md "Lifting blocks", "Lifting symbolic SVs"); breakends in a lift by their own position and each mate's, the mate's contig renamed inside ALT and the brackets turned per strand, `LIFT_VERSION` 11 (2026-10-26, merged; docs/SCHEMA.md "Lifting breakends"); copy-number rows whose REF is `N` lifted as `ref_check = unstated` (F23, schema 0.0.22, 2026-10-27). Chromosome naming on input is `schema.canonical_chrom` with F19's aliases. Sequence rows across a gap of one chain lifted, the change carried into the target's sequence there, gaps under `GAP_LIMIT` (50) bases, `LIFT_VERSION` 14 (2026-11-03, docs/SCHEMA.md "Lifting", step 2b; synthetic tests only, no real callset re-lifted yet). Left, buildable now: strand resolution of A/T and C/G sites, which neither F13's `check_strand` nor RM281's probe-pair reading decides. Not specified yet: quality filters, of which no code exists; what they should be beside graded evidence (charter) is a lead design call before it is buildable)
 
@@ -1100,6 +1100,15 @@ Reimplement chromosome naming and quality filters (just-dna-lite's versions are 
 so they are a behaviour reference, not a source) and port coordinate liftover from just-prs.
 New work: left-align, split multi-allelic sites, strand resolution (A/T and C/G), dedup, sort, and a
 writer that keeps FORMAT/GT (just-dna-lite's writer drops them).
+
+*Settled 2026-11-06 (the lead), quality filters:* not built as a filter. The charter's invariant 7 makes
+genotype evidence graded, with no public shape reducing it to a boolean, and a filter dropping rows
+below a GQ, DP or QUAL cut-off is that reduction; the port scope above predates the charter, which wins
+(CLAUDE.md §1). The grade already carries what a filter would read (`genotype_evidence`, docs/SCHEMA.md),
+and a consumer thresholds it for its own use. Rejected: a derived `filtered` facet (a lossy copy whose
+absences turn unknown, for a choice that belongs to the consumer), and a `passes` column (a boolean
+beside the grade). A threshold applied at the edge, in `write_vcf` for a tool that needs hard calls,
+is a new item when a consumer asks for one.
 
 When it splits multi-allelic sites, the writer must not use the convention RM270 found in pre-split
 input, where a split row's `0` can mean another ALT: it writes `.` for the other ALT, as vt, Glow,

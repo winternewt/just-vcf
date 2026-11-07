@@ -48,6 +48,19 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-07, away: RM281's per-probe I/D orientation merged (c71f461) and its table learned (fae179f)**;
+   merge 1 of 6 toward audit 17. `scripts/id_orientation.py` over the 36 pairs: v3 128 probes `same` and 45 `flipped`,
+   v4 142 and 40 (the scratch count's 41st v4 flip rests on fewer than 3 people). Over those exports 3,912 of v3's
+   23,057 I/D rows resolve (1,005 swapped) and 2,194 of v4's 144,375 (503); every other row is unlisted, on v4 mostly
+   internal ids. Suite 2701 passed, 77 skipped, 8 xfailed (2677 + 24). One test fixed at merge: the unverified-gate
+   test assumed the shipped table empty; a listed chip now writes "0 of 2 resolved", pinned per chip. What RM281 has
+   left: v4's internal-id rows, which match no Illumina probe (State waits until 2026-12-07). The builder's own
+   calls, for the person's veto: the pair's chip from the pairs list when the facet names none, skipped when the
+   facet names another; export and genome must state one assembly; "carrying an ALT" is `alts` non-empty; a row
+   listed both ways withheld as `code_orientation_ambiguous`; the digest covers `{rsid: orientation}` only, not
+   counts or date; an empty table reads no manifest; `RESOLVE_VERSION` 14; `IdCalibration.resolve` kept as a
+   property; one pair at a time; a pair that fails stops the run (no skip-and-count); `--manifests` sets
+   `JUST_VCF_MANIFESTS_DIR`; Typer's bad-path error prints the path (the script's own logs are counts only).
 0. **2026-11-07, away: RM281 measured on PGP-HMS** (aggregates; the v4 calibration gate lifted in a scratch process
    only). 13 people with a 23andMe v4 export and a CGI `var`: about 15,000 I/D rows per export, about 128 resolved by
    rsid (the rest are internal ids). Pooled homozygous rows against the person's CGI: hom-ref over a reference

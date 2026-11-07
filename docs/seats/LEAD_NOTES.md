@@ -54,7 +54,12 @@ each reset.
    `sv_claim` decomposes, though VCF 4.5 makes SVCLAIM required on `<DEL>`/`<DUP>` (a `.` there, or a store migrated
    with SVCLAIM unread, is unknown, not "both"); `_gap_plan` wants one block per merged segment, so two abutting
    blocks of one mapping refuse a span as `split_across_chains`. Found by the merge-6 builder, known: a `<DEL>` with
-   neither END nor SVLEN loads `end_pos == pos`.
+   neither END nor SVLEN loads `end_pos == pos`. Grok's three: the abutting-blocks liftover one (agrees with Sol's);
+   a jackknife replicate keeping no more sites than `dim_online` divides 0 by 0 in `svd_online` (confirmed by
+   reading: U1 then spans the kept sites); `tests/imputation_rules.py` reading one gzip member only, wrong
+   (`gzip.decompress` reads every member, checked by running it). Four confirmed, one fix builder running; the
+   lead's calls for veto: WGS asks every autosome; a null claim decomposes only on a file before VCF 4.5 whose
+   load read SVCLAIM; a jackknife withheld when a replicate keeps ≤ `dim_online` sites.
 0. **2026-11-07: Beagle's `##source` and VCF 4.5's SVCLAIM merged as b93eb07 (merge 6 of 6)**; suite 2658 passed, 77
    skipped, 8 xfailed (2631 + 27 new). Schema 0.0.24 (`calls.sv_claim`). The builder's calls for veto: Beagle gets no
    phase step; 4.1's "(version 4.1)" tail dropped; SVCLAIM written only to VCF 4.5; an invalid value a null element,

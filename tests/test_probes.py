@@ -379,7 +379,14 @@ def test_codes_of_a_chip_whose_orientation_is_unverified_are_withheld(tmp_path: 
         assert calls["gt_alleles"].to_list() == [["D", "I"], ["D", "D"]], chip
         line = next(w for w in withheld.warnings if "id_orientation_unverified" in w)
         assert line.startswith("2 array row(s) with an I/D indel code left unread (id_orientation_unverified)"), chip
-        assert not any("resolved against the indel probes" in w for w in withheld.warnings), chip
+        read = [w for w in withheld.warnings if "resolved against the indel probes" in w]
+        if chip in ORIENTATION_CHIPS and id_orientation(chip):
+            # The shipped table lists probes of the chip, so its manifests are read; rs100 and rs200 are not
+            # listed, so neither row resolves.
+            assert len(read) == 1 and read[0].startswith("0 of 2 array row(s)"), chip
+            assert "no WGS evidence of this probe's orientation" in line, chip
+        else:
+            assert read == [], chip
     unknown = loaded.model_copy(update={"facets": loaded.facets.with_columns(pl.lit(None, dtype=pl.String).alias("chip"))})
     assert any("the facet's chip is unknown" in w for w in resolve_ref(unknown, grch37_store).warnings)
 

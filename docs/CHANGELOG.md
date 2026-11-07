@@ -21,8 +21,7 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
   `IdCalibration` now carries a `mode` (`IdGate`: `chip_wide`, `per_probe`, `withheld`) in place of
   its `resolve` flag, which stays as a property. The table is learned by `scripts/id_orientation.py`
   (at least 3 people one way over a CGI reference block and none the other), its orientations are part
-  of `facets.resolve_inputs`, and `RESOLVE_VERSION` is 14. It ships empty until it is learned on
-  PGP-HMS, and an empty table reads as the withheld gate did. Tests: `tests/test_probes.py` (the rule
+  of `facets.resolve_inputs`, and `RESOLVE_VERSION` is 14. It is learned 2026-11-07 on 36 PGP-HMS pairs (23 v3 and 13 v4 people, listed in docs/PROVENANCE.md): v3 128 probes `same` and 45 `flipped`, v4 142 and 40. Over those exports 3,912 of v3's 23,057 I/D rows resolve (1,005 swapped) and 2,194 of v4's 144,375 (503 swapped); the rest are unlisted, on v4 mostly internal ids no probe carries. An empty table reads as the withheld gate did. Tests: `tests/test_probes.py` (the rule
   case by case, the table's checks, flipped, same and unlisted probes, the empty table) and
   `tests/test_id_orientation.py` (the learner on synthetic exports and a CGI `var`).
 

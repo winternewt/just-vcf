@@ -140,7 +140,7 @@ Severity: low · Status: in progress (`consensus` and `method_error_rates` shipp
 The person chose after the atlas (E7): a per-site posterior across one person's facets as a derived facet, with RM279's rates as priors; never before them.
 
 ## RM281 — Chip manifests
-**State:** unattended: the per-probe orientation is built, 2026-11-07; the lead learns its table on PGP-HMS at merge · **Owner:** lead
+**State:** waits until 2026-12-07: the per-probe table is learned (2026-11-07); left are v4's internal-id I/D rows, which match no Illumina probe and need a probe source of their own · **Owner:** lead
 
 Severity: medium · Status: in progress (shipped 2026-10-23: I/D codes resolved against Illumina's indel probes, a mixed-strand array's withheld rows read by their probe's allele pair, absence with a cause from manifest or learned probe sets, merge 5b6ec3b; I/D codes only on chips whose calibration passed (`probes.ID_CALIBRATION`) and a written no-call as `no_call`, merge 9641c70; the v3/v4 hom-alt question answered against the same people's CGI `var` (13 v4 and 23 v3 people, 2026-11-07: the orientation is per probe, 41 v4 and 45 v3 probes flipped) and 23andMe v3/v4 codes read per probe by a table learned from whole genomes (`probes.id_orientation`, `scripts/id_orientation.py`), built 2026-11-07, its table shipped empty until the lead learns it on PGP-HMS at merge. Left: 23andMe v4's internal-id I/D rows, about 15,000 of each export's, which match no Illumina probe by rsid and stay unread; F17 waits for a source of the Sirius chip's site alleles (docs/LAYERS.md, layer 1: no public manifest); the Final Report with only Forward/Design alleles waits for its manifest, HumanOmni2.5-8v1_A, not on disk; exact-manifest absence on real data waits for an export whose chip's own manifest is on disk)
 
@@ -230,8 +230,7 @@ Decisions, each with what was rejected:
   export and a CGI `var`: `same` where at least 3 people (`MIN_ORIENTATION_PEOPLE`) read the probe
   hom-ref over a CGI reference block with no ALT-carrying call within 10 bp, and none hom-alt over one;
   `flipped` the mirror; anything else unlisted. Its orientations are folded into `resolve_inputs`;
-  `RESOLVE_VERSION` 14. The table ships empty, so v3 and v4 stay withheld as before until the lead
-  learns it on the PGP-HMS pairs at merge (the builder cannot open the data). Measured by the lead
+  `RESOLVE_VERSION` 14. The table is learned 2026-11-07 on 36 PGP-HMS pairs (23 v3 and 13 v4 people, listed in docs/PROVENANCE.md): v3 128 probes `same` and 45 `flipped`, v4 142 and 40. Over those exports 3,912 of v3's 23,057 I/D rows resolve (1,005 swapped) and 2,194 of v4's 144,375 (503 swapped); the rest are unlisted, on v4 mostly internal ids no probe carries. Measured by the lead
   (2026-11-07, gate lifted in a scratch process): v4, 13 people, 1,268 homozygous rows hom-ref over a
   reference block, 433 hom-alt over one on 41 probes hom-alt in every export carrying them, 1 probe both
   ways, 11 hom-alt over a CGI variant (real indels, ABO's rs8176719 among them); v3, 23 people, 131

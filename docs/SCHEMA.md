@@ -4014,8 +4014,7 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   codes swapped before the manifest probe reads them; a row the table does not list stays as loaded,
   counted `id_orientation_unverified`. **Values change** on v3 and v4 facets when the manifests are
   configured and the table lists probes: the listed rows get `ref`, `alts`, `gt`, `end_pos` and
-  spelled `gt_alleles`, and `resolve_inputs` names the table with the manifests. The table ships empty
-  until it is learned, and an empty table reads as the withheld gate did. `RESOLVE_VERSION` 14.
+  spelled `gt_alleles`, and `resolve_inputs` names the table with the manifests. The table is learned 2026-11-07 on 36 PGP-HMS pairs (23 v3 and 13 v4 people, listed in docs/PROVENANCE.md): v3 128 probes `same` and 45 `flipped`, v4 142 and 40. Over those exports 3,912 of v3's 23,057 I/D rows resolve (1,005 swapped) and 2,194 of v4's 144,375 (503 swapped); the rest are unlisted, on v4 mostly internal ids no probe carries; an empty table reads as the withheld gate did. `RESOLVE_VERSION` 14.
 
 - **No version change** (2026-11-07, audit 16: the WGS band asks every autosome): no column changes.
   **Values change** in `facets`: a VCF facet with a genome's site count and breadth but calls on fewer

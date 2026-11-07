@@ -50,7 +50,8 @@ each reset.
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
 0. **2026-11-07, away: RM281's per-probe I/D orientation merged (c71f461) and its table learned (fae179f)**;
    merge 1 of 6 toward audit 17. `scripts/id_orientation.py` over the 36 pairs: v3 128 probes `same` and 45 `flipped`,
-   v4 142 and 40 (the scratch count's 41st v4 flip rests on fewer than 3 people). Over those exports 3,912 of v3's
+   v4 142 and 40 (checked: the scratch rsid sets under the table's rule give exactly these; v4's 41st flip and v3's
+   3 further `same` probes of the scratch count each rest on fewer than 3 people over a reference block). Over those exports 3,912 of v3's
    23,057 I/D rows resolve (1,005 swapped) and 2,194 of v4's 144,375 (503); every other row is unlisted, on v4 mostly
    internal ids. Suite 2701 passed, 77 skipped, 8 xfailed (2677 + 24). One test fixed at merge: the unverified-gate
    test assumed the shipped table empty; a listed chip now writes "0 of 2 resolved", pinned per chip. What RM281 has

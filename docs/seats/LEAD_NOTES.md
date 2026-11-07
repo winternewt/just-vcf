@@ -48,6 +48,15 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-07, away: RM281 measured on PGP-HMS** (aggregates; the v4 calibration gate lifted in a scratch process
+   only). 13 people with a 23andMe v4 export and a CGI `var`: about 15,000 I/D rows per export, about 128 resolved by
+   rsid (the rest are internal ids). Pooled homozygous rows against the person's CGI: hom-ref over a reference
+   block 1,268; hom-alt over a reference block 433, on 41 probes that read hom-alt in every export carrying them
+   (30 in all 13, 10 in 3, 1 in 4) and one probe that reads both ways (11 and 2), all over reference blocks; hom-alt
+   over a CGI variant 11 (rs8176719, rs2020868, rs5853517, oriented right). So v4's codes run opposite to
+   Illumina's on those 41 probes, not chip-wide. v3's 30 people running. The lead's design, building next: a
+   per-probe orientation table learned from WGS (`same` / `flipped`; a probe with no WGS evidence, or contradicting
+   evidence, withheld), replacing the chip-wide gate for v3 and v4.
 0. **2026-11-07: audit 16 done; fixes merged as 8910d63**; suite 2677 passed, 77 skipped, 8 xfailed (2658 + 19
    new; the ancestry tests run at merge with numpy, 47 passed; the old `svd_online` on a zero residual raised
    "SVD did not converge"). The fix builder's calls for veto: SVCLAIM's first version is 4.4 (the 4.5 spec's change

@@ -48,7 +48,14 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
-0. **2026-11-07: audit 16 running** (57489ba..b93eb07, a public-repo copy after repo-prep, Sol via Codex, Grok via
+0. **2026-11-07: audit 16 done; fixes merged as 8910d63**; suite 2677 passed, 77 skipped, 8 xfailed (2658 + 19
+   new; the ancestry tests run at merge with numpy, 47 passed; the old `svd_online` on a zero residual raised
+   "SVD did not converge"). The fix builder's calls for veto: SVCLAIM's first version is 4.4 (the 4.5 spec's change
+   list), so a null claim on a 4.4 file is unknown too; "claim not read" wins over "required"; the unknown-claim
+   reason counted last; abutting blocks merged per chain into one block; the replicate bound counts kept panel
+   sites; `svd_online` zeroes a residual under √eps of |b|; the karyotype test's synthetic genome widened to 22
+   autosomes. Next audit after 6 more merges (0 of 6 now).
+0. **2026-11-07: audit 16's findings** (57489ba..b93eb07, a public-repo copy after repo-prep, Sol via Codex, Grok via
    Cursor). Sol's three, all confirmed by reading: `callset.classify`'s WGS band asks no autosome count, so a dense
    one-chromosome extract reads `wgs` (older than the range, nearer now that indel-only meets 116,000); a null
    `sv_claim` decomposes, though VCF 4.5 makes SVCLAIM required on `<DEL>`/`<DUP>` (a `.` there, or a store migrated

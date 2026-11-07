@@ -900,8 +900,9 @@ column; breadth keeps an exome cut to its indels out, since its sites cluster. A
 SV-only facet keeps the 1,000,000 floor. Since 2026-11-07 (audit 16) `wgs` also needs calls on all
 22 autosomes, as `wes` does: breadth divides the reach by the span the sites spread over per contig,
 so 116,000 indels 100 bp apart on chromosome 1 alone measured 100% and read `wgs`. Rejected: breadth
-over the assembly's length, which would move just-dna-lite's calibrated breadth, ported unchanged. `wes` 10,000–400,000 sites on
-all 22 autosomes with at most 60% breadth; `panel` 50–5,000 sites reaching at most 50 Mb. A region
+over the assembly's length, which would move just-dna-lite's calibrated breadth, ported unchanged.
+`wes` 10,000–400,000 sites on all 22 autosomes with at most 60% breadth; `panel` 50–5,000 sites
+reaching at most 50 Mb. A region
 extract of a larger callset reads as `panel`, which is what its absences then mean. `imputed` when the
 header names an imputation tool or declares an imputation INFO key. Every sequencing class needs a
 read-evidence FORMAT key (AD, DP, GQ, PL, GL, MIN_DP) in the header. A site is a row with a sequence
@@ -3986,6 +3987,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-07, audit 16: the WGS band asks every autosome): no column changes.
+  **Values change** in `facets`: a VCF facet with a genome's site count and breadth but calls on fewer
+  than 22 autosomes (a dense extract of one chromosome) reads `callset_type` null and `absence_means`
+  `unknown`, where it read `wgs` and `weak_reference` (Decision 5, "`callset_type` and `absence_means`
+  for a VCF"). The type is computed from the calls at every load, never cached, so a load run again
+  gets it; a store keeps the old row until its source is loaded again.
 
 - **No version change** (2026-11-07, audit 16: a jackknife replicate with too few sites): no column
   changes. `JACKKNIFE_REASONS` gains `too_few_sites_per_block` (additive): an answered `pca_knn`

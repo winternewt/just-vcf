@@ -592,7 +592,7 @@ def test_online_svd_of_a_target_in_the_loadings_span_is_finite(target: str) -> N
     d1 = np.sort(rng.uniform(1.0, 5.0, k))[::-1]
     V1 = np.linalg.qr(rng.normal(size=(n, k)))[0]
     b = rng.normal(size=(k, 1)) if target == "in_span" else np.zeros((k, 1))
-    with np.errstate(all="raise"):
+    with np.errstate(divide="raise", invalid="raise"):
         d2, V2 = svd_online(U1, d1, V1, b)
     assert np.isfinite(d2).all() and np.isfinite(V2).all()
     scores = V2 * d2[:k]

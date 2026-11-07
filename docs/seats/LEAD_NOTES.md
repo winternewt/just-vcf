@@ -48,6 +48,10 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-07, building (merge 6 of 6, then audit 16)**: two found-not-fixed defects, two commits: Beagle's
+   `##source` names the caller (caller only, never imputed from it); VCF 4.5's SVCLAIM kept as a calls column (schema
+   bump plus migration step) and a `D`-only claim not decomposed, the not-decomposed warning's null `end_pos` its own
+   reason. RM5's region overlap closed as the panel's geography (17f83fb), so RM5 is blocked on desk #73.
 0. **2026-11-07: RM4's FTDNA X-only chip merged as ec5d2d7 (merge 5 of 6 toward audit 16)**; at merge, through
    `load` on every PGP-HMS FTDNA export: 39 X-only read `illumina_omniexpress`, 4 unknown, whole exports unchanged.
    RM4 now waits for more manifests only. Builder calls for veto: recall None (not 0) where a manifest has no

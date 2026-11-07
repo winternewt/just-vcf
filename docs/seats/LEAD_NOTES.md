@@ -48,10 +48,18 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
-0. **2026-11-07, building (merge 6 of 6, then audit 16)**: two found-not-fixed defects, two commits: Beagle's
-   `##source` names the caller (caller only, never imputed from it); VCF 4.5's SVCLAIM kept as a calls column (schema
-   bump plus migration step) and a `D`-only claim not decomposed, the not-decomposed warning's null `end_pos` its own
-   reason. RM5's region overlap closed as the panel's geography (17f83fb), so RM5 is blocked on desk #73.
+0. **2026-11-07: audit 16 running** (57489ba..b93eb07, a public-repo copy after repo-prep, Sol via Codex, Grok via
+   Cursor). Sol's three, all confirmed by reading: `callset.classify`'s WGS band asks no autosome count, so a dense
+   one-chromosome extract reads `wgs` (older than the range, nearer now that indel-only meets 116,000); a null
+   `sv_claim` decomposes, though VCF 4.5 makes SVCLAIM required on `<DEL>`/`<DUP>` (a `.` there, or a store migrated
+   with SVCLAIM unread, is unknown, not "both"); `_gap_plan` wants one block per merged segment, so two abutting
+   blocks of one mapping refuse a span as `split_across_chains`. Found by the merge-6 builder, known: a `<DEL>` with
+   neither END nor SVLEN loads `end_pos == pos`.
+0. **2026-11-07: Beagle's `##source` and VCF 4.5's SVCLAIM merged as b93eb07 (merge 6 of 6)**; suite 2658 passed, 77
+   skipped, 8 xfailed (2631 + 27 new). Schema 0.0.24 (`calls.sv_claim`). The builder's calls for veto: Beagle gets no
+   phase step; 4.1's "(version 4.1)" tail dropped; SVCLAIM written only to VCF 4.5; an invalid value a null element,
+   a count misfit a null list; NORMALIZE, REJOIN and LIFT versions bumped. RM5's region overlap closed as the panel's
+   geography (17f83fb), so RM5 is blocked on desk #73.
 0. **2026-11-07: RM4's FTDNA X-only chip merged as ec5d2d7 (merge 5 of 6 toward audit 16)**; at merge, through
    `load` on every PGP-HMS FTDNA export: 39 X-only read `illumina_omniexpress`, 4 unknown, whole exports unchanged.
    RM4 now waits for more manifests only. Builder calls for veto: recall None (not 0) where a manifest has no

@@ -95,6 +95,49 @@ def test_eagle_is_the_stated_phasing_method() -> None:
     assert detect_source(["##source=Minimac3"]).phasing_method is None
 
 
+BEAGLE_INFO = (
+    '##INFO=<ID=AF,Number=A,Type=Float,Description="Estimated ALT Allele Frequencies">',
+    (
+        '##INFO=<ID=DR2,Number=A,Type=Float,Description="Dosage R-Squared: estimated squared correlation between '
+        'estimated REF dose [P(RA) + 2*P(RR)] and true REF dose">'
+    ),
+    '##INFO=<ID=IMP,Number=0,Type=Flag,Description="Imputed marker">',
+)
+"""The INFO lines Beagle 4.1 and 5.x declare on every run (`vcf/VcfWriter.java`)."""
+
+
+@pytest.mark.parametrize(
+    ("line", "version"),
+    [
+        # 5.5, 5.4, 5.1 and 5.0: `Main.PROGRAM`, quoted by `VcfWriter.writeMetaLines`.
+        ('##source="beagle.27Feb25.75f.jar"', "27Feb25.75f"),
+        ('##source="beagle.22Jul22.46e.jar"', "22Jul22.46e"),
+        ('##source="beagle.18May20.d20.jar"', "18May20.d20"),
+        ('##source="beagle.28Sep18.793.jar"', "28Sep18.793"),
+        # 4.1 names its release after the jar; 4.0 names the jar plainly and its revision after it.
+        ('##source="beagle.27Jul16.86a.jar (version 4.1)"', "27Jul16.86a"),
+        ('##source="beagle.jar (r1399)"', "r1399"),
+    ],
+)
+def test_beagle_is_the_caller_with_its_build(line: str, version: str) -> None:
+    for meta in ([line], [line, *BEAGLE_INFO]):
+        source = detect_source(meta)
+        assert (source.caller, source.caller_version) == ("Beagle", version)
+        assert [(s.tool, s.version, s.role, s.line) for s in source.steps] == [("Beagle", version, "call", "##source")]
+        # Beagle phases without imputing too: its ##source states no content, with or without DR2 and IMP.
+        assert source.callset_type is None
+        assert source.warnings == []
+
+
+def test_a_beagle_vcf_reads_imputed_from_its_info_keys(tmp_path: Path) -> None:
+    """The facet's `imputed` comes from Beagle's DR2 and IMP declarations (`callset.imputation_marker`),
+    not from its ##source; the caller is Beagle either way."""
+    records = ["1\t100\t.\tA\tG\t.\tPASS\tAF=0.1;DR2=0.97\tGT\t0|1"]
+    meta = ('##source="beagle.22Jul22.46e.jar"', *BEAGLE_INFO)
+    facet = load(write(tmp_path, vcf_text(records, extra_meta=meta), "beagle.vcf")).facets.collect().row(0, named=True)
+    assert (facet["caller"], facet["caller_version"], facet["callset_type"], facet["phasing_method"]) == ("Beagle", "22Jul22.46e", "imputed", None)
+
+
 def test_two_callers_conflict_and_both_stay_null() -> None:
     source = detect_source(["##source=freeBayes v0.9.21", "##source=VarScan2", "##DeepVariant_version=1.1.0"])
     assert (source.caller, source.caller_version) == (None, None)

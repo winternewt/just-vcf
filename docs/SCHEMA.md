@@ -976,7 +976,7 @@ the VCF loaders read them (`loaders.vcf.IMPUTATION_QUALITY`):
 - `imputation_r2` is the row's `R2`, else its `DR2`. A row writing both keeps them where they are equal
   and withholds the column where they differ, counted in a load warning: two tools' estimates, neither
   outranking the other. Which tool wrote the value is the facet's to say (`caller` and `method_steps`,
-  where the header names the tool; `source` reads minimac's `##source`, not yet Beagle's).
+  where the header names the tool; `source` reads minimac's `##source` and Beagle's).
 - `imputation_empirical_r2` is `ER2`, null on the sites the chip did not type.
 - A row writing several values for a key (Beagle's `DR2` on a multi-allelic site) has that column
   withheld, counted: one column holds one value per row, as `dosage` holds `DS` only on a site with one

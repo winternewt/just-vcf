@@ -939,7 +939,9 @@ docs/PROVENANCE.md). Per manifest: coverage, the share of the export's sampled r
 and recall, the share of the manifest's sampled rsids in the export. A chip family is named, basis
 `inferred`, when the export has at least 1,000 sampled rsids, the best manifest's coverage is at least
 0.90 and 0.30 above the other's, and its recall at least 0.40; otherwise the chip is unknown and a
-warning gives both shares per manifest.
+warning gives both shares per manifest. *Since 2026-11-07:* recall is over the chromosomes the export
+carries and the floor is 200 sampled rsids (the lead's call in the decisions below); the measurements
+that follow were taken under the rule above.
 
 Measured through `load` on every loadable array export under the Krypton copy's
 `pgp-hms/participants/`, duplicates as uploaded (660 facets; 606 with 61,000 rsids or more, where the

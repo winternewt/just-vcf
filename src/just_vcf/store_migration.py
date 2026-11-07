@@ -162,6 +162,7 @@ _METHOD_STEP_0016 = pl.Struct(
 )
 _PHASE_SET_KINDS_0017 = pl.List(pl.Enum(["ps", "psl", "cgi_haplink"]))
 _GL_SOURCE_0018 = pl.Enum(["gl", "pl", "gl_over_pl"])
+_SV_CLAIM_0024 = pl.List(pl.Enum(["D", "J", "DJ"]))
 _REF_CHECK_0022 = pl.Enum(["not_run", "match", "mismatch", "unstated"])
 
 _RELOAD = "load the source again to read them"
@@ -334,6 +335,23 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
                 _dropped("INFO/R2", "INFO/ER2", "INFO/DR2"),
                 "the load left out INFO R2, ER2 and DR2 (in dropped_fields), which 0.0.23 reads as each site's "
                 f"imputation quality: imputation_r2 and imputation_empirical_r2 null here mean not read; {_RELOAD}",
+            ),
+        ),
+    ),
+    MigrationStep(
+        "0.0.23",
+        "0.0.24",
+        "VCF 4.5's structural-variant claim: calls.sv_claim",
+        frames={"calls": _add_after("alt_copy_numbers", {"sv_claim": _SV_CLAIM_0024})},
+        added=("calls.sv_claim",),
+        caveats=(
+            Caveat(
+                "calls",
+                ("sv_claim",),
+                _dropped("INFO/SVCLAIM"),
+                "the load left out INFO SVCLAIM (in dropped_fields), which 0.0.24 reads as each ALT's abundance or "
+                "adjacency claim: sv_claim null here means not read, and concordance decomposes a <DEL> or <DUP> there "
+                f"into breakends whatever it claimed; {_RELOAD}",
             ),
         ),
     ),

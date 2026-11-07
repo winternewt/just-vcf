@@ -67,12 +67,12 @@ from just_vcf.schema import CALLS, EMPTY_ALLELE, SCHEMA_VERSION, RefCheck, Split
 
 logger = logging.getLogger(__name__)
 
-NORMALIZE_VERSION = 10
+NORMALIZE_VERSION = 11
 """Part of the derived `facet_id`: bumped whenever the rule changes what `normalize` emits (6: RM282's
 per-ALT SV columns split with their ALT, the intervals of a moved row cleared; 7: F19's scaffold aliases;
 8: a split row's `hq` null on each GT slot it writes `.`; 9: RM3's anchored insertion points aligned, and
 a deletion at a contig's first base anchored on the base after; 10: of two duplicates the one whose REF
-was stated and matched is kept, `_KEPT_FIRST`)."""
+was stated and matched is kept, `_KEPT_FIRST`; 11: schema 0.0.24's per-ALT `sv_claim` split with its ALT)."""
 
 NORMALIZE_LAYOUT = 1
 """How a normalize spill's files hold the rows, a key in its manifest and in its generation's key: 1 is
@@ -351,6 +351,7 @@ def _split(rows: pl.DataFrame, counts: Counter[str]) -> pl.DataFrame:
             for name in ("cipos", "ciend")
         ],
         pl.when(pl.col("alt_copy_numbers").list.len() == n).then(pl.concat_list(pl.col("alt_copy_numbers").list.get(k - 1))).alias("alt_copy_numbers"),
+        pl.when(pl.col("sv_claim").list.len() == n).then(pl.concat_list(pl.col("sv_claim").list.get(k - 1))).alias("sv_claim"),
         sliced_gl.alias("gl"),
         pl.lit(None, dtype=CALLS["gp"]).alias("gp"),
         pl.lit(None, dtype=CALLS["dosage"]).alias("dosage"),

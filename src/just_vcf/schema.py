@@ -17,7 +17,7 @@ import polars as pl
 from just_vcf.contig_names import PRIMARY_ACCESSIONS
 from just_vcf.formats.spec import Family
 
-SCHEMA_VERSION = "0.0.23"
+SCHEMA_VERSION = "0.0.24"
 """The frame schema version. Written into parquet metadata as `just_vcf.schema_version` on export."""
 
 SCHEMA_VERSION_KEY = "just_vcf.schema_version"
@@ -124,6 +124,21 @@ class SplitSignal(str, Enum):
     """Two or more non-reference rows at one position, each GT slot non-zero in at most one of them."""
     ALL_ZERO_BESIDE_ALT = "all_zero_beside_alt"
     """A fully called all-`0` row beside a non-reference row at the same position."""
+
+
+class SvClaim(str, Enum):
+    """VCF 4.5's INFO `SVCLAIM`, per ALT: what a structural-variant allele claims (SCHEMA.md Decision 6).
+
+    The values are the spec's tokens, verbatim. `.` (the spec's missing value, which for `<CNV>` means
+    `D` and for `<INV>`, `<INS>` and a breakend `J`) is kept as a null, never resolved by the type here.
+    """
+
+    ABUNDANCE = "D"
+    """Copy number changed (read depth, allele frequency), with no evidence of a junction."""
+    ADJACENCY = "J"
+    """A non-reference adjacency (a break junction), with no evidence of a change in abundance."""
+    BOTH = "DJ"
+    """Both, consistent with each other: a simple, isolated deletion or tandem duplication."""
 
 
 class VariantClass(str, Enum):
@@ -313,6 +328,7 @@ CALLS = pl.Schema(
         "ciend": pl.List(pl.Int32),
         "copy_number": pl.Float32,
         "alt_copy_numbers": pl.List(pl.Float32),
+        "sv_claim": pl.List(enum_dtype(SvClaim)),
     }
 )
 """One row per site per facet (SCHEMA.md Decision 6)."""

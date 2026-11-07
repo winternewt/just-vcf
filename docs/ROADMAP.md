@@ -301,8 +301,10 @@ lone symbolic allele near the other's breakends, was added beside the one asked 
 only: no person here has a symbolic SV facet beside another caller's breakends.
 
 **Left:** no DELLY, Sniffles or second breakend file exists to check against (synthetic tests only);
-VCF 4.5's SVCLAIM is not kept by the frame, so a `<DEL>` claiming abundance only (`SVCLAIM=D`, no
-SVTYPE) is decomposed; whether a
+*built 2026-11-07:* VCF 4.5's SVCLAIM is kept per ALT (`calls.sv_claim`, schema 0.0.24, written back
+only under VCF 4.5), and the decompose no longer turns an allele claiming abundance only (`D`) into
+breakends, counting it in the not-decomposed warning under a reason of its own, beside a separate one
+for an allele without END (docs/SCHEMA.md, "Symbolic alleles against breakends"); whether a
 copy-number allele should meet a deletion or duplication as a loss or a gain (it
 needs the expected copy number at the locus, which differs on X and Y, and is the person's call:
 built is the strict reading, type from the ALT's name, reversible by adding a mapping in

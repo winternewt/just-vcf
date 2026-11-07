@@ -43,7 +43,9 @@ What is written, and the rules it follows:
   own load reads that phase back only where PSL names the slot's set (P4), and the rows that lose it so
   are counted. CN is declared Float, as 4.5 reserves it, so a fractional copy number is written.
 - **INFO** carries `END` where `end_pos` is not the REF span (symbolic alleles), the SV keys
-  `SVTYPE`, `CIPOS`, `CIEND` and `CN` from `sv_type`, `cipos`, `ciend` and `alt_copy_numbers` (FORMAT
+  `SVTYPE`, `CIPOS`, `CIEND` and `CN` from `sv_type`, `cipos`, `ciend` and `alt_copy_numbers`, and in a
+  VCF 4.5 file `SVCLAIM` from `sv_claim` (4.3 has no SVCLAIM: left out there, counted, the light choice
+  over writing 4.5 for it; a reload then holds no claim) (FORMAT
   `CN` is `copy_number`; a copy number that is not whole cannot be written as 4.3's Integer CN and
   is left out, counted), `SVLEN` on a length-type SV allele (`<DEL>`, `<DUP>`, `<INV>`, `<CNV>`,
   `<CNn>`) as `end_pos - pos`, `.` on the record's other ALTs: the frame keeps no SVLEN of its own,
@@ -149,12 +151,18 @@ _SV_INFO = {
     "CIPOS": (".", "Integer", "Confidence interval around POS, two values per ALT"),
     "CIEND": (".", "Integer", "Confidence interval around END, two values per ALT"),
     "CN": ("A", V43_RESERVED_TYPES["INFO/CN"], "Copy number of each ALT allele, as the source wrote it"),
+    "SVCLAIM": ("A", "String", "Claim of each ALT allele, as the source wrote it: D abundance, J adjacency, DJ both"),
 }
 """The structural-variant INFO keys the writer emits (RM282, RM6), in the order they are written: SVLEN
 as VCF 4.3 declares it (`Number=.`, signed), CIPOS and CIEND as VCF 4.5 declares them (two values per
 ALT, which is how the frame holds them), CN with the Integer Type VCF 4.3 reserves, since polars-bio
 refuses a 4.3 CN declared Float. A 4.5 file takes each key's Number and Type from `INFO_KEYS`: SVLEN
-`Number=A` and unsigned, CN Float."""
+`Number=A` and unsigned, CN Float. SVCLAIM is written only in a 4.5 file, which alone defines it."""
+
+
+def _has_claim() -> pl.Expr:
+    """A row whose `sv_claim` holds a claim (not only `.`)."""
+    return pl.col("sv_claim").list.drop_nulls().list.len().fill_null(0).gt(0)
 
 _DELETION_ALLELE = r"^<DEL(:[^>]*)?>$"
 _COPY_NUMBER_ALLELE = r"^<(CNV|CN\d+)(:[^>]*)?>$"
@@ -228,6 +236,12 @@ def _sv_info_values(v45: bool = False) -> dict[str, pl.Expr]:
         "CIEND": _list_text("ciend"),
         "CN": pl.when(_whole_list("alt_copy_numbers", v45)).then(
             pl.col("alt_copy_numbers").list.eval(_copy_number_text(pl.element(), v45).fill_null(".")).list.join(",")
+        ),
+        # VCF 4.5's alone: a 4.3 file has no SVCLAIM, so there it is left out, counted (`n_sv_claim_unwritten`).
+        "SVCLAIM": (
+            pl.when(pl.col("sv_claim").is_not_null()).then(pl.col("sv_claim").list.eval(pl.element().cast(pl.String).fill_null(".")).list.join(","))
+            if v45
+            else pl.lit(None, dtype=pl.String)
         ),
     }
     return {key: pl.when(text.is_not_null()).then(pl.concat_str(pl.lit(f"{key}="), text)) for key, text in texts.items()}
@@ -426,6 +440,12 @@ def write_vcf(
         warnings.append(
             f"{stats['n_svlen_withheld']} row(s) with SV alleles whose own lengths the frame does not keep apart; "
             "SVLEN left out, INFO END states the record's extent"
+        )
+    if stats["n_sv_claim_unwritten"]:
+        warnings.append(
+            f"{stats['n_sv_claim_unwritten']} row(s) with an SV claim (sv_claim) written as VCF 4.3, which has no "
+            "SVCLAIM; left out, so a reload holds no claim, and concordance then decomposes a <DEL> or <DUP> that "
+            "claimed abundance only (D) into breakends"
         )
     if stats["n_split"]:
         warnings.append(
@@ -741,6 +761,7 @@ def _scan(calls: pl.LazyFrame) -> dict:
             .sum()
             .alias("n_cn_fractional"),
             ((_svlen_count() > 0) & ~_svlen_writable() & pl.col("_unwritable").is_null()).sum().alias("n_svlen_withheld"),
+            (pl.lit(not v45) & _has_claim() & pl.col("_unwritable").is_null()).sum().alias("n_sv_claim_unwritten"),
             pl.col("split_signal").is_not_null().sum().alias("n_split"),
             (pl.col("end_pos").cast(pl.Int64) != ref_span_end).fill_null(False).any().alias("has_END"),
             pl.concat_list(pl.col("filters").fill_null(_NO_STRINGS), pl.col("sample_filters").fill_null(_NO_STRINGS))

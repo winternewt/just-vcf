@@ -79,8 +79,9 @@ A lifted row's `source_ref`, `ref_check`, `source_gt` and VRS ids are null, and 
 `cipos` and `ciend`: they described the source's representation on the source assembly (an SV's
 intervals are about its two ends, which step 5 places, so they carry). `gl`, `gp` and `ad` stay indexed over
 `source_alleles`, never reordered (SCHEMA.md Decision 2); a swapped row's `dosage` is withheld, since it
-counted the other allele, and so are its `alt_copy_numbers` (INFO CN, one per ALT): the swapped ALT's
-slot now holds the old REF, whose copy number the source did not state. Re-mint ids on the target with `mint_vrs_ids`.
+counted the other allele, and so are its `alt_copy_numbers` (INFO CN, one per ALT) and its `sv_claim`
+(INFO SVCLAIM, one per ALT): the swapped ALT's slot now holds the old REF, whose copy number and claim
+the source did not state. Re-mint ids on the target with `mint_vrs_ids`.
 
 Coordinates: `pos` is 1-based; chains and the store are 0-based half-open. `reference._span` converts
 a row to the store's range and `_to_pos` converts a lifted start back, the only two places (charter 13).
@@ -109,7 +110,7 @@ from just_vcf.schema import BLOCKS, CALLS, FACETS, SCHEMA_VERSION, AbsenceMeans,
 
 logger = logging.getLogger(__name__)
 
-LIFT_VERSION = 15
+LIFT_VERSION = 16
 """Part of the derived `facet_id`: bumped whenever the rule changes what `liftover` emits (3: a swapped
 row's `alt_copy_numbers` withheld; 4: F19's scaffold aliases on the target; 5: schema 0.0.15's
 `phase_set_ordinals` and `phase_set_qualities` carried, null with the phase on another contig;
@@ -122,7 +123,8 @@ kept as written; 13: a row whose source REF states no base, `ref_check = unstate
 left behind as `source_ref_unstated`; 14: a sequence row whose REF span crosses a gap of one chain lifted,
 REF read over the lifted span and each ALT's change carried into the target's sequence there; 15: such a
 row judged by the chains that hold each piece of its span, not by the one block per mapping the axis kept,
-so a chain repeating only part of another's blocks no longer leaves it `split_across_chains`)."""
+so a chain repeating only part of another's blocks no longer leaves it `split_across_chains`; 16: schema
+0.0.24's `sv_claim` carried, withheld on a swapped row as `alt_copy_numbers` is)."""
 
 RELATION = LIFTOVER_TO
 """The derived facet's `relation`: the Cat-VRS term, verbatim (charter, GA4GH from the start)."""
@@ -1690,6 +1692,7 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
     counts["other_contig"] += int(work.select(moved_contig.sum()).item())
     counts["dosage_withheld"] += int(work.select((pl.col("_swap") & pl.col("dosage").is_not_null()).sum()).item())
     counts["copy_numbers_withheld"] += int(work.select((pl.col("_swap") & pl.col("alt_copy_numbers").is_not_null()).sum()).item())
+    counts["sv_claims_withheld"] += int(work.select((pl.col("_swap") & pl.col("sv_claim").is_not_null()).sum()).item())
     counts["phase_cleared"] += int(work.select((moved_contig & pl.col("phased").is_not_null()).sum()).item())
     out = work.with_columns(
         pl.lit(facet_id).alias("facet_id"),
@@ -1715,6 +1718,7 @@ def _lifted_rows(work: pl.DataFrame, facet_id: str, source_chrom: str, counts: C
         pl.lit(None, dtype=CALLS["ciend"]).alias("ciend"),
         pl.when(pl.col("_swap")).then(None).otherwise(pl.col("dosage")).alias("dosage"),
         pl.when(pl.col("_swap")).then(None).otherwise(pl.col("alt_copy_numbers")).alias("alt_copy_numbers"),
+        pl.when(pl.col("_swap")).then(None).otherwise(pl.col("sv_claim")).alias("sv_claim"),
         *[pl.when(moved_contig).then(None).otherwise(pl.col(name)).alias(name) for name in ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities")],
         array.alias("_array"),
     )
@@ -1793,6 +1797,8 @@ def _warnings(
         lines.append(f"{counts['dosage_withheld']} swapped row(s): dosage withheld (it counted the other allele)")
     if counts["copy_numbers_withheld"]:
         lines.append(f"{counts['copy_numbers_withheld']} swapped row(s): alt_copy_numbers withheld (the swapped ALT's slot now holds the old REF)")
+    if counts["sv_claims_withheld"]:
+        lines.append(f"{counts['sv_claims_withheld']} swapped row(s): sv_claim withheld (the swapped ALT's slot now holds the old REF)")
     if counts["other_contig"]:
         lines.append(f"{counts['other_contig']} row(s) lifted to another contig than their source's; phase sets cleared on {counts['phase_cleared']}")
     for reason, count in reasons.items():

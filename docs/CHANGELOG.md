@@ -6,11 +6,28 @@ What shipped, newest first. Cross-repo integration changes made on our side are 
 
 The first release. It loads 32 formats (consumer array and table exports, VCF, BCF and gVCF, and the
 older sequencing outputs PGP-HMS carries) into the facets, calls, blocks and links frames (schema
-0.0.23), with build, callset type, vendor, caller and chip described per facet; reads REF from a refget
+0.0.24), with build, callset type, vendor, caller and chip described per facet; reads REF from a refget
 store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; compares facets
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **Schema 0.0.24, a breaking change pre-1.0: `calls` gains `sv_claim`, VCF 4.5's SVCLAIM, and the
+  decompose honours it** (RM282). VCF 4.5 says per ALT what a structural-variant call claims: `D`
+  abundance (copy number changed, no junction), `J` an adjacency, `DJ` both. The frame dropped it, so
+  `concordance` turned a `<DEL>` claiming abundance only into the breakends of a junction it never
+  claimed. Now `sv_claim` holds the claims (`list[Enum]`, one per ALT, `.` and a value that is no claim
+  a null element, a count not one per ALT a null list, each counted in a load warning), and the
+  decompose skips an allele claiming `D` only; `J`, `DJ` and no claim decompose as before. The
+  not-decomposed warning now counts each reason apart: an abundance claim, an allele without END (counted
+  under the SVTYPE reason before), and an SVTYPE or duplication subtype that names no junction. INFO
+  `SVCLAIM` leaves `dropped_fields`. `normalize` splits it with its ALT, `rejoin_split` joins it,
+  `liftover` carries it (withheld on a swapped row); `write_vcf` writes it only as VCF 4.5 and counts
+  the rows a 4.3 export leaves out, `write_vcf_zarr` does not write it. `REWRITE_VERSION` 19,
+  `STATS_VERSION` 3, `NORMALIZE_VERSION` 11, `REJOIN_VERSION` 7, `LIFT_VERSION` 16. `migrate_store` adds
+  the column null to a 0.0.23 store and names the facets whose `dropped_fields` list INFO `SVCLAIM` as
+  not read. Additive, but a consumer checking the exact `calls` columns meets a new one. Tests:
+  `tests/test_sv_claim.py` (the decompose and reason tests fail on the old code),
+  `tests/test_store_migration.py::test_an_sv_facet_migrated_to_0024_has_its_claims_named_not_read`.
 - **Beagle's `##source` names the caller.** A Beagle output VCF gets `caller` `Beagle` and
   `caller_version` the build its jar names, read from every form Beagle's own `VcfWriter` writes:
   5.x `"beagle.22Jul22.46e.jar"` (`22Jul22.46e`), 4.1 `"beagle.27Jul16.86a.jar (version 4.1)"`

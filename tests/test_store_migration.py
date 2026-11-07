@@ -34,11 +34,13 @@ from test_load_vcf import vcf_text
 from test_load_vcf import write as write_vcf_text
 from test_person import _array_file
 from test_store import GVCF, SUBJECT, _files, _resolved_cgi
+from test_sv_claim import LOADED_RECORDS as SV_CLAIM_RECORDS
+from test_sv_claim import v45 as sv_claim_vcf
 from test_unstated_ref import RECORDS
 from test_unstated_ref import vcf as unstated_vcf
 from test_unstated_ref import write_fasta as unstated_fasta
 
-VERSIONS = ("0.0.14", "0.0.15", "0.0.16", "0.0.17", "0.0.18", "0.0.19", "0.0.20", "0.0.21", "0.0.22", "0.0.23")
+VERSIONS = ("0.0.14", "0.0.15", "0.0.16", "0.0.17", "0.0.18", "0.0.19", "0.0.20", "0.0.21", "0.0.22", "0.0.23", "0.0.24")
 """Every schema version a store can have been written under: the store shipped under 0.0.14 (merge
 6830fb7, 2026-10-23, between 0.0.14's merge 04c5db3 and 0.0.15's 8b72a46)."""
 
@@ -50,6 +52,7 @@ ADDED: dict[str, dict[str, tuple[str, ...]]] = {
     "0.0.20": {"facets": ("resolve_version",)},
     "0.0.21": {"facets": ("resolve_inputs",)},
     "0.0.23": {"calls": ("imputation_r2", "imputation_empirical_r2")},
+    "0.0.24": {"calls": ("sv_claim",)},
 }
 """The columns each bump since the store shipped added (SCHEMA.md "Changes since sign-off")."""
 
@@ -343,6 +346,32 @@ def test_an_imputed_facet_migrated_to_0023_has_its_quality_named_not_read(tmp_pa
     got = _read_back(Store.open(root))
     assert all(got[name].equals(expected[name]) for name in FRAMES)
     assert got["calls"].filter(pl.col("facet_id") == facet_id)["imputation_r2"].null_count() == len(IMPUTED_RECORDS), "not read, never invented"
+
+
+def test_an_sv_facet_migrated_to_0024_has_its_claims_named_not_read(tmp_path: Path) -> None:
+    """A 0.0.23 load left INFO SVCLAIM out (in `dropped_fields`): the step to 0.0.24 adds `sv_claim`
+    null and names that facet, and only it; a VCF that never wrote SVCLAIM loses nothing."""
+    claims = load(sv_claim_vcf(tmp_path, "claims", SV_CLAIM_RECORDS), subject=SUBJECT)
+    held = claims.calls.select(pl.col("sv_claim").is_not_null().sum()).collect().item()
+    assert held > 0
+    # As a 0.0.23 load left it: the key not carried, so listed as dropped.
+    left = claims.model_copy(
+        update={"facets": claims.facets.with_columns(pl.concat_list("dropped_fields", pl.lit(["INFO/SVCLAIM"])).list.sort().alias("dropped_fields"))}
+    )
+    plain = load(write_vcf_text(tmp_path, vcf_text(PHASED, fmt=("GT", "PS")), "phased.vcf"), subject=SUBJECT)
+    root = tmp_path / "store"
+    expected = _old_store(root, "0.0.23", [left, plain])
+    facet_id = claims.facets.collect()["facet_id"].item()
+
+    report = migrate_store(root)
+    assert [step.to_version for step in report.steps] == ["0.0.24"]
+    assert [(entry.version, entry.frame, entry.columns, entry.facet_ids) for entry in report.filled_unknown] == [
+        ("0.0.24", "calls", ("sv_claim",), (facet_id,))
+    ]
+    got = _read_back(Store.open(root))
+    assert all(got[name].equals(expected[name]) for name in FRAMES)
+    assert got["calls"].schema["sv_claim"] == CALLS["sv_claim"]
+    assert got["calls"]["sv_claim"].is_null().all(), "not read, never invented"
 
 
 def test_a_newer_store_is_refused_never_downgraded(tmp_path: Path) -> None:

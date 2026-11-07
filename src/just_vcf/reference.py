@@ -39,6 +39,7 @@ import json
 import logging
 import os
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -50,20 +51,36 @@ from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_sn
 from just_vcf import cache
 from just_vcf.contig_names import scaffold_names
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_batches
-from just_vcf.probes import IndelSite, Manifest, catalog_digest, id_calibration, indel_catalog, locate_indel, place_indel, snv_catalog, window_for
+from just_vcf.probes import (
+    IdGate,
+    IdOrientation,
+    IndelSite,
+    Manifest,
+    Orientation,
+    catalog_digest,
+    id_calibration,
+    id_orientation,
+    indel_catalog,
+    locate_indel,
+    orientation_digest,
+    place_indel,
+    snv_catalog,
+    window_for,
+)
 from just_vcf.schema import CALLS, CONTIG_RANK, EMPTY_ALLELE, FACETS, SCHEMA_VERSION, AssemblyLabelBasis, RefCheck, StrandCheck, canonical_chrom, canonical_order, empty
 from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_reason
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 13
+RESOLVE_VERSION = 14
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes (10: an insertion
 point's anchor base, and REF over a Genos row's stated span; 11: a point whose every called haplotype is
 the empty allele is left unread, not anchored as a hom-ref call at the base before it; 12: the row sample
 the build inference and the strand check score leaves out rows not over one base, a Genos insertion site
 among them, so a facet's inferred label and `strand_check`, and the rows a mixed strand withholds, can
 change; the strand is not in the spill key; 13: a source REF made only of `N` over bases the reference
-reads is `ref_check = unstated`, not `mismatch`, F23)."""
+reads is `ref_check = unstated`, not `mismatch`, F23; 14: 23andMe v3 and v4 read their `I`/`D` codes per
+probe, by the orientation table learned from whole genomes, a `flipped` probe's codes swapped, RM281)."""
 
 RESOLVE_LAYOUT = 1
 """How a resolve spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
@@ -403,18 +420,7 @@ def resolve_ref(
     facet = facets.row(0, named=True)
     if facet["ref_seqcol_digest"] is not None:
         raise ValueError(f"facet {facet['facet_id']}: REF was already read (from {facet['ref_seqcol_digest']}); resolve the facet as loaded")
-    store, given = _store_for(reference)
-    collection = collection if collection is not None else given
-
-    rows_per_chrom = dict(loaded.calls.group_by("chrom").agg(pl.len()).collect().iter_rows())
-    candidates = [collection] if collection is not None else store.collections()
-    if not candidates:
-        raise ReferenceMismatchError("the reference store holds no collection; add a FASTA with ReferenceStore.add_fasta")
-    inferred = _infer_from_rows(store, loaded, facet, candidates)
-    if inferred is not None:
-        facet = {**facet, "assembly_label": inferred.label, "assembly_label_basis": AssemblyLabelBasis.INFERRED.value}
-    plans = [_plan(store, digest, facet, rows_per_chrom) for digest in candidates]
-    plan = _choose(plans, facet["facet_id"], explicit=collection is not None)
+    store, facet, inferred, plan, rows_per_chrom = _fit(loaded, facet, reference, collection)
 
     warnings = [f"assembly inferred from the rows as {inferred.label}: {inferred.summary()}"] if inferred is not None else []
     warnings += _contig_warnings(plan, rows_per_chrom)
@@ -484,6 +490,24 @@ def resolve_ref(
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )
+
+
+def _fit(
+    loaded: Loaded, facet: dict, reference: "ReferenceStore | Path | str | None", collection: str | None
+) -> tuple["ReferenceStore", dict, RowsInference | None, "_Plan", dict[str, int]]:
+    """The store, the facet (its label inferred from the rows where it stated none), the inference, the
+    collection chosen by the contig checks, and the facet's rows per contig. Raises as `resolve_ref` does."""
+    store, given = _store_for(reference)
+    collection = collection if collection is not None else given
+    rows_per_chrom = dict(loaded.calls.group_by("chrom").agg(pl.len()).collect().iter_rows())
+    candidates = [collection] if collection is not None else store.collections()
+    if not candidates:
+        raise ReferenceMismatchError("the reference store holds no collection; add a FASTA with ReferenceStore.add_fasta")
+    inferred = _infer_from_rows(store, loaded, facet, candidates)
+    if inferred is not None:
+        facet = {**facet, "assembly_label": inferred.label, "assembly_label_basis": AssemblyLabelBasis.INFERRED.value}
+    plans = [_plan(store, digest, facet, rows_per_chrom) for digest in candidates]
+    return store, facet, inferred, _choose(plans, facet["facet_id"], explicit=collection is not None), rows_per_chrom
 
 
 def resolve_inputs(probe_catalog: str | None, pair_catalog: str | None) -> str | None:
@@ -933,30 +957,47 @@ class _Codes:
     absent: str | None
     """Why `catalog` is None, for the warning; None also when the facet has no code rows at all."""
     unverified: str | None = None
-    """Why the facet's chip has its codes withheld (`ID_CALIBRATION`): its I/D orientation is not
-    verified. None when the chip's calibration passed, or there are no code rows."""
+    """Why the facet's chip has every code row withheld (`ID_CALIBRATION`): its I/D orientation is not
+    verified, or its per-probe table lists no probe yet. None when rows may resolve, or there are none."""
+    orientation: Mapping[str, IdOrientation] | None = None
+    """The chip's per-probe orientation table (`probes.id_orientation`) where `ID_CALIBRATION` resolves
+    it per probe; None for a chip resolved chip-wide."""
+    unlisted: str | None = None
+    """Why a code row whose rsid the per-probe table does not list is withheld."""
 
     @property
     def digest(self) -> str | None:
-        return catalog_digest(list(self.manifests)) if self.manifests else None
+        if not self.manifests:
+            return None
+        return catalog_digest(list(self.manifests), orientation_digest(self.orientation) if self.orientation is not None else None)
 
 
 def _code_catalog(loaded: Loaded, facet: dict, label: str | None) -> _Codes:
-    """The configured manifests' indel probes on the facet's assembly, read only when it has `I`/`D` rows."""
+    """The configured manifests' indel probes on the facet's assembly, read only when it has `I`/`D` rows
+    its chip may resolve: chip-wide, or per probe where its orientation table lists any probe."""
     if facet["vcf_version"] is not None:
         return _Codes(None, (), None)
     code = pl.col("source_ref").is_null() & pl.col("gt_alleles").list.eval(pl.element().is_in(CODES)).list.any()
     if not loaded.calls.select(code.fill_null(False).any()).collect().item():
         return _Codes(None, (), None)
-    calibration = id_calibration(facet["chip"])
-    if not calibration.resolve:
-        return _Codes(None, (), None, unverified=calibration.evidence if facet["chip"] is None else f"{facet['chip']}: {calibration.evidence}")
+    chip = facet["chip"]
+    calibration = id_calibration(chip)
+    if calibration.mode is IdGate.WITHHELD:
+        return _Codes(None, (), None, unverified=calibration.evidence if chip is None else f"{chip}: {calibration.evidence}")
+    orientation, unlisted = None, None
+    if calibration.mode is IdGate.PER_PROBE:
+        orientation = id_orientation(chip)
+        unlisted = f"{chip} is read per probe, and no WGS evidence of this probe's orientation is in its table (id_orientation.json"
+        if not orientation:
+            # Nothing listed: every row is withheld, and no manifest is read, as for a withheld chip.
+            return _Codes(None, (), None, unverified=f"{unlisted}, which lists no probe of {chip} yet); {calibration.evidence}")
+        unlisted += f", {len(orientation)} probe(s) of {chip} listed)"
     if label is None:
-        return _Codes(None, (), "the reference's assembly is unknown, so no manifest's build can be matched with it")
+        return _Codes(None, (), "the reference's assembly is unknown, so no manifest's build can be matched with it", orientation=orientation, unlisted=unlisted)
     catalog, manifests = indel_catalog(label)
     if not manifests:
-        return _Codes(None, (), f"no manifest with indel probes on {label} is configured (JUST_VCF_MANIFESTS_DIR)")
-    return _Codes(catalog, tuple(manifests), None)
+        return _Codes(None, (), f"no manifest with indel probes on {label} is configured (JUST_VCF_MANIFESTS_DIR)", orientation=orientation, unlisted=unlisted)
+    return _Codes(catalog, tuple(manifests), None, orientation=orientation, unlisted=unlisted)
 
 
 def _pair_catalog() -> _Codes:
@@ -1041,19 +1082,28 @@ def _resolve_codes(work: pl.DataFrame, store: ReferenceStore, contig: Contig, co
     `D` the shorter. The row gets `ref`, `alts` (the called alleles other than REF, as for any array
     row), `gt`, `end_pos`, and `gt_alleles` spelled as the sequences; `source_gt` keeps the codes. A row
     whose rsids name no probe or more than one site, or whose site is not located or cannot be spelled
-    at its position, is left as loaded, each reason counted. A facet whose chip's I/D orientation is
-    not verified (`probes.ID_CALIBRATION`) has every code row left as loaded, counted
-    `id_orientation_unverified`. Returns `work` with the `_split_*` slots filled for the rows resolved
-    here, and their `gt_alleles` replaced.
+    at its position, is left as loaded, each reason counted.
+
+    The chip's gate (`probes.ID_CALIBRATION`) comes first. A chip resolved chip-wide reads every row as
+    written. A chip resolved per probe reads a row only when its rsid is in the chip's orientation table
+    (`probes.id_orientation`): `same` as written, `flipped` with `I` and `D` swapped before the probe
+    reads them (counted); a row the table does not list is left as loaded, counted
+    `id_orientation_unverified`, and one whose rsids the table lists both ways likewise, under its own
+    reason. A chip withheld, or read per probe with nothing listed, has every code row left as loaded,
+    counted `id_orientation_unverified`. Returns `work` with the `_split_*` slots filled for the rows
+    resolved here, and their `gt_alleles` replaced.
     """
     is_code = pl.col("source_ref").is_null() & pl.col("gt_alleles").list.eval(pl.element().is_in(CODES)).list.any().fill_null(False)
     only_codes = pl.col("gt_alleles").list.eval(pl.element().is_null() | pl.element().is_in(CODES)).list.all()
     rows = work.filter(is_code).select("_row", "chrom", "pos", "ids", "gt_alleles", only_codes.alias("_only"))
-    found: dict[str, list] = {"_row": [], **{f"_code_{name}": [] for name in _CODE_NAMES}}
+    found = _code_slots()
     if rows.height:
         counts["code_rows"] += rows.height
         counts["code_mixed"] += rows.filter(~pl.col("_only")).height
         rows = rows.filter(pl.col("_only"))
+        flipped: set[int] = set()
+        if codes is not None and codes.unverified is None and codes.orientation is not None:
+            rows, flipped = _orient_code_rows(rows, codes.orientation, counts)
         if codes is not None and codes.unverified is not None:
             counts["code_id_orientation_unverified"] += rows.height
         elif codes is None or codes.catalog is None:
@@ -1061,23 +1111,62 @@ def _resolve_codes(work: pl.DataFrame, store: ReferenceStore, contig: Contig, co
         elif rows.height:
             probes = codes.catalog.filter(pl.col("chrom") == rows["chrom"][0])
             _resolve_code_rows(rows, probes, store, contig, counts, found)
-    resolved = pl.DataFrame(found, schema={"_row": pl.UInt32, **{f"_code_{name}": CALLS[name] for name in _CODE_NAMES}})
-    work = work.join(resolved, on="_row", how="left", maintain_order="left")
+            counts["code_resolved_flipped"] += len(flipped & set(found["_row"]))
+    resolved = pl.DataFrame(found, schema=_CODE_SLOTS)
+    work = work.join(resolved.drop("_code_rsid"), on="_row", how="left", maintain_order="left")
     return work.with_columns(
         *[pl.coalesce(f"_split_{name}", f"_code_{name}").alias(f"_split_{name}") for name in ("ref", "alts", "gt", "end_pos")],
         pl.when(pl.col("_code_gt_alleles").is_not_null()).then(pl.col("_code_gt_alleles")).otherwise(pl.col("gt_alleles")).alias("gt_alleles"),
     ).drop([f"_code_{name}" for name in _CODE_NAMES])
 
 
+_CODE_SLOTS = {"_row": pl.UInt32, **{f"_code_{name}": CALLS[name] for name in _CODE_NAMES}, "_code_rsid": pl.String}
+"""What `_resolve_code_rows` writes per row it resolves, in order: the row, its slots, and the rsid of
+the probe that read it."""
+
+_SWAP = {"I": "D", "D": "I"}
+
+
+def _code_slots() -> dict[str, list]:
+    return {name: [] for name in _CODE_SLOTS}
+
+
+def _orient_code_rows(rows: pl.DataFrame, orientation: Mapping[str, IdOrientation], counts: Counter[str]) -> tuple[pl.DataFrame, set[int]]:
+    """A per-probe chip's code rows by its orientation table: the rows to resolve, the codes of a
+    `flipped` probe's rows swapped (`I` ↔ `D`), and which rows were swapped. A row the table does not
+    list, by any rsid among its `ids`, is counted `id_orientation_unverified`; one whose rsids it lists
+    both ways, `orientation_ambiguous`. Neither is returned."""
+    table = pl.DataFrame(
+        {"rsid": list(orientation), "_orientation": [entry.orientation.value for entry in orientation.values()]},
+        schema={"rsid": pl.String, "_orientation": pl.String},
+    )
+    listed = (
+        rows.select("_row", pl.col("ids").list.unique().alias("rsid")).explode("rsid", empty_as_null=False)
+        .join(table, on="rsid", how="inner")
+        .group_by("_row").agg(pl.col("_orientation").unique())
+    )  # fmt: skip
+    rows = rows.join(listed, on="_row", how="left", maintain_order="left")
+    length = pl.col("_orientation").list.len().fill_null(0)
+    counts["code_id_orientation_unverified"] += rows.filter(length == 0).height
+    counts["code_orientation_ambiguous"] += rows.filter(length > 1).height
+    rows = rows.filter(length == 1).with_columns(pl.col("_orientation").list.first())
+    swap = pl.col("_orientation") == Orientation.FLIPPED.value
+    flipped = set(rows.filter(swap)["_row"].to_list())
+    swapped = pl.col("gt_alleles").list.eval(pl.element().replace_strict(_SWAP, default=None))
+    return rows.with_columns(pl.when(swap).then(swapped).otherwise(pl.col("gt_alleles")).alias("gt_alleles")).drop("_orientation"), flipped
+
+
 def _resolve_code_rows(
     rows: pl.DataFrame, probes: pl.DataFrame, store: ReferenceStore, contig: Contig, counts: Counter[str], found: dict[str, list]
 ) -> None:
-    """`_resolve_codes` for one contig's code rows against that contig's probes; appends to `found`."""
+    """One contig's code rows (`_row`, `pos`, `ids`, `gt_alleles`) resolved against that contig's probes,
+    the codes read as given, with no gate: appends to `found` (`_code_slots`). Shared by `_resolve_codes`,
+    behind the chip's gate, and `_ungated_code_rows`, which the orientation table is learned with."""
     matched = (
         rows.select("_row", pl.col("ids").list.unique().alias("rsid")).explode("rsid", empty_as_null=False)
         .join(probes, on="rsid", how="inner")
         .group_by("_row", maintain_order=True)
-        .agg(pl.struct("map_info", "left_flank", "indel_seq", "right_flank", "source_strand").unique(maintain_order=True).alias("probes"))
+        .agg(pl.struct("map_info", "left_flank", "indel_seq", "right_flank", "source_strand", "rsid").unique(maintain_order=True).alias("probes"))
     )  # fmt: skip
     by_row = dict(zip(matched["_row"].to_list(), matched["probes"].to_list()))
     located: dict[tuple, IndelSite | str] = {}
@@ -1113,9 +1202,50 @@ def _resolve_code_rows(
         counts["code_resolved"] += 1
         for name, value in zip(
             found,
-            (row, ref, sorted(called - {ref}), [None if a is None else int(a != ref) for a in spelled], pos + len(ref) - 1, spelled),
+            (row, ref, sorted(called - {ref}), [None if a is None else int(a != ref) for a in spelled], pos + len(ref) - 1, spelled, key[5]),
         ):
             found[name].append(value)
+
+
+def _ungated_code_rows(loaded: Loaded, reference: "ReferenceStore | Path | str | None" = None) -> tuple[pl.DataFrame, Counter[str]]:
+    """An array facet's `I`/`D` code rows resolved by rsid against the configured manifests' indel probes
+    with the codes read as the export wrote them, whatever its chip's gate says: what
+    `scripts/id_orientation.py` learns each probe's orientation from, against the same person's whole
+    genome (RM281). Not a step: its rows are not a facet's.
+
+    The reference is chosen and checked as `resolve_ref` chooses it, and the rows are read by the same
+    resolution (`_resolve_code_rows`). Returns the rows resolved, one per row (`chrom`, `pos`, `end_pos`,
+    `rsid` the probe's, `gt` into `[ref] + alts` with `I` read as Illumina's `I`), sorted by contig,
+    position and rsid, and the counts per outcome. Raises `ValueError` for a load of several facets, or one whose assembly
+    no configured manifest maps its indel probes to; `ReferenceMismatchError` as `resolve_ref` does.
+    """
+    facets = loaded.facets.collect()
+    if facets.height != 1:
+        raise ValueError(f"_ungated_code_rows takes one facet; this Loaded has {facets.height}")
+    store, _, _, plan, rows_per_chrom = _fit(loaded, facets.row(0, named=True), reference, None)
+    if plan.label is None:
+        raise ValueError("the reference's assembly is unknown, so no manifest's build can be matched with it")
+    catalog, manifests = indel_catalog(plan.label)
+    if not manifests:
+        raise ValueError(f"no manifest with indel probes on {plan.label} is configured (JUST_VCF_MANIFESTS_DIR)")
+    is_code = pl.col("source_ref").is_null() & pl.col("gt_alleles").list.eval(pl.element().is_in(CODES)).list.any().fill_null(False)
+    only_codes = pl.col("gt_alleles").list.eval(pl.element().is_null() | pl.element().is_in(CODES)).list.all()
+    rows = loaded.calls.filter(is_code & only_codes).select("chrom", "pos", "ids", "gt_alleles").collect().with_row_index("_row")
+    counts: Counter[str] = Counter({"code_rows": rows.height})
+    found = _code_slots()
+    for chrom in sorted(chrom for chrom in rows_per_chrom if chrom is not None):
+        on_contig = rows.filter(pl.col("chrom") == chrom)
+        if on_contig.is_empty():
+            continue
+        if plan.checks.get(chrom) not in _READABLE or chrom not in plan.contigs:
+            counts["code_contig_unread"] += on_contig.height
+            continue
+        _resolve_code_rows(on_contig, catalog.filter(pl.col("chrom") == chrom), store, plan.contigs[chrom], counts, found)
+    resolved = pl.DataFrame(found, schema=_CODE_SLOTS)
+    out = rows.join(resolved, on="_row", how="inner").select(
+        "chrom", "pos", pl.col("_code_end_pos").alias("end_pos"), pl.col("_code_rsid").alias("rsid"), pl.col("_code_gt").alias("gt")
+    )
+    return out.sort("chrom", "pos", "end_pos", "rsid", maintain_order=True), counts
 
 
 _NO_BASE = r"^[Nn]+$"
@@ -1210,6 +1340,7 @@ def _derive_array_alleles(work: pl.DataFrame, counts: Counter[str], withhold: bo
 
 _CODE_REASONS = {
     "code_mixed": "an I/D code beside a base letter",
+    "code_orientation_ambiguous": "their rsids are listed both ways in the chip's per-probe orientation table",
     "code_no_probe": "no indel probe of the manifests carries one of their rsids on their contig",
     "code_ambiguous": "their rsids name more than one indel site",
     "code_not_found": "their probe's flanks are not found in the reference near its position",
@@ -1228,16 +1359,23 @@ def _code_warnings(counts: Counter[str], codes: _Codes | None) -> list[str]:
     lines = []
     if codes is not None and codes.manifests:
         used = ", ".join(f"{manifest.descriptor} (sha256 {manifest.sha256[:12]}…)" for manifest in codes.manifests)
-        lines.append(
+        line = (
             f"{counts['code_resolved']} of {counts['code_rows']} array row(s) with an I/D indel code resolved against the indel "
             f"probes of {used}: matched by rsid, the site located by the probe's flanks in the reference, REF read from it"
         )
+        if codes.orientation is not None:
+            line += (
+                f"; {counts['code_resolved_flipped']} of them with I and D swapped first, their probe read the other way round "
+                "in the chip's per-probe orientation table (id_orientation.json, learned from whole genomes)"
+            )
+        lines.append(line)
     if counts["code_id_orientation_unverified"]:
-        unverified = codes.unverified if codes is not None else None
-        lines.append(
-            f"{counts['code_id_orientation_unverified']} array row(s) with an I/D indel code left unread "
-            f"(id_orientation_unverified): the chip's I/D orientation against the manifests' probes is not verified; {unverified}"
-        )
+        prefix = f"{counts['code_id_orientation_unverified']} array row(s) with an I/D indel code left unread (id_orientation_unverified)"
+        if codes is not None and codes.unverified is None and codes.unlisted is not None:
+            lines.append(f"{prefix}: {codes.unlisted}")
+        else:
+            unverified = codes.unverified if codes is not None else None
+            lines.append(f"{prefix}: the chip's I/D orientation against the manifests' probes is not verified; {unverified}")
     if counts["code_no_manifest"]:
         absent = codes.absent if codes is not None and codes.absent else "no manifest was given"
         lines.append(f"{counts['code_no_manifest']} array row(s) with an I/D indel code left unread: {absent}")

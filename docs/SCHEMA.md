@@ -186,7 +186,7 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
 
 A store written before 0.0.22 keeps its rows' `mismatch` on such a REF (the step to 0.0.22 never
 rewrites a value; it names the facets holding those rows, "Store migration"), and the facet records
-`RESOLVE_VERSION` 12, so the same facet resolved today (13) is another REF state of it.
+`RESOLVE_VERSION` 12, so the same facet resolved since (13 and later) is another REF state of it.
 
 RM3 never fills `ref` from `source_ref` or the reverse. That would be filling a value from the source
 that checks it.
@@ -255,11 +255,31 @@ second identity rejected above.
   row's; `source_gt` keeps the codes. A row whose rsids name more than one located site, or none, is
   left as loaded, each reason counted. Not affected by `strand_check`: `I` and `D` read the same on
   either strand. `ref_check` stays null. **Gated per chip** (`probes.ID_CALIBRATION`): a vendor's `I`
-  is matched with Illumina's by rsid only on a chip where that was measured to hold, the share of
-  resolved homozygous rows that read hom-ref (`23andme_v5` 98.7%, `ancestrydna_v2` 98.4%, PGP-HMS,
-  2026-10-23). Every other chip (`23andme_v3` and `23andme_v4` at 76%, with the same sites hom-alt in
-  every export, and on v3 hom-ref in the same person's CGI genome; `23andme_v1_v2` on 6 rows; an `illumina:` Final Report, a platform family or an unknown
-  chip, never measured) has its code rows left as loaded, counted `id_orientation_unverified`.
+  is matched with Illumina's by rsid chip-wide only on a chip where that was measured to hold, the
+  share of resolved homozygous rows that read hom-ref (`23andme_v5` 98.7%, `ancestrydna_v2` 98.4%,
+  PGP-HMS, 2026-10-23). **Gated per probe** on `23andme_v3` and `23andme_v4` (76% chip-wide, the same
+  sites hom-alt in every export): against the same people's Complete Genomics `var` (2026-11-07, 23 v3
+  and 13 v4 people) the orientation runs per probe, not per chip. On v4, 433 homozygous rows over a CGI
+  reference block read hom-alt, on 41 probes that read so in every export carrying them, against 1,268
+  that read hom-ref; on v3 131 probes read as Illumina's and 45 the other way round, none both; 39
+  probes are flipped on both chips and none flipped on one reads as Illumina's on the other. So
+  `resolve_ref` reads a v3 or v4 code row only when its rsid is in the chip's orientation table
+  (`probes.id_orientation`, the package's `id_orientation.json`, learned by `scripts/id_orientation.py`):
+  `same` as written, `flipped` with `I` and `D` swapped before the probe reads them (`source_gt` keeps
+  the codes as written; the warnings count the rows swapped). The table's rule
+  (`MIN_ORIENTATION_PEOPLE` 3): `same` when at least 3 people's export reads the probe hom-ref over a
+  reference block of their whole genome with no call carrying an ALT within 10 bases
+  (`ORIENTATION_VARIANT_WINDOW`) and none reads it hom-alt over one; `flipped` the mirror; anything
+  else, fewer people or both kinds of evidence, is not listed. Only reference-block evidence counts: a
+  person whose genome has a reference block there is hom-ref, so the export's code says which code
+  means the reference. A row the table does not list is left as loaded, counted
+  `id_orientation_unverified` ("no WGS evidence of this probe's orientation"); one whose rsids it lists
+  both ways likewise, under its own reason. While the table lists no probe of a chip, every code row of
+  it is left as loaded and no manifest is read, as before. The table's orientations (not its counts)
+  are folded into `facets.resolve_inputs` with the manifests (`probes.orientation_digest`), so a facet
+  resolved by one table and by another are two REF states. Every other chip (`23andme_v1_v2` on 6
+  rows; an `illumina:` Final Report, a platform family or an unknown chip, never measured) has its
+  code rows left as loaded, counted `id_orientation_unverified`.
 - **An insertion point** (a row over no reference base: `source_ref = ""` in CGI's native files and a
   CASAVA indel table; a Genos row with `end_pos` null) gets VCF's anchor base. Every loader places the
   point at the base before it (1-based `pos = begin` of a zero-length 0-based locus), so the anchor is
@@ -834,7 +854,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `sorted_name_length_pairs_digest` | the seqcol `sorted_name_length_pairs` attribute digest of the header's `##contig` names (verbatim) and lengths: the coordinate system, not the collection. Null when a contig has no length or there are none |
 | `ref_seqcol_digest` | the Sequence Collection `ref` was read from (RM3, `resolve_ref`). Null until REF is read. It is kept apart from `seqcol_digest`: the reference that checks the facet is not evidence of the facet's own collection, and filling one from the other would make that check agree with itself |
 | `resolve_version` | the `RESOLVE_VERSION` of the `resolve_ref` that read REF (u32). Null until REF is read, and on a facet a store migrated from before 0.0.20 whose REF was read (not recorded). A derived facet keeps its parent's; a consensus its parents' where they share one, else null. `resolve_ref` keeps the `facet_id`, so this column, `ref_seqcol_digest` and `resolve_inputs` are what tell two REF states of one facet apart (the durable store refuses an add that meets a held facet in another). just-vcf's own shape |
-| `resolve_inputs` | what else `resolve_ref` read rows with: a 16-hex digest over the chip manifests whose indel probes read an array's `I`/`D` codes and whose SNV allele pairs read a mixed strand's withheld rows (`probes.catalog_digest` of each, so the manifests' bytes and `PROBES_VERSION`). Null until REF is read, where no manifest read a row (a VCF, an array with no code row and no strand withheld, or none configured), and on an array or consensus facet a store migrated from before 0.0.21 whose REF was read (not recorded). A derived facet keeps its parent's. A consensus has a digest of its parents' REF states instead (each parent's `facet_id`, `ref_seqcol_digest`, `resolve_version` and `resolve_inputs`), always set, since its `resolve_version` is null wherever they differ. With `ref_seqcol_digest` and `resolve_version` it is the facet's REF state (`store.REF_STATE`). just-vcf's own shape |
+| `resolve_inputs` | what else `resolve_ref` read rows with: a 16-hex digest over the chip manifests whose indel probes read an array's `I`/`D` codes and whose SNV allele pairs read a mixed strand's withheld rows (`probes.catalog_digest` of each, so the manifests' bytes and `PROBES_VERSION`, and for a chip read per probe, 23andMe v3 and v4, the orientations its table lists). Null until REF is read, where no manifest read a row (a VCF, an array with no code row and no strand withheld, or none configured), and on an array or consensus facet a store migrated from before 0.0.21 whose REF was read (not recorded). A derived facet keeps its parent's. A consensus has a digest of its parents' REF states instead (each parent's `facet_id`, `ref_seqcol_digest`, `resolve_version` and `resolve_inputs`), always set, since its `resolve_version` is null wherever they differ. With `ref_seqcol_digest` and `resolve_version` it is the facet's REF state (`store.REF_STATE`). just-vcf's own shape |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
 | `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele; null = not counted (a genotype table, which writes no REF or ALT). just-vcf's own shape |
@@ -3987,6 +4007,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-07, RM281: I/D codes per probe on 23andMe v3 and v4): no column
+  changes. Rule changed (Decision 2): `23andme_v3` and `23andme_v4` read their `I`/`D` codes per probe
+  by the orientation table learned from whole genomes (`probes.id_orientation`), a `flipped` probe's
+  codes swapped before the manifest probe reads them; a row the table does not list stays as loaded,
+  counted `id_orientation_unverified`. **Values change** on v3 and v4 facets when the manifests are
+  configured and the table lists probes: the listed rows get `ref`, `alts`, `gt`, `end_pos` and
+  spelled `gt_alleles`, and `resolve_inputs` names the table with the manifests. The table ships empty
+  until it is learned, and an empty table reads as the withheld gate did. `RESOLVE_VERSION` 14.
 
 - **No version change** (2026-11-07, audit 16: the WGS band asks every autosome): no column changes.
   **Values change** in `facets`: a VCF facet with a genome's site count and breadth but calls on fewer

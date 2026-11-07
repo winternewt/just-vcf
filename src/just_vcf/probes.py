@@ -33,6 +33,12 @@ Final Report names one (`illumina:<manifest>`, configured), or one learned from 
 (`learn_probe_sets`, written into the cache) for the vendors that publish none. A platform family named
 by marker overlap has none: which version's probes it carries is not known.
 
+**Which way a chip's `I` reads (`ID_CALIBRATION`).** Matching a vendor's code with Illumina's probe by
+rsid assumes both call the allele with the inserted bases `I`. On 23andMe v5 and AncestryDNA v2 that held
+chip-wide; on 23andMe v3 and v4 it holds on most probes and runs the other way on a few dozen, so those
+chips resolve per probe, by a table learned from people with both an export and a whole genome
+(`id_orientation`, the package's `id_orientation.json`; the rule at `MIN_ORIENTATION_PEOPLE`).
+
 Coordinates: `map_info` and the exports' `pos` are 1-based; a gap is the 0-based index of the first
 base after the left flank, so an insertion goes before that base and a deletion starts at it.
 """
@@ -40,14 +46,16 @@ base after the left flank, so an insertion goes before that base and a deletion 
 import csv
 import hashlib
 import io
+import json
 import logging
 import os
 import re
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from functools import cache
+from importlib import resources
 from pathlib import Path
 
 import polars as pl
@@ -99,44 +107,206 @@ MAX_PREFIX = 64
 """The most reference bases `place_indel` puts between an export's position and the site it names."""
 
 
+class IdGate(str, Enum):
+    """How `resolve_ref` treats a chip's `I`/`D` codes (`ID_CALIBRATION`)."""
+
+    CHIP_WIDE = "chip_wide"
+    """Every code row resolves, `I` read as Illumina's `I`: the chip-wide check held."""
+    PER_PROBE = "per_probe"
+    """A code row resolves only when its rsid is in the chip's orientation table (`id_orientation`),
+    `same` as written, `flipped` with `I` and `D` swapped; any other row is left as loaded."""
+    WITHHELD = "withheld"
+    """No code row resolves: nothing measured says which way the chip's `I` reads."""
+
+
 @dataclass(frozen=True)
 class IdCalibration:
-    """Whether a chip's `I`/`D` codes are resolved against the manifests' indel probes, and on what evidence."""
+    """How a chip's `I`/`D` codes are resolved against the manifests' indel probes, and on what evidence."""
 
-    resolve: bool
+    mode: IdGate
     evidence: str
+
+    @property
+    def resolve(self) -> bool:
+        """Whether any of the chip's code rows may resolve (chip-wide, or per probe where the table lists it)."""
+        return self.mode is not IdGate.WITHHELD
 
 
 _HOM_ALT_SITES = (
-    "resolved homozygous I/D rows read hom-ref only 76%, the same sites hom-alt in every export (2 PGP-HMS exports, 2026-10-23): "
-    "the reference may carry the rare allele there, or the chip's I/D may mean the other way round"
+    "resolved homozygous I/D rows read hom-ref only 76%, the same sites hom-alt in every export (2 PGP-HMS exports, 2026-10-23)"
 )
 
 ID_CALIBRATION: dict[str, IdCalibration] = {
-    "23andme_v5": IdCalibration(True, "resolved homozygous I/D rows read hom-ref 98.7% (2 PGP-HMS exports, 2026-10-23)"),
-    "ancestrydna_v2": IdCalibration(True, "resolved homozygous I/D rows read hom-ref 98.4% (1 PGP-HMS export, 2026-10-23)"),
+    "23andme_v5": IdCalibration(IdGate.CHIP_WIDE, "resolved homozygous I/D rows read hom-ref 98.7% (2 PGP-HMS exports, 2026-10-23)"),
+    "ancestrydna_v2": IdCalibration(IdGate.CHIP_WIDE, "resolved homozygous I/D rows read hom-ref 98.4% (1 PGP-HMS export, 2026-10-23)"),
     "23andme_v3": IdCalibration(
-        False,
-        _HOM_ALT_SITES + "; the same person's Complete Genomics var (hu0E7AAF, 2026-10-23) has a reference block and no "
-        "variant over all 44 sites its 23andMe v3 export reads hom-alt, and over all 127 it reads hom-ref: on those probes the "
-        "codes mean the other way round",
+        IdGate.PER_PROBE,
+        _HOM_ALT_SITES + "; against 23 people's Complete Genomics var (2026-11-07) 131 probes read the codes as Illumina's and "
+        "45 the other way round, none both: the orientation is per probe",
     ),
-    "23andme_v4": IdCalibration(False, _HOM_ALT_SITES),
-    "23andme_v1_v2": IdCalibration(False, "6 resolved homozygous rows in one PGP-HMS export (2026-10-23), too few to calibrate"),
+    "23andme_v4": IdCalibration(
+        IdGate.PER_PROBE,
+        _HOM_ALT_SITES + "; against 13 people's Complete Genomics var (2026-11-07) 41 probes read hom-alt over a reference "
+        "block in every export carrying them, 1 both ways, the rest as Illumina's: the orientation is per probe",
+    ),
+    "23andme_v1_v2": IdCalibration(IdGate.WITHHELD, "6 resolved homozygous rows in one PGP-HMS export (2026-10-23), too few to calibrate"),
 }
 """Per chip, whether its `I`/`D` codes may be resolved by rsid against the manifests' indel probes
-(RM281). The codes name no sequence: matching a vendor's probe to Illumina's by rsid assumes both
-mean the same allele by `I`, and the check is the share of resolved homozygous rows that then read
-hom-ref, which a person's genome makes most of them. A chip resolves only where that share was
-measured and held; a chip not listed here (an unknown chip, an `illumina:` Final Report, a platform
-family) has no calibration and is withheld too."""
+(RM281), chip-wide or per probe. The codes name no sequence: matching a vendor's probe to Illumina's
+by rsid assumes both mean the same allele by `I`, and the check is the share of resolved homozygous
+rows that then read hom-ref, which a person's genome makes most of them. A chip resolves chip-wide
+only where that share was measured and held. 23andMe v3 and v4 failed it (76%), and the same people's
+whole genomes showed why: on a few dozen probes their `I` is Illumina's `D`, on the rest it is
+Illumina's `I`. They resolve per probe (`id_orientation`). A chip not listed here (an unknown chip, an
+`illumina:` Final Report, a platform family) has no calibration and is withheld."""
 
 
 def id_calibration(chip: str | None) -> IdCalibration:
     """`ID_CALIBRATION`'s entry for `chip`, or a withholding one saying there is none."""
     if chip is None:
-        return IdCalibration(False, "the facet's chip is unknown, so no calibration of its I/D codes applies")
-    return ID_CALIBRATION.get(chip, IdCalibration(False, f"no calibration of {chip}'s I/D codes has been measured"))
+        return IdCalibration(IdGate.WITHHELD, "the facet's chip is unknown, so no calibration of its I/D codes applies")
+    return ID_CALIBRATION.get(chip, IdCalibration(IdGate.WITHHELD, f"no calibration of {chip}'s I/D codes has been measured"))
+
+
+# --- per-probe orientation: which way a chip's I reads, learned from whole genomes ---------------
+
+MIN_ORIENTATION_PEOPLE = 3
+"""People whose whole genome must show a probe's orientation before the table lists it.
+
+The rule, per chip and rsid: `same` when at least this many people's export reads hom-ref over a
+reference block of their whole genome and none reads hom-alt over one; `flipped` the mirror (at least
+this many hom-alt over a reference block, none hom-ref); anything else, fewer people or both kinds of
+evidence, is not listed, so its rows stay withheld. A person whose genome has a reference block over
+the site is hom-ref there, so the export's code says which code means the reference.
+
+Rejected: counting a hom-alt row over a whole-genome variant as `same` evidence (the variant is found
+within `ORIENTATION_VARIANT_WINDOW` bases, which is coarse, and a nearby variant need not be the probe's
+allele); pooling evidence across chips, although v3 and v4 agree on every probe both carry (one chip's
+probe design is not the other's); and a chip-wide flip (most probes read as Illumina's)."""
+
+ORIENTATION_VARIANT_WINDOW = 10
+"""Bases on either side of a site within which a whole-genome call carrying an ALT disqualifies the
+site as reference evidence, though a reference block covers the site itself."""
+
+ORIENTATION_CHIPS: frozenset[str] = frozenset(chip for chip, entry in ID_CALIBRATION.items() if entry.mode is IdGate.PER_PROBE)
+"""The chips the orientation table covers: those `ID_CALIBRATION` resolves per probe."""
+
+_RSID = re.compile(r"^rs\d+$")
+
+
+class Orientation(str, Enum):
+    """Which way a chip's `I` reads on one probe, against Illumina's."""
+
+    SAME = "same"
+    """The export's `I` is Illumina's `I`: the codes resolve as written."""
+    FLIPPED = "flipped"
+    """The export's `I` is Illumina's `D`: the codes are swapped before they resolve."""
+
+
+@dataclass(frozen=True)
+class IdOrientation:
+    """One probe's orientation on one chip, and the people it rests on: those whose export read the
+    probe hom-ref over a reference block of their whole genome, and those whose read it hom-alt over one."""
+
+    orientation: Orientation
+    hom_ref_people: int
+    hom_alt_people: int
+
+
+def orientation_rule(hom_ref_people: int, hom_alt_people: int) -> Orientation | None:
+    """`MIN_ORIENTATION_PEOPLE`'s rule: the orientation the evidence supports, or None (not listed)."""
+    if hom_ref_people >= MIN_ORIENTATION_PEOPLE and hom_alt_people == 0:
+        return Orientation.SAME
+    if hom_alt_people >= MIN_ORIENTATION_PEOPLE and hom_ref_people == 0:
+        return Orientation.FLIPPED
+    return None
+
+
+def orientation_payload(
+    evidence: Mapping[str, Mapping[str, tuple[int, int]]], pairs: Mapping[str, int], learned_from: str, date: str
+) -> dict:
+    """The orientation table's JSON payload: per chip in `ORIENTATION_CHIPS`, the probes the rule lists
+    from `evidence` (chip → rsid → (people hom-ref over a reference block, people hom-alt over one)),
+    with `pairs` the export–genome pairs read per chip, under a provenance header. A chip with no
+    evidence is present with no probes. Raises `ValueError` for a chip the table does not cover."""
+    unknown = sorted((set(evidence) | set(pairs)) - ORIENTATION_CHIPS)
+    if unknown:
+        raise ValueError(f"the orientation table covers {sorted(ORIENTATION_CHIPS)}, not {unknown}")
+    chips = {}
+    for chip in sorted(ORIENTATION_CHIPS):
+        probes = {}
+        for rsid, (hom_ref, hom_alt) in sorted(evidence.get(chip, {}).items()):
+            orientation = orientation_rule(hom_ref, hom_alt)
+            if orientation is not None:
+                probes[rsid] = {"orientation": orientation.value, "hom_ref_people": hom_ref, "hom_alt_people": hom_alt}
+        chips[chip] = {"pairs": pairs.get(chip, 0), "probes": probes}
+    provenance = {
+        "learned_from": learned_from,
+        "date": date,
+        "min_orientation_people": MIN_ORIENTATION_PEOPLE,
+        "variant_window": ORIENTATION_VARIANT_WINDOW,
+        "rule": (
+            "per chip and rsid: same when at least min_orientation_people people's export reads the probe hom-ref over a "
+            "reference block of their whole genome (no call carrying an ALT within variant_window bases) and none reads it "
+            "hom-alt over one; flipped the mirror; anything else is not listed and stays withheld"
+        ),
+    }
+    return {"chips": chips, "provenance": provenance}
+
+
+def orientation_json(payload: dict) -> str:
+    """The payload as the package file writes it: keys sorted, compact, a newline at the end."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+
+
+def orientation_tables(payload: dict) -> dict[str, dict[str, IdOrientation]]:
+    """The orientation table per chip, read from a payload `orientation_payload` wrote, and checked:
+    the rule's constants the same as this module's, every chip in `ORIENTATION_CHIPS` present and no
+    other, rsids sorted, and each listed probe's orientation the one the rule gives its evidence (a hand
+    edit that does not follow it is refused). Raises `ValueError` on anything else."""
+    provenance = payload.get("provenance", {})
+    if provenance.get("min_orientation_people") != MIN_ORIENTATION_PEOPLE or provenance.get("variant_window") != ORIENTATION_VARIANT_WINDOW:
+        raise ValueError(
+            f"id_orientation.json was learned at min_orientation_people {provenance.get('min_orientation_people')}, variant_window "
+            f"{provenance.get('variant_window')}; this module's rule is {MIN_ORIENTATION_PEOPLE}, {ORIENTATION_VARIANT_WINDOW}"
+        )
+    chips = payload.get("chips", {})
+    if set(chips) != ORIENTATION_CHIPS:
+        raise ValueError(f"id_orientation.json covers {sorted(chips)}, not {sorted(ORIENTATION_CHIPS)}")
+    tables: dict[str, dict[str, IdOrientation]] = {}
+    for chip in sorted(chips):
+        probes = chips[chip]["probes"]
+        if list(probes) != sorted(probes):
+            raise ValueError(f"id_orientation.json: {chip}'s rsids are not sorted")
+        table = {}
+        for rsid, entry in probes.items():
+            hom_ref, hom_alt = entry["hom_ref_people"], entry["hom_alt_people"]
+            ruled = orientation_rule(hom_ref, hom_alt)
+            if not _RSID.match(rsid) or ruled is None or entry["orientation"] != ruled.value:
+                raise ValueError(
+                    f"id_orientation.json: {chip} {rsid} is listed {entry['orientation']!r} on {hom_ref} hom-ref and {hom_alt} "
+                    "hom-alt people, which the rule does not give"
+                )
+            table[rsid] = IdOrientation(ruled, hom_ref, hom_alt)
+        tables[chip] = table
+    return tables
+
+
+@cache
+def _packaged_tables() -> dict[str, dict[str, IdOrientation]]:
+    return orientation_tables(json.loads(resources.files("just_vcf").joinpath("id_orientation.json").read_text()))
+
+
+def id_orientation(chip: str) -> dict[str, IdOrientation]:
+    """The chip's per-probe orientation table, by rsid, from the package's `id_orientation.json`; empty
+    for a chip the table does not cover, or one it covers with no probe learned yet."""
+    return _packaged_tables().get(chip, {})
+
+
+def orientation_digest(table: Mapping[str, IdOrientation]) -> str:
+    """What rows resolved by `table` depend on: each listed rsid and its orientation (not the counts)."""
+    text = json.dumps({rsid: entry.orientation.value for rsid, entry in table.items()}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
 def reverse_complement(sequence: str) -> str:
@@ -337,9 +507,12 @@ def snv_catalog() -> tuple[pl.DataFrame, list[Manifest]]:
     return pairs.join(single, on=["rsid", "chrom"], how="semi").sort("chrom", "rsid"), used
 
 
-def catalog_digest(manifests: list[Manifest]) -> str:
-    """What a result computed with these manifests depends on: their bytes and this module's version."""
+def catalog_digest(manifests: list[Manifest], orientation: str | None = None) -> str:
+    """What a result computed with these manifests depends on: their bytes and this module's version,
+    and, for a chip resolved per probe, its orientation table (`orientation_digest`)."""
     text = ",".join(sorted(manifest.sha256 for manifest in manifests)) + f";{PROBES_VERSION}"
+    if orientation is not None:
+        text += f";orientation={orientation}"
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 

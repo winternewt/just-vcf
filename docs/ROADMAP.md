@@ -140,9 +140,9 @@ Severity: low · Status: in progress (`consensus` and `method_error_rates` shipp
 The person chose after the atlas (E7): a per-site posterior across one person's facets as a derived facet, with RM279's rates as priors; never before them.
 
 ## RM281 — Chip manifests
-**State:** unattended: WGS-learned I/D orientation for 23andMe v4 from PGP people with an export and a CGI `var` · **Owner:** lead
+**State:** unattended: the per-probe orientation is built, 2026-11-07; the lead learns its table on PGP-HMS at merge · **Owner:** lead
 
-Severity: medium · Status: in progress (shipped 2026-10-23: I/D codes resolved against Illumina's indel probes, a mixed-strand array's withheld rows read by their probe's allele pair, absence with a cause from manifest or learned probe sets, merge 5b6ec3b; I/D codes only on chips whose calibration passed (`probes.ID_CALIBRATION`) and a written no-call as `no_call`, merge 9641c70. Left: WGS-learned I/D orientation for 23andMe v4's internal ids and the v3/v4 hom-alt question, buildable now from PGP people with a 23andMe export and a CGI `var` (slow: one `var` load from Krypton took about 25 minutes), ending in new `ID_CALIBRATION` entries or a per-probe flip; F17 waits for a source of the Sirius chip's site alleles (docs/LAYERS.md, layer 1: no public manifest); the Final Report with only Forward/Design alleles waits for its manifest, HumanOmni2.5-8v1_A, not on disk; exact-manifest absence on real data waits for an export whose chip's own manifest is on disk)
+Severity: medium · Status: in progress (shipped 2026-10-23: I/D codes resolved against Illumina's indel probes, a mixed-strand array's withheld rows read by their probe's allele pair, absence with a cause from manifest or learned probe sets, merge 5b6ec3b; I/D codes only on chips whose calibration passed (`probes.ID_CALIBRATION`) and a written no-call as `no_call`, merge 9641c70; the v3/v4 hom-alt question answered against the same people's CGI `var` (13 v4 and 23 v3 people, 2026-11-07: the orientation is per probe, 41 v4 and 45 v3 probes flipped) and 23andMe v3/v4 codes read per probe by a table learned from whole genomes (`probes.id_orientation`, `scripts/id_orientation.py`), built 2026-11-07, its table shipped empty until the lead learns it on PGP-HMS at merge. Left: 23andMe v4's internal-id I/D rows, about 15,000 of each export's, which match no Illumina probe by rsid and stay unread; F17 waits for a source of the Sirius chip's site alleles (docs/LAYERS.md, layer 1: no public manifest); the Final Report with only Forward/Design alleles waits for its manifest, HumanOmni2.5-8v1_A, not on disk; exact-manifest absence on real data waits for an export whose chip's own manifest is on disk)
 
 The person chose both sources (E9): public vendor manifests (Illumina GSA/OmniExpress are on disk) and probe sets learned from PGP people with an array and a WGS. Resolves I/D codes, strand per probe, and which sites a chip has (absence with a cause). Closes F17.
 
@@ -215,14 +215,32 @@ Decisions, each with what was rejected:
 - The manifests' indel probes serve every array on their build, matched by rsid. Rejected: only the
   chip's own manifest, which resolves nothing on PGP-HMS (no export's chip has its manifest on disk).
   Risk kept: a vendor's probe for a multi-allelic rsid may test another allele than Illumina's; the
-  hom-ref share above is the check, and v3/v4's is the open question.
+  hom-ref share above is the check, and v3/v4's is answered per probe (next bullet but one).
 - I/D codes resolve only on a chip whose calibration passed (`probes.ID_CALIBRATION`, the lead's
   call 2026-10-23): `23andme_v5` and `ancestrydna_v2`; the rest withheld, counted
   `id_orientation_unverified`. Rejected: resolving every chip (v3 and v4 would ship a quarter of their
-  homozygous rows possibly backwards), and flipping v3/v4's codes (nothing yet says which way is
-  wrong). An `illumina:` Final Report is withheld too, though its own manifest defines its `I`: no
+  homozygous rows possibly backwards), and flipping v3/v4's codes (nothing yet said which way is
+  wrong; since 2026-11-07 v3 and v4 read per probe, below). An `illumina:` Final Report is withheld too, though its own manifest defines its `I`: no
   Final Report with I/D rows has been measured, and the catalog matches rsids across every configured
   manifest, not only the chip's own.
+- 23andMe v3 and v4 read their I/D codes per probe (the lead's design, built 2026-11-07): an rsid in
+  the chip's orientation table (`probes.id_orientation`, the package's `id_orientation.json`) resolves,
+  `same` as written, `flipped` with `I` and `D` swapped first; any other row stays unread, counted
+  `id_orientation_unverified`. The table is learned by `scripts/id_orientation.py` from people with an
+  export and a CGI `var`: `same` where at least 3 people (`MIN_ORIENTATION_PEOPLE`) read the probe
+  hom-ref over a CGI reference block with no ALT-carrying call within 10 bp, and none hom-alt over one;
+  `flipped` the mirror; anything else unlisted. Its orientations are folded into `resolve_inputs`;
+  `RESOLVE_VERSION` 14. The table ships empty, so v3 and v4 stay withheld as before until the lead
+  learns it on the PGP-HMS pairs at merge (the builder cannot open the data). Measured by the lead
+  (2026-11-07, gate lifted in a scratch process): v4, 13 people, 1,268 homozygous rows hom-ref over a
+  reference block, 433 hom-alt over one on 41 probes hom-alt in every export carrying them, 1 probe both
+  ways, 11 hom-alt over a CGI variant (real indels, ABO's rs8176719 among them); v3, 23 people, 131
+  probes `same`, 45 `flipped`, none contradicting; 39 probes flipped on both chips, none flipped on one
+  and `same` on the other. Rejected: counting a hom-alt row over a CGI variant as `same` evidence (the
+  10 bp window is coarse, and a nearby variant need not be the probe's allele); pooling evidence across
+  chips, although they agree on all 39 shared probes (one chip's probe design is not the other's); and a
+  chip-wide flip (most probes read right). A row whose rsids the table lists both ways is withheld
+  under its own reason (`orientation_ambiguous`), not resolved by either (the builder's call).
 - A site is located by its flanks, not by `MapInfo`, which is not the anchor (the gap is one base
   before it for 5,594 GSA probes, at or after it for the rest). REF comes from the reference; the
   manifest gives the inserted bases and the locator only.
@@ -238,9 +256,9 @@ Decisions, each with what was rejected:
 - A platform family (`illumina_gsa`, `illumina_omniexpress`) has no probe set. Rejected: the family's
   manifest, which would put another version's probes on the chip.
 
-Left: WGS-learned I/D orientation for the codes no manifest names (23andMe v4's internal ids) and the
-v3/v4 hom-alt question, from PGP people with a 23andMe export and a CGI `var` (its reference blocks say
-hom-ref outright); F17 (DOGFOODING: no public Sirius manifest, one export); the Final Report with only
+Left: the I/D codes no manifest names (23andMe v4's internal `i` ids, about 15,000 of each v4
+export's I/D rows), which match no Illumina probe by rsid and stay unread; v4's check against WGS is
+done (above, per probe); F17 (DOGFOODING: no public Sirius manifest, one export); the Final Report with only
 Forward/Design alleles (its manifest, HumanOmni2.5-8v1_A, is not on disk); exact-manifest absence on
 real data (no PGP-HMS export's chip has its own manifest on disk).
 

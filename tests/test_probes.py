@@ -1,30 +1,44 @@
 """Chip manifests (RM281): reading a manifest, locating its indel probes, resolving an array's I/D codes."""
 
 import io
+import json
 import random
 import zipfile
+from collections import Counter
+from importlib import resources
 from pathlib import Path
 
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceStore, load, normalize, resolve_ref
+from just_vcf import ReferenceStore, load, normalize, probes, resolve_ref
 from just_vcf.cache import cache_dir
 from just_vcf.formats import get_spec
-from just_vcf.reference import resolve_inputs
+from just_vcf.reference import _orient_code_rows, resolve_inputs
 from just_vcf.store import Store, StoreConflictError, migrate_store
 from just_vcf.probes import (
+    ID_CALIBRATION,
+    MIN_ORIENTATION_PEOPLE,
+    ORIENTATION_CHIPS,
+    IdGate,
+    IdOrientation,
     IndelSite,
+    Orientation,
     ProbeSet,
     ProbeSetKind,
     available_manifests,
     catalog_digest,
     chip_absence,
-    ID_CALIBRATION,
     find_manifest,
     id_calibration,
+    id_orientation,
     learn_probe_sets,
     locate_indel,
+    orientation_digest,
+    orientation_json,
+    orientation_payload,
+    orientation_rule,
+    orientation_tables,
     place_indel,
     probe_set,
     probe_table,
@@ -371,9 +385,270 @@ def test_codes_of_a_chip_whose_orientation_is_unverified_are_withheld(tmp_path: 
 
 
 def test_every_calibration_names_its_evidence() -> None:
-    assert {chip for chip, entry in ID_CALIBRATION.items() if entry.resolve} == {"23andme_v5", "ancestrydna_v2"}
+    by_mode = {mode: {chip for chip, entry in ID_CALIBRATION.items() if entry.mode is mode} for mode in IdGate}
+    assert by_mode[IdGate.CHIP_WIDE] == {"23andme_v5", "ancestrydna_v2"}
+    assert by_mode[IdGate.PER_PROBE] == {"23andme_v3", "23andme_v4"} == ORIENTATION_CHIPS
+    assert by_mode[IdGate.WITHHELD] == {"23andme_v1_v2"}
     assert all("2026-10-23" in entry.evidence for entry in ID_CALIBRATION.values())
+    assert all("2026-11-07" in ID_CALIBRATION[chip].evidence for chip in ORIENTATION_CHIPS)
     assert not id_calibration("living_dna_sirius").resolve and not id_calibration(None).resolve
+    assert {chip for chip, entry in ID_CALIBRATION.items() if entry.resolve} == by_mode[IdGate.CHIP_WIDE] | by_mode[IdGate.PER_PROBE]
+
+
+# --- per-probe orientation (23andMe v3, v4) -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("hom_ref", "hom_alt", "expected"),
+    [
+        (3, 0, Orientation.SAME),
+        (13, 0, Orientation.SAME),
+        (0, 3, Orientation.FLIPPED),
+        (0, 30, Orientation.FLIPPED),
+        (2, 0, None),  # too few people
+        (0, 2, None),
+        (3, 1, None),  # both kinds of evidence
+        (1, 3, None),
+        (11, 2, None),
+        (0, 0, None),
+    ],
+)
+def test_the_orientation_rule_case_by_case(hom_ref: int, hom_alt: int, expected: Orientation | None) -> None:
+    assert orientation_rule(hom_ref, hom_alt) is expected
+
+
+def test_the_rule_is_min_orientation_people_one_way_and_none_the_other() -> None:
+    """The rule against its own definition over a grid, so a change to the threshold moves both."""
+    for hom_ref in range(MIN_ORIENTATION_PEOPLE + 3):
+        for hom_alt in range(MIN_ORIENTATION_PEOPLE + 3):
+            same = hom_ref >= MIN_ORIENTATION_PEOPLE and hom_alt == 0
+            flipped = hom_alt >= MIN_ORIENTATION_PEOPLE and hom_ref == 0
+            assert orientation_rule(hom_ref, hom_alt) is (Orientation.SAME if same else Orientation.FLIPPED if flipped else None)
+
+
+EVIDENCE = {
+    "23andme_v4": {"rs9": (4, 0), "rs10": (0, 3), "rs2": (2, 0), "rs7": (3, 1), "rs1": (0, 0)},
+    "23andme_v3": {"rs5": (0, 5)},
+}
+
+
+def test_the_payload_lists_only_what_the_rule_gives_and_writes_deterministically() -> None:
+    payload = orientation_payload(EVIDENCE, {"23andme_v4": 13, "23andme_v3": 23}, "synthetic evidence", "2026-11-07")
+    tables = orientation_tables(json.loads(orientation_json(payload)))
+    expected = {
+        chip: {rsid: orientation_rule(*counts) for rsid, counts in by_rsid.items() if orientation_rule(*counts) is not None}
+        for chip, by_rsid in EVIDENCE.items()
+    }
+    assert {chip: {rsid: entry.orientation for rsid, entry in table.items()} for chip, table in tables.items()} == expected
+    assert tables["23andme_v4"]["rs10"] == IdOrientation(Orientation.FLIPPED, 0, 3)
+    assert payload["chips"]["23andme_v4"]["pairs"] == 13 and payload["provenance"]["min_orientation_people"] == MIN_ORIENTATION_PEOPLE
+
+    reordered = {chip: dict(reversed(list(by_rsid.items()))) for chip, by_rsid in reversed(list(EVIDENCE.items()))}
+    again = orientation_payload(reordered, {"23andme_v3": 23, "23andme_v4": 13}, "synthetic evidence", "2026-11-07")
+    text = orientation_json(payload)
+    assert orientation_json(again) == text and text.endswith("}\n") and "\n" not in text[:-1]
+    assert list(tables["23andme_v4"]) == sorted(tables["23andme_v4"])
+
+    empty = orientation_payload({}, {}, "nothing", "2026-11-07")
+    assert orientation_tables(empty) == {chip: {} for chip in ORIENTATION_CHIPS}
+
+
+def test_a_table_the_rule_does_not_give_is_refused() -> None:
+    def payload() -> dict:
+        return json.loads(orientation_json(orientation_payload(EVIDENCE, {}, "synthetic evidence", "2026-11-07")))
+
+    edited = payload()
+    edited["chips"]["23andme_v4"]["probes"]["rs10"]["orientation"] = "same"  # 0 hom-ref, 3 hom-alt: flipped
+    with pytest.raises(ValueError, match="rs10 is listed 'same'"):
+        orientation_tables(edited)
+    edited = payload()
+    added = {**edited["chips"]["23andme_v4"]["probes"], "rs7": {"orientation": "same", "hom_ref_people": 3, "hom_alt_people": 1}}
+    edited["chips"]["23andme_v4"]["probes"] = dict(sorted(added.items()))
+    with pytest.raises(ValueError, match="rs7"):
+        orientation_tables(edited)
+    edited = payload()
+    probes = edited["chips"]["23andme_v4"]["probes"]
+    edited["chips"]["23andme_v4"]["probes"] = dict(reversed(list(probes.items())))
+    with pytest.raises(ValueError, match="not sorted"):
+        orientation_tables(edited)
+    edited = payload()
+    del edited["chips"]["23andme_v3"]
+    with pytest.raises(ValueError, match="covers"):
+        orientation_tables(edited)
+    edited = payload()
+    edited["provenance"]["min_orientation_people"] = MIN_ORIENTATION_PEOPLE + 1
+    with pytest.raises(ValueError, match="min_orientation_people"):
+        orientation_tables(edited)
+    with pytest.raises(ValueError, match="23andme_v5"):
+        orientation_payload({"23andme_v5": {"rs1": (3, 0)}}, {}, "pooled", "2026-11-07")
+
+
+def test_the_packaged_table_validates() -> None:
+    text = resources.files("just_vcf").joinpath("id_orientation.json").read_text()
+    payload = json.loads(text)
+    assert orientation_json(payload) == text, "written as orientation_json writes it"
+    tables = orientation_tables(payload)
+    assert set(tables) == ORIENTATION_CHIPS
+    assert {"learned_from", "date", "rule", "min_orientation_people", "variant_window"} <= set(payload["provenance"])
+    for chip in ORIENTATION_CHIPS:
+        assert id_orientation(chip) == tables[chip]
+        assert payload["chips"][chip]["pairs"] >= 0
+    assert id_orientation("23andme_v5") == {}, "a chip resolved chip-wide has no table"
+
+
+def with_table(monkeypatch: pytest.MonkeyPatch, evidence: dict[str, dict[str, tuple[int, int]]]) -> None:
+    """The packaged table replaced by one learned from `evidence`, read through the same validation."""
+    payload = json.loads(orientation_json(orientation_payload(evidence, {}, "synthetic evidence", "2026-11-07")))
+    monkeypatch.setattr(probes, "_packaged_tables", lambda: orientation_tables(payload))
+
+
+@pytest.fixture
+def oriented_manifests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Three locatable probes: rs100 a deletion site, rs200 an insertion site, rs500 another deletion."""
+    rows = [
+        probe_row("rs100", "[I/D]", "1", 501, "PLUS", deletion(500, 3)[1]),
+        probe_row("GSA-rs200", "[D/I]", "1", 1001, "PLUS", insertion(1000, INSERTED)),
+        probe_row("rs500", "[I/D]", "1", 2001, "PLUS", deletion(2000, 2)[1]),
+    ]
+    directory = tmp_path / "manifests"
+    write_manifest(directory, rows)
+    monkeypatch.setenv("JUST_VCF_MANIFESTS_DIR", str(directory))
+    return directory
+
+
+ORIENTED_ROWS = [
+    ("rs100", "1", 501, "II"),
+    ("rs100", "1", 501, "DI"),
+    ("rs200", "1", 1001, "DD"),
+    ("rs200", "1", 1001, "ID"),
+    ("rs500", "1", 2001, "DI"),
+    ("rs500", "1", 2001, "DD"),
+]
+
+
+def as_chip(loaded, chip: str | None):
+    return loaded.model_copy(update={"facets": loaded.facets.with_columns(pl.lit(chip, dtype=pl.String).alias("chip"))})
+
+
+def by_codes(resolved) -> dict[tuple[str, str], dict]:
+    return {(row["ids"][0], row["source_gt"]): row for row in resolved.calls.collect().iter_rows(named=True)}
+
+
+@pytest.mark.parametrize("chip", sorted(ORIENTATION_CHIPS))
+def test_a_per_probe_chip_reads_each_listed_probe_its_way_and_withholds_the_rest(
+    tmp_path: Path, grch37_store: ReferenceStore, oriented_manifests: Path, monkeypatch: pytest.MonkeyPatch, chip: str
+) -> None:
+    with_table(monkeypatch, {chip: {"rs100": (3, 0), "rs200": (0, 4)}})
+    loaded = load(coded_export(tmp_path, ORIENTED_ROWS))
+    as_written = by_codes(resolve_ref(as_chip(loaded, "23andme_v5"), grch37_store))
+    oriented = resolve_ref(as_chip(loaded, chip), grch37_store)
+    rows = by_codes(oriented)
+    slots = ("ref", "alts", "gt", "end_pos", "gt_alleles")
+
+    # rs100 `same`: read as written, as a chip-wide chip reads it.
+    long_del, short_del = CONTIG[500:504], CONTIG[503]
+    for codes in ("II", "DI"):
+        assert [rows[("rs100", codes)][s] for s in slots] == [as_written[("rs100", codes)][s] for s in slots]
+    assert rows[("rs100", "II")]["ref"] == long_del and rows[("rs100", "II")]["gt"] == [0, 0]
+    assert haplotype(CONTIG, 501, long_del, short_del) == CONTIG[:500] + CONTIG[503:]
+
+    # rs200 `flipped`: the export's D is Illumina's I. Over an insertion site (the reference lacks the
+    # bases) Illumina's D is REF, so the export's DD is hom-alt with the bases inserted, its ID het.
+    short_ins, long_ins = CONTIG[1000], INSERTED + CONTIG[1000]
+    flipped_dd, flipped_id = rows[("rs200", "DD")], rows[("rs200", "ID")]
+    assert (flipped_dd["ref"], flipped_dd["alts"], flipped_dd["gt"], flipped_dd["gt_alleles"]) == (short_ins, [long_ins], [1, 1], [long_ins, long_ins])
+    assert (flipped_id["gt"], flipped_id["gt_alleles"]) == ([0, 1], [short_ins, long_ins])
+    assert haplotype(CONTIG, 1001, short_ins, long_ins) == CONTIG[:1000] + INSERTED + CONTIG[1000:]
+    # The same rows as a chip-wide chip reads the codes swapped by hand.
+    (tmp_path / "swapped").mkdir()
+    by_hand = by_codes(resolve_ref(as_chip(load(coded_export(tmp_path / "swapped", [("rs200", "1", 1001, "II"), ("rs200", "1", 1001, "DI")])), "23andme_v5"), grch37_store))
+    for codes, written in {"DD": "II", "ID": "DI"}.items():
+        assert [rows[("rs200", codes)][s] for s in slots] == [by_hand[("rs200", written)][s] for s in slots]
+    assert all(row["source_gt"] == codes for (_, codes), row in rows.items()), "the codes stay in source_gt as the export wrote them"
+
+    # rs500 is not listed: left as loaded, though its probe would resolve it.
+    for codes in ("DI", "DD"):
+        assert as_written[("rs500", codes)]["ref"] == CONTIG[2000:2003]
+        row = rows[("rs500", codes)]
+        assert row["ref"] is None and row["gt"] is None and row["gt_alleles"] == list(codes)
+    assert_gt_indexes_ref(oriented.calls.collect())
+
+    warnings = "\n".join(oriented.warnings)
+    assert "4 of 6 array row(s) with an I/D indel code resolved against the indel probes of TEST-1-0_A1" in warnings
+    assert "2 of them with I and D swapped first" in warnings
+    assert (
+        f"2 array row(s) with an I/D indel code left unread (id_orientation_unverified): {chip} is read per probe, and no WGS "
+        f"evidence of this probe's orientation is in its table (id_orientation.json, 2 probe(s) of {chip} listed)"
+    ) in warnings
+
+
+def test_a_chip_resolved_chip_wide_ignores_the_orientation_table(
+    tmp_path: Path, grch37_store: ReferenceStore, oriented_manifests: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loaded = load(coded_export(tmp_path, ORIENTED_ROWS))
+    before = {chip: resolve_ref(as_chip(loaded, chip), grch37_store) for chip in ("ancestrydna_v2", "23andme_v5")}
+    with_table(monkeypatch, {"23andme_v4": {"rs100": (0, 3), "rs200": (0, 3)}})
+    for chip, resolved in before.items():
+        after = resolve_ref(as_chip(loaded, chip), grch37_store)
+        assert after.calls.collect().equals(resolved.calls.collect()), chip
+        assert after.warnings == resolved.warnings, chip
+        assert after.facets.collect()["resolve_inputs"].to_list() == [resolve_inputs(catalog_digest(available_manifests()), None)], chip
+        assert not any("swapped" in w for w in after.warnings), chip
+
+
+def test_the_orientation_table_is_part_of_a_per_probe_facets_resolve_inputs(
+    tmp_path: Path, grch37_store: ReferenceStore, oriented_manifests: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two tables that read a probe two ways give two REF states of one facet; a table whose counts
+    alone differ reads the same rows, and is the same state."""
+    loaded = as_chip(load(coded_export(tmp_path, ORIENTED_ROWS)), "23andme_v4")
+
+    def inputs(evidence: dict[str, tuple[int, int]]) -> str | None:
+        with_table(monkeypatch, {"23andme_v4": evidence})
+        return resolve_ref(loaded, grch37_store).facets.collect()["resolve_inputs"].item()
+
+    same, flipped, more_people = inputs({"rs200": (3, 0)}), inputs({"rs200": (0, 3)}), inputs({"rs200": (9, 0)})
+    chip_wide = resolve_inputs(catalog_digest(available_manifests()), None)
+    assert len({same, flipped, chip_wide}) == 3 and None not in (same, flipped)
+    assert more_people == same
+    with_table(monkeypatch, {"23andme_v4": {"rs200": (3, 0)}})
+    assert same == resolve_inputs(catalog_digest(available_manifests(), orientation_digest(id_orientation("23andme_v4"))), None)
+
+
+@pytest.mark.parametrize("chip", sorted(ORIENTATION_CHIPS))
+def test_an_empty_table_withholds_a_per_probe_chip_as_the_chip_wide_gate_did(
+    tmp_path: Path, grch37_store: ReferenceStore, oriented_manifests: Path, monkeypatch: pytest.MonkeyPatch, chip: str
+) -> None:
+    """Until the table is learned, a v3 or v4 export resolves as it did when the chip was withheld:
+    every code row as loaded and counted, no manifest read, no manifest named in its REF state."""
+    with_table(monkeypatch, {})
+    loaded = load(coded_export(tmp_path, ORIENTED_ROWS))
+    withheld = resolve_ref(as_chip(loaded, chip), grch37_store)
+    calls = withheld.calls.collect()
+    assert calls["ref"].null_count() == calls.height and calls["gt"].null_count() == calls.height
+    assert calls.sort("pos", "source_gt")["gt_alleles"].to_list() == [list(gt) for _, _, _, gt in sorted(ORIENTED_ROWS, key=lambda r: (r[2], r[3]))]
+    code_lines = [w for w in withheld.warnings if "I/D indel code" in w]
+    assert len(code_lines) == 1 and code_lines[0].startswith("6 array row(s) with an I/D indel code left unread (id_orientation_unverified)")
+    assert f"which lists no probe of {chip} yet" in code_lines[0]
+    assert withheld.facets.collect()["resolve_inputs"].to_list() == [None]
+    assert list((cache_dir() / "probes").glob("*.parquet")) == [], "no manifest was read"
+
+
+def test_rows_are_oriented_by_the_table_and_a_row_listed_both_ways_is_withheld() -> None:
+    table = {"rs1": IdOrientation(Orientation.SAME, 3, 0), "rs2": IdOrientation(Orientation.FLIPPED, 0, 3)}
+    rows = pl.DataFrame(
+        {
+            "_row": [0, 1, 2, 3, 4],
+            "ids": [["rs1"], ["rs2"], ["rs1", "rs2"], ["rs9"], ["rs2"]],
+            "gt_alleles": [["I", "D"], ["I", "D"], ["I", "I"], ["D", "D"], ["I", None]],
+        },
+        schema={"_row": pl.UInt32, "ids": pl.List(pl.String), "gt_alleles": pl.List(pl.String)},
+    )
+    counts: Counter[str] = Counter()
+    oriented, flipped = _orient_code_rows(rows, table, counts)
+    assert dict(zip(oriented["_row"].to_list(), oriented["gt_alleles"].to_list())) == {0: ["I", "D"], 1: ["D", "I"], 4: ["D", None]}
+    assert flipped == {1, 4}
+    assert counts == Counter({"code_id_orientation_unverified": 1, "code_orientation_ambiguous": 1})
 
 
 # --- probe sets and the cause of an absence -------------------------------------------------------

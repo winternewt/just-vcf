@@ -849,9 +849,9 @@ primary-assembly FASTA, 3.15 GB, 194 sequences):
   a reference panel as the REF value here.
 
 ## RM4 — Input type inference
-**State:** unattended: an FTDNA X-only export read across with the same person's autosomal one · **Owner:** lead
+**State:** unattended: the X-only chip is built, 2026-11-07; the lead measures it on PGP-HMS at merge · **Owner:** lead
 
-Severity: medium · Status: in progress (a VCF facet's `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null), the `absence_means` that follows, and `assembly_label` from its contig lengths, merge ee4d5d1, 2026-10-22; an array's build from its rows in `resolve_ref` (F9, RM3), merge 2ff9b00, its row sample limited to rows over one base so a Genos insertion site is not scored as an SNV at its anchor, 2026-10-26; chip from the header or, for 23andMe, the rows, with F13, merge 9d18bcb; variant classes and `content_filter`, merge 3dfeaad; chip by marker overlap for FTDNA, MyHeritage and unstated Final Reports, merge 7451089, 2026-10-23; RefSeq and GenBank accessions as contig names, merge cec1831; GRCh36 in `assembly.ASSEMBLY_LENGTHS` from NCBI's NCBI36 assembly report, so a build-36 VCF's `##contig` lengths name it, 2026-10-26; NCBI36's RefSeq accessions (`NC_000001.9`) as contig names, from the same report through `scripts/contig_names.py`, 2026-10-26, merged. Not built, the lead's call 2026-10-26: a genotype table's variant classes stay null, since an array writes no REF or ALT at load, its `AA` is hom-ref or hom-alt until `resolve_ref`, and counting after it would put carried alleles in a column that counts written ones (rejected: counting after `resolve_ref`, and counting probe shapes at load, a new meaning or column). Left, buildable now: pairing an FTDNA X-only export with the same person's autosomal one, which a caller-supplied subject (RM273) can now group but nothing reads across. Waiting for data: more manifests (other OmniExpress and GSA versions, an Affymetrix one for the 2010 FTDNA layout). An indel-only genome half reads `wgs` at a floor of its own, the lead's call, 2026-11-06)
+Severity: medium · Status: in progress (a VCF facet's `callset_type` (`wgs`, `wes`, `panel`, `imputed`, or null), the `absence_means` that follows, and `assembly_label` from its contig lengths, merge ee4d5d1, 2026-10-22; an array's build from its rows in `resolve_ref` (F9, RM3), merge 2ff9b00, its row sample limited to rows over one base so a Genos insertion site is not scored as an SNV at its anchor, 2026-10-26; chip from the header or, for 23andMe, the rows, with F13, merge 9d18bcb; variant classes and `content_filter`, merge 3dfeaad; chip by marker overlap for FTDNA, MyHeritage and unstated Final Reports, merge 7451089, 2026-10-23; RefSeq and GenBank accessions as contig names, merge cec1831; GRCh36 in `assembly.ASSEMBLY_LENGTHS` from NCBI's NCBI36 assembly report, so a build-36 VCF's `##contig` lengths name it, 2026-10-26; NCBI36's RefSeq accessions (`NC_000001.9`) as contig names, from the same report through `scripts/contig_names.py`, 2026-10-26, merged. Not built, the lead's call 2026-10-26: a genotype table's variant classes stay null, since an array writes no REF or ALT at load, its `AA` is hom-ref or hom-alt until `resolve_ref`, and counting after it would put carried alleles in a column that counts written ones (rejected: counting after `resolve_ref`, and counting probe shapes at load, a new meaning or column). an FTDNA X-only export's chip from its own rows: recall is measured over the chromosomes an export carries (`chip.MIN_CARRIED_SHARE`, 0.5% of its rows), the sampled-rsid floor is 200, and `chip_markers.json` carries each sampled marker's chromosome, 2026-11-07. Waiting for data: more manifests (other OmniExpress and GSA versions, an Affymetrix one for the 2010 FTDNA layout). An indel-only genome half reads `wgs` at a floor of its own, the lead's call, 2026-11-06)
 
 Port just-dna-lite `detect_callset_scope` (WGS vs targeted), gVCF detection, and just-prs chip
 generation detection. New work: WES vs WGS vs panel, and expanding gVCF `END` blocks.
@@ -939,7 +939,9 @@ docs/PROVENANCE.md). Per manifest: coverage, the share of the export's sampled r
 and recall, the share of the manifest's sampled rsids in the export. A chip family is named, basis
 `inferred`, when the export has at least 1,000 sampled rsids, the best manifest's coverage is at least
 0.90 and 0.30 above the other's, and its recall at least 0.40; otherwise the chip is unknown and a
-warning gives both shares per manifest.
+warning gives both shares per manifest. *Since 2026-11-07:* recall is over the chromosomes the export
+carries and the floor is 200 sampled rsids (the lead's call in the decisions below); the measurements
+that follow were taken under the rule above.
 
 Measured through `load` on every loadable array export under the Krypton copy's
 `pgp-hms/participants/`, duplicates as uploaded (660 facets; 606 with 61,000 rsids or more, where the
@@ -972,13 +974,32 @@ Decisions, each with what was rejected:
   above states GSA v2 and reaches 0.97 against the v3 manifest, so the overlap does not tell a
   manifest's version from its neighbour's; naming the one compared with would be a statement the
   export never made.
-- Coverage, margin and recall all have to hold. Rejected: coverage alone, which an extract of a chip
-  passes (39 of the 43 FTDNA X exports have 0.96–0.99 of their rsids in OmniExpress's manifest, and
-  hold 2% of it); and a
+- Coverage, margin and recall all have to hold, recall over the chromosomes the export carries (since
+  2026-11-07, below). Rejected: coverage alone, which an extract of a chip passes (a curated list of the
+  chip's rsids holds a small part of it on every chromosome it carries); and a
   recall floor of 0.8, which would refuse a report like the GSA one that names half its probes by
   position. The coverage floor sits between 0.72 (23andMe v3 against OmniExpress, a custom chip around
   it) and 0.98 (the FTDNA exports named); the rsid CSV at 0.84 and SelfDecode at 0.80 against GSA sit
   in that gap and read unknown.
+- **The lead's call, 2026-11-07: an FTDNA X-only export reads its chip from its own rows.** FTDNA splits
+  a Family Finder download into an autosomal file and an X file. The 43 X files on PGP-HMS (15,789–18,091
+  rows, every row on X, 245–270 sampled rsids) were refused twice over: by the floor of 1,000 sampled
+  rsids, and by recall, since an X file holds about 2% of the whole chip. 39 of them have 0.96–0.98 of
+  their sampled rsids in the OmniExpress sample; 4 have their best share under 0.90 (GSA at most 0.52)
+  and stay unknown. Recall is now measured over the chromosomes the export carries: a chromosome holding
+  at least 0.5% of the export's rows (`chip.MIN_CARRIED_SHARE`; an autosomal FTDNA file's few hundred X
+  rows, about 0.14%, do not make X carried, and the smallest autosomes hold about 1.4% of a whole
+  export), with each sampled marker's chromosome from the manifest's `Chr` column (`sample_chrom` in
+  `chip_markers.json`; `XY` written `X`, unplaced written null and counted in no recall). The floor is
+  200 sampled rsids: a binomial 95% interval around a coverage of 0.97 is then about ±0.024, still above
+  the 0.90 floor. A reason names the carried chromosomes when they are not every autosome ("recall over
+  X, the chromosomes the export carries"). `chip_basis` stays `inferred`. Accepted with it: an export of
+  whole chromosomes of a chip now reads as that chip (it did come from it); a curated list of rsids
+  across chromosomes is still refused by recall. Rejected: taking the chip of the same subject's
+  autosomal export (the earlier plan in the "Left" paragraph below, dropped from it), which writes into
+  one facet a value read from another file, a statement the X file never made, and one person's FTDNA
+  files can come from two chips (the 2010 Affymetrix layout and OmniExpress); and an X-specific branch
+  in the rule: the carried-chromosome recall is one rule for every export.
 - A sampled marker list ships in the package. Rejected: reading the manifests at run time from a
   configured path (every consumer would have to fetch 150 MB of Illumina files for one column); and
   the full lists, 1.3M rsids, above what a source tree should carry. 1 in 61 keeps about 10,000 rsids
@@ -989,9 +1010,7 @@ Decisions, each with what was rejected:
   rule names that).
 
 **Left:** more manifests (other OmniExpress and GSA versions, an Affymetrix one that might place the
-2010 FTDNA exports, whatever the rsid CSV's chip is), which could name more of the unknowns above; an FTDNA
-X-chromosome export, which reads like an extract of its chip, could take the chip of the same
-person's autosomal export, but nothing links the two files yet; GRCh36 in
+2010 FTDNA exports, whatever the rsid CSV's chip is), which could name more of the unknowns above; GRCh36 in
 `ASSEMBLY_LENGTHS`, so a build-36 VCF's `##contig` lengths name it (the reference side knows GRCh36's
 contig 1 since F9; the header side reads those lengths as matching no assembly); contigs named by RefSeq accession (`NC_000001.11`), which the label
 inference does not read yet; gVCF `END` expansion. *Corrected 2026-10-26:* gVCF `END` is read: every

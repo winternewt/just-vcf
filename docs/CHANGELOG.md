@@ -11,6 +11,19 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **An FTDNA X-only export reads its chip from its own rows** (RM4, the lead's call). Marker overlap
+  measures recall over the chromosomes the export carries, those holding at least 0.5% of its rows
+  (`chip.MIN_CARRIED_SHARE`, `chip.carried_chroms`), and needs 200 sampled rsids instead of 1,000, so an
+  X file on OmniExpress or GSA content reads `illumina_omniexpress` or `illumina_gsa` (basis `inferred`),
+  and its warning says "recall over X, the chromosomes the export carries". A curated list of rsids
+  across chromosomes is still refused by recall. `chip_markers.json` gains `sample_chrom`, each sampled
+  marker's chromosome from the manifest's `Chr` column (`XY` as `X`, unplaced as null; read by
+  `chip.chip_marker_chroms`), 187 KB to 285 KB; the rsid samples are unchanged. `marker_overlap`'s
+  recall is now over the carried chromosomes, and None where no sampled marker of a manifest lies on
+  one. Tests: `tests/test_chip.py::test_an_x_only_export_of_a_chip_is_that_family` (refused by the old
+  code, `too_few_markers`, and at a floor of 200 by recall over every chromosome, 2.4% and 3.4%), `::test_a_loaded_ftdna_x_export_gets_its_family_by_overlap`,
+  `::test_a_stray_autosomal_row_does_not_make_its_chromosome_carried`, `::test_a_curated_list_across_every_autosome_is_not_the_chip`,
+  `::test_an_extract_of_the_carried_chromosomes_is_not_the_chip`, `::test_the_carried_chromosomes`.
 - **The PCA path reports its uncertainty** (RM5, the lead's call of method). `infer_ancestry` runs a
   leave-one-chromosome-out jackknife by default: the facet is projected again by OADP with each shared
   autosome left out, the reference's SVD recomputed on the kept sites from the panel's stored factors

@@ -18,8 +18,10 @@ Two kinds of evidence, recorded apart in `facets.chip_basis`:
   are compared with Illumina's own manifests (`chip_markers.json`, a sample of each manifest's rsids
   derived by `scripts/chip_markers.py`; docs/PROVENANCE.md). A chip is named only when one manifest
   holds nearly all of the export's sampled rsids, clearly more than any other does, and the export
-  holds a good part of the manifest's: an extract, an export on a chip no manifest here describes, or
-  two chips' content mixed stays unknown. Thresholds measured on PGP-HMS (docs/ROADMAP.md RM4). The
+  holds a good part of the manifest's on the chromosomes the export carries: an extract, a curated list
+  of rsids, an export on a chip no manifest here describes, or two chips' content mixed stays unknown,
+  while an export of whole chromosomes of a chip (FTDNA writes the X chromosome to a file of its own)
+  reads as that chip. Thresholds measured on PGP-HMS (docs/ROADMAP.md RM4). The
   name is the platform's family (`illumina_omniexpress`, `illumina_gsa`), not the manifest compared
   with: one manifest per family is on hand, and a Final Report that states GSA v2 reaches 0.97 against
   the GSA v3 manifest, so the overlap does not tell versions apart. A row count names nothing here.
@@ -37,7 +39,7 @@ from importlib import resources
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
-from just_vcf.schema import ChipBasis
+from just_vcf.schema import CONTIG_RANK, ChipBasis
 
 CHIPS: frozenset[str] = frozenset(
     {
@@ -92,8 +94,8 @@ class ChipOutcome(str, Enum):
     TOO_FEW_MARKERS = "too_few_markers"
     """Too few of the export's rsids fall in the marker sample to compare it with a manifest."""
     NO_CLEAR_OVERLAP = "no_clear_overlap"
-    """No manifest holds nearly all of the export's sampled rsids, clearly ahead of the others, with a good
-    part of its own in the export."""
+    """No manifest holds nearly all of the export's sampled rsids, clearly ahead of the others, with the
+    export holding a good part of the manifest's own on the chromosomes the export carries."""
 
 
 class ChipInference(BaseModel):
@@ -235,9 +237,22 @@ in how rsids are numbered lines up with it. Applied alike to the manifests (`chi
 an export's ids, so the two samples compare as the full sets do. Measured on 606 PGP-HMS array exports
 of 61,000 rsids or more, the sampled shares differ from the full sets' by at most 0.011 (RM4)."""
 
-MIN_SAMPLED_MARKERS = 1_000
-"""Sampled rsids an export needs before it is compared (about 61,000 rsids in the export). On PGP-HMS the
-FTDNA X-chromosome exports have 245-270, every whole export 8,964 or more."""
+MARKER_CHROMS: frozenset[str] = frozenset([*(str(n) for n in range(1, 23)), "X", "Y", "MT"])
+"""The chromosomes `chip_markers.json` names for its sampled markers (`sample_chrom`, null for a probe the
+manifest leaves unplaced). Illumina's pseudo-autosomal `XY` is written `X`, as an export's is read."""
+
+MIN_SAMPLED_MARKERS = 200
+"""Sampled rsids an export needs before it is compared (about 12,000 rsids in the export). At 200, a
+binomial 95% interval around a coverage of 0.97 is about ±0.024 (1.96·√(0.97·0.03/200)), so an export
+that close to a manifest still clears the 0.90 coverage floor. On PGP-HMS the FTDNA X-chromosome exports
+have 245-270 sampled rsids, every whole export 8,964 or more."""
+
+MIN_CARRIED_SHARE = 0.005
+"""Share of the export's rows a chromosome must hold to be carried by it; recall is measured over the
+carried chromosomes only. The smallest autosomes hold about 1.4% of a whole export's rows, so every
+autosome of one is carried. The few hundred X rows of an autosomal FTDNA export (FTDNA writes the X
+chromosome to a file of its own), about 0.14% of its rows, do not make X carried, and a stray row in an
+X-only export does not make its chromosome carried."""
 
 MIN_COVERAGE = 0.90
 """Share of the export's sampled rsids the winning manifest must hold. On PGP-HMS: 0.98-0.99 for the 57
@@ -249,7 +264,10 @@ MIN_MARGIN = 0.30
 where a chip is named: the two families share about a quarter of their rsids)."""
 
 MIN_RECALL = 0.40
-"""Share of the winning manifest's sampled rsids the export must hold: an extract of a chip is not the chip.
+"""Share of the winning manifest's sampled rsids on the chromosomes the export carries (`carried_chroms`)
+that the export holds: an extract of a chip is not the chip, and neither is a curated list of rsids across
+its chromosomes. An export of whole chromosomes of a chip, such as FTDNA's X-only file, does read as that
+chip: it came from it. Measured over every chromosome, before recall was limited to the carried ones:
 0.94-0.99 for the FTDNA exports on OmniExpress. Set below the 0.51 of the one GSA Final Report on PGP-HMS
 (it states its chip, `GSA-24v2-0_A1`, and names half its probes by position, not by rsid), so a report
 like it that did not state its chip would still be read."""
@@ -259,12 +277,30 @@ _RSID_NAME = r"^(?:GSA-|exm-)?rs(\d+)$"
 
 
 @cache
-def chip_markers() -> dict[str, pl.Series]:
-    """Each chip family's sampled rsid numbers, from the package's `chip_markers.json`."""
+def _marker_payload() -> dict:
     payload = json.loads(resources.files("just_vcf").joinpath("chip_markers.json").read_text())
     if payload["modulus"] != MARKER_MODULUS:
         raise ValueError(f"chip_markers.json samples 1 in {payload['modulus']}, this module 1 in {MARKER_MODULUS}")
-    return {chip: pl.Series(chip, entry["sample"], dtype=pl.UInt64) for chip, entry in sorted(payload["chips"].items())}
+    return payload
+
+
+@cache
+def chip_markers() -> dict[str, pl.Series]:
+    """Each chip family's sampled rsid numbers, from the package's `chip_markers.json`."""
+    return {chip: pl.Series(chip, entry["sample"], dtype=pl.UInt64) for chip, entry in sorted(_marker_payload()["chips"].items())}
+
+
+@cache
+def chip_marker_chroms() -> dict[str, pl.Series]:
+    """Each chip family's sampled markers' chromosomes, parallel to `chip_markers()` (one of
+    `MARKER_CHROMS`, or null where the manifest leaves the probe unplaced)."""
+    chroms = {}
+    for chip, entry in sorted(_marker_payload()["chips"].items()):
+        values = entry["sample_chrom"]
+        if len(values) != len(entry["sample"]) or not set(values) <= MARKER_CHROMS | {None}:
+            raise ValueError(f"chip_markers.json: {chip}'s sample_chrom is not one chromosome or null per sampled marker")
+        chroms[chip] = pl.Series(chip, values, dtype=pl.String)
+    return chroms
 
 
 def sampled_rsids(calls: pl.DataFrame) -> pl.Series:
@@ -274,32 +310,73 @@ def sampled_rsids(calls: pl.DataFrame) -> pl.Series:
     return numbers.filter(numbers % MARKER_MODULUS == 0).sort()
 
 
-def marker_overlap(calls: pl.DataFrame) -> dict[str, tuple[float, float]]:
-    """Per chip family: the share of the export's sampled rsids in its manifest (coverage), and the
-    share of its manifest's sampled rsids in the export (recall). Empty when the export has none."""
-    sampled = sampled_rsids(calls)
-    if sampled.is_empty():
-        return {}
+def carried_chroms(calls: pl.DataFrame) -> frozenset[str]:
+    """The chromosomes the export carries: those of `MARKER_CHROMS` holding at least `MIN_CARRIED_SHARE`
+    of its rows, read from the canonical `chrom`. A row on `XY` (the pseudo-autosomal region) counts for
+    `X`, as the manifests' `XY` probes do. Rows on no such chromosome count only in the total."""
+    if calls.is_empty():
+        return frozenset()
+    counts = calls.select(pl.col("chrom").replace({"XY": "X"})).group_by("chrom").len()
+    return frozenset(chrom for chrom, rows in counts.iter_rows() if chrom in MARKER_CHROMS and rows / calls.height >= MIN_CARRIED_SHARE)
+
+
+def _shares(sampled: pl.Series, carried: frozenset[str]) -> dict[str, tuple[float, float | None]]:
+    """Coverage and recall per chip family (`marker_overlap`), from the export's sampled rsids."""
+    on = pl.Series(sorted(carried), dtype=pl.String).implode()
     shares = {}
     for chip, markers in chip_markers().items():
-        shared = int(sampled.is_in(markers.implode()).sum())
-        shares[chip] = (shared / sampled.len(), shared / markers.len())
+        held = markers.is_in(sampled.implode())
+        counted = chip_marker_chroms()[chip].is_in(on).fill_null(False)
+        denominator = int(counted.sum())
+        recall = int((held & counted).sum()) / denominator if denominator else None
+        shares[chip] = (int(held.sum()) / sampled.len(), recall)
     return shares
 
 
+def marker_overlap(calls: pl.DataFrame) -> dict[str, tuple[float, float | None]]:
+    """Per chip family: the share of the export's sampled rsids in its manifest (coverage), and the share
+    of its manifest's sampled rsids on the chromosomes the export carries (`carried_chroms`) that the
+    export holds (recall). A marker the manifest leaves unplaced counts in no recall. Recall is None when
+    no sampled marker of the manifest lies on a carried chromosome: it was not measured. Empty when the
+    export has no sampled rsid."""
+    sampled = sampled_rsids(calls)
+    if sampled.is_empty():
+        return {}
+    return _shares(sampled, carried_chroms(calls))
+
+
+_AUTOSOMES = frozenset(str(n) for n in range(1, 23))
+
+
+def _carried_text(carried: frozenset[str]) -> str:
+    """How a reason names the chromosomes recall is measured over: nothing when they are every autosome."""
+    if _AUTOSOMES <= carried:
+        return ""
+    if not carried:
+        return f"; no chromosome holds {MIN_CARRIED_SHARE:.1%} of the export's rows, so recall is not measured"
+    return f"; recall over {', '.join(sorted(carried, key=CONTIG_RANK.__getitem__))}, the chromosomes the export carries"
+
+
 def overlap_chip(calls: pl.DataFrame) -> ChipInference:
-    """The chip family whose manifest the export's rsids clearly belong to, or why none is named."""
-    count = sampled_rsids(calls).len()
+    """The chip family whose manifest the export's rsids clearly belong to, or why none is named.
+
+    `calls` is the export's rows as a loader reads them: `ids`, and the canonical `chrom` that
+    `carried_chroms` reads."""
+    sampled = sampled_rsids(calls)
+    count = sampled.len()
     if count < MIN_SAMPLED_MARKERS:
         return ChipInference(
             chip=None, basis=None, outcome=ChipOutcome.TOO_FEW_MARKERS,
             reason=f"{count} of the export's rsids are in the marker sample (1 in {MARKER_MODULUS}), fewer than {MIN_SAMPLED_MARKERS}",
         )  # fmt: skip
-    shares = marker_overlap(calls)
-    ranked = sorted(shares.items(), key=lambda item: (-item[1][0], item[0]))
+    carried = carried_chroms(calls)
+    ranked = sorted(_shares(sampled, carried).items(), key=lambda item: (-item[1][0], item[0]))
     (best, (coverage, recall)), runner_up = ranked[0], max((share[0] for _, share in ranked[1:]), default=0.0)
-    features = f"{count} sampled rsids; " + ", ".join(f"{chip} holds {c:.1%} of them, the export {r:.1%} of its" for chip, (c, r) in ranked)
-    if coverage >= MIN_COVERAGE and coverage - runner_up >= MIN_MARGIN and recall >= MIN_RECALL:
+    held = ("none of its own on those chromosomes" if r is None else f"the export {r:.1%} of its" for _, (_, r) in ranked)
+    features = f"{count} sampled rsids{_carried_text(carried)}; " + ", ".join(
+        f"{chip} holds {c:.1%} of them, {h}" for (chip, (c, _)), h in zip(ranked, held)
+    )
+    if coverage >= MIN_COVERAGE and coverage - runner_up >= MIN_MARGIN and recall is not None and recall >= MIN_RECALL:
         return ChipInference(chip=best, basis=ChipBasis.INFERRED, outcome=ChipOutcome.INFERRED, reason=f"{features}: the overlap points at {best}")
     return ChipInference(chip=None, basis=None, outcome=ChipOutcome.NO_CLEAR_OVERLAP, reason=f"{features}: no manifest clearly holds the export")
 

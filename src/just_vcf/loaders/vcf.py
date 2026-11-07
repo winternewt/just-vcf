@@ -424,8 +424,14 @@ class Header:
 
     @property
     def version_tuple(self) -> tuple[int, int] | None:
-        match = re.match(r"VCFv(\d+)\.(\d+)", self.version or "")
-        return (int(match.group(1)), int(match.group(2))) if match else None
+        return version_tuple(self.version)
+
+
+def version_tuple(version: str | None) -> tuple[int, int] | None:
+    """`(major, minor)` of a `##fileformat` value as `facets.vcf_version` holds it (`VCFv4.5`), or None
+    where it names no VCF version."""
+    match = re.match(r"VCFv(\d+)\.(\d+)", version or "")
+    return (int(match.group(1)), int(match.group(2))) if match else None
 
 
 def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:

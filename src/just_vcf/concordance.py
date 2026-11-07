@@ -68,6 +68,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from just_vcf.breakends import ASSEMBLY_CONTIG, SINGLE_BREAKEND, breakend_parts
 from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
 from just_vcf.intervals import contig_join, covering, nearest_block
+from just_vcf.loaders.vcf import version_tuple
 from just_vcf.loading import Loaded
 from just_vcf.reference import PRIMARY, ReferenceMismatchError, ReferenceStore, _store_for
 from just_vcf.schema import CONTIG_RANK, BlockKind, SvClaim, VariantClass, canonical_chrom, canonical_chrom_expr, enum_dtype, unstated_sequence_alt
@@ -992,13 +993,14 @@ def _sv_sites(
     d = params.bnddist
     sym = {"a": _sv_side(sv_a, "a"), "b": _sv_side(sv_b, "b")}
     adj = {"a": _bnd_side(bnd_a, "a", d, warnings), "b": _bnd_side(bnd_b, "b", d, warnings)}
-    implied = {"a": _implied(sym["a"], "a", d), "b": _implied(sym["b"], "b", d)}
+    unknown = {"a": _claim_unknown_reason(a[1]), "b": _claim_unknown_reason(b[1])}
+    implied = {side: _implied(sym[side], side, d, unknown[side]) for side in "ab"}
     for side, other in (("a", "b"), ("b", "a")):
         skipped = sym[side].filter(pl.col(f"{side}_alt").str.contains(_JUNCTION_TYPES)).join(
             implied[side].select(f"_{side}_row", f"_{side}_k").unique(), on=[f"_{side}_row", f"_{side}_k"], how="anti"
         )
         if skipped.height and adj[other].height:
-            warnings.append(_not_decomposed(skipped, side))
+            warnings.append(_not_decomposed(skipped, side, unknown[side]))
 
     candidates = _sv_candidates(sym["a"], sym["b"], params)
     extent = _pick_single(candidates)
@@ -1076,35 +1078,87 @@ END back to POS + 1 (the duplicated bases are POS + 1 to END); an inversion join
 POS + 1 to END + 1, each reverse-complemented, two adjacencies (VCF 4.3 section 5.4.3's example)."""
 
 
+_CLAIM_REQUIRED = r"^<(DEL|DUP)(:[^>]*)?>$"
+"""The symbolic alleles VCF 4.4 and 4.5 require an SVCLAIM on (a deletion or duplication, any subtype).
+`<INV>` makes it optional, its missing value equal to J; `<CNV>`'s is D."""
+
+_SV_CLAIM_FIRST = (4, 4)
+"""The VCF version that defines SVCLAIM: 4.4 added it ("Changes between VCFv4.4 and VCFv4.3" in
+VCFv4.5.tex), and 4.5 keeps it. A `<DEL>` or `<DUP>` written before it claims both an abundance
+change and a junction (truvari decomposes it)."""
+
+_SV_CLAIM_DROPPED = "INFO/SVCLAIM"
+"""SVCLAIM as `facets.dropped_fields` names it when a load left it out (before schema 0.0.24)."""
+
+
+def _claim_unknown_reason(facet: Mapping) -> str | None:
+    """Why a null `sv_claim` on facet `facet`'s `<DEL>` or `<DUP>` is unknown, or None where it is not.
+
+    None where the facet predates SVCLAIM: its file states a VCF version before 4.4 (or none), and its
+    load did not leave SVCLAIM out, so a null claim there implies both. Otherwise a null claim says
+    nothing of a junction: on a facet whose `dropped_fields` lists SVCLAIM the claims were in the file
+    and not read; on a 4.4 or later file the spec requires one and the file did not state it."""
+    if _SV_CLAIM_DROPPED in (facet.get("dropped_fields") or []):
+        return "claim not read: the load left INFO SVCLAIM out (dropped_fields), so a null claim says nothing of a junction"
+    if (version_tuple(facet.get("vcf_version")) or (0, 0)) >= _SV_CLAIM_FIRST:
+        return "claim unknown: VCF 4.4 and later require SVCLAIM on <DEL>/<DUP>, and none (or `.`) was stated"
+    return None
+
+
+def _claim(name: str) -> pl.Expr:
+    """Side `name`'s allele's own claim (`sv_claim` at its ALT), as a string, or null."""
+    return pl.col(f"{name}_sv_claim").list.get(pl.col(f"_{name}_k").cast(pl.Int64), null_on_oob=True).cast(pl.String)
+
+
 def _abundance_only(name: str) -> pl.Expr:
     """True where side `name`'s allele claims abundance only (VCF 4.5's `SVCLAIM=D`, `sv_claim` at its
-    own ALT): a copy-number call that states no junction. A null claim (none recorded, or `.`) is not:
-    a `<DEL>` or `<DUP>` before 4.5 implies both."""
-    claim = pl.col(f"{name}_sv_claim").list.get(pl.col(f"_{name}_k").cast(pl.Int64), null_on_oob=True).cast(pl.String)
-    return (claim == SvClaim.ABUNDANCE.value).fill_null(False)
+    own ALT): a copy-number call that states no junction. A null claim is not (`_claim_unknown`)."""
+    return (_claim(name) == SvClaim.ABUNDANCE.value).fill_null(False)
 
 
-def _not_decomposed(skipped: pl.DataFrame, name: str) -> str:
+def _claim_unknown(name: str, unknown_reason: str | None) -> pl.Expr:
+    """True where side `name`'s allele is a `<DEL>` or `<DUP>` with a null claim on a facet whose null
+    claims are unknown (`_claim_unknown_reason`): no junction is implied. On a facet that predates
+    SVCLAIM it is never true, and an `<INV>`'s null claim is J whatever the facet."""
+    if unknown_reason is None:
+        return pl.lit(False)
+    return pl.col(f"{name}_alt").str.contains(_CLAIM_REQUIRED) & _claim(name).is_null()
+
+
+def _type_excluded(name: str) -> pl.Expr:
+    """True where side `name`'s allele is no type `_implied` decomposes: not one `_DECOMPOSED` names, or
+    its record's SVTYPE names another type before any `:` (truvari reads SVTYPE first)."""
+    stated = pl.col(f"{name}_sv_type").str.extract(r"^([^:]+)", 1)
+    named_other = (stated.is_not_null() & (stated != pl.col(f"_{name}_kind"))).fill_null(False)
+    return ~pl.col(f"{name}_alt").str.contains(_DECOMPOSED) | named_other
+
+
+def _not_decomposed(skipped: pl.DataFrame, name: str, unknown_reason: str | None) -> str:
     """The warning for side `name`'s junction-type alleles `_implied` did not decompose, counted by reason,
-    each allele under the first that holds: its claim, its END, its type."""
-    claim = _abundance_only(name)
-    no_end = ~claim & pl.col(f"{name}_end_pos").is_null()
-    abundance, endless = skipped.select(claim.sum().alias("abundance"), no_end.sum().alias("endless")).row(0)
-    typed = skipped.height - abundance - endless
+    each allele under the first that holds: an abundance claim, no END, its type, and last a claim left
+    unknown (`_claim_unknown_reason`), so that reason counts only the alleles nothing else kept out."""
+    abundance = _abundance_only(name)
+    endless = ~abundance & pl.col(f"{name}_end_pos").is_null()
+    typed = ~abundance & ~endless & _type_excluded(name)
+    unknown = ~abundance & ~endless & ~typed & _claim_unknown(name, unknown_reason)
+    counts = skipped.select(
+        abundance.sum().alias("abundance"), endless.sum().alias("endless"), typed.sum().alias("typed"), unknown.sum().alias("unknown")
+    ).row(0)
     typed_reason = (
         "an SVTYPE naming another type (a copy-number caller's CNV states abundance, not a junction), or a duplication "
         "subtype other than TANDEM, which puts its copy elsewhere"
     )
-    reasons = [
-        (abundance, "an abundance claim only (VCF 4.5's SVCLAIM=D), which states no junction"),
-        (endless, "without END, so no junction to join POS to"),
-        (typed, typed_reason),
-    ]
-    shown = "; ".join(f"{count} {reason}" for count, reason in reasons if count)
+    reasons = (
+        "an abundance claim only (VCF 4.5's SVCLAIM=D), which states no junction",
+        "without END, so no junction to join POS to",
+        typed_reason,
+        unknown_reason or "",
+    )
+    shown = "; ".join(f"{count} {reason}" for count, reason in zip(counts, reasons, strict=True) if count)
     return f"{skipped.height} symbolic deletions, duplications or inversions of facet {name} are not decomposed into breakends: {shown}"
 
 
-def _implied(sym: pl.DataFrame, name: str, bnddist: int) -> pl.DataFrame:
+def _implied(sym: pl.DataFrame, name: str, bnddist: int, unknown_reason: str | None = None) -> pl.DataFrame:
     """The breakend records `sym`'s symbolic alleles (`_sv_side`'s columns, side `name`) imply, with the
     columns `_bnd_side` gives a breakend record and the allele's own beside them; `_part` is the
     record's place in `_IMPLIED`.
@@ -1113,20 +1167,19 @@ def _implied(sym: pl.DataFrame, name: str, bnddist: int) -> pl.DataFrame:
     type before any `:`: truvari reads SVTYPE first and decomposes only what it reads as DEL, DUP or
     INV, so a copy-number caller's `<DEL>` with SVTYPE=CNV (an abundance claim, no junction) is not.
     Nor is an allele whose own VCF 4.5 claim is abundance only (`SVCLAIM=D`, `_abundance_only`), which
-    truvari does not read; `J`, `DJ` and no claim are decomposed. An allele with no `end_pos` has no END
-    to join and is not either.
+    truvari does not read; `J` and `DJ` are decomposed. A null claim is decomposed on a facet that
+    predates SVCLAIM, where a `<DEL>` or `<DUP>` implies both; on a facet where it is unknown
+    (`unknown_reason`, `_claim_unknown_reason`: a VCF 4.4 or later file, or a load that left SVCLAIM out) a
+    `<DEL>` or `<DUP>` with a null claim is not (`_claim_unknown`), and an `<INV>`'s is J. An allele with
+    no `end_pos` has no END to join and is not either.
 
     Each record is a copy of the symbolic one, as truvari's are, so each carries the allele's CIPOS
     and CIEND: its own position's window is widened by `|CIPOS[1]|` and its mate's by `|CIEND[1]|`,
     whichever end the record stands at, with no fallback from CIEND to CIPOS (`_bnd_side`)."""
     n = name
     kind = pl.col(f"_{n}_kind")
-    stated = pl.col(f"{n}_sv_type").str.extract(r"^([^:]+)", 1)
     usable = sym.filter(
-        pl.col(f"{n}_alt").str.contains(_DECOMPOSED)
-        & (stated.is_null() | (stated == kind))
-        & pl.col(f"{n}_end_pos").is_not_null()
-        & ~_abundance_only(n)
+        ~_type_excluded(n) & pl.col(f"{n}_end_pos").is_not_null() & ~_abundance_only(n) & ~_claim_unknown(n, unknown_reason)
     )
     at = {"pos": pl.col(f"{n}_pos").cast(pl.Int64), "end": pl.col(f"{n}_end_pos").cast(pl.Int64)}
     parts = [

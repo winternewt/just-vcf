@@ -79,7 +79,8 @@ PC coordinates, and by default their uncertainty from a leave-one-chromosome-out
 projected again with each shared autosome left out, giving a standard error per PC coordinate
 (`pc_errors`) and per proportion (`proportion_errors`), and the share of those replicates, one per
 shared autosome, whose vote agrees (`vote_stability`). A facet that reads sites on fewer than five autosomes gets none, with
-`jackknife_reason = too_few_blocks`; `jackknife=False` skips it. The method, what each replicate
+`jackknife_reason = too_few_blocks`, and a panel so small that leaving an autosome out keeps no more
+of its sites than `dim_online` gets none either (`too_few_sites_per_block`); `jackknife=False` skips it. The method, what each replicate
 recomputes and the minimum are in docs/SCHEMA.md, "The PCA path's uncertainty". Its tests use
 synthetic panels (`tests/test_ancestry.py`); no run on a real panel is recorded yet.
 

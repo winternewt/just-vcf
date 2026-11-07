@@ -9,9 +9,11 @@ weak evidence never lands in the nearest class.
 The classes, by what the calls look like:
 
 - `wgs`: at least `MIN_WGS_SITES` sites on the primary assembly and at least `MIN_WGS_BREADTH` of the
-  span within `FLANK_BP` of a call (the ported rule, thresholds unchanged). A facet whose
-  `content_filter` is `indel_only` (a genome cut to its indels) needs `MIN_WGS_INDEL_SITES` sites
-  instead, at the same breadth: a genome carries about a tenth as many indels as SNVs.
+  span within `FLANK_BP` of a call (the ported rule, thresholds unchanged), on every autosome. A facet
+  whose `content_filter` is `indel_only` (a genome cut to its indels) needs `MIN_WGS_INDEL_SITES` sites
+  instead, at the same breadth: a genome carries about a tenth as many indels as SNVs. The autosome
+  bound is ours (audit 16, 2026-11-07): breadth is measured over the sites' own span per contig, so a
+  dense extract of one chromosome would otherwise read as a genome.
 - `wes`: an exome's spread. Between `MIN_WES_SITES` and `MAX_WES_SITES` sites, on every autosome, and
   clustered (breadth at most `MAX_TARGETED_BREADTH`).
 - `panel`: calls confined to a small region set. Between `MIN_PANEL_SITES` and `MAX_PANEL_SITES` sites,
@@ -180,7 +182,11 @@ def classify(
     if not evidence:
         return answer(None, "unknown, the header declares no read-evidence FORMAT key (AD, DP, GQ, PL, GL, MIN_DP), so the calls may not come from reads")
     indels_only = content_filter is ContentFilter.INDEL_ONLY
-    if n >= (MIN_WGS_INDEL_SITES if indels_only else MIN_WGS_SITES) and breadth >= MIN_WGS_BREADTH:
+    # Every autosome, as the WES band asks (audit 16): breadth is measured over the span the sites
+    # spread over per contig, so a dense extract of one chromosome has a genome's breadth. Measuring it
+    # over the assembly's length instead was rejected: it would move just-dna-lite's calibrated
+    # breadth, which is ported unchanged.
+    if n >= (MIN_WGS_INDEL_SITES if indels_only else MIN_WGS_SITES) and breadth >= MIN_WGS_BREADTH and autosomes == len(_AUTOSOMES):
         return answer(CallsetType.WGS, f"whole genome cut to its indels (at least {MIN_WGS_INDEL_SITES:,} sites)" if indels_only else "whole genome")
     if MIN_WES_SITES <= n <= MAX_WES_SITES and breadth <= MAX_TARGETED_BREADTH and autosomes == len(_AUTOSOMES):
         return answer(CallsetType.WES, "exome")

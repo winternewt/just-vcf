@@ -897,8 +897,12 @@ breadth (`MIN_WGS_INDEL_SITES`: 1,000,000 sits 4.3x below the 4.3M sites of the 
 just-dna-lite measured, and a genome carries 0.5–0.6M indels, so 500,000 / 4.3 = 116,279, rounded
 down). The filter is decided first (Decision 4), from the same rows, so the floor reads the facet's own
 column; breadth keeps an exome cut to its indels out, since its sites cluster. An SNV-only or
-SV-only facet keeps the 1,000,000 floor. `wes` 10,000–400,000 sites on
-all 22 autosomes with at most 60% breadth; `panel` 50–5,000 sites reaching at most 50 Mb. A region
+SV-only facet keeps the 1,000,000 floor. Since 2026-11-07 (audit 16) `wgs` also needs calls on all
+22 autosomes, as `wes` does: breadth divides the reach by the span the sites spread over per contig,
+so 116,000 indels 100 bp apart on chromosome 1 alone measured 100% and read `wgs`. Rejected: breadth
+over the assembly's length, which would move just-dna-lite's calibrated breadth, ported unchanged.
+`wes` 10,000–400,000 sites on all 22 autosomes with at most 60% breadth; `panel` 50–5,000 sites
+reaching at most 50 Mb. A region
 extract of a larger callset reads as `panel`, which is what its absences then mean. `imputed` when the
 header names an imputation tool or declares an imputation INFO key. Every sequencing class needs a
 read-evidence FORMAT key (AD, DP, GQ, PL, GL, MIN_DP) in the header. A site is a row with a sequence
@@ -1218,8 +1222,15 @@ holding that collection and the target.
    hold, each failure its own reason:
    - its first and last bases lie in blocks (`split_across_blocks` otherwise: the span runs off a
      block into a gap's source-only bases or past the chain's end), and one chain holds every piece
-     of the span a block covers, each piece whole inside one of its blocks (`split_across_chains`
-     otherwise: another alignment, target contig or strand on the other side). Another chain
+     of the span a block covers, each piece whole inside one run of its blocks of that mapping
+     (`split_across_chains` otherwise: another alignment, target contig or strand on the other side).
+     A run is the chain's blocks of one mapping where each ends at or past the next one's start: a
+     `size 0 0` gap line writes two abutting blocks that send every base to the same place, the axis
+     counts them as one segment, and so a piece across their edge is held (`LIFT_VERSION` 17, merge
+     audit 16: such a piece was `split_across_chains`, though one chain covered every base). The plan
+     carries one merged block per run, exact since its blocks share the offset; rejected: carrying the
+     blocks as they are, which reads their shared edge as a gap of no bases and leaves a change across
+     it `gap_in_change`. Abutting blocks of two chains are still two chains. Another chain
      repeating some of those blocks (the same target contig, strand and offset, F14) changes nothing:
      the row is judged by every block of each mapping, never by the one the axis keeps for it, so it
      lifts alike in either order of the chains (`LIFT_VERSION` 15, merge audit 15: a chain repeating
@@ -1227,7 +1238,7 @@ holding that collection and the target.
      `TypeError`, by which chain's block the axis happened to keep). Where several chains hold every
      piece, each gives the same lift, and the lowest chain id is read. A doubly mapped stretch
      anywhere in the span is still `multiple_targets`, judged first;
-   - each ALT's change lies inside one block (`gap_in_change` otherwise). The change is the REF bases
+   - each ALT's change lies inside one block, or one run (`gap_in_change` otherwise). The change is the REF bases
      the ALT replaces after the shared first and last bases are set aside, or, for an insertion, the
      two bases either side of the point it goes in at; and for an indel in a repeat, every place it
      could equally sit, from its left-most placement (a common suffix trimmed first) to its right-most
@@ -1611,9 +1622,11 @@ event goes to six columns, each just-vcf's own shape (VRS has no Allele for thes
   requires it on `<DEL>` and `<DUP>`, makes it optional elsewhere (`<CNV>` implies `D`, `<INV>`,
   `<INS>` and a breakend `J`), and has non-SV alleles write `.`. A `.` is a null element, and so is a
   value that is none of the three (counted); a count that is not one per ALT leaves the record's list
-  null (counted). Nothing is resolved from the allele's type: a null claim stays null, and a `<DEL>`
-  or `<DUP>` with none (every file before 4.5) is read as before, as implying both. What reads it:
-  `concordance`'s decompose ("Symbolic alleles against breakends"). Rejected: a claim column per
+  null (counted). Nothing is resolved from the allele's type: a null claim stays null. A `<DEL>` or
+  `<DUP>` with none is read as implying both only on a facet that predates SVCLAIM (a file before VCF
+  4.4, which added it, and a load that did not leave it out); on a 4.4 or later file, or a facet whose
+  `dropped_fields` list it, its claim is unknown. What reads it: `concordance`'s decompose ("Symbolic
+  alleles against breakends"). Rejected: a claim column per
   record, which a multi-ALT record whose ALTs claim differently (VCF 4.5's mobile-element example
   links such records by EVENT, one claim each) cannot hold; and filling `.` from the type, which would
   make a stated claim and a derived one look alike. A VCF 4.3 file has no definition for SVCLAIM and is
@@ -2986,7 +2999,7 @@ a step fails it.
 | 0.0.20 → 0.0.21 | facets | adds `resolve_inputs` (null) after `resolve_version` | array facets (`family = genotype_table`) whose REF was read: null means not recorded, not "no manifest", so the store refuses the same facet resolved today with manifests as another state of it; consensus facets: null means the parents' REF states were not recorded, so the store refuses the same consensus built today |
 | 0.0.21 → 0.0.22 | calls | casts `ref_check` to the enum with `unstated` | facets whose REF was read and that hold a row with a source REF of only `N` and `ref_check = mismatch`: kept as `mismatch` where today's rule reads `unstated`, so `liftover` leaves those rows behind; the facet records `RESOLVE_VERSION` 12, so the store refuses it resolved today. A caveat may name rows as well as facets (`Caveat.rows`), and this is the first that does |
 | 0.0.22 → 0.0.23 | calls | adds `imputation_r2`, `imputation_empirical_r2` (null) after `dosage` | facets whose `dropped_fields` list INFO `R2`, `ER2` or `DR2` (imputation output, and anything derived from it): the two columns null mean not read, not "the source wrote none" |
-| 0.0.23 → 0.0.24 | calls | adds `sv_claim` (null) after `alt_copy_numbers` | facets whose `dropped_fields` list INFO `SVCLAIM` (a VCF 4.5 SV file, and anything derived from it): `sv_claim` null means not read, not "no claim", so `concordance` decomposes their `<DEL>` and `<DUP>` whatever they claimed until the source is loaded again |
+| 0.0.23 → 0.0.24 | calls | adds `sv_claim` (null) after `alt_copy_numbers` | facets whose `dropped_fields` list INFO `SVCLAIM` (a VCF 4.5 SV file, and anything derived from it): `sv_claim` null means not read, not "no claim", so `concordance` does not decompose their `<DEL>` and `<DUP>` (each counted as a claim not read) until the source is loaded again |
 
 A step never invents a value: an added column is null, and where that null (or a value an older loader
 left) reads differently from what a load of the same source gives today, the facets it applies to are
@@ -3528,18 +3541,30 @@ What differs from truvari, each with its reason:
   decompose either.
 - **An abundance claim is not decomposed** (2026-11-07). VCF 4.5's `SVCLAIM` says what each allele
   claims (`sv_claim`): an allele claiming `D` only (copy number changed, no junction) implies no
-  breakend and is not decomposed; `J`, `DJ` and no claim are, a `<DEL>` or `<DUP>` without one (every
-  file before 4.5) implying both, as the spec reads it. Each ALT goes by its own claim, so a record's
+  breakend and is not decomposed; `J` and `DJ` are. Each ALT goes by its own claim, so a record's
   `D` `<DEL>` beside its `J` `<DUP>` decomposes only the duplication. truvari 5.5 reads no SVCLAIM and
   would decompose a 4.5 `<DEL>` with `SVCLAIM=D` and no SVTYPE; here it is not, for the reason
   DRAGEN's `SVTYPE=CNV` is not.
+- **A null claim is decomposed only where the facet predates SVCLAIM** (2026-11-07, audit 16). VCF
+  4.4 added SVCLAIM ("Changes between VCFv4.4 and VCFv4.3") and 4.5 keeps it: a `<DEL>` or `<DUP>`
+  (any subtype) must state one. Before 4.4 there was none, and a `<DEL>` or `<DUP>` implies both, as
+  truvari decomposes it. So a null claim on a `<DEL>` or `<DUP>` decomposes when the facet's
+  `vcf_version` is before 4.4 (or none) and its `dropped_fields` do not list INFO `SVCLAIM`. On a 4.4
+  or later file (`.` or no SVCLAIM) it is unknown: not decomposed, counted as "claim unknown"; on a
+  facet whose load left SVCLAIM out (a store migrated from 0.0.23) the claims were in the file and
+  unread: not decomposed, counted as "claim not read", until the source is loaded again. An `<INV>`
+  keeps its implicit J (the spec makes its claim optional, `.` equal to J), so a null claim on one
+  decomposes on any facet. Rejected: decomposing every null claim as before (it turns a 4.5 `<DEL>`
+  whose claim is missing into a junction nobody claimed), and reading a null claim on a 4.4 or later
+  file as `DJ` (a value the file did not state).
 - **An allele with no END is not decomposed**: no loader leaves a symbolic allele's `end_pos` null
   (without END or SVLEN it falls back to the REF span), but a frame built or edited elsewhere can, and
   such an allele has no junction to join POS to.
 - **One warning, a count per reason.** When the other facet has breakends, the `<DEL>`, `<DUP>` and
   `<INV>` alleles not decomposed (an SVTYPE naming another type, an abundance claim, no END, a
-  duplication subtype other than TANDEM, below) are counted in one warning, each allele under the first
-  reason that holds, in this order: the abundance claim, no END, then the type or subtype. Before
+  duplication subtype other than TANDEM, below, or a claim left unknown, above) are counted in one
+  warning, each allele under the first reason that holds, in this order: the abundance claim, no END,
+  the type or subtype, then the unknown claim (so it counts only alleles nothing else kept out). Before
   2026-11-07 the warning named only the type or subtype, and counted an allele without END under it.
 - **Only a tandem duplication.** truvari assumes every DUP is tandem, subtypes dropped. Here `<DUP>`
   and `<DUP:TANDEM>` are decomposed and another subtype is not: VCF 4.5's `<DUP:DISPERSED>` puts its
@@ -3873,6 +3898,23 @@ the PCA path reports a **weighted delete-one-block jackknife** (the lead's call)
   `1 / sqrt(2 (g - 1))`: 0.35 at five, 0.5 at three. Below five the uncertainty is withheld
   (`jackknife_reason = too_few_blocks`, the blocks found still counted). A genome or an array covers
   all 22 autosomes. A choice, not a calibration.
+- **More kept sites than online loadings** (2026-11-07, audit 16). A replicate keeps every panel site
+  off its chromosome, read or not, and OADP augments the kept sites' `dim_online` loadings with the
+  target. When a replicate keeps p sites and p is no more than `dim_online`, those loadings span all of
+  R^p, the target has no residual outside them, and the augmentation divided 0 by 0 (or normalised
+  rounding noise into a direction): the replicate, and the standard errors after it, meant nothing. So
+  the jackknife is withheld (`jackknife_reason = too_few_sites_per_block`, the blocks still counted)
+  when any replicate would keep no more panel sites than `dim_online`, decided from the sites per
+  autosome before any replicate is projected; one site above the bound it runs. Only a panel of a few
+  dozen sites meets it (`dim_online` is 40 at FRAPOSA's defaults); a real panel keeps thousands. The
+  count is of panel sites, not of sites read: a facet reading few sites of a large panel still has a
+  residual (its target vector is sparse, the loadings' span is not R^p), and is the coverage floor's
+  case. Beside it, `_projection.svd_online` no longer divides by zero: a residual below
+  `RESIDUAL_TOLERANCE` (the square root of float64's epsilon, about 1.5e-8) of the target's norm reads
+  as the target lying in the loadings' span, and the update adds no direction (just-vcf's change to the
+  vendored file, docs/PROVENANCE.md). Above it the code is FRAPOSA's, unchanged. Rejected: dropping the
+  degenerate replicate and jackknifing over the rest, which would change the weights of every block
+  and report an error the dropped chromosome did not take part in.
 - **On by default**; `infer_ancestry(..., jackknife=False)` skips it (`not_requested`). It costs about
   one projection per autosome, 22 for a genome, plus a small eigendecomposition and a pass over the
   kept loadings each. Timed 2026-11-06 on a synthetic panel of `aadr_ho`'s shape (2,565 samples, 184,882
@@ -3946,6 +3988,26 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 ## Changes since sign-off
 
+- **No version change** (2026-11-07, audit 16: the WGS band asks every autosome): no column changes.
+  **Values change** in `facets`: a VCF facet with a genome's site count and breadth but calls on fewer
+  than 22 autosomes (a dense extract of one chromosome) reads `callset_type` null and `absence_means`
+  `unknown`, where it read `wgs` and `weak_reference` (Decision 5, "`callset_type` and `absence_means`
+  for a VCF"). The type is computed from the calls at every load, never cached, so a load run again
+  gets it; a store keeps the old row until its source is loaded again.
+
+- **No version change** (2026-11-07, audit 16: a jackknife replicate with too few sites): no column
+  changes. `JACKKNIFE_REASONS` gains `too_few_sites_per_block` (additive): an answered `pca_knn`
+  estimate on a panel where leaving some autosome out keeps no more sites than `dim_online` carries no
+  jackknife, where it carried standard errors computed from a 0 / 0 ("The PCA path's uncertainty").
+  `svd_online` reads a residual below `RESIDUAL_TOLERANCE` of the target's norm as none.
+
+- **No version change** (2026-11-07, audit 16: a null SV claim): no column changes. **Values change**
+  in `concordance`: a `<DEL>` or `<DUP>` with a null `sv_claim` on a VCF 4.4 or later facet, or on a
+  facet whose `dropped_fields` list INFO `SVCLAIM`, is no longer decomposed into breakends, so against
+  another caller's breakends it reads `only_a` and `only_b` where it read `decomposed`, counted in the
+  not-decomposed warning as a claim unknown or not read ("Symbolic alleles against breakends"). Files
+  before 4.4 decompose as before; an `<INV>` keeps its implicit J.
+
 - **One calls column, landed in 0.0.24** (2026-11-07, RM282: VCF 4.5's SVCLAIM): `calls.sv_claim`
   (`list[Enum]` of `D`, `J`, `DJ`, one per ALT, null where the source wrote none), after
   `alt_copy_numbers`: each ALT's abundance or adjacency claim (Decision 6, "Structural variants").
@@ -4006,6 +4068,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `consensus` refuses two parents whose lineages meet, one made from the other or both made from one
   facet not given ("A consensus posterior", "Parents"), where it refused only the first. Nothing it
   still makes changes, so `CONSENSUS_VERSION` stays 5.
+
+- **No version change** (2026-11-07, merge audit 16: abutting blocks of one chain): no column
+  changes. `liftover` lets a chain hold a span's piece across a gap ("Lifting", step 2b) when its
+  abutting or overlapping blocks of one mapping cover it together, where it asked one block to;
+  `LIFT_VERSION` 17. **Values change** only on a chain with a `size 0 0` gap line (or overlapping
+  blocks of one mapping): a row whose span crosses that edge and a real gap lifts where it was
+  `split_across_chains`. A lifted facet's `facet_id` changes with the version.
 
 - **No version change** (2026-11-05, merge audit 15: a chain repeating part of another): no column
   changes. `liftover` judges a row across a gap of one chain ("Lifting", step 2b) by the chains that

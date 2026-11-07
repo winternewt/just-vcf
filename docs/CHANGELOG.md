@@ -11,6 +11,51 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **A jackknife replicate with no more sites than the online loadings is withheld, not divided by zero**
+  (audit 16, RM5). A leave-one-chromosome-out replicate that keeps p panel sites, p no more than the
+  panel's `dim_online` (40 at the defaults), has loadings spanning every kept site, so OADP's residual
+  was zero and `svd_online` normalised it by 0; the replicate and the jackknife's standard errors were
+  meaningless. `infer_ancestry` now withholds the jackknife when any replicate would keep that few sites
+  (`jackknife_reason = too_few_sites_per_block`, a new `JACKKNIFE_REASONS` value, additive), decided
+  from the sites per autosome before anything is projected; and `svd_online` reads a residual below
+  `RESIDUAL_TOLERANCE` (about 1.5e-8 of the target's norm) as none, the vendored file's one recorded
+  change. Only a panel of a few dozen sites meets the bound. Tests (numpy):
+  `tests/test_ancestry.py::test_a_replicate_with_no_more_sites_than_the_online_loadings_withholds_the_jackknife`
+  (21 kept, exactly 40 kept, and 41 kept, which runs) and
+  `::test_online_svd_of_a_target_in_the_loadings_span_is_finite`.
+- **A row across abutting blocks of one chain lifts across its gap** (audit 16). The chain axis
+  merges abutting or overlapping blocks of one mapping (a `size 0 0` gap line writes two) into one
+  segment, but the gap planner asked a single block to hold the segment's piece of a span, so a span
+  over source `[90, 230)` on blocks `[0,100)`, `[100,200)`, `[201,300)` of one chain was refused as
+  `split_across_chains`. A chain now holds a piece when its blocks of the mapping cover it without a
+  hole, merged into one block per run (they share the offset, so the merge is exact); the lowest chain
+  id and the F14 duplicate-chain rule are unchanged, and abutting blocks of two chains still refuse.
+  `LIFT_VERSION` 17, so a lifted facet's `facet_id` changes. Tests:
+  `tests/test_liftover.py::test_a_row_across_abutting_blocks_of_one_chain_lifts_across_its_gap` fails on
+  the old code; `::test_abutting_blocks_of_two_chains_still_split_the_span` pins the refusal.
+- **A null SV claim no longer decomposes into a junction nobody claimed** (audit 16, RM282).
+  `concordance` read every null `sv_claim` as "implies both", so a VCF 4.5 `<DEL>` with `SVCLAIM=.` or
+  none, and any `<DEL>` or `<DUP>` of a facet migrated from 0.0.23 whose `dropped_fields` list INFO
+  `SVCLAIM` (claims in the file, unread), was turned into breakends. Now a null claim on a `<DEL>` or
+  `<DUP>` decomposes only where the facet predates SVCLAIM: its `vcf_version` is before 4.4 (the
+  version that added it; the 4.5 spec's change list says so) or absent, and its load did not leave
+  SVCLAIM out. Elsewhere it is not decomposed and is counted in the not-decomposed warning under a
+  reason of its own, "claim unknown" (4.4 or later) or "claim not read" (left out); an `<INV>` keeps its
+  implicit J. `migrate_store`'s 0.0.24 caveat now says so. Values change, no column does. Tests:
+  `tests/test_sv_claim.py::test_only_an_adjacency_claim_is_decomposed_in_a_45_file` (its `.` and
+  no-claim cases), `::test_a_null_claim_is_unknown_from_44_on` and
+  `::test_a_facet_that_left_sv_claim_out_does_not_decompose_a_null_claim` fail on the old code;
+  `::test_a_null_claim_before_44_implies_both` and `::test_an_inversion_with_no_claim_is_a_junction_in_45`
+  pin what stays.
+- **A dense extract of one chromosome no longer reads `wgs`** (audit 16, RM4). Breadth divides the
+  reach by the span the sites spread over per contig, so 116,000 indels 100 bp apart on chromosome 1
+  alone, or a million SNVs packed there, measured a genome's breadth and the facet read `wgs`, with
+  `absence_means = weak_reference`. The WGS band now asks calls on all 22 autosomes, as the WES band
+  already did; such a facet reads unknown. Breadth itself is unchanged (just-dna-lite's, ported as is).
+  Tests: `tests/test_callset.py::test_a_dense_one_chromosome_extract_is_not_wgs` and
+  `::test_a_genome_missing_an_autosome_is_not_wgs` fail on the old code;
+  `tests/test_karyotype.py::test_through_load_a_genome_shaped_vcf_is_estimated` now spreads its genome
+  over all 22 autosomes instead of two.
 - **Schema 0.0.24, a breaking change pre-1.0: `calls` gains `sv_claim`, VCF 4.5's SVCLAIM, and the
   decompose honours it** (RM282). VCF 4.5 says per ALT what a structural-variant call claims: `D`
   abundance (copy number changed, no junction), `J` an adjacency, `DJ` both. The frame dropped it, so

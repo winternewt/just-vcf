@@ -11,6 +11,21 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **23andMe v3 and v4 read their I/D codes per probe** (RM281). Against the same people's Complete
+  Genomics `var` (13 v4 and 23 v3 people on PGP-HMS, 2026-11-07), these chips' `I` is Illumina's `I`
+  on most indel probes and Illumina's `D` on a few dozen (41 on v4, 45 on v3), so the chip-wide gate
+  that withheld them gives way to a per-probe one: `resolve_ref` reads a code row when its rsid is in
+  the chip's orientation table (`probes.id_orientation`, the package's `id_orientation.json`), `same`
+  as written, `flipped` with `I` and `D` swapped first (`source_gt` keeps the codes; the warnings count
+  the swapped rows); a row the table does not list stays unread, counted `id_orientation_unverified`.
+  `IdCalibration` now carries a `mode` (`IdGate`: `chip_wide`, `per_probe`, `withheld`) in place of
+  its `resolve` flag, which stays as a property. The table is learned by `scripts/id_orientation.py`
+  (at least 3 people one way over a CGI reference block and none the other), its orientations are part
+  of `facets.resolve_inputs`, and `RESOLVE_VERSION` is 14. It ships empty until it is learned on
+  PGP-HMS, and an empty table reads as the withheld gate did. Tests: `tests/test_probes.py` (the rule
+  case by case, the table's checks, flipped, same and unlisted probes, the empty table) and
+  `tests/test_id_orientation.py` (the learner on synthetic exports and a CGI `var`).
+
 - **A jackknife replicate with no more sites than the online loadings is withheld, not divided by zero**
   (audit 16, RM5). A leave-one-chromosome-out replicate that keeps p panel sites, p no more than the
   panel's `dim_online` (40 at the defaults), has loadings spanning every kept site, so OADP's residual

@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+from functools import cache
 from importlib import resources
 from pathlib import Path
 
@@ -13,7 +14,9 @@ from just_vcf import load
 from just_vcf.chip import (
     CHIPS,
     LOW_ID_FLOOR,
+    MARKER_CHROMS,
     MARKER_MODULUS,
+    MIN_CARRIED_SHARE,
     MIN_COVERAGE,
     MIN_MARGIN,
     MIN_RECALL,
@@ -21,6 +24,8 @@ from just_vcf.chip import (
     OVERLAP_FORMATS,
     ROW_BANDS_23ANDME,
     ChipOutcome,
+    carried_chroms,
+    chip_marker_chroms,
     chip_markers,
     detect_chip,
     id_profile,
@@ -210,18 +215,54 @@ def _off_manifest(count: int) -> list[int]:
     return found
 
 
-def _export(sampled: list[int], filler: int = 0, prefix: str = "rs") -> pl.DataFrame:
-    """An export's `ids`: the given sampled rsids, plus `filler` rsids outside the sample (never compared)."""
+@cache
+def _placed() -> dict[int, str]:
+    """Each sampled marker's chromosome, from the first manifest that places it."""
+    found: dict[int, str] = {}
+    for chip, markers in chip_markers().items():
+        for number, chrom in zip(markers.to_list(), chip_marker_chroms()[chip].to_list()):
+            if chrom is not None:
+                found.setdefault(number, chrom)
+    return found
+
+
+def _on(chip: str, chrom: str) -> list[int]:
+    """This chip's sampled markers on one chromosome."""
+    return [n for n, c in zip(_markers(chip), chip_marker_chroms()[chip].to_list()) if c == chrom]
+
+
+def _export(sampled: list[int], filler: int = 0, prefix: str = "rs", on: str | None = None) -> pl.DataFrame:
+    """An export's `ids` and `chrom`: the given sampled rsids, plus `filler` rsids outside the sample (never
+    compared). Each sampled rsid sits on its manifest's chromosome; one no manifest places, and the filler,
+    are spread over the autosomes. With `on`, every row is on that chromosome (an X-only export)."""
     unsampled = [n * MARKER_MODULUS + 1 for n in range(filler)]
-    return pl.DataFrame({"ids": [[f"{prefix}{n}"] for n in sampled + unsampled]})
+    spread = [str(1 + index % 22) for index in range(len(sampled) + filler)]
+    chroms = [on] * len(spread) if on else [_placed().get(n, spread[i]) for i, n in enumerate(sampled)] + spread[len(sampled) :]
+    return pl.DataFrame({"ids": [[f"{prefix}{n}"] for n in sampled + unsampled], "chrom": chroms})
 
 
 def test_the_packaged_sample_holds_only_sampled_rsids() -> None:
     markers = chip_markers()
+    chroms = chip_marker_chroms()
     assert set(markers) == {"illumina_gsa", "illumina_omniexpress"} and set(markers) <= CHIPS
-    for sample in markers.values():
+    assert set(chroms) == set(markers)
+    for chip, sample in markers.items():
         assert sample.len() > 5 * MIN_SAMPLED_MARKERS and (sample % MARKER_MODULUS == 0).all()
         assert sample.is_sorted() and sample.n_unique() == sample.len()
+        assert chroms[chip].len() == sample.len(), "sample_chrom is parallel to sample"
+        assert set(chroms[chip].drop_nulls()) <= MARKER_CHROMS
+        assert {str(n) for n in range(1, 23)} | {"X"} <= set(chroms[chip].drop_nulls()), chip
+
+
+def test_the_carried_chromosomes() -> None:
+    """A chromosome is carried from `MIN_CARRIED_SHARE` of the rows up; an `XY` row counts for X."""
+    rows = 2_000
+    at_share = round(rows * MIN_CARRIED_SHARE)
+    frame = pl.DataFrame({"chrom": ["X"] * (rows - at_share - 3) + ["1"] * at_share + ["XY", "2", None]})
+    assert carried_chroms(frame) == {"X", "1"}
+    fewer = pl.DataFrame({"chrom": ["XY"] * (rows - at_share + 1) + ["1"] * (at_share - 1)})
+    assert carried_chroms(fewer) == {"X"}
+    assert carried_chroms(pl.DataFrame({"chrom": ["0"] * rows})) == frozenset()
 
 
 @pytest.mark.parametrize("chip", ["illumina_gsa", "illumina_omniexpress"])
@@ -274,6 +315,85 @@ def test_an_extract_of_a_chip_is_not_the_chip() -> None:
     assert overlap_chip(_export(extract)).outcome is ChipOutcome.NO_CLEAR_OVERLAP
 
 
+# An export of one chromosome (FTDNA writes the X chromosome to a file of its own): recall is measured over
+# the chromosomes the export carries, so a whole X of a chip reads as that chip.
+
+X_FILLER = 16_000
+"""Unsampled rows beside an X export's sampled ones, so it has the 15,789-18,091 rows FTDNA's X files have."""
+
+
+@pytest.mark.parametrize("chip", ["illumina_gsa", "illumina_omniexpress"])
+def test_an_x_only_export_of_a_chip_is_that_family(chip: str) -> None:
+    export = _export(_on(chip, "X"), filler=X_FILLER, on="X")
+    found = overlap_chip(export)
+    assert (found.chip, found.basis, found.outcome) == (chip, "inferred", ChipOutcome.INFERRED)
+    assert "recall over X, the chromosomes the export carries" in found.reason
+    assert marker_overlap(export)[chip] == (1.0, 1.0)
+
+
+def test_an_x_only_export_mostly_in_no_manifest_stays_unknown() -> None:
+    held = _on("illumina_omniexpress", "X")[:100]
+    export = _export(held + _off_manifest(2 * len(held)), filler=X_FILLER, on="X")
+    assert max(coverage for coverage, _ in marker_overlap(export).values()) < MIN_COVERAGE
+    found = overlap_chip(export)
+    assert (found.chip, found.outcome) == (None, ChipOutcome.NO_CLEAR_OVERLAP)
+
+
+def test_an_extract_of_the_carried_chromosomes_is_not_the_chip() -> None:
+    """Under `MIN_RECALL` of a manifest's markers on the one chromosome the export carries.
+
+    Neither manifest has enough sampled X markers for an X extract under the recall floor to reach the
+    comparison (it stops at `MIN_SAMPLED_MARKERS`), so the recall gate is shown on chromosome 1, by the
+    same rule."""
+    for chip in chip_markers():
+        x = _on(chip, "X")
+        assert int(len(x) * MIN_RECALL) < MIN_SAMPLED_MARKERS
+        found = overlap_chip(_export(x[: int(len(x) * (MIN_RECALL - 0.05))], filler=X_FILLER, on="X"))
+        assert (found.chip, found.outcome) == (None, ChipOutcome.TOO_FEW_MARKERS)
+    chr1 = _on("illumina_omniexpress", "1")
+    extract = chr1[: int(len(chr1) * (MIN_RECALL - 0.05))]
+    assert len(extract) >= MIN_SAMPLED_MARKERS
+    export = _export(extract, filler=X_FILLER, on="1")
+    coverage, recall = marker_overlap(export)["illumina_omniexpress"]
+    assert coverage == 1.0 and recall < MIN_RECALL
+    found = overlap_chip(export)
+    assert (found.chip, found.outcome) == (None, ChipOutcome.NO_CLEAR_OVERLAP)
+    assert "recall over 1, the chromosomes the export carries" in found.reason
+
+
+def test_a_stray_autosomal_row_does_not_make_its_chromosome_carried() -> None:
+    chip = "illumina_omniexpress"
+    stray = _export(_on(chip, "1")[:1])
+    export = pl.concat([_export(_on(chip, "X"), filler=X_FILLER, on="X"), stray])
+    assert stray["chrom"].to_list() == ["1"] and carried_chroms(export) == {"X"}
+    found = overlap_chip(export)
+    assert (found.chip, found.basis) == (chip, "inferred")
+    assert marker_overlap(export)[chip] == (1.0, 1.0)
+
+
+def test_a_curated_list_across_every_autosome_is_not_the_chip() -> None:
+    """A twentieth of each autosome's markers: every rsid is the chip's (coverage 1.0), but the list holds
+    a small share of the chip on the chromosomes it carries."""
+    chip = "illumina_omniexpress"
+    curated = [n for chrom in range(1, 23) for n in _on(chip, str(chrom))[::20]]
+    export = _export(curated)
+    assert carried_chroms(export) >= {str(n) for n in range(1, 23)}
+    coverage, recall = marker_overlap(export)[chip]
+    assert coverage == 1.0 and recall < MIN_RECALL
+    found = overlap_chip(export)
+    assert (found.chip, found.outcome) == (None, ChipOutcome.NO_CLEAR_OVERLAP)
+    assert "recall over" not in found.reason, "every autosome is carried, so the reason names none"
+
+
+def test_an_export_on_no_carried_chromosome_has_no_recall() -> None:
+    """Rows on no chromosome a manifest names (an unplaced `0`): recall is not measured, never 0."""
+    export = _export(_markers("illumina_omniexpress"), on="0")
+    assert {recall for _, recall in marker_overlap(export).values()} == {None}
+    found = overlap_chip(export)
+    assert (found.chip, found.outcome) == (None, ChipOutcome.NO_CLEAR_OVERLAP)
+    assert "so recall is not measured" in found.reason
+
+
 def test_too_few_sampled_rsids_are_not_compared() -> None:
     found = overlap_chip(_export(_markers("illumina_omniexpress")[: MIN_SAMPLED_MARKERS - 1], filler=50_000))
     assert (found.chip, found.outcome) == (None, ChipOutcome.TOO_FEW_MARKERS)
@@ -287,12 +407,29 @@ def test_23andme_keeps_its_own_rule_over_the_overlap() -> None:
     assert found.chip != "illumina_gsa"
 
 
+def _ftdna_body(markers: list[int]) -> str:
+    """FTDNA rows for the placed markers, each on its manifest's chromosome (an unplaced one is left out,
+    as the loader drops chromosome `0` rows)."""
+    placed = [(n, _placed()[n]) for n in markers if n in _placed()]
+    return "RSID,CHROMOSOME,POSITION,RESULT\n" + "".join(f'"rs{n}","{chrom}","{1000 + i}","AG"\n' for i, (n, chrom) in enumerate(placed))
+
+
 def test_a_loaded_ftdna_export_gets_its_family_by_overlap(tmp_path: Path) -> None:
-    body = "".join(f'"rs{n}","1","{1000 + i}","AG"\n' for i, n in enumerate(_markers("illumina_omniexpress")))
-    loaded = load(_write(tmp_path, "RSID,CHROMOSOME,POSITION,RESULT\n" + body, "ftdna.csv"))
+    loaded = load(_write(tmp_path, _ftdna_body(_markers("illumina_omniexpress")), "ftdna.csv"))
     facet = loaded.facets.collect().row(0, named=True)
     assert (facet["format_id"], facet["chip"], facet["chip_basis"]) == ("ftdna", "illumina_omniexpress", "inferred")
     assert any(w.startswith("chip inferred from the rows as illumina_omniexpress: ") for w in loaded.warnings)
+
+
+def test_a_loaded_ftdna_x_export_gets_its_family_by_overlap(tmp_path: Path) -> None:
+    """Through `load`: the loader's calls carry the canonical `chrom` the carried chromosomes are read from."""
+    loaded = load(_write(tmp_path, _ftdna_body(_on("illumina_omniexpress", "X")), "ftdna_x.csv"))
+    facet = loaded.facets.collect().row(0, named=True)
+    assert (facet["format_id"], facet["chip"], facet["chip_basis"]) == ("ftdna", "illumina_omniexpress", "inferred")
+    assert any(
+        w.startswith("chip inferred from the rows as illumina_omniexpress: ") and "recall over X, the chromosomes the export carries" in w
+        for w in loaded.warnings
+    )
 
 
 def test_a_small_ftdna_export_says_why_its_chip_is_unknown(tmp_path: Path) -> None:
@@ -314,6 +451,7 @@ def test_the_packaged_sample_is_derived_from_the_manifests(manifests_dir: Path) 
         if not found:
             pytest.skip(f"{entry['file']} is not under JUST_VCF_MANIFESTS_DIR")
         assert hashlib.sha256(found[0].read_bytes()).hexdigest() == entry["sha256"]
-        descriptor, numbers = module.manifest_rsids(found[0])
+        descriptor, numbers, chroms = module.manifest_rsids(found[0])
         assert descriptor == entry["manifest"] and len(numbers) == entry["rsids"]
         assert [n for n in numbers if n % MARKER_MODULUS == 0] == entry["sample"], chip
+        assert [chroms[n] for n in entry["sample"]] == entry["sample_chrom"], chip

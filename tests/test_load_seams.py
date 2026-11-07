@@ -90,7 +90,7 @@ _TOO_FEW_SITES = (
 )
 _NO_CHIP_RULE = "The format states no chip and has no probe-set rule (`chip.ChipOutcome.NO_RULE`)."
 _FEW_OVERLAP = (
-    "Marker overlap names no Illumina family: the example's few rsids are far below the 1,000 the marker "
+    "Marker overlap names no Illumina family: the example's few rsids are far below the 200 the marker "
     "sample needs (`chip.overlap_chip`, a load warning)."
 )
 _NO_BAND_23 = "The example's row count lies in no 23andMe generation's band (`chip.ChipOutcome.NO_BAND`, a load warning)."

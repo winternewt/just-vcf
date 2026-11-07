@@ -11,6 +11,16 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **A row across abutting blocks of one chain lifts across its gap** (audit 16). The chain axis
+  merges abutting or overlapping blocks of one mapping (a `size 0 0` gap line writes two) into one
+  segment, but the gap planner asked a single block to hold the segment's piece of a span, so a span
+  over source `[90, 230)` on blocks `[0,100)`, `[100,200)`, `[201,300)` of one chain was refused as
+  `split_across_chains`. A chain now holds a piece when its blocks of the mapping cover it without a
+  hole, merged into one block per run (they share the offset, so the merge is exact); the lowest chain
+  id and the F14 duplicate-chain rule are unchanged, and abutting blocks of two chains still refuse.
+  `LIFT_VERSION` 17, so a lifted facet's `facet_id` changes. Tests:
+  `tests/test_liftover.py::test_a_row_across_abutting_blocks_of_one_chain_lifts_across_its_gap` fails on
+  the old code; `::test_abutting_blocks_of_two_chains_still_split_the_span` pins the refusal.
 - **A null SV claim no longer decomposes into a junction nobody claimed** (audit 16, RM282).
   `concordance` read every null `sv_claim` as "implies both", so a VCF 4.5 `<DEL>` with `SVCLAIM=.` or
   none, and any `<DEL>` or `<DUP>` of a facet migrated from 0.0.23 whose `dropped_fields` list INFO

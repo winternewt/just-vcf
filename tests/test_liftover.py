@@ -659,6 +659,48 @@ def test_a_row_across_a_gap_lifts_alike_whichever_chain_repeats_part_of_it(tmp_p
     assert results == {"alone": expected, "a_first": expected, "b_first": expected}
 
 
+ABUT_SOURCE = random_bases(300)
+ABUT_GAP = "GG"
+ABUT_TARGET = ABUT_SOURCE[:200] + ABUT_GAP + ABUT_SOURCE[201:]
+ABUT_ONE_CHAIN = "chain 100 1 300 + 0 300 1 301 + 0 301 1\n100 0 0\n100 1 2\n99\n\n"
+"""Source [0, 100) to target [0, 100) and [100, 200) to [100, 200), two blocks abutting across a
+`size 0 0` gap line, then source base 200 dropped and two target bases put in: [201, 300) to [202, 301)."""
+ABUT_TWO_CHAINS = "chain 100 1 300 + 0 100 1 301 + 0 100 1\n100\n\nchain 100 1 300 + 100 300 1 301 + 100 301 2\n100 1 2\n99\n\n"
+"""The same three blocks, the first in a chain of its own: no one chain covers source [90, 200)."""
+
+
+@pytest.mark.parametrize("change", [2, 9])
+def test_a_row_across_abutting_blocks_of_one_chain_lifts_across_its_gap(tmp_path: Path, change: int) -> None:
+    """Audit 16: `_segments` merges abutting blocks of one mapping into one axis segment, and a chain
+    holds that segment's piece of a span when its blocks of the mapping cover it without a hole, not
+    only when one block does. The REF span source [90, 230) lifts to target [90, 231), the dropped
+    source base left out and the gap's two target bases put in, the change carried; at offset 9 the
+    change straddles the abutting edge (source 99 and 100), which merged blocks hold as one."""
+    s0, e0 = 90, 230
+    ref = ABUT_SOURCE[s0:e0]
+    alt = ref[:change] + other(ref[change]) + other(ref[change + 1]) + ref[change + 2 :]
+    record = f"1\t{s0 + 1}\tabut\t{ref}\t{alt}\t50\tPASS\t.\tGT\t0/1"
+    lifted = one_contig_lift(tmp_path, ABUT_SOURCE, ABUT_TARGET, ABUT_ONE_CHAIN, [record])
+    report = lifted.report.collect().row(0, named=True)
+    assert report["lift_reason"] is None, report
+    (row,) = lifted.loaded.calls.collect().iter_rows(named=True)
+    kept = 200 - s0  # source bases [90, 200), on the abutting blocks; base 200 is source-only
+    assert (row["pos"], row["ref"]) == (s0 + 1, ABUT_TARGET[s0 : e0 + 1])
+    assert row["alts"] == [alt[:kept] + ABUT_GAP + alt[kept + 1 :]]
+
+
+def test_abutting_blocks_of_two_chains_still_split_the_span(tmp_path: Path) -> None:
+    """The same blocks, the first in a chain of its own: no one chain covers the span's first piece, so
+    the row is refused as before."""
+    s0, e0 = 90, 230
+    ref = ABUT_SOURCE[s0:e0]
+    alt = ref[:2] + other(ref[2]) + ref[3:]
+    record = f"1\t{s0 + 1}\tabut\t{ref}\t{alt}\t50\tPASS\t.\tGT\t0/1"
+    lifted = one_contig_lift(tmp_path, ABUT_SOURCE, ABUT_TARGET, ABUT_TWO_CHAINS, [record])
+    assert lifted.report.collect()["lift_reason"].to_list() == ["split_across_chains"]
+    assert lifted.loaded.calls.collect().height == 0
+
+
 def test_a_lifted_row_across_a_gap_normalizes_on_the_target(tmp_path: Path, setup) -> None:
     """The gap's own bases ride in every allele as context; `normalize` trims them off, and what is
     left is the change on its own, left-aligned in the target's sequence."""

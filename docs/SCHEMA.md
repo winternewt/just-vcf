@@ -1221,8 +1221,15 @@ holding that collection and the target.
    hold, each failure its own reason:
    - its first and last bases lie in blocks (`split_across_blocks` otherwise: the span runs off a
      block into a gap's source-only bases or past the chain's end), and one chain holds every piece
-     of the span a block covers, each piece whole inside one of its blocks (`split_across_chains`
-     otherwise: another alignment, target contig or strand on the other side). Another chain
+     of the span a block covers, each piece whole inside one run of its blocks of that mapping
+     (`split_across_chains` otherwise: another alignment, target contig or strand on the other side).
+     A run is the chain's blocks of one mapping where each ends at or past the next one's start: a
+     `size 0 0` gap line writes two abutting blocks that send every base to the same place, the axis
+     counts them as one segment, and so a piece across their edge is held (`LIFT_VERSION` 17, merge
+     audit 16: such a piece was `split_across_chains`, though one chain covered every base). The plan
+     carries one merged block per run, exact since its blocks share the offset; rejected: carrying the
+     blocks as they are, which reads their shared edge as a gap of no bases and leaves a change across
+     it `gap_in_change`. Abutting blocks of two chains are still two chains. Another chain
      repeating some of those blocks (the same target contig, strand and offset, F14) changes nothing:
      the row is judged by every block of each mapping, never by the one the axis keeps for it, so it
      lifts alike in either order of the chains (`LIFT_VERSION` 15, merge audit 15: a chain repeating
@@ -1230,7 +1237,7 @@ holding that collection and the target.
      `TypeError`, by which chain's block the axis happened to keep). Where several chains hold every
      piece, each gives the same lift, and the lowest chain id is read. A doubly mapped stretch
      anywhere in the span is still `multiple_targets`, judged first;
-   - each ALT's change lies inside one block (`gap_in_change` otherwise). The change is the REF bases
+   - each ALT's change lies inside one block, or one run (`gap_in_change` otherwise). The change is the REF bases
      the ALT replaces after the shared first and last bases are set aside, or, for an insertion, the
      two bases either side of the point it goes in at; and for an indel in a repeat, every place it
      could equally sit, from its left-most placement (a common suffix trimmed first) to its right-most
@@ -4030,6 +4037,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   `consensus` refuses two parents whose lineages meet, one made from the other or both made from one
   facet not given ("A consensus posterior", "Parents"), where it refused only the first. Nothing it
   still makes changes, so `CONSENSUS_VERSION` stays 5.
+
+- **No version change** (2026-11-07, merge audit 16: abutting blocks of one chain): no column
+  changes. `liftover` lets a chain hold a span's piece across a gap ("Lifting", step 2b) when its
+  abutting or overlapping blocks of one mapping cover it together, where it asked one block to;
+  `LIFT_VERSION` 17. **Values change** only on a chain with a `size 0 0` gap line (or overlapping
+  blocks of one mapping): a row whose span crosses that edge and a real gap lifts where it was
+  `split_across_chains`. A lifted facet's `facet_id` changes with the version.
 
 - **No version change** (2026-11-05, merge audit 15: a chain repeating part of another): no column
   changes. `liftover` judges a row across a gap of one chain ("Lifting", step 2b) by the chains that

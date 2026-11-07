@@ -133,6 +133,37 @@ def test_millions_of_clustered_sites_are_not_wgs() -> None:
     assert inferred.callset_type is None
 
 
+def one_chromosome(total: int, step: int = 100, chrom: str = "1") -> pl.LazyFrame:
+    """`total` sites `step` bp apart on one chromosome: a dense extract of a single contig."""
+    return pl.LazyFrame(
+        {"chrom": pl.repeat(chrom, total, eager=True), "pos": pl.int_range(0, total, eager=True).cast(pl.UInt32) * step + 1}
+    ).with_columns(pl.lit(["G"]).alias("alts"))
+
+
+def test_a_dense_one_chromosome_extract_is_not_wgs() -> None:
+    """Audit 16: breadth divides the reach by the span the sites spread over per contig, so sites packed
+    100 bp apart on chromosome 1 alone have a genome's breadth. The WGS band asks every autosome, as
+    the WES band does, so neither an indel-only extract over the indel floor nor an SNV one over the
+    plain floor reads `wgs`."""
+    indels = classify(one_chromosome(MIN_WGS_INDEL_SITES), READS, None, ContentFilter.INDEL_ONLY)
+    assert indels.sites >= MIN_WGS_INDEL_SITES and indels.breadth >= MIN_WGS_BREADTH and indels.autosomes == 1
+    assert indels.callset_type is None, indels.reason
+    snvs = classify(one_chromosome(MIN_WGS_SITES), READS, None)
+    assert snvs.sites >= MIN_WGS_SITES and snvs.breadth >= MIN_WGS_BREADTH and snvs.autosomes == 1
+    assert snvs.callset_type is None, snvs.reason
+
+
+def test_a_genome_missing_an_autosome_is_not_wgs() -> None:
+    """The band's bound, case by case: 21 autosomes at a genome's density read unknown, 22 read `wgs`."""
+    per = (MIN_WGS_SITES + 22) // 22
+    short = genome_shaped(MIN_WGS_SITES + 22).filter(pl.col("chrom") != "22")
+    padded = pl.concat([short, one_chromosome(per, step=100_000_000 // per, chrom="1").with_columns(pos=pl.col("pos") + 1)])
+    inferred = classify(padded, READS, None)
+    assert inferred.sites >= MIN_WGS_SITES and inferred.breadth >= MIN_WGS_BREADTH and inferred.autosomes == 21
+    assert inferred.callset_type is None, inferred.reason
+    assert classify(genome_shaped(MIN_WGS_SITES + 22), READS, None).callset_type is CallsetType.WGS
+
+
 def test_an_exome_shaped_callset_is_wes() -> None:
     inferred = classify(sites(exome_shaped()), READS, None)
     assert inferred.callset_type is CallsetType.WES

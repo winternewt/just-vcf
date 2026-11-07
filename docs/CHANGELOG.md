@@ -11,6 +11,15 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **A dense extract of one chromosome no longer reads `wgs`** (audit 16, RM4). Breadth divides the
+  reach by the span the sites spread over per contig, so 116,000 indels 100 bp apart on chromosome 1
+  alone, or a million SNVs packed there, measured a genome's breadth and the facet read `wgs`, with
+  `absence_means = weak_reference`. The WGS band now asks calls on all 22 autosomes, as the WES band
+  already did; such a facet reads unknown. Breadth itself is unchanged (just-dna-lite's, ported as is).
+  Tests: `tests/test_callset.py::test_a_dense_one_chromosome_extract_is_not_wgs` and
+  `::test_a_genome_missing_an_autosome_is_not_wgs` fail on the old code;
+  `tests/test_karyotype.py::test_through_load_a_genome_shaped_vcf_is_estimated` now spreads its genome
+  over all 22 autosomes instead of two.
 - **Schema 0.0.24, a breaking change pre-1.0: `calls` gains `sv_claim`, VCF 4.5's SVCLAIM, and the
   decompose honours it** (RM282). VCF 4.5 says per ALT what a structural-variant call claims: `D`
   abundance (copy number changed, no junction), `J` an adjacency, `DJ` both. The frame dropped it, so

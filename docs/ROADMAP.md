@@ -872,6 +872,11 @@ every pair of classes. Decisions taken, each with what was rejected:
   the `pl.Enum` dtype and answer a question the blocks frame already answers.
 - A region extract reads as `panel`. Rejected: a separate "extract" outcome, which the calls cannot
   tell from a panel; either way absence outside the regions means nothing was looked at.
+- The WGS band asks calls on every autosome, as the WES band does (since 2026-11-07, audit 16):
+  breadth is measured over the span the sites spread over per contig, so a dense extract of one
+  chromosome (116,000 indels 100 bp apart on chromosome 1, or a million SNVs) read `wgs`. Rejected:
+  breadth over the assembly's length, which would move just-dna-lite's calibrated breadth, ported
+  unchanged.
 - Sequencing classes need a read-evidence FORMAT key, and rows whose ALTs are all symbolic do not
   count as sites. Rejected: reading GP/DS as imputation (DRAGEN writes GP), and counting SV records
   (a 5-sample DELLY merge in PGP-HMS had 1.04M SV sites at 93.5% breadth and read as `wgs`).

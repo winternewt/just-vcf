@@ -646,8 +646,9 @@ def test_through_load_a_small_vcf_is_measured_but_not_estimated(tmp_path: Path) 
 
 
 def test_through_load_a_genome_shaped_vcf_is_estimated(tmp_path: Path) -> None:
-    # 1,000,000+ autosomal sites spread over two chromosomes make the facet `wgs` (RM4).
-    spread = [rows(chrom, 1, 520_000, [0, 1], REF_DP, step=400) for chrom in ("1", "2")]
+    # 1,000,000+ autosomal sites spread over every autosome make the facet `wgs` (RM4; the WGS band
+    # asks all 22 since audit 16). Positions 1 + 400k never meet chr20()'s, which end in 0.
+    spread = [rows(str(chrom), 1, 47_300, [0, 1], REF_DP, step=400) for chrom in range(1, 23)]
     # The header's karyotype line is the caller's statement: carried verbatim, and it does not decide.
     path = write_vcf(tmp_path / "genome.vcf", [*spread, chr20(), XX[0], XY[1]], prefix="", meta=("##referenceSexKaryotype=XY",))
     (found,) = sex_chromosome_evidence(load(path))

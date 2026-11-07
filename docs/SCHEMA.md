@@ -897,7 +897,10 @@ breadth (`MIN_WGS_INDEL_SITES`: 1,000,000 sits 4.3x below the 4.3M sites of the 
 just-dna-lite measured, and a genome carries 0.5–0.6M indels, so 500,000 / 4.3 = 116,279, rounded
 down). The filter is decided first (Decision 4), from the same rows, so the floor reads the facet's own
 column; breadth keeps an exome cut to its indels out, since its sites cluster. An SNV-only or
-SV-only facet keeps the 1,000,000 floor. `wes` 10,000–400,000 sites on
+SV-only facet keeps the 1,000,000 floor. Since 2026-11-07 (audit 16) `wgs` also needs calls on all
+22 autosomes, as `wes` does: breadth divides the reach by the span the sites spread over per contig,
+so 116,000 indels 100 bp apart on chromosome 1 alone measured 100% and read `wgs`. Rejected: breadth
+over the assembly's length, which would move just-dna-lite's calibrated breadth, ported unchanged. `wes` 10,000–400,000 sites on
 all 22 autosomes with at most 60% breadth; `panel` 50–5,000 sites reaching at most 50 Mb. A region
 extract of a larger callset reads as `panel`, which is what its absences then mean. `imputed` when the
 header names an imputation tool or declares an imputation INFO key. Every sequencing class needs a

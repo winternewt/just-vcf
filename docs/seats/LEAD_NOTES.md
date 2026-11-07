@@ -48,6 +48,13 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-07: RM4's FTDNA X-only chip building** (will be merge 5 of 6 toward audit 16). Measured first on
+   PGP-HMS (aggregates): 43 X-only FTDNA exports, every row on X, 245-270 sampled rsids; 39 have 0.96-0.98 of them
+   in OmniExpress's sample, 4 under 0.90 for every family. The lead's call, for veto: the chip from the file's own
+   rows, recall over the chromosomes an export carries (at least 0.5% of its rows), the sampled floor 1,000 → 200,
+   `chip_markers.json` gains each marker's chromosome. Rejected: lending the chip of the same subject's autosomal
+   export (writes another file's value into the facet; one person's FTDNA files can be two chips), an X-only branch.
+   The karyotype's pairing of the two files stays RM269's (blocked on desk #135).
 0. **2026-11-06, the lead's calls without a builder, for the person's veto**: RM6's quality filters are not built
    as a filter (charter invariant 7: no row-dropping cut-off; consumers threshold `genotype_evidence`; a `write_vcf`
    edge threshold is a new item on a consumer's ask); RM269's somalier point answered in the roadmap (somalier's

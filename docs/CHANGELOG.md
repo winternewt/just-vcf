@@ -32,8 +32,9 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
   `caller_version` the build its jar names, read from every form Beagle's own `VcfWriter` writes:
   5.x `"beagle.22Jul22.46e.jar"` (`22Jul22.46e`), 4.1 `"beagle.27Jul16.86a.jar (version 4.1)"`
   (`27Jul16.86a`), 4.0 `"beagle.jar (r1399)"` (`r1399`); before, the caller was null. The line states
-  no content: `imputed` still comes from the DR2 and IMP declarations (`callset.imputation_marker`), and
-  no `phase` step is added. Tests: `tests/test_source.py::test_beagle_is_the_caller_with_its_build`
+  no content in `detect_source`: the facet's `imputed` still comes from `callset.imputation_marker`,
+  which reads the DR2 and IMP declarations and a `##source` naming beagle, both unchanged; and no
+  `phase` step is added. Tests: `tests/test_source.py::test_beagle_is_the_caller_with_its_build`
   (each form, failing on the old code), `::test_a_beagle_vcf_reads_imputed_from_its_info_keys`.
 - **An FTDNA X-only export reads its chip from its own rows** (RM4, the lead's call). Marker overlap
   measures recall over the chromosomes the export carries, those holding at least 0.5% of its rows

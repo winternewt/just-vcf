@@ -130,8 +130,8 @@ def test_beagle_is_the_caller_with_its_build(line: str, version: str) -> None:
 
 
 def test_a_beagle_vcf_reads_imputed_from_its_info_keys(tmp_path: Path) -> None:
-    """The facet's `imputed` comes from Beagle's DR2 and IMP declarations (`callset.imputation_marker`),
-    not from its ##source; the caller is Beagle either way."""
+    """The facet's `imputed` comes from `callset.imputation_marker` (Beagle's DR2 and IMP declarations,
+    and its ##source too), not from `detect_source`, which states no content; the caller is Beagle."""
     records = ["1\t100\t.\tA\tG\t.\tPASS\tAF=0.1;DR2=0.97\tGT\t0|1"]
     meta = ('##source="beagle.22Jul22.46e.jar"', *BEAGLE_INFO)
     facet = load(write(tmp_path, vcf_text(records, extra_meta=meta), "beagle.vcf")).facets.collect().row(0, named=True)

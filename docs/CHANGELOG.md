@@ -11,6 +11,18 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **A jackknife replicate with no more sites than the online loadings is withheld, not divided by zero**
+  (audit 16, RM5). A leave-one-chromosome-out replicate that keeps p panel sites, p no more than the
+  panel's `dim_online` (40 at the defaults), has loadings spanning every kept site, so OADP's residual
+  was zero and `svd_online` normalised it by 0; the replicate and the jackknife's standard errors were
+  meaningless. `infer_ancestry` now withholds the jackknife when any replicate would keep that few sites
+  (`jackknife_reason = too_few_sites_per_block`, a new `JACKKNIFE_REASONS` value, additive), decided
+  from the sites per autosome before anything is projected; and `svd_online` reads a residual below
+  `RESIDUAL_TOLERANCE` (about 1.5e-8 of the target's norm) as none, the vendored file's one recorded
+  change. Only a panel of a few dozen sites meets the bound. Tests (numpy):
+  `tests/test_ancestry.py::test_a_replicate_with_no_more_sites_than_the_online_loadings_withholds_the_jackknife`
+  (21 kept, exactly 40 kept, and 41 kept, which runs) and
+  `::test_online_svd_of_a_target_in_the_loadings_span_is_finite`.
 - **A row across abutting blocks of one chain lifts across its gap** (audit 16). The chain axis
   merges abutting or overlapping blocks of one mapping (a `size 0 0` gap line writes two) into one
   segment, but the gap planner asked a single block to hold the segment's piece of a span, so a span

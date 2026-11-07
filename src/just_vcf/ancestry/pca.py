@@ -294,7 +294,8 @@ def infer_ancestry(
 
     With `jackknife` (the default) an estimate that answered carries its uncertainty from a
     leave-one-chromosome-out jackknife (`chromosome_jackknife`): `pc_errors`, `vote_stability` and
-    `proportion_errors`, or `jackknife_reason = too_few_blocks` below `MIN_JACKKNIFE_BLOCKS` autosomes.
+    `proportion_errors`, or `jackknife_reason = too_few_blocks` below `MIN_JACKKNIFE_BLOCKS` autosomes,
+    or `too_few_sites_per_block` where a replicate would keep no more panel sites than `dim_online`.
     `jackknife=False` skips it (`jackknife_reason = not_requested`).
     """
     if resolution not in RESOLUTIONS:
@@ -433,7 +434,10 @@ def chromosome_jackknife(
       `labels`, names `leader`;
     - `proportion_errors`: the same jackknife over the centroid proportions, unrounded per replicate.
 
-    Fewer than `min_blocks` blocks: nothing is projected and `jackknife_reason = too_few_blocks`. The
+    Fewer than `min_blocks` blocks: nothing is projected and `jackknife_reason = too_few_blocks`. A
+    replicate that would keep no more panel sites than the panel's `dim_online`: nothing is projected
+    either, and `jackknife_reason = too_few_sites_per_block` (OADP cannot augment loadings that already
+    span every kept site; `_projection.svd_online`). The
     replicates measure how much the placement rests on any one chromosome's sites; they do not measure
     how well the panel's groups stand for the person's ancestry.
     """
@@ -442,6 +446,12 @@ def chromosome_jackknife(
     blocks = jackknife_blocks(chroms, used)
     if len(blocks) < min_blocks:
         return {"n_jackknife_blocks": len(blocks), "jackknife_reason": "too_few_blocks"}
+    # A replicate keeps every panel site off its chromosome, read or not (`project_restricted`). With
+    # no more of them than the online loadings' columns, those loadings span all of the kept sites'
+    # space: OADP's residual is zero and the replicate says nothing (audit 16). Decided before any
+    # replicate is projected.
+    if min(int(np.count_nonzero(chroms != chrom)) for chrom, _ in blocks) <= model.pca.dim_online:
+        return {"n_jackknife_blocks": len(blocks), "jackknife_reason": "too_few_sites_per_block"}
     w = dosage.astype(np.float64).reshape((-1, 1))
     standardize(w, model.pca.mean, model.pca.std, miss=DEFAULT_MISSING)
     groups, centroids = group_centroids(model.pca.pcs_ref, labels)

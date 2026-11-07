@@ -9,7 +9,8 @@ array-first, logging and file I/O removed) from FRAPOSA / fraposa_pgsc:
 
 The full upstream MIT notice ships alongside this module as ``FRAPOSA_LICENSE``. just-prs vendored
 them first (``just_prs/ancestry/_projection.py``, MIT); this copy is that file with this docstring
-rewritten (docs/PROVENANCE.md).
+rewritten and one change of just-vcf's: ``svd_online`` reads a residual below ``RESIDUAL_TOLERANCE`` as
+none instead of dividing it by its norm (docs/PROVENANCE.md).
 
 Why vendor instead of depend: ``fraposa-pgsc`` pins ``numpy<2.0`` and ``pandas<2.0``.
 
@@ -34,12 +35,22 @@ __all__ = [
     "ReferencePCA",
     "project_samples",
     "DEFAULT_MISSING",
+    "RESIDUAL_TOLERANCE",
 ]
 
 # Missing-genotype sentinel used in standardisation. A panel matrix and a sample vector carry -9 for
 # a missing genotype; standardisation treats it as missing (set to the column mean,
 # i.e. 0 after centering).
 DEFAULT_MISSING: float = -9.0
+
+RESIDUAL_TOLERANCE: float = float(np.sqrt(np.finfo(np.float64).eps))
+"""just-vcf's, not FRAPOSA's: the largest residual `b - U1 U1^T b`, relative to `|b|`, that
+`svd_online` reads as `b` lying in U1's span (about 1.5e-8). With U1's columns orthonormal the residual
+is orthogonal to them, so its only trace in the update is `b_tilde^T b = |residual|`, one entry of the
+small matrix whose SVD is taken: zeroing it moves that matrix by at most this share of `|b|`, below any
+digit a PC coordinate is read to. And it is far above what rounding leaves of a vector in the span
+(about `p` float64 epsilons, 1e-14 at the few dozen sites where the span can be all of R^p), while a
+target over a real panel (sites far more than U1's columns) keeps most of its norm outside the span."""
 
 
 def standardize(
@@ -99,7 +110,14 @@ def svd_online(
     p = U1.shape[0]
     b = b.reshape((p, 1))
     b_tilde = b - U1 @ (U1.T @ b)
-    b_tilde = b_tilde / np.sqrt(sum(np.square(b_tilde)))
+    # just-vcf (audit 16): a residual of rounding size means b lies in U1's span (always so when U1 has
+    # p <= k orthonormal columns, a chromosome jackknife replicate keeping few sites); the update then
+    # adds no direction, so b_tilde is zero instead of 0 / 0 or a unit vector of noise. Otherwise the
+    # line below is FRAPOSA's, unchanged.
+    if np.sqrt(np.sum(np.square(b_tilde))) > RESIDUAL_TOLERANCE * np.sqrt(np.sum(np.square(b))):
+        b_tilde = b_tilde / np.sqrt(sum(np.square(b_tilde)))
+    else:
+        b_tilde = np.zeros_like(b_tilde)
     R = np.concatenate((np.diag(d1), U1.transpose() @ b), axis=1)
     R_tail = np.concatenate((np.zeros((1, k)), b_tilde.transpose() @ b), axis=1)
     R = np.concatenate((R, R_tail), axis=0)

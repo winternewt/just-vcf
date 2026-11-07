@@ -1116,7 +1116,8 @@ jackknife (a site bootstrap does not reach OADP as it reaches Privé's sums). Ea
 out in turn, the facet projected again with the reference's SVD recomputed on the kept sites from the
 panel's stored factors and fitted into the full frame; `pc_errors` and `proportion_errors` by the
 weighted block jackknife (Busing et al. 1999, as ADMIXTOOLS), `vote_stability` the share of replicates
-whose vote agrees; withheld below five autosomes (`too_few_blocks`); on by default, `jackknife=False`
+whose vote agrees; withheld below five autosomes (`too_few_blocks`), and where a replicate would keep no
+more panel sites than `dim_online` (`too_few_sites_per_block`, audit 16, 2026-11-07); on by default, `jackknife=False`
 skips it (docs/SCHEMA.md "The PCA path's uncertainty"). Built in a worktree without numpy, so its
 numpy tests and its timing were not run there.
 *Done 2026-11-03:* the consensus no longer multiplies methods from one panel as if independent

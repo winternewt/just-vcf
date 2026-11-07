@@ -36,7 +36,7 @@ from just_vcf.ancestry import (  # noqa: E402
     panel_assemblies,
     prive_proportions,
 )
-from just_vcf.ancestry._projection import DEFAULT_MISSING, build_reference_pca, project_samples, standardize  # noqa: E402
+from just_vcf.ancestry._projection import DEFAULT_MISSING, build_reference_pca, project_samples, standardize, svd_online  # noqa: E402
 from just_vcf.ancestry.pca import PANEL_META_KEYS, jackknife_blocks, panel_paths, project_restricted  # noqa: E402
 from just_vcf.ancestry.sites import facet_of, panel_sites, site_dosages  # noqa: E402
 from just_vcf.assembly import ASSEMBLY_LENGTHS  # noqa: E402
@@ -528,6 +528,77 @@ def test_jackknife_blocks_are_the_autosomes_read_in_canonical_order() -> None:
     chroms = np.array(["10", "2", "X", "1", "2", "10", "MT", "3"], dtype=object)
     used = np.array([True, True, True, True, True, False, True, False])
     assert jackknife_blocks(chroms, used) == [("1", 1), ("2", 2), ("10", 1)]
+
+
+DIM_ONLINE = 40
+"""The panels below are built with the defaults (`dim_ref` 10, so FRAPOSA's `dim_online` 4 x 10) from
+45 reference samples, more than 40, so `dim_online` stays 40 (asserted from the panel read back)."""
+SMALL_LAYOUTS = {
+    "below": {"1": 10, **{str(c): 1 for c in range(2, 23)}},
+    "at": {"1": 10, "2": 1, "3": 1, **{str(c): 2 for c in range(4, 23)}},
+    "above": {"1": 10, "2": 1, **{str(c): 2 for c in range(3, 23)}},
+}
+"""Ten sites on chromosome 1 and one or two on each other autosome: leaving chromosome 1 out keeps 21
+sites (the audit's case), exactly `DIM_ONLINE`, or one more."""
+
+
+def _finite_floats(value: object) -> list[float]:
+    """Every float inside a dumped estimate, so a NaN anywhere is seen."""
+    if isinstance(value, float):
+        return [value]
+    if isinstance(value, dict):
+        return [x for v in value.values() for x in _finite_floats(v)]
+    if isinstance(value, list | tuple):
+        return [x for v in value for x in _finite_floats(v)]
+    return []
+
+
+@pytest.mark.parametrize("layout", sorted(SMALL_LAYOUTS))
+def test_a_replicate_with_no_more_sites_than_the_online_loadings_withholds_the_jackknife(tmp_path: Path, layout: str) -> None:
+    """Audit 16: a replicate keeping p <= `dim_online` panel sites has loadings spanning all of R^p, so
+    OADP's residual is zero and its normalisation 0 / 0. The jackknife is decided from the per-block
+    site counts before any replicate is projected: withheld as `too_few_sites_per_block` at or below the
+    bound, the blocks still counted, and run one site above it. No NaN anywhere in the estimate."""
+    sites, freqs, genotypes, labels = synthetic_panel(SEED + 31, SMALL_LAYOUTS[layout], n_per_population=15)
+    panel_dir = tmp_path / "panels"
+    build_pca_panel(genotypes, sites, labels, panel="small", assembly="GRCh37", panel_dir=panel_dir)
+    model = load_pca_panel(panel_dir, "small", "GRCh37")
+    assert model.pca.dim_online == DIM_ONLINE
+    chroms = model.sites["chrom"].cast(pl.String).to_numpy()
+    fewest = min(int(np.count_nonzero(chroms != chrom)) for chrom in SMALL_LAYOUTS[layout])
+    assert fewest - DIM_ONLINE == {"below": 21 - DIM_ONLINE, "at": 0, "above": 1}[layout]
+    loaded = _autosome_vcf(tmp_path / "p.vcf", sites, person(freqs, "EUR", seed=31))
+    result = infer_ancestry(loaded, panel_dir, "small")
+    assert result and result.n_sites_used == sites.height and result.n_jackknife_blocks == len(AUTOSOME_CONTIGS)
+    floats = _finite_floats(result.model_dump())
+    assert floats and all(math.isfinite(x) for x in floats), result
+    if layout == "above":
+        assert result.jackknife_reason is None and result.error_method == "chromosome_jackknife"
+        assert len(result.pc_errors) == len(result.pc_coords)
+    else:
+        assert result.jackknife_reason == "too_few_sites_per_block"
+        assert all(getattr(result, field) is None for field in JACKKNIFE_FIELDS - {"jackknife_reason", "n_jackknife_blocks"})
+
+
+@pytest.mark.parametrize("target", ["in_span", "zero"])
+def test_online_svd_of_a_target_in_the_loadings_span_is_finite(target: str) -> None:
+    """`svd_online` with `b` in U1's span (here U1 = I, spanning all of R^p, so the residual is exactly
+    zero) or `b` = 0: no 0 / 0. The update then adds no direction, and the augmented scores are the
+    exact SVD's: their Gram matrix is that of `[diag(d1) V1^T | U1^T b]`, the augmented data in U1's
+    coordinates, and the target's own row has the norm of its plain projection `U1^T b`."""
+    rng = np.random.default_rng(SEED + 5)
+    k, n = 6, 9
+    U1 = np.eye(k)
+    d1 = np.sort(rng.uniform(1.0, 5.0, k))[::-1]
+    V1 = np.linalg.qr(rng.normal(size=(n, k)))[0]
+    b = rng.normal(size=(k, 1)) if target == "in_span" else np.zeros((k, 1))
+    with np.errstate(all="raise"):
+        d2, V2 = svd_online(U1, d1, V1, b)
+    assert np.isfinite(d2).all() and np.isfinite(V2).all()
+    scores = V2 * d2[:k]
+    augmented = np.hstack([np.diag(d1) @ V1.T, U1.T @ b])
+    assert scores @ scores.T == pytest.approx(augmented.T @ augmented, abs=1e-9)
+    assert np.linalg.norm(scores[-1]) == pytest.approx(np.linalg.norm(U1.T @ b), abs=1e-9)
 
 
 def _readings(*estimates: AncestryEstimate) -> list[dict[str, float]]:

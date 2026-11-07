@@ -52,12 +52,16 @@ ERROR_METHODS: frozenset[str] = frozenset({"block_bootstrap", "chromosome_jackkn
   (`pca.chromosome_jackknife`).
 """
 
-JACKKNIFE_REASONS: frozenset[str] = frozenset({"not_requested", "too_few_blocks"})
+JACKKNIFE_REASONS: frozenset[str] = frozenset({"not_requested", "too_few_blocks", "too_few_sites_per_block"})
 """Why a `pca_knn` estimate that answered carries no jackknife (`jackknife_reason`). Grows additively.
 
 - `not_requested`: the caller passed `jackknife=False`.
 - `too_few_blocks`: fewer autosomes with a site read than `MIN_JACKKNIFE_BLOCKS`
   (`n_jackknife_blocks` says how many), too few for a standard error worth reporting.
+- `too_few_sites_per_block`: leaving some autosome out would keep no more panel sites than the panel's
+  `dim_online`, so that replicate's online loadings already span every kept site and OADP has nothing
+  to augment them with (a panel of a few dozen sites). Decided from the sites per autosome, before any
+  replicate is projected; `n_jackknife_blocks` still counts the blocks.
 """
 
 PROPORTION_METHODS: frozenset[str] = frozenset({"pca_nnls", "prive_qp"})
@@ -182,7 +186,8 @@ class AncestryEstimate(BaseModel):
     n_jackknife_blocks: int | None = None
     """`pca_knn`: the autosomes the facet and the panel share, each with at least one site read: the
     jackknife's blocks. Set when they were counted (the jackknife ran, or was withheld as
-    `too_few_blocks`); null when it was not requested or the estimate did not answer."""
+    `too_few_blocks` or `too_few_sites_per_block`); null when it was not requested or the estimate did
+    not answer."""
     jackknife_reason: str | None = None
     """`pca_knn` only: why an estimate that answered carries no jackknife (`JACKKNIFE_REASONS`). Null when
     the jackknife ran, and on an estimate that did not answer (its `reason` says why)."""

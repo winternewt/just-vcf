@@ -3897,6 +3897,23 @@ the PCA path reports a **weighted delete-one-block jackknife** (the lead's call)
   `1 / sqrt(2 (g - 1))`: 0.35 at five, 0.5 at three. Below five the uncertainty is withheld
   (`jackknife_reason = too_few_blocks`, the blocks found still counted). A genome or an array covers
   all 22 autosomes. A choice, not a calibration.
+- **More kept sites than online loadings** (2026-11-07, audit 16). A replicate keeps every panel site
+  off its chromosome, read or not, and OADP augments the kept sites' `dim_online` loadings with the
+  target. When a replicate keeps p sites and p is no more than `dim_online`, those loadings span all of
+  R^p, the target has no residual outside them, and the augmentation divided 0 by 0 (or normalised
+  rounding noise into a direction): the replicate, and the standard errors after it, meant nothing. So
+  the jackknife is withheld (`jackknife_reason = too_few_sites_per_block`, the blocks still counted)
+  when any replicate would keep no more panel sites than `dim_online`, decided from the sites per
+  autosome before any replicate is projected; one site above the bound it runs. Only a panel of a few
+  dozen sites meets it (`dim_online` is 40 at FRAPOSA's defaults); a real panel keeps thousands. The
+  count is of panel sites, not of sites read: a facet reading few sites of a large panel still has a
+  residual (its target vector is sparse, the loadings' span is not R^p), and is the coverage floor's
+  case. Beside it, `_projection.svd_online` no longer divides by zero: a residual below
+  `RESIDUAL_TOLERANCE` (the square root of float64's epsilon, about 1.5e-8) of the target's norm reads
+  as the target lying in the loadings' span, and the update adds no direction (just-vcf's change to the
+  vendored file, docs/PROVENANCE.md). Above it the code is FRAPOSA's, unchanged. Rejected: dropping the
+  degenerate replicate and jackknifing over the rest, which would change the weights of every block
+  and report an error the dropped chromosome did not take part in.
 - **On by default**; `infer_ancestry(..., jackknife=False)` skips it (`not_requested`). It costs about
   one projection per autosome, 22 for a genome, plus a small eigendecomposition and a pass over the
   kept loadings each. Timed 2026-11-06 on a synthetic panel of `aadr_ho`'s shape (2,565 samples, 184,882
@@ -3969,6 +3986,12 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-07, audit 16: a jackknife replicate with too few sites): no column
+  changes. `JACKKNIFE_REASONS` gains `too_few_sites_per_block` (additive): an answered `pca_knn`
+  estimate on a panel where leaving some autosome out keeps no more sites than `dim_online` carries no
+  jackknife, where it carried standard errors computed from a 0 / 0 ("The PCA path's uncertainty").
+  `svd_online` reads a residual below `RESIDUAL_TOLERANCE` of the target's norm as none.
 
 - **No version change** (2026-11-07, audit 16: a null SV claim): no column changes. **Values change**
   in `concordance`: a `<DEL>` or `<DUP>` with a null `sv_claim` on a VCF 4.4 or later facet, or on a

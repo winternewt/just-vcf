@@ -54,7 +54,9 @@ each reset.
    block 1,268; hom-alt over a reference block 433, on 41 probes that read hom-alt in every export carrying them
    (30 in all 13, 10 in 3, 1 in 4) and one probe that reads both ways (11 and 2), all over reference blocks; hom-alt
    over a CGI variant 11 (rs8176719, rs2020868, rs5853517, oriented right). So v4's codes run opposite to
-   Illumina's on those 41 probes, not chip-wide. v3's 30 people running. The lead's design, building next: a
+   Illumina's on those 41 probes, not chip-wide. v3, 23 people (7 skipped: GRCh36 exports or no `var-` file):
+   131 probes `same`, 45 `flipped`, none contradicting; 39 flipped on both chips, none flipped on one and `same`
+   on the other. The export/genome pairs are in the session scratch (`id_pairs.tsv`, 36 rows). Building: a
    per-probe orientation table learned from WGS (`same` / `flipped`; a probe with no WGS evidence, or contradicting
    evidence, withheld), replacing the chip-wide gate for v3 and v4.
 0. **2026-11-07: audit 16 done; fixes merged as 8910d63**; suite 2677 passed, 77 skipped, 8 xfailed (2658 + 19

@@ -107,6 +107,17 @@ def _attr(body: str, name: str) -> str | None:
     return match.group(1).strip('"') if match else None
 
 
+_BEAGLE = re.compile(r'^"?beagle\.(?:(\d{2}[A-Z][a-z]{2}\d{2}\.[0-9a-f]+)\.jar(?: \(version [\d.]+\))?|jar \((r\d+)\))"?$')
+"""Beagle's `##source`, quoted, as its `VcfWriter.writeMetaLines` writes `Main.PROGRAM` (Beagle 4.0 r1399,
+4.1, 5.0-5.5; Debian's source packages and the r1399 source zip, read 2026-11-07): 5.x
+`"beagle.22Jul22.46e.jar"`, 4.1 `"beagle.27Jul16.86a.jar (version 4.1)"`, 4.0 `"beagle.jar (r1399)"`.
+The version is the build as the jar names it, `22Jul22.46e` or `r1399`; 4.1's release tail is dropped.
+Only the caller is read from it, never imputed content: Beagle phases without imputing too. (Every
+release read also declares INFO DR2 on every run, IMP from 4.1 on, phase-only output included:
+`main/WindowWriter.java` sets `printGP` or `ds` true unconditionally. So no Beagle header line says
+which kind of run it was.)"""
+
+
 def _source(value: str, ev: _Evidence) -> None:
     """`##source=`: the many tools that write it, callers and not."""
     patterns: tuple[tuple[str, Callable[[re.Match], Caller | None]], ...] = (
@@ -122,6 +133,7 @@ def _source(value: str, ev: _Evidence) -> None:
         (r"^aengine\b", lambda m: Caller("aengine", None, "##source")),
         (r"^loimpute\b", lambda m: Caller("loimpute", None, "##source")),
         (r"^Minimac(\d)\b", lambda m: Caller(f"Minimac{m.group(1)}", None, "##source")),
+        (_BEAGLE, lambda m: Caller("Beagle", m.group(1) or m.group(2), "##source")),
     )
     for pattern, make in patterns:
         match = re.search(pattern, value)

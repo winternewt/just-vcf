@@ -95,6 +95,7 @@ from just_vcf.schema import (
     PhaseSetKind,
     RefCheck,
     SplitSignal,
+    SvClaim,
     StrandCheck,
     VariantClass,
 )
@@ -191,6 +192,7 @@ __all__ = [
     "Sniffed",
     "SniffOutcome",
     "SplitSignal",
+    "SvClaim",
     "Store",
     "StoreAdded",
     "StoreConflictError",

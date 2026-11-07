@@ -41,7 +41,7 @@ from just_vcf.bgzf import BgzfWriter
 from just_vcf.links import CALLER_SPLIT  # noqa: F401 (kept importable here; defined in just_vcf.links)
 from just_vcf.loaders import text as text_loader
 from just_vcf.loaders.text import PAST_ALTS_WARNING, PAST_GT_WARNING, past_alts, past_gt
-from just_vcf.schema import BLOCKS, CALLS, EMPTY_ALLELE, BlockKind, EvidenceBasis, GlSource, PhaseSetKind, RefCheck, SplitSignal, canonical_chrom_expr, conform
+from just_vcf.schema import BLOCKS, CALLS, EMPTY_ALLELE, BlockKind, EvidenceBasis, GlSource, PhaseSetKind, RefCheck, SplitSignal, SvClaim, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +150,7 @@ INFO_KEYS: dict[str, tuple[str, str]] = {
     "CIPOS": (".", "Integer"),
     "CIEND": (".", "Integer"),
     "CN": ("A", "Float"),
+    "SVCLAIM": ("A", "String"),
     "R2": ("1", "Float"),
     "ER2": ("1", "Float"),
     "DR2": ("A", "Float"),
@@ -157,8 +158,10 @@ INFO_KEYS: dict[str, tuple[str, str]] = {
 """INFO keys the loader reads, with the Number and Type VCF 4.5 gives them: END and SVLEN for
 `end_pos`, and the structural-variant keys the SV columns carry (RM282). VCF 4.5 deprecates SVTYPE
 as redundant with ALT; it is read because callers write a type ALT does not say (DRAGEN's `CNV` on a
-`<DEL>`, Canvas's `LOH`). And the imputation tools' per-site quality (RM287), which VCF does not
-reserve, with the Number and Type the tools declare: minimac's R2 and ER2, Beagle's DR2
+`<DEL>`, Canvas's `LOH`). VCF 4.5's SVCLAIM, each ALT's abundance or adjacency claim, is read into
+`sv_claim` (it decides whether `concordance` decomposes a `<DEL>` or `<DUP>` into breakends; a VCF 4.3
+file has no definition for it and is read under its own declaration). And the imputation tools'
+per-site quality (RM287), which VCF does not reserve, with the Number and Type the tools declare: minimac's R2 and ER2, Beagle's DR2
 (`IMPUTATION_QUALITY`)."""
 
 IMPUTATION_QUALITY: dict[str, str] = {"R2": "imputation_r2", "DR2": "imputation_r2", "ER2": "imputation_empirical_r2"}
@@ -236,7 +239,7 @@ declared with another Type is not carried (`refused_types`), except GT, which th
 have no definition in that version and are read under any Type. 4.3's CN is Integer
 (`V43_RESERVED_TYPES`)."""
 
-_LIST_INFO = ("SVLEN", "CIPOS", "CIEND", "CN", *IMPUTATION_QUALITY)
+_LIST_INFO = ("SVLEN", "CIPOS", "CIEND", "CN", "SVCLAIM", *IMPUTATION_QUALITY)
 """INFO keys read as lists. One declared `Number=1` (VCF 4.2's INFO CN, an older caller's SVLEN) is
 read as the one-value list of a one-ALT record. The imputation quality keys are read as lists whatever their
 Number (minimac's R2 is `1`, Beagle's DR2 `A`), so a row's count of values is known (`_one_value`)."""
@@ -279,7 +282,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 18
+REWRITE_VERSION = 19
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -312,7 +315,9 @@ excepted; a copy from 16 declared only the carried keys it left out, so a reserv
 retry.
 18: the imputation quality keys (INFO R2, ER2, DR2) are carried (RM287), so a copy declares them where
 the rows use them undeclared, and a structural copy keeps them; a copy from 17 dropped their lines,
-and polars-bio panics on a requested key its header does not declare."""
+and polars-bio panics on a requested key its header does not declare.
+19: INFO SVCLAIM is carried (VCF 4.5's per-ALT claim, `sv_claim`), so a copy declares it where the rows
+use it undeclared, and a structural copy keeps it; a copy from 18 dropped its line."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -1398,6 +1403,7 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
             for key in ("CIPOS", "CIEND")
         ],
         (pl.col("info_CN").is_not_null() & _per_alt("info_CN", alts).is_null()).sum().alias("unfit_info_CN"),
+        *_sv_claim_stats(alts),
         *_imputation_quality_stats(),
         alts.list.eval(~pl.element().str.contains(_VCF_ALLELE_OR_DASH)).list.any().sum().alias("not_allele_alts"),
         pl.col("fmt_GP").cast(pl.List(pl.Float64), strict=False).is_not_null().sum().alias("gp_rows"),
@@ -1436,7 +1442,7 @@ def scan_stats(records: pl.LazyFrame, unsourced: pl.LazyFrame | None = None) -> 
     return row
 
 
-STATS_VERSION = 2
+STATS_VERSION = 3
 """Bumped whenever `scan_stats` could return something else for the same file under the same request:
 its own expressions and helpers (`_hq_slots`, `_end_stats`, `_psl_stats`, `_fits`, `_alts_expr`,
 `past_alts`, `past_gt`…), how `read_records` shapes the records before the pass sees them
@@ -1444,7 +1450,8 @@ its own expressions and helpers (`_hq_slots`, `_end_stats`, `_psl_stats`, `_fits
 them. A key in the cached stats' manifest and in their key (`stats_key`), so a result an older version
 computed is never read, and the sweep retires its entry. The source of this module and of
 `loaders/text.py` is in the key as well (`_STATS_CODE`): an edit that forgets the bump costs a pass,
-never a stale count. 2: the imputation quality keys' counts (`_imputation_quality_stats`, RM287)."""
+never a stale count. 2: the imputation quality keys' counts (`_imputation_quality_stats`, RM287).
+3: SVCLAIM's counts (`_sv_claim_stats`)."""
 
 POLARS_BIO_VERSION = version("polars-bio")
 """The polars-bio that read the records the cached stats count: in their key and their manifest."""
@@ -1842,6 +1849,10 @@ def to_rows(
             )
     if stats.get("unfit_info_CN"):
         warnings.append(f"{stats['unfit_info_CN']} INFO CN value(s) not one per ALT set to null")
+    if stats.get("unfit_info_SVCLAIM"):
+        warnings.append(f"{stats['unfit_info_SVCLAIM']} INFO SVCLAIM value(s) not one per ALT set to null")
+    if stats.get("not_claim_info_SVCLAIM"):
+        warnings.append(f"{stats['not_claim_info_SVCLAIM']} INFO SVCLAIM claim(s) neither D, J nor DJ (VCF 4.5) read as no claim")
     warnings += imputation_quality_warnings(stats)
     if stats.get("dash_alts"):
         warnings.append(
@@ -1946,6 +1957,7 @@ def to_rows(
         _ci_pairs("info_CIEND", pl.col("alts")).alias("ciend"),
         pl.col("fmt_CN").cast(pl.Float32, strict=False).alias("copy_number"),
         _per_alt("info_CN", pl.col("alts")).alias("alt_copy_numbers"),
+        _sv_claims(pl.col("alts")).alias("sv_claim"),
     )
     full_vector = pl.any_horizontal(pl.col("gl").is_not_null(), pl.col("gp").is_not_null(), pl.col("ad").is_not_null())
     rows = rows.with_columns(
@@ -2006,6 +2018,34 @@ def _per_alt(name: str, alts: pl.Expr) -> pl.Expr:
     """An INFO list with one value per ALT (`Number=A`) as Float32, null where its count is not that."""
     values = pl.col(name).cast(pl.List(pl.Float32), strict=False)
     return pl.when(values.list.len() == alts.list.len()).then(values).otherwise(None)
+
+
+SV_CLAIMS: tuple[str, ...] = tuple(claim.value for claim in SvClaim)
+"""The claims VCF 4.5 gives INFO SVCLAIM: `D`, `J`, `DJ` (`schema.SvClaim`)."""
+
+
+def _claim_values() -> pl.Expr:
+    """INFO SVCLAIM's values as text, `.` and an empty value as null (VCF 4.5's missing value)."""
+    return pl.col("info_SVCLAIM").cast(pl.List(pl.String)).list.eval(pl.when(~pl.element().is_in([".", ""])).then(pl.element()))
+
+
+def _sv_claims(alts: pl.Expr) -> pl.Expr:
+    """`sv_claim`: INFO SVCLAIM, one claim per ALT (`Number=A`), as written; a missing value, or one that
+    is no claim VCF 4.5 names, is a null claim (the latter counted); null where the record writes none or
+    not one per ALT (counted). A null claim is never resolved from the allele's type here: VCF 4.5 reads
+    `.` as `D` on a `<CNV>` and as `J` on an `<INV>`, and gives a `<DEL>` or `<DUP>` no default."""
+    values = _claim_values().list.eval(pl.when(pl.element().is_in(SV_CLAIMS)).then(pl.element()))
+    return pl.when(values.list.len() == alts.list.len()).then(values)
+
+
+def _sv_claim_stats(alts: pl.Expr) -> list[pl.Expr]:
+    """`scan_stats`' counts behind SVCLAIM's warnings: records not writing one value per ALT, and values
+    that are no claim."""
+    values = _claim_values()
+    return [
+        (pl.col("info_SVCLAIM").is_not_null() & (values.list.len() != alts.list.len())).sum().alias("unfit_info_SVCLAIM"),
+        values.list.eval((pl.element().is_not_null() & ~pl.element().is_in(SV_CLAIMS)).cast(pl.UInt32)).list.sum().sum().alias("not_claim_info_SVCLAIM"),
+    ]
 
 
 def _one_value(key: str) -> pl.Expr:

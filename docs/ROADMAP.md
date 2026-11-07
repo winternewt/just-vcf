@@ -301,8 +301,10 @@ lone symbolic allele near the other's breakends, was added beside the one asked 
 only: no person here has a symbolic SV facet beside another caller's breakends.
 
 **Left:** no DELLY, Sniffles or second breakend file exists to check against (synthetic tests only);
-VCF 4.5's SVCLAIM is not kept by the frame, so a `<DEL>` claiming abundance only (`SVCLAIM=D`, no
-SVTYPE) is decomposed; whether a
+*built 2026-11-07:* VCF 4.5's SVCLAIM is kept per ALT (`calls.sv_claim`, schema 0.0.24, written back
+only under VCF 4.5), and the decompose no longer turns an allele claiming abundance only (`D`) into
+breakends, counting it in the not-decomposed warning under a reason of its own, beside a separate one
+for an allele without END (docs/SCHEMA.md, "Symbolic alleles against breakends"); whether a
 copy-number allele should meet a deletion or duplication as a loss or a gain (it
 needs the expected copy number at the locus, which differs on X and Y, and is the person's call:
 built is the strict reading, type from the ALT's name, reversible by adding a mapping in
@@ -476,8 +478,12 @@ on disk copies a BAM's `@PG` lines). Decisions, each with what was rejected:
   (`_CALLER_PHASE_SETS`). Rejected: any `PS` declaration, which credits the caller with a phaser's work.
   HaplotypeCaller's PGT/PID alone is not a phase step: no `calls` column carries it.
 - Phasers with no header on disk get a rule only where their source code shows the line they write
-  (WhatsHap, SHAPEIT4, HapCUT2). Beagle, SHAPEIT5 and DRAGEN's `--vc-enable-phasing` without a `PS`
-  declaration have no rule: no header on disk, no source read.
+  (WhatsHap, SHAPEIT4, HapCUT2). SHAPEIT5 and DRAGEN's `--vc-enable-phasing` without a `PS`
+  declaration have no rule: no header on disk, no source read. Beagle's `##source` is read as its
+  caller (2026-11-07, from its source: `vcf/VcfWriter.java`), with no `phase` step: every record Beagle
+  5.x writes is phased (`VcfWriter.appendRecords` refuses unphased genotypes), so a phase step after
+  its call would be true to the source, but whether a caller that always phases gets one without a
+  `PS` line is the lead's call, and `phasing_method` stays null for a Beagle file meanwhile.
 - `options` come from a list kept per tool, never the whole command: GATK writes forty defaults, and a
   command carries inputs, outputs and sample names. Rejected: every option with paths redacted, which
   still keeps `--vc-sample-name`.
@@ -600,6 +606,7 @@ Header evidence found while declaring the VCF formats:
 | `##source=aengine` | FamilyTreeDNA Big Y |
 | `##source=loimpute`, `##generatedby=Gencove` | Gencove low-pass imputation |
 | `##source=Minimac3`, `##eagleVersion=` | Minimac3 + Eagle imputation |
+| `##source="beagle.22Jul22.46e.jar"`, `"beagle.27Jul16.86a.jar (version 4.1)"`, `"beagle.jar (r1399)"` | Beagle 5.x, 4.1, 4.0 (caller only: Beagle phases without imputing too) |
 | `##Genes_for_Good_version=` | Genes for Good |
 | `##source=open_humans_data_processing.twenty_three_and_me` | Open Humans 23andMe conversion |
 | `##source=intersection_dbSNP_23andme` | DNA.Land 23andMe conversion |

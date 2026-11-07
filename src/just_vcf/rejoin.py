@@ -19,12 +19,13 @@ from just_vcf.links import SPLIT_REJOINED, derived_links
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_parts
 from just_vcf.schema import CALLS, SCHEMA_VERSION, EvidenceBasis, RefCheck, unstated_sequence_alt
 
-REJOIN_VERSION = 6
+REJOIN_VERSION = 7
 """Part of the derived `facet_id`: bumped whenever the join rule changes what it emits (2: the SV
 columns kept, RM282; 3: schema 0.0.15's `phase_set_ordinals` and `phase_set_qualities` kept where
 the split rows agree; 4: schema 0.0.19's `hq` kept where they agree; 5: `hq` joined per GT slot, so
 the rows `normalize` splits, which keep a score only on their own slots, give it back; 6: a group
-with a sequence ALT spelled against a source REF of only `N`, `ref_check = unstated`, kept as written)."""
+with a sequence ALT spelled against a source REF of only `N`, `ref_check = unstated`, kept as written;
+7: schema 0.0.24's per-ALT `sv_claim` joined in `alts` order)."""
 
 RELATION = SPLIT_REJOINED
 """The derived facet's `relation`."""
@@ -32,7 +33,7 @@ RELATION = SPLIT_REJOINED
 _KEPT_WHEN_EQUAL = ("phased", "phase_sets", "phase_set_kinds", "phase_set_ordinals", "phase_set_qualities", "dp", "qual", "sv_type", "copy_number")
 """Columns a joined row keeps only when every row of its group agrees; otherwise null (not known)."""
 
-_PER_ALT = {"cipos": 2, "ciend": 2, "alt_copy_numbers": 1}
+_PER_ALT = {"cipos": 2, "ciend": 2, "alt_copy_numbers": 1, "sv_claim": 1}
 """Columns holding this many values per ALT: a joined row concatenates them in its `alts` order."""
 
 _UNSTATED = "_unstated"

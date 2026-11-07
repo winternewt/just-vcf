@@ -1,6 +1,6 @@
 # Frame schema: proposal (RM8)
 
-Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.23.** Every per-format loader (RM2) emits the frames
+Status: **signed off 2026-09-30 as schema v0.0.1; now v0.0.24.** Every per-format loader (RM2) emits the frames
 described below. Pieces found missing while building are added here as they come up, and each change
 bumps the schema version (`just_vcf.schema_version` in the frame metadata).
 
@@ -963,6 +963,7 @@ With Decisions 1–5 as recommended:
 | `ciend` | `list[i32]` | as `cipos`, from INFO `CIEND`: offsets from the end. Never filled from `cipos`, though VCF 4.5 says a missing CIEND matches it |
 | `copy_number` | `f32` | the source wrote no FORMAT `CN`: this sample's copy number of the segment |
 | `alt_copy_numbers` | `list[f32]` | the source wrote no INFO `CN`, or not one value per ALT. Parallel to `alts`: VCF 4.5's copy number of each ALT allele; a VCF 4.2 INFO CN (`Number=1`, the copy number of the segment) is the one-ALT list |
+| `sv_claim` | `list[Enum]` | the source wrote no INFO `SVCLAIM`, or not one value per ALT; on a store migrated from before 0.0.24 whose load left SVCLAIM out (`dropped_fields`), not read. Parallel to `alts`: VCF 4.5's claim of each ALT allele, `D` (abundance: copy number changed, no junction claimed), `J` (a junction) or `DJ` (both), as written; an element null where the source wrote `.` or a value that is none of the three (counted). Never resolved from the allele's type (structural variants, below) |
 
 **Imputation quality (`imputation_r2`, `imputation_empirical_r2`, 0.0.23, RM287).** An imputation
 server's output states, per site, how well it thinks it imputed: minimac (Michigan, TOPMed) writes INFO
@@ -976,7 +977,7 @@ the VCF loaders read them (`loaders.vcf.IMPUTATION_QUALITY`):
 - `imputation_r2` is the row's `R2`, else its `DR2`. A row writing both keeps them where they are equal
   and withholds the column where they differ, counted in a load warning: two tools' estimates, neither
   outranking the other. Which tool wrote the value is the facet's to say (`caller` and `method_steps`,
-  where the header names the tool; `source` reads minimac's `##source`, not yet Beagle's).
+  where the header names the tool; `source` reads minimac's `##source` and Beagle's).
 - `imputation_empirical_r2` is `ER2`, null on the sites the chip did not type.
 - A row writing several values for a key (Beagle's `DR2` on a multi-allelic site) has that column
   withheld, counted: one column holds one value per row, as `dosage` holds `DS` only on a site with one
@@ -1103,7 +1104,7 @@ parquet spill of `calls`, three columns, so they cost no second parse of the VCF
   every row's whole list agreed, which `normalize`'s rows never do at a heterozygous site).
 - `ids` and `filters` are unions (sorted; `PASS` only when no row failed a filter); `phased`, the phase
   sets, `dp`, `qual`, `sv_type` and `copy_number` are kept when every row agrees and null otherwise.
-- The per-ALT columns, `cipos`, `ciend` (two values per ALT) and `alt_copy_numbers` (one), are each
+- The per-ALT columns, `cipos`, `ciend` (two values per ALT), `alt_copy_numbers` and `sv_claim` (one), are each
   row's values concatenated in the joined `alts` order; null when a row does not state them for each
   of its ALTs, or two rows giving one ALT disagree.
 - Withheld: `gl`, `gp`, `ad`, `gq`, `dosage`, `source_alleles` (split rows hold REF against one ALT,
@@ -1303,8 +1304,8 @@ holding that collection and the target.
    reverse). A symbolic SV keeps them, mirrored on a minus strand ("Lifting symbolic SVs" below). `gt`
    indexes `[ref] + alts`. `gl`, `gp`, `ad` and the order of `source_alleles` are the parent's (Decision
    2: never reordered). A swapped row's `dosage` is null, since it counted the other allele, and so
-   are its `alt_copy_numbers`: the swapped ALT's slot holds the old REF, whose copy number the source
-   did not state. Its `imputation_r2` and `imputation_empirical_r2` carry: the r² of a dosage does
+   are its `alt_copy_numbers` and its `sv_claim`: the swapped ALT's slot holds the old REF, whose copy
+   number and claim the source did not state (`LIFT_VERSION` 16 for the claim). Its `imputation_r2` and `imputation_empirical_r2` carry: the r² of a dosage does
    not depend on which allele it counts. A row
    lifted to another contig than its source's has `phased`, `phase_sets` and `phase_set_kinds` null: a
    PS set is keyed per contig, and two sets would otherwise merge. `ids`, `filters`, `qual`, `gq`, `dp`
@@ -1367,7 +1368,7 @@ ends rather than its REF span, with one base of REF:
    another base and nothing is compared, as a re-anchored indel's old padding base is not. The ALTs
    stay as written (Picard and bcftools leave a symbolic allele as it is on either strand);
    `gt_alleles` and `source_alleles` take the new REF where they held the old; `gt`, `sv_type`,
-   `copy_number`, `alt_copy_numbers` and `dosage` carry. Nothing swaps.
+   `copy_number`, `alt_copy_numbers`, `sv_claim` and `dosage` carry. Nothing swaps.
 5. `cipos` and `ciend` carry on a plus-strand block. On a minus-strand block the new POS is the old
    END's image and the new END the old POS's, so each pair `[lo, hi]` mirrors to `[-hi, -lo]` and the
    two swap; where the source wrote no CIEND, VCF 4.5's rule (assume CIPOS) supplies the old END's
@@ -1587,7 +1588,7 @@ Where REF is not known yet (an array `I`/`D` row) `end_pos` is null. A single-po
 Sniffles) loads as any VCF does: its symbolic ALTs (`<DEL>`, `<DUP:TANDEM>`, `<INV>`, `<INS>`,
 `<CNV>`, `<CN0>`…) and breakends (`A]2:7000]`, `.A`) are kept verbatim in `alts`, each counted as an
 `sv` allele in `variant_classes`, its extent is `end_pos` (above), and what the caller wrote about the
-event goes to five columns, each just-vcf's own shape (VRS has no Allele for these; charter 2):
+event goes to six columns, each just-vcf's own shape (VRS has no Allele for these; charter 2):
 
 - `sv_type` is INFO `SVTYPE` as written. VCF 4.5 deprecates it as redundant with ALT, but callers
   write a type ALT does not say: DRAGEN's copy-number caller writes `SVTYPE=CNV` on `<DEL>` and `<DUP>`
@@ -1603,11 +1604,32 @@ event goes to five columns, each just-vcf's own shape (VRS has no Allele for the
 - `copy_number` is FORMAT `CN`, the sample's total; `alt_copy_numbers` is INFO `CN`, per ALT under
   VCF 4.5 (its own example: `<CNV>,<CNV>` with `CN=1,2` and FORMAT `CN` 3). The two are kept apart:
   neither is filled from the other, nor from a `<CNn>` allele's name.
+- `sv_claim` is VCF 4.5's INFO `SVCLAIM` (`Number=A`, 0.0.24), one claim per ALT as `alt_copy_numbers`
+  holds one copy number: `D` an abundance claim (read depth or allele frequency, "no evidence to
+  support changes in breakpoint structure"), `J` an adjacency claim, `DJ` both (a simple, isolated
+  deletion or tandem duplication); the values are `schema.SvClaim`'s, the spec's tokens verbatim. 4.5
+  requires it on `<DEL>` and `<DUP>`, makes it optional elsewhere (`<CNV>` implies `D`, `<INV>`,
+  `<INS>` and a breakend `J`), and has non-SV alleles write `.`. A `.` is a null element, and so is a
+  value that is none of the three (counted); a count that is not one per ALT leaves the record's list
+  null (counted). Nothing is resolved from the allele's type: a null claim stays null, and a `<DEL>`
+  or `<DUP>` with none (every file before 4.5) is read as before, as implying both. What reads it:
+  `concordance`'s decompose ("Symbolic alleles against breakends"). Rejected: a claim column per
+  record, which a multi-ALT record whose ALTs claim differently (VCF 4.5's mobile-element example
+  links such records by EVENT, one claim each) cannot hold; and filling `.` from the type, which would
+  make a stated claim and a derived one look alike. A VCF 4.3 file has no definition for SVCLAIM and is
+  read under its own declaration; a 4.4 or 4.5 file declaring it with another Type than String is
+  refused by polars-bio's reader, so the key is not carried, with a warning and the key in
+  `dropped_fields`.
 - A VCF 4.3 header declaring `CN` with a Type other than the Integer 4.3 reserves (it is Float from
   4.4 on) is refused by polars-bio's reader, so that key is not carried, with a warning and the key in
   `dropped_fields`; an undeclared `CN` the rows use is declared as the file's version reserves it.
   `write_vcf` writes VCF 4.3, so it declares `CN` Integer and leaves out, counted, a copy number that
-  is not a whole number.
+  is not a whole number. It writes `SVCLAIM` only where it writes VCF 4.5 (a facet holding a PSL
+  phase set): 4.3 has no SVCLAIM, so a 4.3 export leaves the claims out, counted in a warning, and a
+  reload of it holds none, so `concordance` then decomposes a `<DEL>` or `<DUP>` that claimed
+  abundance only. Rejected: writing 4.5 whenever a row holds a claim, a version decision for every SV
+  export (leaving it out is the lighter choice, listed for the lead's veto), and SVCLAIM declared in a 4.3 file, which
+  gives a 4.5 key a meaning the version the file states does not define.
 - The frame keeps no SVLEN: it goes into `end_pos` and nowhere else, so an `<INS>`'s inserted length
   and a source SVLEN that disagreed with END are not kept. `write_vcf` still writes INFO `SVLEN`
   beside END (2026-10-26), since VCF 4.5 requires it on a symbolic SV allele: `end_pos - pos` on each
@@ -1622,7 +1644,7 @@ event goes to five columns, each just-vcf's own shape (VRS has no Allele for the
   beside a longer `<DUP>` does not have.
 
 Each of these is null on a row that is no SV. `normalize` leaves symbolic sites as written; on a
-sequence site it splits, each row keeps its own ALT's pair and copy number, and a row it moves loses
+sequence site it splits, each row keeps its own ALT's pair, copy number and claim, and a row it moves loses
 `cipos` and `ciend` (offsets from the POS the source wrote), as a lifted sequence row does. `liftover`
 lifts a symbolic site by both ends and keeps its intervals ("Lifting symbolic SVs"). `concordance`
 compares SV calls across facets by type and extent, and breakends by both ends and the join, as
@@ -2964,6 +2986,7 @@ a step fails it.
 | 0.0.20 → 0.0.21 | facets | adds `resolve_inputs` (null) after `resolve_version` | array facets (`family = genotype_table`) whose REF was read: null means not recorded, not "no manifest", so the store refuses the same facet resolved today with manifests as another state of it; consensus facets: null means the parents' REF states were not recorded, so the store refuses the same consensus built today |
 | 0.0.21 → 0.0.22 | calls | casts `ref_check` to the enum with `unstated` | facets whose REF was read and that hold a row with a source REF of only `N` and `ref_check = mismatch`: kept as `mismatch` where today's rule reads `unstated`, so `liftover` leaves those rows behind; the facet records `RESOLVE_VERSION` 12, so the store refuses it resolved today. A caveat may name rows as well as facets (`Caveat.rows`), and this is the first that does |
 | 0.0.22 → 0.0.23 | calls | adds `imputation_r2`, `imputation_empirical_r2` (null) after `dosage` | facets whose `dropped_fields` list INFO `R2`, `ER2` or `DR2` (imputation output, and anything derived from it): the two columns null mean not read, not "the source wrote none" |
+| 0.0.23 → 0.0.24 | calls | adds `sv_claim` (null) after `alt_copy_numbers` | facets whose `dropped_fields` list INFO `SVCLAIM` (a VCF 4.5 SV file, and anything derived from it): `sv_claim` null means not read, not "no claim", so `concordance` decomposes their `<DEL>` and `<DUP>` whatever they claimed until the source is loaded again |
 
 A step never invents a value: an added column is null, and where that null (or a value an older loader
 left) reads differently from what a load of the same source gives today, the facets it applies to are
@@ -3502,9 +3525,22 @@ What differs from truvari, each with its reason:
   INV, reading INFO SVTYPE first. Here the type is the ALT's (above), and an allele is decomposed only
   where SVTYPE is absent or names the same type: DRAGEN's copy-number caller writes `<DEL>` and `<DUP>`
   with `SVTYPE=CNV`, an abundance claim with no junction (VCF 4.5's `SVCLAIM=D`), which truvari does not
-  decompose either. Such alleles are counted in a warning when the other facet has breakends. VCF 4.5's
-  `SVCLAIM` itself is not read: the frame does not keep it (`dropped_fields`), so a 4.5 `<DEL>` with
-  `SVCLAIM=D` and no SVTYPE is decomposed.
+  decompose either.
+- **An abundance claim is not decomposed** (2026-11-07). VCF 4.5's `SVCLAIM` says what each allele
+  claims (`sv_claim`): an allele claiming `D` only (copy number changed, no junction) implies no
+  breakend and is not decomposed; `J`, `DJ` and no claim are, a `<DEL>` or `<DUP>` without one (every
+  file before 4.5) implying both, as the spec reads it. Each ALT goes by its own claim, so a record's
+  `D` `<DEL>` beside its `J` `<DUP>` decomposes only the duplication. truvari 5.5 reads no SVCLAIM and
+  would decompose a 4.5 `<DEL>` with `SVCLAIM=D` and no SVTYPE; here it is not, for the reason
+  DRAGEN's `SVTYPE=CNV` is not.
+- **An allele with no END is not decomposed**: no loader leaves a symbolic allele's `end_pos` null
+  (without END or SVLEN it falls back to the REF span), but a frame built or edited elsewhere can, and
+  such an allele has no junction to join POS to.
+- **One warning, a count per reason.** When the other facet has breakends, the `<DEL>`, `<DUP>` and
+  `<INV>` alleles not decomposed (an SVTYPE naming another type, an abundance claim, no END, a
+  duplication subtype other than TANDEM, below) are counted in one warning, each allele under the first
+  reason that holds, in this order: the abundance claim, no END, then the type or subtype. Before
+  2026-11-07 the warning named only the type or subtype, and counted an allele without END under it.
 - **Only a tandem duplication.** truvari assumes every DUP is tandem, subtypes dropped. Here `<DUP>`
   and `<DUP:TANDEM>` are decomposed and another subtype is not: VCF 4.5's `<DUP:DISPERSED>` puts its
   copy elsewhere, so its end is not joined to its start. `<DEL>` and `<INV>` of any subtype are.
@@ -3909,6 +3945,21 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **One calls column, landed in 0.0.24** (2026-11-07, RM282: VCF 4.5's SVCLAIM): `calls.sv_claim`
+  (`list[Enum]` of `D`, `J`, `DJ`, one per ALT, null where the source wrote none), after
+  `alt_copy_numbers`: each ALT's abundance or adjacency claim (Decision 6, "Structural variants").
+  Additive, but a new column changes the `calls` schema, so pre-1.0 it breaks a consumer that checks
+  the frame's exact columns. INFO `SVCLAIM` leaves `dropped_fields`. Rules: `normalize` splits it with
+  its ALT (`NORMALIZE_VERSION` 11), `rejoin_split` joins it in `alts` order (`REJOIN_VERSION` 7),
+  `liftover` carries it and withholds it on a swapped row (`LIFT_VERSION` 16), `write_vcf` writes it
+  only as VCF 4.5 and counts what a 4.3 export leaves out; `write_vcf_zarr` does not write it.
+  `REWRITE_VERSION` 19 and `STATS_VERSION` 3. **Values change** in `concordance`: a `<DEL>` or `<DUP>`
+  claiming abundance only (`D`) is no longer decomposed into breakends, so against another caller's
+  breakends it reads `only_a` and `only_b` where it read `decomposed`; and the not-decomposed warning
+  counts each reason apart, an allele without `end_pos` under its own ("Symbolic alleles against
+  breakends"). A store of 0.0.23 migrates with `sv_claim` null, named as not read on the facets whose
+  `dropped_fields` list INFO `SVCLAIM`.
 
 - **No version change** (2026-11-06, RM5: the PCA path's uncertainty): no column of `facets`, `calls`
   or `blocks` changes. `infer_ancestry` runs a leave-one-chromosome-out jackknife by default ("The PCA
@@ -4452,6 +4503,9 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   the rule above is a minor bump, 0.0.10. Rule change in `resolve_ref`:
   in a `mixed` facet, array rows that are not strand-safe keep `ref` with `alts` and `gt` null
   (Decision 2), a new null combination on rows that were filled before.
+
+- **0.0.24** (2026-11-07, RM282): `calls.sv_claim` (`list[Enum]` or null), each ALT's VCF 4.5
+  SVCLAIM (the entry at the top of this list).
 
 - **0.0.23** (2026-11-05, RM287): `calls.imputation_r2` and `calls.imputation_empirical_r2` (`f32` or
   null), each site's imputation quality (the entry at the top of this list).

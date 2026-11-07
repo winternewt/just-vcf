@@ -1614,9 +1614,11 @@ event goes to six columns, each just-vcf's own shape (VRS has no Allele for thes
   requires it on `<DEL>` and `<DUP>`, makes it optional elsewhere (`<CNV>` implies `D`, `<INV>`,
   `<INS>` and a breakend `J`), and has non-SV alleles write `.`. A `.` is a null element, and so is a
   value that is none of the three (counted); a count that is not one per ALT leaves the record's list
-  null (counted). Nothing is resolved from the allele's type: a null claim stays null, and a `<DEL>`
-  or `<DUP>` with none (every file before 4.5) is read as before, as implying both. What reads it:
-  `concordance`'s decompose ("Symbolic alleles against breakends"). Rejected: a claim column per
+  null (counted). Nothing is resolved from the allele's type: a null claim stays null. A `<DEL>` or
+  `<DUP>` with none is read as implying both only on a facet that predates SVCLAIM (a file before VCF
+  4.4, which added it, and a load that did not leave it out); on a 4.4 or later file, or a facet whose
+  `dropped_fields` list it, its claim is unknown. What reads it: `concordance`'s decompose ("Symbolic
+  alleles against breakends"). Rejected: a claim column per
   record, which a multi-ALT record whose ALTs claim differently (VCF 4.5's mobile-element example
   links such records by EVENT, one claim each) cannot hold; and filling `.` from the type, which would
   make a stated claim and a derived one look alike. A VCF 4.3 file has no definition for SVCLAIM and is
@@ -2989,7 +2991,7 @@ a step fails it.
 | 0.0.20 → 0.0.21 | facets | adds `resolve_inputs` (null) after `resolve_version` | array facets (`family = genotype_table`) whose REF was read: null means not recorded, not "no manifest", so the store refuses the same facet resolved today with manifests as another state of it; consensus facets: null means the parents' REF states were not recorded, so the store refuses the same consensus built today |
 | 0.0.21 → 0.0.22 | calls | casts `ref_check` to the enum with `unstated` | facets whose REF was read and that hold a row with a source REF of only `N` and `ref_check = mismatch`: kept as `mismatch` where today's rule reads `unstated`, so `liftover` leaves those rows behind; the facet records `RESOLVE_VERSION` 12, so the store refuses it resolved today. A caveat may name rows as well as facets (`Caveat.rows`), and this is the first that does |
 | 0.0.22 → 0.0.23 | calls | adds `imputation_r2`, `imputation_empirical_r2` (null) after `dosage` | facets whose `dropped_fields` list INFO `R2`, `ER2` or `DR2` (imputation output, and anything derived from it): the two columns null mean not read, not "the source wrote none" |
-| 0.0.23 → 0.0.24 | calls | adds `sv_claim` (null) after `alt_copy_numbers` | facets whose `dropped_fields` list INFO `SVCLAIM` (a VCF 4.5 SV file, and anything derived from it): `sv_claim` null means not read, not "no claim", so `concordance` decomposes their `<DEL>` and `<DUP>` whatever they claimed until the source is loaded again |
+| 0.0.23 → 0.0.24 | calls | adds `sv_claim` (null) after `alt_copy_numbers` | facets whose `dropped_fields` list INFO `SVCLAIM` (a VCF 4.5 SV file, and anything derived from it): `sv_claim` null means not read, not "no claim", so `concordance` does not decompose their `<DEL>` and `<DUP>` (each counted as a claim not read) until the source is loaded again |
 
 A step never invents a value: an added column is null, and where that null (or a value an older loader
 left) reads differently from what a load of the same source gives today, the facets it applies to are
@@ -3531,18 +3533,30 @@ What differs from truvari, each with its reason:
   decompose either.
 - **An abundance claim is not decomposed** (2026-11-07). VCF 4.5's `SVCLAIM` says what each allele
   claims (`sv_claim`): an allele claiming `D` only (copy number changed, no junction) implies no
-  breakend and is not decomposed; `J`, `DJ` and no claim are, a `<DEL>` or `<DUP>` without one (every
-  file before 4.5) implying both, as the spec reads it. Each ALT goes by its own claim, so a record's
+  breakend and is not decomposed; `J` and `DJ` are. Each ALT goes by its own claim, so a record's
   `D` `<DEL>` beside its `J` `<DUP>` decomposes only the duplication. truvari 5.5 reads no SVCLAIM and
   would decompose a 4.5 `<DEL>` with `SVCLAIM=D` and no SVTYPE; here it is not, for the reason
   DRAGEN's `SVTYPE=CNV` is not.
+- **A null claim is decomposed only where the facet predates SVCLAIM** (2026-11-07, audit 16). VCF
+  4.4 added SVCLAIM ("Changes between VCFv4.4 and VCFv4.3") and 4.5 keeps it: a `<DEL>` or `<DUP>`
+  (any subtype) must state one. Before 4.4 there was none, and a `<DEL>` or `<DUP>` implies both, as
+  truvari decomposes it. So a null claim on a `<DEL>` or `<DUP>` decomposes when the facet's
+  `vcf_version` is before 4.4 (or none) and its `dropped_fields` do not list INFO `SVCLAIM`. On a 4.4
+  or later file (`.` or no SVCLAIM) it is unknown: not decomposed, counted as "claim unknown"; on a
+  facet whose load left SVCLAIM out (a store migrated from 0.0.23) the claims were in the file and
+  unread: not decomposed, counted as "claim not read", until the source is loaded again. An `<INV>`
+  keeps its implicit J (the spec makes its claim optional, `.` equal to J), so a null claim on one
+  decomposes on any facet. Rejected: decomposing every null claim as before (it turns a 4.5 `<DEL>`
+  whose claim is missing into a junction nobody claimed), and reading a null claim on a 4.4 or later
+  file as `DJ` (a value the file did not state).
 - **An allele with no END is not decomposed**: no loader leaves a symbolic allele's `end_pos` null
   (without END or SVLEN it falls back to the REF span), but a frame built or edited elsewhere can, and
   such an allele has no junction to join POS to.
 - **One warning, a count per reason.** When the other facet has breakends, the `<DEL>`, `<DUP>` and
   `<INV>` alleles not decomposed (an SVTYPE naming another type, an abundance claim, no END, a
-  duplication subtype other than TANDEM, below) are counted in one warning, each allele under the first
-  reason that holds, in this order: the abundance claim, no END, then the type or subtype. Before
+  duplication subtype other than TANDEM, below, or a claim left unknown, above) are counted in one
+  warning, each allele under the first reason that holds, in this order: the abundance claim, no END,
+  the type or subtype, then the unknown claim (so it counts only alleles nothing else kept out). Before
   2026-11-07 the warning named only the type or subtype, and counted an allele without END under it.
 - **Only a tandem duplication.** truvari assumes every DUP is tandem, subtypes dropped. Here `<DUP>`
   and `<DUP:TANDEM>` are decomposed and another subtype is not: VCF 4.5's `<DUP:DISPERSED>` puts its
@@ -3948,6 +3962,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-07, audit 16: a null SV claim): no column changes. **Values change**
+  in `concordance`: a `<DEL>` or `<DUP>` with a null `sv_claim` on a VCF 4.4 or later facet, or on a
+  facet whose `dropped_fields` list INFO `SVCLAIM`, is no longer decomposed into breakends, so against
+  another caller's breakends it reads `only_a` and `only_b` where it read `decomposed`, counted in the
+  not-decomposed warning as a claim unknown or not read ("Symbolic alleles against breakends"). Files
+  before 4.4 decompose as before; an `<INV>` keeps its implicit J.
 
 - **One calls column, landed in 0.0.24** (2026-11-07, RM282: VCF 4.5's SVCLAIM): `calls.sv_claim`
   (`list[Enum]` of `D`, `J`, `DJ`, one per ALT, null where the source wrote none), after

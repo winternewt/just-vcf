@@ -350,8 +350,8 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
                 ("sv_claim",),
                 _dropped("INFO/SVCLAIM"),
                 "the load left out INFO SVCLAIM (in dropped_fields), which 0.0.24 reads as each ALT's abundance or "
-                "adjacency claim: sv_claim null here means not read, and concordance decomposes a <DEL> or <DUP> there "
-                f"into breakends whatever it claimed; {_RELOAD}",
+                "adjacency claim: sv_claim null here means not read, and concordance does not decompose a <DEL> or <DUP> "
+                f"there into breakends, counting it as a claim not read; {_RELOAD}",
             ),
         ),
     ),

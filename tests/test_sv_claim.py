@@ -5,8 +5,11 @@ implies only where it claims a junction.
 VCF 4.5 "Encoding Structural Variants" (data/interim/hts-specs/VCFv4.5.tex): `D` is an abundance
 claim (copy number changed, no adjacency claimed), `J` an adjacency claim, `DJ` both. `<DEL>` and
 `<DUP>` must state one; `.` is the missing value. A file before 4.5 states none, and its `<DEL>` and
-`<DUP>` imply both, so a null claim decomposes as before. Synthetic records only; the breakends are
-those tests/test_concordance_decompose.py pins to the spec's own (`SPEC_DEL_RECORDS`, `SPEC_DUP_RECORDS`).
+`<DUP>` imply both, so a null claim there decomposes as before; on a 4.5 file, or a facet whose load
+left SVCLAIM out, a null claim on a `<DEL>` or `<DUP>` is unknown and is not decomposed (audit 16).
+`<INV>`'s missing value is J. Synthetic records only; the breakends are those
+tests/test_concordance_decompose.py pins to the spec's own (`SPEC_DEL_RECORDS`, `SPEC_DUP_RECORDS`,
+`SPEC_INV_RECORDS`).
 """
 
 from pathlib import Path
@@ -25,6 +28,8 @@ from test_concordance_decompose import (  # noqa: F401  (store is a fixture)
     SPEC_DEL_RECORDS,
     SPEC_DUP,
     SPEC_DUP_RECORDS,
+    SPEC_INV,
+    SPEC_INV_RECORDS,
     base,
     bnd,
     facet,
@@ -44,6 +49,12 @@ COLUMNS = "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INF
 
 def v45_text(records: list[str], extra: tuple[str, ...] = ()) -> str:
     meta = ["##fileformat=VCFv4.5", *(f"##contig=<ID={c},length={len(s)}>" for c, s in SEQ.items()), *META, SVCLAIM_LINE, *extra]
+    return "\n".join([*meta, COLUMNS, *records]) + "\n"
+
+
+def v43_text(records: list[str]) -> str:
+    """The same records under VCF 4.3, which defines no SVCLAIM."""
+    meta = ["##fileformat=VCFv4.3", *(f"##contig=<ID={c},length={len(s)}>" for c, s in SEQ.items()), *META]
     return "\n".join([*meta, COLUMNS, *records]) + "\n"
 
 
@@ -168,17 +179,80 @@ def sv_sites(tmp_path: Path, store, a: list[str], b: list[str]) -> tuple[pl.Data
     return result.sites.collect().filter(pl.col("variant_class") == "sv"), result.warnings
 
 
+NOT_DECOMPOSED = "1 symbolic deletions, duplications or inversions of facet a are not decomposed"
+CLAIM_UNKNOWN = "1 claim unknown: VCF 4.4 and later require SVCLAIM on <DEL>/<DUP>"
+CLAIM_NOT_READ = "1 claim not read: the load left INFO SVCLAIM out (dropped_fields)"
+
+
+def _alone(rows: pl.DataFrame) -> bool:
+    """Nothing met: the symbolic allele and the breakends each stand alone."""
+    return rows["key"].is_null().all() and sorted(set(rows["agreement"].to_list())) == ["only_a", "only_b"]
+
+
 @pytest.mark.parametrize(("symbol", "call", "records"), [("<DEL>", SPEC_DEL, SPEC_DEL_RECORDS), ("<DUP>", SPEC_DUP, SPEC_DUP_RECORDS)])
-@pytest.mark.parametrize("claim", CLAIMS)
-def test_only_an_adjacency_claim_or_none_is_decomposed(tmp_path: Path, store, symbol: str, call: tuple, records: list, claim: str | None) -> None:  # noqa: F811
+@pytest.mark.parametrize("claim", [*CLAIMS, "."])
+def test_only_an_adjacency_claim_is_decomposed_in_a_45_file(tmp_path: Path, store, symbol: str, call: tuple, records: list, claim: str | None) -> None:  # noqa: F811
+    """VCF 4.5 requires SVCLAIM on `<DEL>` and `<DUP>`: `J` and `DJ` decompose; `D` states no junction;
+    `.` or none leaves the claim unknown, so no junction is implied either (audit 16). Each is counted."""
     rows, warnings = sv_sites(tmp_path, store, [claimed(sv(call, symbol), claim)], [bnd(r) for r in records])
-    if claim == "D":
-        # An abundance claim states no junction: nothing for the breakends to meet, and it is counted.
-        assert rows["key"].is_null().all() and sorted(rows["agreement"].to_list()) == ["only_a", "only_b"]
-        assert any(w.startswith("1 symbolic deletions, duplications or inversions of facet a are not decomposed") and "abundance claim only" in w for w in warnings), warnings
-    else:
+    if claim in ("J", "DJ"):
         assert rows["key"].to_list() == ["decomposed"], rows
         assert not any("not decomposed" in w for w in warnings), warnings
+    else:
+        assert _alone(rows), rows
+        why = "abundance claim only" if claim == "D" else CLAIM_UNKNOWN
+        assert any(w.startswith(NOT_DECOMPOSED) and why in w for w in warnings), warnings
+
+
+def test_a_null_claim_is_unknown_from_44_on(tmp_path: Path, store) -> None:  # noqa: F811
+    """VCF 4.4 added SVCLAIM ("Changes between VCFv4.4 and VCFv4.3" in VCFv4.5.tex): a 4.4 `<DEL>`
+    without one is unknown, as a 4.5 one is."""
+    path = tmp_path / "a.vcf"
+    path.write_text(v45_text([sv(SPEC_DEL, "<DEL>")]).replace("##fileformat=VCFv4.5\n", "##fileformat=VCFv4.4\n"))
+    left = resolve_ref(load(path), store)
+    assert left.facets.collect()["vcf_version"].item() == "VCFv4.4"
+    result = concordance(left, facet(tmp_path, "b", [bnd(r) for r in SPEC_DEL_RECORDS], store))
+    assert _alone(result.sites.collect().filter(pl.col("variant_class") == "sv"))
+    assert any(w.startswith(NOT_DECOMPOSED) and CLAIM_UNKNOWN in w for w in result.warnings), result.warnings
+
+
+@pytest.mark.parametrize(("symbol", "call", "records"), [("<DEL>", SPEC_DEL, SPEC_DEL_RECORDS), ("<DUP>", SPEC_DUP, SPEC_DUP_RECORDS)])
+def test_a_null_claim_before_44_implies_both(tmp_path: Path, store, symbol: str, call: tuple, records: list) -> None:  # noqa: F811
+    """VCF 4.3 has no SVCLAIM: its `<DEL>` and `<DUP>` claim both, and decompose (truvari does)."""
+    path = tmp_path / "a.vcf"
+    path.write_text(v43_text([sv(call, symbol)]))
+    left = resolve_ref(load(path), store)
+    assert left.facets.collect()["vcf_version"].item() == "VCFv4.3"
+    result = concordance(left, facet(tmp_path, "b", [bnd(r) for r in records], store))
+    rows = result.sites.collect().filter(pl.col("variant_class") == "sv")
+    assert rows["key"].to_list() == ["decomposed"], rows
+    assert not any("not decomposed" in w for w in result.warnings), result.warnings
+
+
+@pytest.mark.parametrize("claim", [None, ".", "J"])
+def test_an_inversion_with_no_claim_is_a_junction_in_45(tmp_path: Path, store, claim: str | None) -> None:  # noqa: F811
+    """VCF 4.5: `<INV>`'s claim is optional, and `.` equals J, so it decomposes whatever it states of it."""
+    rows, warnings = sv_sites(tmp_path, store, [claimed(sv(SPEC_INV, "<INV>"), claim)], [bnd(r) for r in SPEC_INV_RECORDS])
+    # Taken once: the inversion meets the adjacency its first implied breakend meets (as
+    # tests/test_concordance_decompose.py pins it); its other adjacency stands alone.
+    assert rows.filter(pl.col("key") == "decomposed").select("alt", "sv_kind").rows() == [("<INV>", "INV")], rows
+    assert not any("not decomposed" in w for w in warnings), warnings
+
+
+def test_a_facet_that_left_sv_claim_out_does_not_decompose_a_null_claim(tmp_path: Path, store) -> None:  # noqa: F811
+    """A facet whose `dropped_fields` lists INFO SVCLAIM (a store migrated from 0.0.23) holds claims it
+    never read: a null one is unknown, not decomposed, and counted under its own reason. The facet is a
+    4.3 file's, where a null claim would otherwise decompose, so only `dropped_fields` decides."""
+    path = tmp_path / "a.vcf"
+    path.write_text(v43_text([sv(SPEC_DEL, "<DEL>")]))
+    loaded = resolve_ref(load(path), store)
+    left = loaded.model_copy(
+        update={"facets": loaded.facets.with_columns(pl.concat_list("dropped_fields", pl.lit(["INFO/SVCLAIM"])).list.sort().alias("dropped_fields"))}
+    )
+    result = concordance(left, facet(tmp_path, "b", [bnd(r) for r in SPEC_DEL_RECORDS], store))
+    rows = result.sites.collect().filter(pl.col("variant_class") == "sv")
+    assert _alone(rows), rows
+    assert any(w.startswith(NOT_DECOMPOSED) and CLAIM_NOT_READ in w for w in result.warnings), result.warnings
 
 
 def test_each_allele_of_a_record_is_decomposed_by_its_own_claim(tmp_path: Path, store) -> None:  # noqa: F811

@@ -11,6 +11,20 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **A null SV claim no longer decomposes into a junction nobody claimed** (audit 16, RM282).
+  `concordance` read every null `sv_claim` as "implies both", so a VCF 4.5 `<DEL>` with `SVCLAIM=.` or
+  none, and any `<DEL>` or `<DUP>` of a facet migrated from 0.0.23 whose `dropped_fields` list INFO
+  `SVCLAIM` (claims in the file, unread), was turned into breakends. Now a null claim on a `<DEL>` or
+  `<DUP>` decomposes only where the facet predates SVCLAIM: its `vcf_version` is before 4.4 (the
+  version that added it; the 4.5 spec's change list says so) or absent, and its load did not leave
+  SVCLAIM out. Elsewhere it is not decomposed and is counted in the not-decomposed warning under a
+  reason of its own, "claim unknown" (4.4 or later) or "claim not read" (left out); an `<INV>` keeps its
+  implicit J. `migrate_store`'s 0.0.24 caveat now says so. Values change, no column does. Tests:
+  `tests/test_sv_claim.py::test_only_an_adjacency_claim_is_decomposed_in_a_45_file` (its `.` and
+  no-claim cases), `::test_a_null_claim_is_unknown_from_44_on` and
+  `::test_a_facet_that_left_sv_claim_out_does_not_decompose_a_null_claim` fail on the old code;
+  `::test_a_null_claim_before_44_implies_both` and `::test_an_inversion_with_no_claim_is_a_junction_in_45`
+  pin what stays.
 - **A dense extract of one chromosome no longer reads `wgs`** (audit 16, RM4). Breadth divides the
   reach by the span the sites spread over per contig, so 116,000 indels 100 bp apart on chromosome 1
   alone, or a million SNVs packed there, measured a genome's breadth and the facet read `wgs`, with

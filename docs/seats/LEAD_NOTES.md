@@ -48,7 +48,10 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
-0. **2026-11-07: RM4's FTDNA X-only chip building** (will be merge 5 of 6 toward audit 16). Measured first on
+0. **2026-11-07: RM4's FTDNA X-only chip merged as ec5d2d7 (merge 5 of 6 toward audit 16)**; at merge, through
+   `load` on every PGP-HMS FTDNA export: 39 X-only read `illumina_omniexpress`, 4 unknown, whole exports unchanged.
+   RM4 now waits for more manifests only. Builder calls for veto: recall None (not 0) where a manifest has no
+   sampled marker on a carried chromosome; an export's `XY` rows count for X. Measured first on
    PGP-HMS (aggregates): 43 X-only FTDNA exports, every row on X, 245-270 sampled rsids; 39 have 0.96-0.98 of them
    in OmniExpress's sample, 4 under 0.90 for every family. The lead's call, for veto: the chip from the file's own
    rows, recall over the chromosomes an export carries (at least 0.5% of its rows), the sampled floor 1,000 → 200,

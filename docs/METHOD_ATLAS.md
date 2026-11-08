@@ -361,3 +361,54 @@ for huAF3C63 is a noisier run, by its discordance with CGI (1.77% against 0.50%)
 consensus weighing CGA 2.5.0.33 rows with these bands would take its 40–100 phred rows as nearly
 never wrong. The even split is first order on this pair, where docs/CONSENSUS.md found it second order
 on hu1B2689's; the rule stands, and the person's options are in docs/CONSENSUS.md.
+
+## More PGP pairs: a third CGI–freeBayes person and CGI's own run-to-run drift (2026-11-08)
+
+Built with `scripts/method_atlas.py`, alleles met by VRS id, every pair `same_person`. The outputs are
+`data/output/method_atlas_pgp_timing.*` and `data/output/method_atlas_cgi_drift.*`, git-ignored; each
+pair's counts are in the `.pairs/` folder beside them. Columns: SNVs both called (`carried_pass`,
+region `all`), their discordance, the one-sided share of all alleles, the easy-region SNV discordance,
+and the indel discordance (`all`).
+
+**A third CGI against freeBayes 0.9.15 person.** Only three PGP-HMS people have both a CGI `var` and
+PGP's freeBayes+VarScan2 VCF. huF5F075, CGA 2.5.0.48 `var` against freeBayes 0.9.15: 3,126,771 SNVs
+both called, discordance 0.36%, one-sided 23.6%; easy SNVs 0.106%, indels 4.10%. That is below both
+hu1B2689's 0.50% and huAF3C63's 1.77% above.
+
+**Two CGI sequencing runs of one person.** 16 PGP-HMS people have two CGI `var` files from different
+assemblies with different sample ids, so two runs, not one run analysed twice. Fifteen are built here,
+along with hu250634 in the timing build; huF06AD0's 2.0.4.14/2.5.0.24 pair is among them. Nine share one
+key, 2.5.0.33 against 2.5.0.37; the drift build's pooled row for it holds eight (`pairs` = 8), and
+hu250634's is in the timing build:
+
+| Person | Versions | SNVs both called | Discordance | One-sided | Easy SNV | Indel |
+|---|---|---|---|---|---|---|
+| hu34D5B9 | 2.0.3.5 vs 2.0.4.14 | 3,277,190 | 0.08% | 6.7% | 0.036% | 3.41% |
+| huF06AD0 | 2.0.4.14 vs 2.5.0.24 | 3,214,858 | 0.17% | 9.1% | 0.065% | 6.90% |
+| hu066C78 | 2.0.4.18 vs 2.5.0.33 | 3,252,442 | 0.15% | 7.9% | 0.054% | 7.12% |
+| hu4C20BC | 2.5.0.24 vs 2.5.0.33 | 3,136,293 | 0.20% | 8.7% | 0.084% | 9.10% |
+| hu03E3D2 | 2.5.0.33 vs 2.5.0.36 | 3,243,773 | 0.17% | 7.1% | 0.057% | 9.56% |
+| hu24A473 | 2.5.0.33 vs 2.5.0.36 | 3,116,775 | 0.63% | 10.9% | 0.485% | 10.19% |
+| huD2B804 | 2.5.0.33 vs 2.5.0.36 | 2,833,189 | 3.66% | 18.0% | 3.505% | 13.64% |
+| hu1725A5 | 2.5.0.33 vs 2.5.0.37 | 2,973,980 | 1.82% | 14.1% | 1.649% | 11.06% |
+| hu250634 | 2.5.0.33 vs 2.5.0.37 | 3,100,963 | 0.91% | 10.8% | 0.753% | 10.26% |
+| hu48AC54 | 2.5.0.33 vs 2.5.0.37 | 3,198,281 | 0.39% | 8.9% | 0.260% | 9.97% |
+| hu524B5B | 2.5.0.33 vs 2.5.0.37 | 3,124,160 | 0.93% | 11.1% | 0.780% | 10.22% |
+| hu87BAAD | 2.5.0.33 vs 2.5.0.37 | 2,997,604 | 1.69% | 13.8% | 1.516% | 10.91% |
+| hu9385BA | 2.5.0.33 vs 2.5.0.37 | 3,117,324 | 0.91% | 10.9% | 0.757% | 10.23% |
+| huBB058E | 2.5.0.33 vs 2.5.0.37 | 3,222,653 | 0.26% | 8.1% | 0.131% | 9.96% |
+| huD58ABC | 2.5.0.33 vs 2.5.0.37 | 2,922,809 | 2.03% | 15.9% | 1.841% | 11.86% |
+| huD649F1 | 2.5.0.33 vs 2.5.0.37 | 2,666,437 | 1.27% | 21.6% | 1.094% | 9.50% |
+
+- **One key, a fourteen-fold spread between people.** Across the nine 2.5.0.33/2.5.0.37 pairs, easy-region
+  SNV discordance runs from 0.131% to 1.841% (median 0.78%), and the three 2.5.0.33/2.5.0.36 pairs from
+  0.057% to 3.505%. A pooled row's interval is sampling error over its alleles, so it says nothing of
+  this spread. The measurement went to desk #101 (whether one person's rates may stand for another's);
+  pooling stays as today until it is answered.
+- **Pairs with a 2.0 or 2.5.0.24 run agree best** (0.036% to 0.084% easy SNV); the 2.5.0.33 against
+  2.5.0.36 or 2.5.0.37 pairs run from 0.057% to 3.505%. Whether some runs were weaker sequencing or the
+  later versions changed the calling is not settled here: the version and the run change together in
+  every pair.
+- **Two CGI runs disagree more in easy regions than CGI does with freeBayes on huF5F075** (0.106%) for
+  all nine 2.5.0.33/2.5.0.37 people. One-sided shares, 7 to 22% for SNVs, are lower than CGI
+  against freeBayes (24 to 29%).

@@ -48,6 +48,15 @@ each reset.
    VCF facet's `method_steps` and `gl_source` stay null, told apart from "not a VCF" by the manifest's
    `migrations` record and `loaded()`'s warning; an own value (a `not_recorded` enum member, a marker step) is
    rejected in docs/SCHEMA.md "Store migration", for the person's veto.
+0. **2026-11-08, away: RM279's pooling pairs built (f4555e9)**, the lead's run, no builder. 17 PGP-HMS pairs,
+   about 10 min each: huF5F075's CGI `var` against freeBayes (only three people have both; this was the last) and
+   16 people's two CGI sequencing runs (sample ids differ in every pair). Nine share 2.5.0.33/2.5.0.37: easy SNV
+   discordance 0.13% to 1.84% between them, added to desk #101 as a fact for option 1. RM279 is now
+   `blocked: desk #101, #72, #102`. The lead's call, for veto: the single-person pairs of other methods (huE18D82
+   freeBayes against DRAGEN, hu6ABACE CGI against DRAGEN's SNV and indel files, hu250634 CGI against an Omni2.5
+   array VCF) are planned in `data/interim/rm279/plan_pgp_methods.json` but not built, since each adds a method on
+   one genome rather than a pooled row (about 50 min to run). Plans: `data/interim/rm279/plan_{pgp_timing,cgi_drift}.json`.
+   Nothing unattended and unblocked is left on the plan; audit 17 stands at 1 of 6 merges.
 0. **2026-11-07, away: RM281's per-probe I/D orientation merged (c71f461) and its table learned (fae179f)**;
    merge 1 of 6 toward audit 17. `scripts/id_orientation.py` over the 36 pairs: v3 128 probes `same` and 45 `flipped`,
    v4 142 and 40 (checked: the scratch rsid sets under the table's rule give exactly these; v4's 41st flip and v3's

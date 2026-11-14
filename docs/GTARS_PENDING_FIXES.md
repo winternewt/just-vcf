@@ -48,6 +48,8 @@ state). gtars main after 0.10.0 changes none of these files. **File at databio/g
 normalization result (the RLE state where the spec ends in one), in `normalize_ref`, the Python API and
 the VCF batch path; cite vrs-python's steps and the repro.
 
+*Rechecked (2026-11-14).* Still true at gtars-python v0.11.2, the newest tag (2026-11-03): `NormalizedAllele` (`gtars-vrs/src/normalize.rs:170`) still carries literal bytes, the Python `vrs_id` and `vrs_digest` build only a literal allele (`gtars-python/src/vrs/funcs.rs:11`), and the VCF path digests through `allele_identifier_literal` (`gtars-vrs/src/vcf.rs:154`). Nothing on gtars' tracker. Desk #77 updated: still waiting, nothing filed by default.
+
 ## G2 — `add_sequence` into an Encoded store reads back wrong bases
 
 Found by a just-vcf builder (the lead's relay, commit `00f442f` on its branch) as lowercase: a

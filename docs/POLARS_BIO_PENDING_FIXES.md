@@ -419,6 +419,8 @@ sample written as `.` alone would then read as a haploid no-call too. **File at
 datafusion-bio-formats**, citing the noodles ordering; the same one-line reorder in the biodatageeks fork
 or at zaeleus/noodles would fix it at the root.
 
+*Rechecked (2026-11-14).* Still true on polars-bio 0.37.0 (2026-11-07, on datafusion-bio-formats v1.15.0 and datafusion-bio-functions v0.24.0): the draft 2 repro re-run as drafted still reads `.` as null. The newest tags, formats v1.16.0 and functions v0.25.0 (both 2026-11-14), leave the code path unchanged apart from line numbers, and noodles stays at the same pin. Nobody has reported it. The draft waits on desk #161 (desk #161's update says so); before posting, its version lines and code links move to the newest tags.
+
 ## P16 — `import polars_bio` configures the root logger
 
 Found by the lead seat building the CLI (merged as `5b8700f`): after `import polars_bio`, every
@@ -442,6 +444,8 @@ leaves `logging.py` unchanged (0.36.2 is the newest tag). **Comment on pb #291**
 name the two lines, and the fix: drop `basicConfig()` and the root level, give the `polars_bio`
 logger a `NullHandler`, and let `set_loglevel` set that logger's level alone.
 
+*Fixed upstream (2026-11-14).* polars-bio 0.37.0 (2026-11-07) fixes it ("interference with application logging configuration", pb #496), and pb #291 closed on 2026-11-06. Read at the 0.37.0 tag: `logging.py` sets the `polars_bio` logger to WARNING and nothing else, no `basicConfig()` and no root level, and `set_loglevel` sets only that logger. Nothing to post: desk #105 withdrawn as moot. just-vcf pins 0.36.0, so the CLI's mitigation stays until the lock moves to 0.37; once it does, the root-logger part of that mitigation can go.
+
 ## P17 — `depth()` wraps a depth past 32,767
 
 Found by the lead seat building alignment coverage (`src/just_vcf/coverage.py`). polars-bio's
@@ -462,6 +466,8 @@ to a positive value and is not caught. Not filed.
 searched live for "depth", "coverage", "pileup" and "Int16"). The pileup source is unchanged on
 datafusion-bio-functions main after `v0.22.2` (newest tag `v0.23.1`). **File at
 datafusion-bio-functions:** an `Int32` (or `UInt32`) coverage column, or at least a saturating cast.
+
+*Rechecked (2026-11-14).* Still true on polars-bio 0.37.0 (2026-11-07, on datafusion-bio-formats v1.15.0 and datafusion-bio-functions v0.24.0): the repro re-run as drafted gives `-32766`. The newest tags, formats v1.16.0 and functions v0.25.0 (both 2026-11-14), leave the code path unchanged apart from line numbers, and noodles stays at the same pin. Nobody has reported it. The draft waits on desk #161 (desk #161's update says so); before posting, its version lines and code links move to the newest tags.
 
 ## P18 — `depth()` block mode drops a run that reaches a contig's last base (1-based)
 
@@ -489,6 +495,8 @@ Mitigation: just-vcf uses per-base mode and folds it into windows (`coverage.py`
 dense merge drops a contig whose batches fail to build without an error (`physical_exec.rs:420-430`,
 `if let Ok(...)`).
 
+*Rechecked (2026-11-14).* Still true on polars-bio 0.37.0 (2026-11-07, on datafusion-bio-formats v1.15.0 and datafusion-bio-functions v0.24.0): the repro re-run as drafted still returns 3 rows in 1-based block mode, without `chrX 41-50` and `chrY 1-40`. The newest tags, formats v1.16.0 and functions v0.25.0 (both 2026-11-14), leave the code path unchanged apart from line numbers, and noodles stays at the same pin. Nobody has reported it. The draft waits on desk #161 (desk #161's update says so); before posting, its version lines and code links move to the newest tags.
+
 ## P19 — `depth()` block mode builds every contig's batches before emitting any
 
 Found by the lead seat on 30x BAMs: block mode peaks at 22.6 GB on a 27 GB BAM and 33.6 GB on a 48 GB
@@ -511,6 +519,8 @@ drafts are on desk #104 (comment of 2026-10-27), with the code linked at main `e
 pileup crate (`datafusion/bio-function-pileup/`) is unchanged since `v0.22.2` but for its Cargo.toml.
 The repros for P17 and P18 were rerun as written on 0.36.0 with synthetic BAMs, and the trackers were
 searched again: no duplicates. Nothing is posted until the person says so; record `Filed:` here then.
+
+*Rechecked (2026-11-14).* Still true on polars-bio 0.37.0 (2026-11-07, on datafusion-bio-formats v1.15.0 and datafusion-bio-functions v0.24.0): not re-runnable on a small file; the block branch of `physical_exec.rs` (v0.25.0 `:410-437`) still builds every contig's batches before emitting. The newest tags, formats v1.16.0 and functions v0.25.0 (both 2026-11-14), leave the code path unchanged apart from line numbers, and noodles stays at the same pin. Nobody has reported it. The draft waits on desk #161 (desk #161's update says so); before posting, its version lines and code links move to the newest tags.
 
 ## P20 — An indexed BAM `depth()` scan reads the file twice
 
@@ -549,6 +559,8 @@ reading each selected key with `info.get(header, key)` / `sample.get(header, key
 on a good record, and name it as the list paths do. A noodles change (the key in the iterator's error)
 would be the deeper fix, and could be mentioned. Goes well in one batch with P15, also
 datafusion-bio-formats.
+
+*Rechecked (2026-11-14).* Still true on polars-bio 0.37.0 (2026-11-07, on datafusion-bio-formats v1.15.0 and datafusion-bio-functions v0.24.0): the draft 1 repro re-run as drafted gives the same errors, scalar ones still without the key. The newest tags, formats v1.16.0 and functions v0.25.0 (both 2026-11-14), leave the code path unchanged apart from line numbers, and noodles stays at the same pin. Nobody has reported it. The draft waits on desk #161 (desk #161's update says so); before posting, its version lines and code links move to the newest tags.
 
 ## P22 — An undeclared key's bad value fails the scan; so does one unparsable GT
 
@@ -602,6 +614,8 @@ option files it with them (P15's own question, desk #69, is unanswered). Code is
 `6af1fa1` and the noodles fork `42a3c01`, both unchanged for these paths; the repros were rerun as
 written on 0.36.0 with synthetic VCFs, and the trackers searched again: no duplicates. P22(b), the GT
 `0/x` case, is named in the draft as not asked. Nothing is posted until the person says so.
+
+*Rechecked (2026-11-14).* Still true on polars-bio 0.37.0 (2026-11-07, on datafusion-bio-formats v1.15.0 and datafusion-bio-functions v0.24.0): the draft 1 repro re-run as drafted gives the same errors, and an undeclared `MQ` still fails the scan. The newest tags, formats v1.16.0 and functions v0.25.0 (both 2026-11-14), leave the code path unchanged apart from line numbers, and noodles stays at the same pin. Nobody has reported it. The draft waits on desk #161 (desk #161's update says so); before posting, its version lines and code links move to the newest tags.
 
 ## P23 — `replace` with a mapping holds every column of a streaming sink
 

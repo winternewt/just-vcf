@@ -596,6 +596,15 @@ same applies when the user corrects a preference: it goes below, in their words,
   parquet store per person plus a VCF Zarr export; the posterior only after the error atlas; XX and XO wait
   for coverage. Every answer is in docs/MVP_READINESS.md and the RM272–RM286 entries.
 
+- 2026-11-16, what counts as a decision: "items that have no contras and only pros, do not become a blocked
+  decision. I expect decision's to have some valid forks/drawbacks on each side to be dropped on me. Sy 'yes'
+  is not a decision, I'm not a parrot" (said to the lead, after it asked for a go on the polars 2 move, whose
+  only cost was the work). A choice is put to the person, in chat or on the desk, only when each option has
+  a real drawback, which the question names. A one-sided choice is decided by the seat: built, or filed as an
+  item with its state (`unattended`, or `urgent` when quick), and reported as done, never asked. "Should I do
+  X?" with nothing against X is not a question. A 5-minute chore is likewise just done (same day: "If it takes
+  5 min why do you even ask?").
+
 ## 11. Learned workspace facts
 
 - Real genomes live under `/data/genomes/<person>/`, all private. What is there by kind:

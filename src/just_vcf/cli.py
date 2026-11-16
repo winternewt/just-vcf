@@ -149,9 +149,10 @@ def main(
 ) -> None:
     """Sniff, load, convert and check a personal genomics file. Prints counts and aggregates only."""
     load_dotenv(find_dotenv(usecwd=True))
-    # The library logs every warning it also returns, and polars-bio's import configures the root logger
-    # (`logging.basicConfig()`), so each would reach stderr unredacted. The CLI prints them itself,
-    # redacted and once; logging stays off while the command runs, and comes back when it closes.
+    # The library logs every warning it also returns, and with no handler configured Python's last-resort
+    # handler prints each to stderr unredacted (polars-bio 0.37 no longer adds a root handler on import,
+    # P16, but that handler was only one way out). The CLI prints them itself, redacted and once; logging
+    # stays off while the command runs, and comes back when it closes.
     logging.disable(logging.CRITICAL)
     ctx.call_on_close(lambda: logging.disable(logging.NOTSET))
     ctx.obj = {"traceback": traceback}

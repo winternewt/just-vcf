@@ -7,6 +7,9 @@ every test that names a sample or a person-like file checks the name never reach
 import json
 import logging
 import gzip
+import os
+import subprocess
+import sys
 import zipfile
 from collections import Counter
 from importlib.metadata import entry_points
@@ -192,8 +195,9 @@ def test_a_crash_is_told_from_a_refusal_and_its_message_withheld(tmp_path: Path,
 
 
 def test_library_logging_is_off_while_a_command_runs(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """polars-bio's import configures the root logger, so a library warning would reach stderr as logged,
-    past the redaction; the CLI prints it itself, once."""
+    """With no handler configured, Python's last-resort handler prints a library warning to stderr as
+    logged, past the redaction; the CLI prints it itself, once. Here pytest's own handler stands in for
+    any handler: the warning must not reach it either."""
     text, _, _ = _two_exports()
     path = tmp_path / "genome.txt"
     path.write_text(text)
@@ -201,6 +205,22 @@ def test_library_logging_is_off_while_a_command_runs(tmp_path: Path, caplog: pyt
         summary = report(run("load", path, "--json"))
     assert summary["warnings"] and not [r for r in caplog.records if r.name.startswith("just_vcf")]
     assert logging.root.manager.disable == logging.NOTSET
+
+
+def test_a_command_s_stderr_holds_no_library_warning_outside_pytest(tmp_path: Path) -> None:
+    """The command in a process of its own, where no handler is configured (pytest configures its own):
+    a library warning would go to Python's last-resort handler, which prints it to stderr unredacted.
+    The warnings are on stdout, in the report, and stderr stays empty."""
+    text, _, _ = _two_exports()
+    path = tmp_path / f"{PERSON}.txt"
+    path.write_text(text)
+    env = os.environ | {"JUST_VCF_CACHE_DIR": str(tmp_path / "cache")}
+    done = subprocess.run(
+        [sys.executable, "-c", "from just_vcf.cli import app; app()", "load", str(path), "--json"], capture_output=True, text=True, env=env, cwd=tmp_path
+    )
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout)["warnings"], "the export makes the library warn"
+    assert done.stderr == ""
 
 
 PLANTED = {

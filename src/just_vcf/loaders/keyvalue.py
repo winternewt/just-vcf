@@ -29,6 +29,7 @@ from just_vcf.loaders.text import (
     genotype_phase,
     past_alts,
     past_gt,
+    tab_fields,
 )
 from just_vcf.schema import CALLS, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
 
@@ -82,13 +83,8 @@ def dropped_fields(head: list[bytes]) -> list[str]:
 
 def scan(path: Path) -> pl.LazyFrame:
     """The twelve fixed fields of every row, as text with each `KEY=` prefix still on; a row with fewer
-    fields has `""` for each it lacks, and the annotation tail is not read.
-
-    Each line is split here, not by `scan_csv`: the rows' widths differ (the tail is any length), and
-    polars 2 refuses a headerless scan whose first row is wider or narrower than the names given, where
-    1.x cut every row to them (`extra_columns="ignore"` exists only in 2.x)."""
-    fields = pl.col("line").str.splitn("\t", len(_FIXED) + 1).struct.rename_fields([*_FIXED, "_tail"])
-    return pl.scan_lines(path, name="line").select(fields.struct.field(name).fill_null("") for name in _FIXED)
+    fields has `""` for each it lacks, and the annotation tail (any length) is not read."""
+    return tab_fields(path, _FIXED)
 
 
 def malformed(rows: pl.LazyFrame) -> pl.Expr:

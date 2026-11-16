@@ -302,6 +302,20 @@ def test_shuffled_loci_give_the_same_rows(tmp_path: Path) -> None:
     assert a.blocks.drop("facet_id").collect().equals(b.blocks.drop("facet_id").collect())
 
 
+def test_a_first_row_wider_than_the_columns_reads_as_the_rest(tmp_path: Path) -> None:
+    """A field past the header's columns on the first data row is not read, as on any other row. polars
+    2 refuses a headerless scan whose first row is wider than its names (polars 1.44 cut it), so the
+    scan splits each line itself."""
+    text = var_text(LOCI)
+    head, body = text.split(">", 1)
+    column_line, first, *rows = body.splitlines()
+    wider = head + ">" + column_line + "\n" + "\n".join([first + "\textra", *rows]) + "\n"
+    a = load(write(tmp_path, text, "a.tsv.bz2"))
+    b = load(write(tmp_path, wider, "b.tsv.bz2"))
+    assert a.calls.drop("facet_id").collect().equals(b.calls.drop("facet_id").collect())
+    assert a.blocks.drop("facet_id").collect().equals(b.blocks.drop("facet_id").collect())
+
+
 def test_master_var_gives_the_same_sites_blocks_and_allele_sets(tmp_path: Path, var) -> None:
     _, _, var_calls, var_blocks = var
     path = write(tmp_path, master_var_text(LOCI), "masterVarBeta-GS000000001-ASM.tsv.bz2")

@@ -1,6 +1,9 @@
 """Reading helpers shared by the text loaders: payload lines, genotype letters, and genotype text of
 allele indices (the key=value table, Nirvana JSON)."""
 
+from collections.abc import Sequence
+from pathlib import Path
+
 import polars as pl
 
 from just_vcf.schema import CALLS, canonical_chrom_expr
@@ -29,6 +32,18 @@ def lines(data: bytes) -> pl.DataFrame:
         schema={"line": pl.String},
         encoding="utf8-lossy",
     ).with_columns(pl.col("line").fill_null(""))
+
+
+def tab_fields(path: Path, names: Sequence[str]) -> pl.LazyFrame:
+    """A headerless tab-separated file's first `len(names)` fields of every line, as text named `names`:
+    a line with fewer fields has `""` for each it lacks, and the fields past them are not read. Quotes are
+    text like any other character.
+
+    Each line is split here, not by `scan_csv`: polars 2 refuses a headerless scan whose first row is
+    wider or narrower than the names given (`extra_columns="ignore"` exists only in polars 2), where 1.x
+    cut every row to them and refused only a narrower first row. The two read every other row alike."""
+    fields = pl.col("_line").str.splitn("\t", len(names) + 1).struct.rename_fields([*names, "_past"])
+    return pl.scan_lines(path, name="_line").select(fields.struct.field(name).fill_null("") for name in names)
 
 
 def one_field_alleles(column: str, no_call: tuple[str, ...], no_call_width: int | None = None) -> pl.Expr:

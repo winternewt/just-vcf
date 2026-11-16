@@ -22,6 +22,10 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
   while polars 2.x deprecates passing it. The lock dropped `polars-config-meta`, which polars-bio 0.37
   no longer requires. Minor: a consumer pinned to polars-bio 0.36 has to move.
 
+- The Complete Genomics `var`/`masterVar` loader reads a first data row wider than the header's
+  columns as it reads any other row, by `loaders.text.tab_fields`, the line split the key=value loader
+  now uses (RM288): polars 2 refused that file outright, where polars 1.44 cut the row. Patch.
+
 - polars-bio 0.37 no longer configures the root logger on import (P16, checked on 0.37.0). The
   `just-vcf` command still turns logging off while it runs: with no handler configured, Python's
   last-resort handler prints each library warning to stderr unredacted, so P16 was only one way out. A

@@ -362,6 +362,17 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
   as "in-memory engine fallback" holds its input (`tests/test_spill_streams.py` reads it so). Still
   so on polars 2.1.0 (checked 2026-11-16: `replace` and `replace_strict` are a fallback
   `columnar-function` node, `map_batches` is not).
+- **Polars `scan_csv` / `read_csv` without a header, given `new_columns`:** polars 2 refuses a file whose
+  first row is wider or narrower than the names (`SchemaError: provided new_columns does not match`),
+  where 1.x cut every row to them and refused only a narrower first row; `extra_columns="ignore"`
+  exists only in 2.x. A file whose rows differ in width is read with `loaders.text.tab_fields`, which
+  splits each line itself and reads alike on both (met 2026-11-16, every PGP-HMS key=value load).
+- **Polars horizontal `concat` and `strict`:** polars 2 always requires equal heights and deprecates
+  `strict`; polars 1.x pads the shorter frame unless `strict=True` and deprecates leaving it out. No
+  call is silent on both, so `vrs._EQUAL_HEIGHTS` passes it only to 1.x (met 2026-11-16).
+- **Polars 2 `explain` fuses a union of scans into one scan of several files** (`Parquet SCAN [a, b]`,
+  `[a, ... N other sources]` past two), where 1.x drew a `UNION` of one scan per file. Count the files
+  a plan reads, never its `SCAN` nodes (`tests/test_spill_order.py` `scanned_files`; met 2026-11-16).
 - **Heed terminal warnings, deprecations especially.** A deprecation in code you touched is a
   **blocker**: find the current upstream API, fix it, and update this file.
 - **Refactor internals aggressively** — no dead code, no old API kept for nostalgia. The contract —

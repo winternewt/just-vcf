@@ -11,6 +11,17 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- **The floor is polars-bio 0.37.0, and the lock moves to polars 2.1.0** (RM288; from polars-bio 0.36.0
+  and polars 1.44.2). polars-bio 0.37 admits polars `>=1.40,<2.2`, and just-vcf pins no polars of its
+  own, so a consumer still on polars 1.4x installs it unchanged; the suite runs on polars 2.1.0. Two
+  changes the move needed, each kept working on polars 1.44.2: the PGP-HMS key=value loader splits each
+  line itself (`scan_lines`), since polars 2 refuses a headerless `scan_csv` whose first row is wider or
+  narrower than the names given, and a table whose first row is malformed (narrower than the twelve
+  fixed fields), which polars 1.44 refused as well, now loads with that row counted as malformed; VRS
+  minting's horizontal `concat` passes `strict` only to polars 1.x, which deprecates leaving it out,
+  while polars 2.x deprecates passing it. The lock dropped `polars-config-meta`, which polars-bio 0.37
+  no longer requires. Minor: a consumer pinned to polars-bio 0.36 has to move.
+
 - **23andMe v3 and v4 read their I/D codes per probe** (RM281). Against the same people's Complete
   Genomics `var` (13 v4 and 23 v3 people on PGP-HMS, 2026-11-07), these chips' `I` is Illumina's `I`
   on most indel probes and Illumina's `D` on a few dozen (41 on v4, 45 on v3), so the chip-wide gate

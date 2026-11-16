@@ -9,8 +9,10 @@ recorded here once filed. The upstream-liaison seat keeps this ledger, beside
 The mirror: `data/interim/gtars/`, a read-only clone of databio/gtars at the tag `uv.lock` pins
 (`gtars-python-v0.10.0`, `90141b6`), for locating code paths; never edited, never filed into. Refresh
 with `git -C data/interim/gtars fetch --tags` and a checkout of the new `gtars-python-v<version>` tag.
-Nothing watches upstream, for the reasons the polars-bio ledger gives; the seat's start check compares
-`uv.lock`'s gtars version against the pin above.
+The seat's `upstream-index` watcher says a final gtars release on PyPI the day it is out (added
+2026-11-16); the seat's start check still compares `uv.lock`'s gtars version against the pin above.
+Read mark: gtars-python 0.11.2 (read 2026-11-14: G1 still true there); the lock is on 0.10.0, and G2's
+one-base residual is re-checked when it moves.
 
 ## Verdicts at a glance
 

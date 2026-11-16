@@ -6,6 +6,16 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM288 — polars-bio 0.37 and polars 2.x
+**State:** building (2026-11-16, an Opus builder on branch `rm288-polars2`) · **Owner:** lead
+
+Severity: medium, a dependency move. polars-bio 0.37.0 (2026-11-07) allows polars `>=1.40,<2.2`, which removes the
+reason the lock stayed on polars 1.44.2, and fixes P16 (importing it no longer sets up the root logger). The lock
+moves to polars-bio 0.37 and the polars 2.x it resolves. The floor becomes `polars-bio>=0.37.0`, with no direct polars
+pin, so a consumer still on polars 1.4x (just-prs) installs it unchanged. CLAUDE.md §5's polars 1.44 workarounds stay
+in the code while polars 1.x is admitted; each note says whether polars 2.x still shows the quirk, from a synthetic
+repro. P16's root-logger workaround goes. Done when the full suite passes on the new lock.
+
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
 

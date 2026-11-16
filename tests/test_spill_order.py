@@ -8,6 +8,7 @@ gives must not change, row for row, only its plan.
 """
 
 import random
+import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -149,17 +150,29 @@ def test_the_decoy_vcf_has_ties_and_blocks_on_every_kind_of_contig(staged: list[
     assert len(set(calls["chrom"]) | set(blocks["chrom"])) > 50
 
 
+def scanned_files(plan: str) -> int:
+    """The files a plan's scans read. polars 1.x draws a union of one scan per file, polars 2.x fuses
+    the union into one scan of several files; both list a scan's files as `[first, ... N other
+    sources]` once there are more than two."""
+    total = 0
+    for listed in re.findall(r"SCAN \[([^\]]*)\]", plan):
+        more = re.search(r"\.\.\. (\d+) other sources?$", listed)
+        total += 1 + int(more.group(1)) if more else listed.count(",") + 1
+    return total
+
+
 @pytest.mark.parametrize("name", SOURCES)
 def test_a_loaded_facet_reads_its_spill_in_one_scan_with_no_sort(name: str, tmp_path: Path) -> None:
     """The plan of each frame is a scan of the part files: no sort node, one scan whatever the number
-    of contigs (68 in the VCF). The decoys with a row or two share a part with the rest (F24)."""
+    of contigs (68 in the VCF), each facet one part file. The decoys with a row or two share a part with
+    the rest (F24)."""
     loaded = load(SOURCES[name](tmp_path))
     facets = loaded.facets.collect().height
     # A key=value table holds no blocks: its `blocks` is an empty frame, not a scan of the spill.
     for frame, scans in ((loaded.calls, facets), (loaded.blocks, 0 if name == "keyvalue" else facets)):
         plan = frame.explain()
         assert "SORT" not in plan
-        assert plan.count("SCAN") == scans
+        assert scanned_files(plan) == scans
     for entry in [cache.cache_dir() / f"frames/{facet_id}-{SCHEMA_VERSION}" for facet_id in loaded.facets.collect()["facet_id"]]:
         (generation,) = generations(entry)
         assert len(list(generation.glob("calls-*.parquet"))) == 1

@@ -74,6 +74,7 @@ from typing import BinaryIO
 
 import polars as pl
 
+from just_vcf.loaders.text import tab_fields
 from just_vcf.schema import BLOCKS, CALLS, BlockKind, EvidenceBasis, PhaseSetKind, RefCheck, canonical_chrom_expr, conform
 
 logger = logging.getLogger(__name__)
@@ -184,17 +185,7 @@ def copy_body(handle: BinaryIO, target: Path) -> Header:
 
 def scan(path: Path, header: Header) -> pl.LazyFrame:
     """The data rows as text, columns named as in format 2.5 (`varQuality` read as `varFilter`)."""
-    names = [_FILTER_ALIASES.get(name, name) for name in header.columns]
-    return pl.scan_csv(
-        path,
-        separator="\t",
-        has_header=False,
-        new_columns=names,
-        schema={name: pl.String for name in names},
-        quote_char=None,
-        truncate_ragged_lines=True,
-        empty_string_is_null=False,
-    )
+    return tab_fields(path, [_FILTER_ALIASES.get(name, name) for name in header.columns])
 
 
 def dropped_fields(format_id: str, header: Header) -> list[str]:

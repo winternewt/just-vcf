@@ -43,6 +43,11 @@ from just_vcf.schema import CALLS, SCHEMA_VERSION, RefCheck, empty
 
 logger = logging.getLogger(__name__)
 
+_EQUAL_HEIGHTS: dict[str, bool] = {"strict": True} if int(pl.__version__.split(".", 1)[0]) < 2 else {}
+"""What makes a horizontal `concat` refuse frames of unequal heights on the installed polars: polars 1.x
+pads the shorter frame unless `strict=True` (and warns that its default will change), polars 2.x
+always refuses and deprecates `strict`. Drop it, and pass nothing, once the floor is polars 2."""
+
 MINT_VERSION = 4
 """Part of the spill key: bumped whenever the rule changes what `mint_vrs_ids` writes (4: a row whose
 source REF states no base, `ref_check = unstated`, has its REF slot minted and a sequence ALT withheld
@@ -259,7 +264,7 @@ def mint_vrs_ids(loaded: Loaded, reference: "ReferenceStore | Path | str | None"
     for warning in warnings:
         logger.warning("%s: %s", facet["facet_id"], warning)
     calls = (
-        pl.concat([calls_spill, pl.scan_parquet(parts).drop("_row")], how="horizontal", strict=True).select(CALLS.names())
+        pl.concat([calls_spill, pl.scan_parquet(parts).drop("_row")], how="horizontal", **_EQUAL_HEIGHTS).select(CALLS.names())
         if parts
         else empty(CALLS)
     )

@@ -29,6 +29,7 @@ from just_vcf.loaders.text import (
     genotype_phase,
     past_alts,
     past_gt,
+    tab_fields,
 )
 from just_vcf.schema import CALLS, EvidenceBasis, RefCheck, canonical_chrom_expr, conform
 
@@ -81,17 +82,9 @@ def dropped_fields(head: list[bytes]) -> list[str]:
 
 
 def scan(path: Path) -> pl.LazyFrame:
-    """The twelve fixed fields of every row, as text with each `KEY=` prefix still on."""
-    return pl.scan_csv(
-        path,
-        separator="\t",
-        has_header=False,
-        new_columns=list(_FIXED),
-        schema={name: pl.String for name in _FIXED},
-        quote_char=None,
-        truncate_ragged_lines=True,
-        empty_string_is_null=False,
-    )
+    """The twelve fixed fields of every row, as text with each `KEY=` prefix still on; a row with fewer
+    fields has `""` for each it lacks, and the annotation tail (any length) is not read."""
+    return tab_fields(path, _FIXED)
 
 
 def malformed(rows: pl.LazyFrame) -> pl.Expr:

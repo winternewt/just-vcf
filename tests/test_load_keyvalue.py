@@ -103,6 +103,22 @@ def test_one_facet_per_caller(tmp_path: Path) -> None:
     assert_gt_consistent(calls)
 
 
+@pytest.mark.parametrize("first", ["tail", "no_tail", "malformed"])
+def test_the_first_row_s_width_reads_no_other(first: str, tmp_path: Path) -> None:
+    """The rows' widths differ, and whichever comes first, wider than the twelve fixed fields (a tail),
+    exactly as wide or narrower (a malformed row), every caller reads the same rows. polars 2 refuses a
+    headerless scan whose first row is not as wide as the names given, and polars 1.44 refused a first
+    row narrower than them; the scan splits each line itself."""
+    lines = {"tail": ROWS[0], "no_tail": ROWS[5], "malformed": MALFORMED}
+    assert len(ROWS[0].split("\t")) > 12 and len(ROWS[5].split("\t")) == 12 and len(MALFORMED.split("\t")) < 12
+    rest = [line for line in [*ROWS, MALFORMED] if line != lines[first]]
+    loaded, _, _, rows, _, _ = frames(write(tmp_path, [lines[first], *rest]))
+    for prefix, caller in (("FB", "freeBayes"), ("VS", "VarScan2")):
+        got = rows[caller].select("chrom", "pos", "source_ref", "alts", "gt_alleles", "source_gt", "dp").to_dicts()
+        assert got == expected(prefix), caller
+    assert any(w.startswith("1 row(s) whose fields do not carry the twelve fixed keys") for w in loaded.warnings)
+
+
 def _classes(prefix: str) -> list[dict]:
     """The ALT alleles of each class a caller's rows carry, by the test's own reading of REF and ALT:
     an ALT of another length than its REF is an indel, one as long an SNV (one base) or an MNV."""

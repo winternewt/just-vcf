@@ -2,8 +2,9 @@
 
 Taken with `/seats:seat upstream-liaison`. The seats kit's base (loaded at every session start)
 holds what every seat knows: messages, the desk, unattended runs, who speaks. `CLAUDE.md` holds the
-house rules. This file adds the seat; the kit has no liaison role yet, and this file is its first
-instance.
+house rules. The seat holds the kit's liaison role (`classes/liaison/LIAISON.md` at the pinned tag,
+`roles = "liaison"` in `.blueprints.toml` since 2026-11-16), whose text this file was the first
+instance of; this file adds the seat's own facts on top of it.
 
 Rewritten onto the kit's base by the kit's seat-builder (2026-10-18) from the pre-kit priming and
 five sessions of this repository read whole, one of them a sitting of this seat (2026-09-30 and
@@ -41,8 +42,9 @@ ledger, `docs/POLARS_BIO_PENDING_FIXES.md` today; a second upstream gets its own
 
 ## How work reaches it
 
-The person; a symptom from the lead or triage. Nothing watches upstream for it: an upstream release
-and a filed issue's reply are found by the checks at each start (below). A pin move in `uv.lock`
+The person; a symptom from the lead or triage. A final release of polars-bio or polars on PyPI is a
+line from the watcher `upstream-index` the day it is out (the kit's `drivers/pypi/watch-pypi.py`, the
+role's duty upstream-index); a filed issue's reply is found by the checks at each start (below). A pin move in `uv.lock`
 re-checks every open entry against the new release.
 
 ## Starting

@@ -36,11 +36,20 @@ pool = "~/.config/agent-seat-blueprints/zulip/pool"
 # Owns what is known about polars-bio and the layers under it (docs/seats/UPSTREAM_LIAISON.md). Triage
 # and the lead hand it an upstream symptom; a desk's secretary relays the person's go for a filing.
 wake_from = "just-vcf/triage just-vcf/lead just-vcf/tooling */secretary"
+# The kit's liaison role (classes/liaison/LIAISON.md), whose text this seat's priming was its first
+# instance of; it brings the duty upstream-index (the seat-builder's call, desk #342, 2026-11-16).
+roles = "liaison"
 
 # The desk's answers to this seat's questions, each said once (D133); the desk files this repo's
 # questions under repo:just-vcf.
 [seat.upstream-liaison.watch.desk]
 cmd = "sh kit:bin/py.sh kit:classes/desk/watch-answers.py just-vcf upstream-liaison"
+
+# The key upstreams' final releases, heard from the package index the day they are out (the kit's
+# duty upstream-index, L136, L143): polars-bio and the polars it builds on. --upstream runs none of
+# this repo's publish hooks; --final leaves pre-releases and dev builds unsaid.
+[seat.upstream-liaison.watch.upstream-index]
+cmd = "sh kit:bin/py.sh kit:drivers/pypi/watch-pypi.py --upstream --final polars-bio polars"
 
 [seat.upstream-liaison.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"

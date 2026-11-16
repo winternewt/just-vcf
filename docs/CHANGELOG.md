@@ -11,6 +11,11 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- The upstream-liaison seat now holds the kit's liaison role (`roles = "liaison"`), and with it the
+  duty upstream-index: a final release of polars-bio or polars on PyPI reaches it as a watcher line
+  the day it is out (`[seat.upstream-liaison.watch.upstream-index]`, the kit's
+  `drivers/pypi/watch-pypi.py --upstream --final`), instead of at its next start. The pin is at v0.1.223.
+
 - **23andMe v3 and v4 read their I/D codes per probe** (RM281). Against the same people's Complete
   Genomics `var` (13 v4 and 23 v3 people on PGP-HMS, 2026-11-07), these chips' `I` is Illumina's `I`
   on most indel probes and Illumina's `D` on a few dozen (41 on v4, 45 on v3), so the chip-wide gate

@@ -5,12 +5,31 @@ place here. polars-bio has no inbox; filing goes to its GitHub issue tracker, an
 is recorded here once filed. The mirror under `data/interim/` (below) is a read-only clone at the
 pinned revisions, for locating code paths; it is never edited and never filed into.
 
-No watcher follows upstream (decided 2026-10-18, at the seat's first seating). A polars-bio release
-changes nothing we run until `uv.lock` moves, and the seat's start check compares the lock against the
-pin below, so a pin move still triggers the re-check pass. The kit's `watch-remote.sh` would also
-report every polars-bio trunk commit, and `watch-issues.py` every updated issue in the repo; both are
-noise while nothing here is filed. Revisit at the first filing: a `watch-issues.py` filtered to the
-`Filed:` numbers would then replace the reply check at each start.
+A watcher now follows the releases (2026-11-16, 6f06b56): the seat holds the kit's liaison role, and its
+`upstream-index` watcher says a final release of polars-bio or polars on PyPI the day it is out. Each
+release is read against this ledger then, without waiting for `uv.lock` to move; the start check still
+compares the lock against the pin below, and a pin move still triggers the re-check pass. Trunk commits
+and issue updates are still not watched: they are noise while nothing here is filed. Revisit at the
+first filing: a `watch-issues.py` filtered to the `Filed:` numbers would then replace the reply check at
+each start.
+
+Read marks, the last release read against this ledger:
+
+- **polars-bio: 0.37.0** (read 2026-11-14, the desk sweep: P16 fixed there, P15, P17–P19, P21 and P22
+  still reproduce). The lock is on 0.36.0; it moves under RM288 (the lead's, building 2026-11-16).
+- **polars: 1.44.2**, the lock's. 2.0.0 to 2.1.0 (newest 2026-10-25) are unread here; they are read once
+  RM288 lands, whose builder re-checks each of CLAUDE.md §5's polars 1.44 quirks on 2.x, and P23 is
+  re-run on the new lock then.
+
+Fellow liaisons (the role's outbound step: poll them before a filing): none on this machine stands on
+polars-bio (checked 2026-11-16). just-prs and just-dna-lite lock it and run no seats; the seated
+repos with a liaison (just-dna-compiler, just-dna-registry, just-module-creator, the kit) do not
+lock it. So the five drafts on desk #161 go up alone.
+
+A report filed upstream opens with a line saying an AI agent wrote it and the account holder reviewed
+it before posting (the kit's liaison role, from its sysadmin role's "AI disclaimer in top, not
+bottom"). The drafts on desk #161 predate the rule; the line is added before they are posted, and the
+desk question says so (2026-11-16).
 
 polars-bio reads VCF through two layers it does not own in-repo: `datafusion-bio-formats` (the table
 provider, same org) and a biodatageeks fork of `noodles` (the parser). An entry names the layer the

@@ -3,6 +3,22 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM288 — polars-bio 0.37 and polars 2.x
+Severity: medium · Status: shipped 2026-11-16 (merge 0adf89c; full suite 2706 passed on polars 2.1.0, 2705 on 1.44.2)
+
+polars-bio 0.37.0 (2026-11-07) allows polars `>=1.40,<2.2`, which removed the reason the lock stayed on polars 1.44.2.
+Built with no question put to the person (CLAUDE.md §10, 2026-11-16: a choice with only pros is not a decision).
+
+**Built:** the floor is `polars-bio>=0.37.0` with no direct polars pin, so a consumer on polars 1.4x co-installs; the
+lock is polars-bio 0.37.0 and polars 2.1.0. The key=value and CGI `var` loaders split lines with
+`loaders.text.tab_fields` (polars 2 refuses a headerless ragged `scan_csv`); VRS minting's horizontal `concat` passes
+`strict` only to polars 1.x. CLAUDE.md §5 says, per polars 1.44 quirk, what 2.1.0 does (three fixed, two still so, one
+default changed; the workarounds stay while 1.x is admitted) and names three polars 2 changes met. P16 is fixed
+upstream, but the CLI keeps logging off for Python's last-resort handler, pinned by a subprocess test. **Left:** drop
+the 1.x workarounds and `vrs._EQUAL_HEIGHTS` once the floor is polars 2; `coverage.py`'s `read_csv` with `new_columns`
+would refuse a BED of mixed row widths on polars 2 (left as is); a `ResourceWarning` from `loaders/vcf.py` (an
+unclosed file, on both versions).
+
 ## RM276 — A durable per-person store
 Severity: medium · Status: shipped 2026-11-05 (the lead kept a migrated VCF facet's null `method_steps` and `gl_source`, told apart by the manifest's record and `loaded()`'s warning, docs/SCHEMA.md "Store migration"; was: in progress, decided by the person in the Part 2 interview, 2026-10-23; `Store` and `write_vcf_zarr` shipped 2026-10-23, merge 6830fb7; `call_HQ` in the Zarr export 2026-10-24, merge fbcb3a9; `variant_CIPOS`, `variant_CIEND` and `variant_CN` in the Zarr export 2026-10-26, an interval holding -1 or -2, the spec's integer sentinels, written missing and counted; 2026-10-26, `migrate_store`: a store of an older schema version rewritten to this one by a step per bump since 0.0.14 (`just_vcf.store_migration`), written beside, checked and swapped, what it cannot carry named as filled unknown, docs/SCHEMA.md "Store migration", merge 401cbf0. Nothing buildable left. For the lead: whether `method_steps` and `gl_source` null on a migrated VCF facet (not read) should get its own value instead of sharing null with "not a VCF" / "no likelihoods", which only the manifest and `loaded()`'s warnings tell apart now) · Owner: lead
 

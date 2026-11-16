@@ -14,7 +14,7 @@ each reset.
 0. **Asked the person 2026-11-16, default to plan:** whether to move to polars-bio 0.37.0 and polars 2.x
    (the liaison's 640356975: polars-bio's new range is polars <2.2; P16, the root-logger workaround, can go).
    On silence: filed as an unattended plan item, built on a branch by one builder, merged if the full suite passes.
-0. **One or two builders at a time** (desk #103's default, again from 2026-11-01; the person's "Turn of
+0. **One or two builders at a time** (desk #103's default, withdrawn as applied 2026-11-16; again from 2026-11-01; the person's "Turn of
    parallelism until Oct 31" of 2026-10-26 has lapsed).
 0. **Merge audits run on two outside model families** (the person, 2026-10-26: "For audit runs, switch
    pasing to using grok4.7 via cursor + sol6.1 via codex subagents"), from audit 13 on (audit 12 was already

@@ -603,7 +603,9 @@ same applies when the user corrects a preference: it goes below, in their words,
   a real drawback, which the question names. A one-sided choice is decided by the seat: built, or filed as an
   item with its state (`unattended`, or `urgent` when quick), and reported as done, never asked. "Should I do
   X?" with nothing against X is not a question. A 5-minute chore is likewise just done (same day: "If it takes
-  5 min why do you even ask?").
+  5 min why do you even ask?"). Doubt about *when* is not a question either: "If your doubts ar on the priority
+  of the item, then it's likely not urgent and to be done nightly, when the time permits". Such an item is
+  `unattended`, built while the person is away.
 
 ## 11. Learned workspace facts
 

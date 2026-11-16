@@ -42,7 +42,7 @@ ledger, `docs/POLARS_BIO_PENDING_FIXES.md` today; a second upstream gets its own
 
 ## How work reaches it
 
-The person; a symptom from the lead or triage. A final release of polars-bio or polars on PyPI is a
+The person; a symptom from the lead or triage. A final release of polars-bio, polars or gtars on PyPI is a
 line from the watcher `upstream-index` the day it is out (the kit's `drivers/pypi/watch-pypi.py`, the
 role's duty upstream-index); a filed issue's reply is found by the checks at each start (below). A pin move in `uv.lock`
 re-checks every open entry against the new release.

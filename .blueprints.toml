@@ -46,10 +46,10 @@ roles = "liaison"
 cmd = "sh kit:bin/py.sh kit:classes/desk/watch-answers.py just-vcf upstream-liaison"
 
 # The key upstreams' final releases, heard from the package index the day they are out (the kit's
-# duty upstream-index, L136, L143): polars-bio and the polars it builds on. --upstream runs none of
+# duty upstream-index, L136, L143): polars-bio, the polars it builds on, and gtars (G2 waits on its 0.11). --upstream runs none of
 # this repo's publish hooks; --final leaves pre-releases and dev builds unsaid.
 [seat.upstream-liaison.watch.upstream-index]
-cmd = "sh kit:bin/py.sh kit:drivers/pypi/watch-pypi.py --upstream --final polars-bio polars"
+cmd = "sh kit:bin/py.sh kit:drivers/pypi/watch-pypi.py --upstream --final polars-bio polars gtars"
 
 [seat.upstream-liaison.zulip]
 pool = "~/.config/agent-seat-blueprints/zulip/pool"

@@ -12,7 +12,7 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
 - The upstream-liaison seat now holds the kit's liaison role (`roles = "liaison"`), and with it the
-  duty upstream-index: a final release of polars-bio or polars on PyPI reaches it as a watcher line
+  duty upstream-index: a final release of polars-bio, polars or gtars on PyPI reaches it as a watcher line
   the day it is out (`[seat.upstream-liaison.watch.upstream-index]`, the kit's
   `drivers/pypi/watch-pypi.py --upstream --final`), instead of at its next start. The pin is at v0.1.223.
 

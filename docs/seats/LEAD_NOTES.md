@@ -65,7 +65,7 @@ each reset.
    freeBayes against DRAGEN, hu6ABACE CGI against DRAGEN's SNV and indel files, hu250634 CGI against an Omni2.5
    array VCF) are planned in `data/interim/rm279/plan_pgp_methods.json` but not built, since each adds a method on
    one genome rather than a pooled row (about 50 min to run). Plans: `data/interim/rm279/plan_{pgp_timing,cgi_drift}.json`.
-   Nothing unattended and unblocked is left on the plan; audit 17 stands at 1 of 6 merges.
+   Nothing unattended and unblocked is left on the plan; audit 17 stood at 1 of 6 merges. **2026-11-16: RM288 (polars 2) merged as 0adf89c, merge 2 of 6 toward audit 17;** suite 2706 on polars 2.1.0, the opt-in key=value tests 13 passed on the real PGP-HMS tables; worktree removed, branch deleted.
 0. **2026-11-07, away: RM281's per-probe I/D orientation merged (c71f461) and its table learned (fae179f)**;
    merge 1 of 6 toward audit 17. `scripts/id_orientation.py` over the 36 pairs: v3 128 probes `same` and 45 `flipped`,
    v4 142 and 40 (checked: the scratch rsid sets under the table's rule give exactly these; v4's 41st flip and v3's

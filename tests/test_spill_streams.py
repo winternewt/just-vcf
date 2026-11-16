@@ -34,7 +34,9 @@ def fallback_nodes(frame: pl.LazyFrame) -> list[str]:
     """The kinds of the nodes in `frame`'s streaming plan that fall back to the in-memory engine."""
     graph = frame.show_graph(engine="streaming", plan_stage="physical", raw_output=True, show=False)
     assert "in-memory engine fallback" in graph, "polars' graph no longer names its fallback colour: read the legend again"
-    labels = re.findall(r'label="([^"]*)",style=filled,fillcolor=' + re.escape(FALLBACK_COLOUR), graph)
+    # A label can hold escaped quotes (`col(\"pos\")`), so it is read up to its first unescaped quote.
+    labels = re.findall(r'label="((?:[^"\\]|\\.)*)",style=filled,fillcolor=' + re.escape(FALLBACK_COLOUR), graph)
+    assert len(labels) == graph.count("fillcolor=" + FALLBACK_COLOUR), "a fallback node's label was not read: read polars' graph again"
     return [label.split("\\n", 1)[0] for label in labels]
 
 

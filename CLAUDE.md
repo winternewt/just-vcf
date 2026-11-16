@@ -320,17 +320,22 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
 - **Derive a guard from the model's rule, not beside it.** Test the guard against the model case by
   case rather than asserting a message.
 - **Polars `explode` on a list column that can be empty:** pass `empty_as_null=False` where an empty list
-  must stay empty (the bare call is deprecated and turns `[]` into a null row; met 2026-10-22).
+  must stay empty (the bare call is deprecated and turns `[]` into a null row; met 2026-10-22). polars
+  2.x made `False` the default and dropped the warning (checked on 2.1.0, 2026-11-16); keep passing it
+  while polars 1.x is admitted.
 - **Polars `list.slice` at a column offset inside `when/then`:** on a frame of one row whose predicate is
   false, polars 1.44 takes the offset for a scalar after the mask nulled it and raises "could not extract
   number from any-value of dtype: 'Null'". Read fixed-width pieces with `list.get` and `concat_list`
   instead (`list.get`, `list.head` and `list.gather` at a column argument survive the case; met
-  2026-10-26, a contig's one `X,<*>` site in `normalize`).
+  2026-10-26, a contig's one `X,<*>` site in `normalize`). Fixed in polars 2.x (the one-row repro
+  passes on 2.1.0, checked 2026-11-16); the workaround stays while 1.x is admitted.
 - **Polars `explode` beside row-length aggregates in one `select`:** an exploded column's expression
   that is reused (a struct from `str.extract_groups` read field by field, or a `filter` on it) shares a
   subexpression polars 1.44's common-subexpression pass evaluates at the rows' length, and raises
   `ShapeError: can't broadcast Series of length N to length M` (met 2026-10-26, `writing._mate_chroms`).
-  Run such a read in a `select` of its own, or inside each row's list with `list.eval`.
+  Run such a read in a `select` of its own, or inside each row's list with `list.eval`. Fixed in
+  polars 2.x: `breakend_parts` over the exploded ALTs beside a `sum` raises on 1.44.2 and passes on
+  2.1.0 (checked 2026-11-16); the workaround stays while 1.x is admitted.
 - **Polars `list.gather` indexed by a column that can be null:** guard it,
   `pl.when(pl.col("gt").is_not_null()).then(alleles.list.gather(pl.col("gt"), null_on_oob=True))`. Over
   index lists that are all null, and over zero rows, polars 1.44 makes a list of a Null inner type
@@ -338,18 +343,25 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
   the plan's schema says, and a parquet sink fails with `InvalidOperationError`; zero rows, and an
   eager frame (which carries `List(Null)` in its own schema), still sink. A `list.contains` on the
   result fails in every case, eager or lazy, zero rows or all null, and in a filter predicate even
-  where only some index lists are null. The guard gives the typed list in all of them.
+  where only some index lists are null. The guard gives the typed list in all of them. Fixed in
+  polars 2.x: on 2.1.0 the gather is `List(String)` over all-null and zero rows, the lazy sink writes
+  and `list.contains` answers (checked 2026-11-16); the guard stays while 1.x is admitted.
 - **Polars `join_where` with an equality beside inequalities is a filtered cross join** in polars 1.44:
   the plan is an inner join on the equality with the inequalities as a filter after it, so every pair
   of rows sharing the key is held at once (26 GB for 20,000 breakend records on 22 contigs, met
   2026-10-26). Split by the equality key and range-join each part with the inequalities alone, which
   polars runs as an IEJoin: `intervals.contig_join`. Check a new `join_where` with `.lazy().explain()`.
+  Still so on polars 2.1.0 (checked 2026-11-16: 10,000 rows a side on one key, 6.2 GB against 57 MB
+  for the inequalities alone), though `explain` now shows it as an `INNER JOIN` with a `FUSED
+  PREDICATE` and no `FILTER` node: anything but `IEJOIN` is the held cross product.
 - **Polars `replace` / `replace_strict` with a mapping in a plan that should stream:** polars 1.44 runs
   it as a columnar function, an in-memory fallback, and holds every other column of the plan beside it
   until it has the whole column (`load`'s sink of a 9.65M-call gVCF held 8 GB for 2.6 GB of rows, F26).
   Map one batch at a time (`map_batches(..., is_elementwise=True)`, as `schema.canonical_chrom_expr`
   does), and check a plan with `show_graph(engine="streaming", plan_stage="physical")`: a node filled
-  as "in-memory engine fallback" holds its input (`tests/test_spill_streams.py` reads it so).
+  as "in-memory engine fallback" holds its input (`tests/test_spill_streams.py` reads it so). Still
+  so on polars 2.1.0 (checked 2026-11-16: `replace` and `replace_strict` are a fallback
+  `columnar-function` node, `map_batches` is not).
 - **Heed terminal warnings, deprecations especially.** A deprecation in code you touched is a
   **blocker**: find the current upstream API, fix it, and update this file.
 - **Refactor internals aggressively** — no dead code, no old API kept for nostalgia. The contract —

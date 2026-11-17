@@ -6,6 +6,21 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM290 — An unclosed file in the VCF loader
+**State:** building (2026-11-17, the same builder, branch `rm289-290`) · **Owner:** lead
+
+Severity: low. Found during RM288: the suite shows a `ResourceWarning` (an unclosed file) raised from
+`loaders/vcf.py` around line 496, on polars 1.44 and 2.1 alike. The handle is closed deterministically, with a test
+that fails under `-W error::ResourceWarning` before the fix.
+
+## RM289 — Coverage BED rows of mixed width on polars 2
+**State:** building (2026-11-17, an Opus builder on branch `rm289-290`) · **Owner:** lead
+
+Severity: low. Found during RM288: `coverage.py` reads a BED with `read_csv(..., new_columns=names)`, the names chosen
+from the measured width. polars 2 refuses a headerless file whose first row is wider or narrower than the names, where
+1.x cut every row to them, so a BED whose rows differ in width now fails on polars 2. The read follows the loaders onto
+`loaders.text.tab_fields` (or an equivalent that reads alike on polars 1.x and 2.x), with a test of a mixed-width BED.
+
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
 

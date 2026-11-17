@@ -16,7 +16,8 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
   and 2.1 alike, since the read took the file's width from that one-field line. It now reads the first
   three fields by name, with no quote character (a track line's `description="a b"` is text), and a
   line is a track or browser line only when the word stands alone, so a contig named `track_x` is
-  read. GIAB stratifications read as before. Patch.
+  read. A BED of comments alone reads as no intervals on both versions, where both raised polars'
+  `NoDataError`. GIAB stratifications read as before. Patch.
 
 - `read_coverage` counts the rows it cut or padded (RM291). A coverage facet's `warnings` gain one line
   per reason: the rows carrying more fields than the format's, whose fields past them were not read; the

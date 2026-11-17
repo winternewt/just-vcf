@@ -136,18 +136,23 @@ def read_bed(path: Path | str) -> pl.LazyFrame:
 
     The first three fields are read by name (`schema=`), never by a width taken from the first line: a
     `track` line is one field, and a frame of that width has no second column (RM292). No quote
-    character, as BED has none: a track line's `description="a b"` is text."""
-    # read_csv, not scan_csv: it decompresses a gzipped BED, as the GIAB releases are.
-    frame = pl.read_csv(
-        Path(path),
-        separator="\t",
-        has_header=False,
-        comment_prefix="#",
-        quote_char=None,
-        schema={"chrom": pl.String, "start": pl.String, "end": pl.String},
-        truncate_ragged_lines=True,
-        **_RAGGED,
-    )
+    character, as BED has none: a track line's `description="a b"` is text. A BED of comments alone
+    has no intervals, on polars 1.x (which raises `NoDataError` for it) as on 2.x."""
+    schema = {"chrom": pl.String, "start": pl.String, "end": pl.String}
+    try:
+        # read_csv, not scan_csv: it decompresses a gzipped BED, as the GIAB releases are.
+        frame = pl.read_csv(
+            Path(path),
+            separator="\t",
+            has_header=False,
+            comment_prefix="#",
+            quote_char=None,
+            schema=schema,
+            truncate_ragged_lines=True,
+            **_RAGGED,
+        )
+    except pl.exceptions.NoDataError:
+        frame = pl.DataFrame(schema=schema)
     return (
         frame.lazy()
         .filter(~pl.col("chrom").str.contains(r"^(?:track|browser)(?:\s|$)"))

@@ -339,6 +339,15 @@ def test_read_bed_skips_track_browser_and_comment_lines_wherever_they_are(tmp_pa
     assert read.rows() == [(line.split("\t")[0], int(line.split("\t")[1]) + 1, int(line.split("\t")[2])) for line in rows]
 
 
+@pytest.mark.parametrize("lines", [["# a comment"], ['track name="none"', "browser hide all"], ["#chrom\tstart\tend"]])
+def test_read_bed_of_no_interval_reads_empty(tmp_path: Path, lines: list[str]) -> None:
+    """A BED of comments, or of track and browser lines, alone has no intervals, on polars 1.x as on 2.x."""
+    bed = tmp_path / "none.bed"
+    bed.write_text("".join(f"{line}\n" for line in lines))
+    read = read_bed(bed).collect()
+    assert read.height == 0 and read.schema == pl.Schema({"chrom": pl.String, "pos": pl.Int64, "end_pos": pl.Int64})
+
+
 def test_each_side_s_confidence_bands_its_own_rows(tmp_path: Path, store: ReferenceStore) -> None:
     # freeBayes's PL puts each het at a stated confidence (the gap to the next genotype, in phred);
     # GATK's rows state none. Each banded row counts the alleles in one band of one side's confidence,

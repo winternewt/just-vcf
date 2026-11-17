@@ -437,17 +437,24 @@ def _read_tsv(path: Path, names: list[str], dtypes: list[pl.DataType], *, skip_h
 def _read_fields(data: bytes, names: list[str], dtypes: list[pl.DataType], *, skip_header: bool) -> pl.DataFrame:
     """Tab-separated rows as their first `len(names)` fields, typed `dtypes`: a row's fields past them are
     not read, and a field a row lacks is null, whatever the width of the first row (RM289). Lines that
-    start with `#` are comments, unless `skip_header` skips the first line instead."""
-    return pl.read_csv(
-        data,
-        separator="\t",
-        has_header=False,
-        skip_rows=1 if skip_header else 0,
-        comment_prefix=None if skip_header else "#",
-        schema=dict(zip(names, dtypes)),
-        truncate_ragged_lines=True,
-        **_RAGGED,
-    )
+    start with `#` are comments, unless `skip_header` skips the first line instead.
+
+    No rows at all (a header alone, comments alone) is an empty frame of the schema: polars 2.x reads it
+    so, polars 1.x raises `NoDataError` for it."""
+    schema = dict(zip(names, dtypes))
+    try:
+        return pl.read_csv(
+            data,
+            separator="\t",
+            has_header=False,
+            skip_rows=1 if skip_header else 0,
+            comment_prefix=None if skip_header else "#",
+            schema=schema,
+            truncate_ragged_lines=True,
+            **_RAGGED,
+        )
+    except pl.exceptions.NoDataError:
+        return pl.DataFrame(schema=schema)
 
 
 def _read_summary(path: Path) -> tuple[pl.DataFrame, list[dict], int]:

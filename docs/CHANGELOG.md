@@ -19,9 +19,10 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
 
 - `read_coverage` reads a depth tool's output whose rows differ in width, alike on polars 1.x and 2.x
   (RM289): a row's fields past the format's are not read and a field it lacks is null, whichever row is
-  the wide one. polars 2 refused the file when its first data row (or one in the first hundred) was
-  wider than the format's columns, and polars 1.44 refused a wide row past the first hundred. A
-  well-formed file reads as before. Patch.
+  the wide one. polars 2 refused a file holding any row wider than the format's columns, and polars
+  1.44 refused a wide row past the first hundred. A file with a header or comments and no row reads as
+  a facet with no intervals on both, where both raised polars' `NoDataError` before. A well-formed file
+  with rows reads as before. Patch.
 
 - The upstream-liaison seat now holds the kit's liaison role (`roles = "liaison"`), and with it the
   duty upstream-index: a final release of polars-bio, polars or gtars on PyPI reaches it as a watcher line

@@ -452,6 +452,27 @@ def test_a_first_row_short_of_a_field_reads_it_as_empty(tmp_path: Path, kind: Co
     assert short.intervals.collect().equals(empty.intervals.collect())
 
 
+@pytest.mark.parametrize(
+    ("lines", "kind"),
+    [
+        (["\t".join(["chrom", "length", "bases", "mean", "min", "max"])], None),
+        (["#rname\tstartpos\tendpos\tnumreads\tcovbases\tcoverage\tmeandepth\tmeanbaseq\tmeanmapq"], None),
+        (["#chrom\tstart\tend\tregion\t1X\t10X"], CoverageFormat.THRESHOLDS_BED),
+        (["# a comment, no row"], CoverageFormat.PER_BASE_BED),
+        (["# a comment, no row"], CoverageFormat.QUANTIZED_BED),
+    ],
+)
+@pytest.mark.parametrize("window", [None, 10])
+def test_a_file_with_no_rows_reads_as_no_intervals(tmp_path: Path, lines: list[str], kind: CoverageFormat | None, window: int | None) -> None:
+    """A header or comments and no row read as a facet with no intervals on polars 1.x and 2.x alike: 2.x
+    reads an empty frame where 1.x raises `NoDataError` (RM289)."""
+    coverage = read_coverage(write(tmp_path / "empty.txt", lines), kind=kind, window=window)
+    intervals = coverage.intervals.collect()
+    assert intervals.schema == pl.Schema(COVERAGE_INTERVALS) and intervals.height == 0
+    if coverage.thresholds is not None:
+        assert coverage.thresholds.collect().height == 0
+
+
 def test_wide_rows_past_the_sniffed_lines_leave_the_format_and_the_runs_as_they_are(tmp_path: Path) -> None:
     # The format is told from the first lines alone, so a file whose wide rows come later is read unstated.
     # Rows past the hundredth are past the lines polars infers a width from, which polars 1.x refused too.

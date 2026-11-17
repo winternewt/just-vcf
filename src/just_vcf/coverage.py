@@ -228,6 +228,12 @@ class UnsupportedCoverageError(ValueError):
 
 _CHUNK_BYTES = 64 << 20
 
+_RAGGED: dict[str, str] = {"extra_columns": "ignore", "missing_columns": "insert"} if int(pl.__version__.split(".", 1)[0]) >= 2 else {}
+"""What makes a headerless `read_csv` given a `schema` take a first row wider or narrower than it, on the
+installed polars: polars 2.x checks the schema against the first row and refuses either without these,
+polars 1.x has neither option and takes both (RM289). `truncate_ragged_lines` covers every later row on
+both. Drop the gate, and pass these always, once the floor is polars 2."""
+
 _MOSDEPTH_SUMMARY_HEADER = ["chrom", "length", "bases", "mean", "min", "max"]
 _SAMTOOLS_COVERAGE_HEADER = ["#rname", "startpos", "endpos", "numreads", "covbases", "coverage", "meandepth", "meanbaseq", "meanmapq"]
 _BIN_LABEL = re.compile(r"^(\d+):(\d+|inf)$")
@@ -425,14 +431,22 @@ def _coverage_kind(lines: list[str]) -> CoverageFormat:
 def _read_tsv(path: Path, names: list[str], dtypes: list[pl.DataType], *, skip_header: bool) -> pl.DataFrame:
     with _open_text(path) as handle:
         data = handle.read()
+    return _read_fields(data, names, dtypes, skip_header=skip_header)
+
+
+def _read_fields(data: bytes, names: list[str], dtypes: list[pl.DataType], *, skip_header: bool) -> pl.DataFrame:
+    """Tab-separated rows as their first `len(names)` fields, typed `dtypes`: a row's fields past them are
+    not read, and a field a row lacks is null, whatever the width of the first row (RM289). Lines that
+    start with `#` are comments, unless `skip_header` skips the first line instead."""
     return pl.read_csv(
         data,
         separator="\t",
         has_header=False,
         skip_rows=1 if skip_header else 0,
         comment_prefix=None if skip_header else "#",
-        new_columns=names,
-        schema_overrides=dict(zip(names, dtypes)),
+        schema=dict(zip(names, dtypes)),
+        truncate_ragged_lines=True,
+        **_RAGGED,
     )
 
 
@@ -592,9 +606,7 @@ def _depth_chunks(path: Path, kind: CoverageFormat) -> Iterator[pl.DataFrame]:
                     continue
             tail = data[cut:]
             if data[:cut].strip():
-                frame = pl.read_csv(
-                    data[:cut], separator="\t", has_header=False, comment_prefix="#", new_columns=names, schema_overrides=dict(zip(names, dtypes))
-                )
+                frame = _read_fields(data[:cut], names, dtypes, skip_header=False)
                 if kind is CoverageFormat.PER_BASE_BED:
                     yield frame.select("chrom", pos=pl.col("start") + 1, end_pos=pl.col("end"), depth=pl.col("depth"))
                 else:

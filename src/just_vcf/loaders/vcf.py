@@ -25,7 +25,7 @@ import os
 import re
 import shutil
 import struct
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
@@ -481,11 +481,17 @@ def is_resaved(head: bytes) -> bool:
     return bool(_QUOTED_META.search(head)) or (b"\r" in head and b"\n" not in head)
 
 
-class _Lines(io.RawIOBase):
-    """A readable byte stream over an iterator of byte chunks."""
+class _Undone(io.RawIOBase):
+    """A re-saved payload's lines with the re-save undone (`undo_resave`), as a readable byte stream.
 
-    def __init__(self, chunks: Iterator[bytes]) -> None:
-        self._chunks = chunks
+    It reads through a text wrapper over the payload, and lets go of the wrapper when it closes, never
+    closing it: the payload is its opener's to close. A wrapper left to the collector while the payload
+    is open closes the payload under its opener and warns of an unclosed file, which is what happened
+    whenever a re-saved payload was read to its end (RM290)."""
+
+    def __init__(self, handle: BinaryIO) -> None:
+        self._text = io.TextIOWrapper(handle, encoding="utf-8", errors="replace", newline=None)
+        self._rows = _undone_lines(self._text)
         self._left = b""
 
     def readable(self) -> bool:
@@ -493,7 +499,7 @@ class _Lines(io.RawIOBase):
 
     def readinto(self, buffer) -> int:
         while not self._left:
-            chunk = next(self._chunks, None)
+            chunk = next(self._rows, None)
             if chunk is None:
                 return 0
             self._left = chunk
@@ -501,6 +507,22 @@ class _Lines(io.RawIOBase):
         buffer[:size] = self._left[:size]
         self._left = self._left[size:]
         return size
+
+    def close(self) -> None:
+        if not self.closed:
+            self._rows.close()
+            if not self._text.closed:
+                self._text.detach()
+        super().close()
+
+
+def _undone_lines(text: io.TextIOWrapper) -> Generator[bytes, None, None]:
+    for line in text:
+        row = [_unquote(field) for field in line.rstrip("\n").split("\t")]
+        if row[0].startswith("##"):
+            while len(row) > 1 and row[-1] == "":
+                row.pop()
+        yield ("\t".join(row) + "\n").encode()
 
 
 def undo_resave(handle: BinaryIO) -> BinaryIO:
@@ -519,18 +541,11 @@ def undo_resave(handle: BinaryIO) -> BinaryIO:
     change every other reader in the process, and a set-and-restore cannot be scoped to a reader that
     is consumed lazily. A VCF field holds no tab and no line break, so the quoting needs no state
     across fields or lines.
+
+    Close the stream before `handle` (use it as a context manager inside the one that opened `handle`);
+    closing it leaves `handle` open.
     """
-    text = io.TextIOWrapper(handle, encoding="utf-8", errors="replace", newline=None)
-
-    def lines() -> Iterator[bytes]:
-        for line in text:
-            row = [_unquote(field) for field in line.rstrip("\n").split("\t")]
-            if row[0].startswith("##"):
-                while len(row) > 1 and row[-1] == "":
-                    row.pop()
-            yield ("\t".join(row) + "\n").encode()
-
-    return io.BufferedReader(_Lines(lines()), 1 << 20)
+    return io.BufferedReader(_Undone(handle), 1 << 20)
 
 
 def _unquote(field: str) -> str:

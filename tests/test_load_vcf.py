@@ -1,9 +1,11 @@
 import csv
+import gc
 import gzip
 import io
 import itertools
 import re
 import struct
+import warnings
 import zipfile
 from collections import Counter
 from pathlib import Path
@@ -818,6 +820,29 @@ def test_undo_resave_reads_quotes_as_csv_does(tmp_path: Path) -> None:
         theirs.append("\t".join(row))
     assert ours == theirs
     assert ours[2] == '1\tNOTE="x";EFF=A,B\t\ta""b\tplain'
+
+
+@pytest.mark.parametrize("read", ["to_the_end", "one_line", "to_the_end_never_closed"])
+def test_undoing_a_resave_leaves_the_payload_to_its_opener(tmp_path: Path, read: str) -> None:
+    """RM290: the stream `undo_resave` gives never closes the handle it reads, and leaves no file behind
+    for the collector to warn about: read to its end, left after one line, or dropped unclosed."""
+    plain = vcf_text(['1\t100\trs1\tA\tG\t50\tPASS\tEFF=A,B\tGT:AD\t0/1:10,12'], fmt=("GT", "AD"))
+    path = tmp_path / "resaved.vcf"
+    path.write_bytes(_spreadsheet_resave(plain))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ResourceWarning)
+        with path.open("rb") as handle:
+            if read == "to_the_end_never_closed":
+                text = undo_resave(handle).read()
+                gc.collect()
+            else:
+                with undo_resave(handle) as stream:
+                    text = stream.read() if read == "to_the_end" else stream.readline()
+            assert not handle.closed
+        gc.collect()
+    assert [str(w.message) for w in caught if issubclass(w.category, ResourceWarning)] == []
+    expected = plain.encode().split(b"\n", 1)[0] + b"\n" if read == "one_line" else plain.encode()
+    assert text == expected
 
 
 def test_crlf_and_plain_vcfs_are_not_taken_for_a_resave(tmp_path: Path) -> None:

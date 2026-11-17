@@ -733,9 +733,14 @@ def _resaved(sniffed: Sniffed) -> bool:
 
 @contextmanager
 def _vcf_text(sniffed: Sniffed, resaved: bool) -> Iterator[BinaryIO]:
-    """A text VCF's payload, with a spreadsheet's re-save undone where `resaved` (F7)."""
+    """A text VCF's payload, with a spreadsheet's re-save undone where `resaved` (F7). The undoing stream
+    is closed before the payload, on every exit (RM290)."""
     with open_payload(sniffed) as handle:
-        yield vcf.undo_resave(handle) if resaved else handle
+        if not resaved:
+            yield handle
+            return
+        with vcf.undo_resave(handle) as undone:
+            yield undone
 
 
 def table_samples(source: Path | str | Sniffed) -> list[str]:

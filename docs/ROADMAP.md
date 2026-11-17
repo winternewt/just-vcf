@@ -7,14 +7,14 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM292 — `read_bed` skips track lines
-**State:** unattended · **Owner:** lead
+**State:** building (2026-11-17, an Opus builder on branch `rm291-292`) · **Owner:** lead
 
 Severity: low. Found during RM289: `atlas.read_bed`'s docstring says `track` and `browser` lines are skipped, but a BED
 whose first line is a `track` line fails with `ColumnNotFoundError` on polars 1.44 and 2.1 alike. The read skips them
 as documented, with a test of a BED that opens with a `track` and a `browser` line.
 
 ## RM291 — Coverage rows cut or padded are counted
-**State:** unattended · **Owner:** lead
+**State:** building (2026-11-17, an Opus builder on branch `rm291-292`) · **Owner:** lead
 
 Severity: low. Since RM289 (2026-11-17) a coverage row with fields past its format's columns is read as its leading
 fields, and one short of a field reads the missing ones as null, on polars 1.x and 2.x alike, with no warning. polars

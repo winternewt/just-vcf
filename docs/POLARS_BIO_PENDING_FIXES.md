@@ -17,7 +17,8 @@ Read marks, the last release read against this ledger:
 
 - **polars-bio: 0.37.0** (read 2026-11-14, the desk sweep: P16 fixed there, P15, P17–P19, P21 and P22
   still reproduce). The lock moved to 0.37.0 with RM288 (merged 2026-11-16, `0adf89c`); P16 passed its
-  repro on the lock and moved to `docs/PREVIOUS_ISSUES.md`.
+  repro on the lock and moved to `docs/PREVIOUS_ISSUES.md`. P1–P14 were re-run on the lock on 2026-11-17:
+  all hold except P6a, which 0.37.0 narrowed to concurrent scans.
 - **polars: 1.44.2.** The lock moved to 2.1.0 with RM288, whose builder re-checked each of CLAUDE.md §5's
   polars 1.44 quirks on 2.x. 2.0.0 to 2.1.0 are not yet read here against what we use, and P23 is not
   yet re-run on 2.1.0: both are the next pass (unattended).
@@ -74,7 +75,7 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P3 SV `end` one short | real bug in noodles `variant_end` (`record.rs:104`); spec example confirms END = POS+\|SVLEN\|; negative SVLEN also errors | zaeleus/noodles |
 | P4 leading `\|` dropped | noodles parses it; dbf discards it (`if !first`, `:1861`/`:2497`) | datafusion-bio-formats |
 | P5 `fmt_DP` vs `DP` | intended (dbf #160, pb #354), undocumented for users; related open: pb #394, dbf #258 | polars-bio (docs) |
-| P6a "table already exists" | reproduced; pb has a uuid lease fix but only for Cool/MSA (`io.py:5010`) | polars-bio |
+| P6a "table already exists" | narrowed in 0.37.0: each collect now takes its own lease; concurrent scans still race, the scan-time lease covers Cool/MSA only (`io.py:5340`) | polars-bio |
 | P6b (new) | `register_vcf` returns 0-based despite 1-based docstring + global; reproduced 99 vs 100 | polars-bio |
 | P7 no `format_fields`/`samples` | never existed; `register_bcf` got them in #435 — ask parity | polars-bio |
 | P8 backslash in header | spec-correct strictness | low priority, don't file |
@@ -157,6 +158,8 @@ the meta-information" (`VCFv4.5.tex:437`), so an undeclared key is tolerated, no
 it without a word is a defect. **File at datafusion-bio-formats:** warn with a per-key count, or read
 the key as String.
 
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Still true: an undeclared INFO key and an undeclared FORMAT key are both dropped without a word.
+
 ## P2 — Headers that do not start with `##fileformat` are refused
 
 Seen with polars-bio 0.36. A VCF whose meta lines are sorted (`##fileformat` on line 199), or that has
@@ -171,6 +174,8 @@ same in 4.3), and again "with the exception of ##fileformat which must come firs
 refusal is noodles' `MissingFileFormat` (`noodles-vcf/src/header/parser.rs:263`), which reads the first
 line as the file format and nothing else. Such files are invalid, and repairing them is our job. An
 earlier version of this entry said the spec allows `##fileformat` later; it does not.
+
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Unchanged: a header whose first line is not `##fileformat` is refused (`missing fileformat`), as the spec requires.
 
 ## P3 — `end` for a symbolic SV is one short
 
@@ -189,6 +194,8 @@ so a negative SVLEN, which the spec says to read as its absolute value, is an er
 datafusion-bio-formats calls it unchanged (`physical_exec.rs:834`). **File at zaeleus/noodles**, the
 fork's upstream; both points belong in one issue.
 
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Still true: `<DEL>` with `SVLEN=30` at POS 200 gives `end=229`.
+
 ## P4 — The leading phase indicator of a GT is dropped
 
 Seen with polars-bio 0.36 (2026-09-30). `|0/1/2` comes back as `0/1/2`. Since VCF 4.4 the first phase
@@ -204,6 +211,8 @@ is the explicit leading indicator when present, else the implicit one (`/` if an
 skips the first allele's phasing (`physical_exec.rs:1861` and `:2497`). It could write the leading
 indicator exactly when it differs from the implicit one, which reproduces the source for every valid
 GT. **File at datafusion-bio-formats.**
+
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Still true: `|0/1/2` reads back as `0/1/2`.
 
 ## P5 — Whether a column is INFO or FORMAT depends on what else the header declares
 
@@ -230,6 +239,8 @@ sample gives flat `DP` and `fmt_DP`, two samples give INFO `DP` plus a nested `g
 FORMAT/DP. just-dna-lite (`just-dna-pipelines/.../io.py`, ~L255-280) still drops a FORMAT field whenever
 INFO declares the same key, a workaround for a `DuplicateQualifiedField` error around polars-bio 0.19;
 on 0.36.0 that workaround only loses data.
+
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Unchanged: with INFO and FORMAT both declaring `DP`, one sample gives `DP` and `fmt_DP`.
 
 ## P6 — `scan_vcf` registers a stem-named table on every run, and `register_vcf` ignores the coordinate setting
 
@@ -262,6 +273,8 @@ just-prs carries the same two workarounds (a lock around a named `register_vcf` 
 `src/just_prs/vcf.py:37-63`, test `tests/test_vcf.py:98`); its commit `c424bec` (2026-07-17) is the
 earliest dated record of both symptoms.
 
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* (a) Narrowed. `pl.collect_all` over four `scan_vcf` frames of one file no longer panics (30 runs): 0.37.0 registers every collect under its own `_pb_<fmt>_collect_<uuid>` lease, for every format (`polars_bio/io.py:4953-4970`). Concurrent `scan_vcf` calls from threads still race: eight threads scanning one file failed in 10 of 10 runs with `Failed to register table: Error during planning: No table named '<stem>'`. Schema discovery in `_read_file` takes a per-scan lease only for Cool, Stockholm, A2M and A3M (`io.py:5340-5345`) and registers VCF under its stem. The ask narrows to adding VCF (and the other file formats) to that tuple. (b) Still true: `register_vcf` returns `start=99` for POS 100.
+
 ## P7 — `register_vcf` cannot restrict FORMAT fields or samples
 
 Seen with polars-bio 0.36 (2026-09-30). `register_vcf` passes `format_fields=None` and `samples=None` to
@@ -279,6 +292,8 @@ left `register_vcf` hardcoding `None`, so the ask is parity with `register_bcf`.
 `register_vcf(format_fields=…)` as if it existed (datafusion-bio-formats #88–#91, open polars-bio PR
 #334 with `samples=`); those calls would fail with a `TypeError` on 0.36.0, which is worth citing.
 **File at polars-bio.** P6(b) is the same function and can go in the same issue.
+
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Still true: `register_vcf` takes `info_fields` and no `format_fields` or `samples`.
 
 ## P8 — A backslash inside a quoted header value refuses the whole file
 
@@ -298,6 +313,8 @@ by the loader's own parser for the facet. Not filed.
 (`noodles-vcf/src/header/parser/record/value/map/field/value/string.rs:74`), as `VCFv4.5.tex:174`
 requires. Not reported anywhere. The only fair ask is a lenient mode that keeps an unknown escape
 literally, at zaeleus/noodles; low priority while our retry works.
+
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Unchanged: one quoted header value with backslashes refuses the file (`invalid record`).
 
 ## P9 — A record at POS 0 fails the scan
 
@@ -322,6 +339,8 @@ through the lazy `noodles_vcf::Record` (`physical_exec.rs:1173`), whose `variant
 (`noodles-vcf/src/record/fields.rs:22-36`) the fork did not touch and which still returns `None` for
 `0`. The owning layer stays datafusion-bio-formats. A synthetic two-record 4.5 file with one POS 0 row
 still fails `scan_vcf(...).collect()` on 0.36.0 with `Execution error: Missing variant start`.
+
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Still true: a record at POS 0 fails the scan (`Missing variant start`).
 
 ## P10 — FORMAT `Number=LA`, `LR`, `LG`, `P` or `M` refuses the whole file
 
@@ -355,6 +374,8 @@ with a warning naming the keys (`loading.py:712`). `LA`, `LR`, `LG` and `M` are 
 refuse the file, and a BCF declaring `Number=P` still refuses: the BCF path reads no rewritten copy. The
 filings are unchanged.
 
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Still true: a FORMAT key declared `Number=P` or `Number=LA` refuses the file (`invalid record`).
+
 ## P11 — FILTER `.` comes back as an empty string
 
 Recorded in just-prs (`src/just_prs/normalize.py:50`) and in our CLAUDE.md §5; reproduced on 0.36.0: a
@@ -369,6 +390,8 @@ and datafusion-bio-formats joins that empty iterator into `""` (`physical_exec.r
 `:1531`, `:3165`); its `unwrap_or(".")` never fires. **Intended in effect, undocumented.** A docs note
 at polars-bio, low priority; asking for null would be a breaking change for them.
 
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Still true: FILTER `.` reads as `''`.
+
 ## P12 — Multi-allelic ALT is joined with `|`
 
 Recorded in just-prs (`normalize.py:67`), just-dna-lite (CLAUDE.md) and our CLAUDE.md §5; reproduced on
@@ -380,6 +403,8 @@ Mitigation: the loader splits `alt` on `|`.
 and the other readers) and PR #252 pins the encoding in a test. It is documented only in the
 datafusion-bio-formats README (`bio-format-vcf/README.md:245`, the `vcf_ac`/`vcf_af` UDFs); the
 `scan_vcf` docstring and polars-bio docs do not say it. A docs note at polars-bio, low priority.
+
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Still true: ALT `G,T` reads as `'G|T'`.
 
 ## P13 — `write_vcf` and `sink_vcf` drop columns the header metadata does not declare
 
@@ -397,6 +422,8 @@ an explicit column-to-id mapping. A column declared in neither INFO nor FORMAT m
 `src/write.rs:395-405` unmarked and the serializer skips it. **File at polars-bio:** warn or refuse with
 the dropped column names; cite #351 and #474.
 
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Still true: `write_vcf` leaves out a column the header metadata does not declare.
+
 ## P14 — `fork()` after a polars-bio call hangs the child
 
 Recorded in just-dna-lite (`docs/GRANIAN_POLARS_FORK_DEADLOCK.md`, `docs/DAGSTER_GUIDE.md:179`);
@@ -409,6 +436,8 @@ Mitigation: just-vcf must not use fork-based multiprocessing once polars-bio has
 *Upstream (2026-09-30).* Nothing in any tracker or doc. polars-bio builds Tokio runtimes in its Rust
 entry points (`src/scan.rs:1101`, `:1176`), and neither Tokio nor Rayon survives `fork()`. **Inherent,
 not a bug.** At most a "use spawn" note in polars-bio docs.
+
+*Rechecked (2026-11-17), on the lock: polars-bio 0.37.0, polars 2.1.0, synthetic files.* Still true: a child forked after a warm `scan_vcf` hangs on its own `scan_vcf` (killed after 30 s).
 
 ## P15 — A haploid no-call GT `.` comes back as null
 

@@ -3,6 +3,24 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM289 — Coverage BED rows of mixed width on polars 2
+Severity: low · Status: shipped 2026-11-17 (merge aac313d; full suite 2740 passed on polars 2.1.0, the touched tests on 1.44.2 too)
+
+**Built:** coverage's two reads go through `_read_fields`: `schema=`, `truncate_ragged_lines=True`, and on polars 2.x
+`extra_columns="ignore", missing_columns="insert"` (`coverage._RAGGED`), so fields past a format's columns are dropped
+and missing ones null on both versions, at the parser's speed. A file of no rows (a header or comments alone) is a facet
+of no intervals on both. **Left:** the cut and padded rows are not counted (RM291); `atlas.read_bed` fails on a `track`
+line (RM292); `loaders.text.lines` and `eigenstrat.read_snp` refuse a line holding `\x1f`, alike on both versions.
+
+## RM290 — An unclosed file in the VCF loader
+Severity: low · Status: shipped 2026-11-17 (merge aac313d)
+
+**Built:** the re-save undoing stream (`_Undone`) owns its text wrapper and detaches it on close, so a payload read to
+its end is no longer closed under its opener when the wrapper is collected (the `ResourceWarning`, a closed handle as
+well as a warning); `_vcf_text` closes the stream before the payload on every exit. The full suite shows no
+`ResourceWarning`. `-W error::ResourceWarning` does not turn a collection-time warning into a test failure, so the test
+asserts the handle and the warnings directly.
+
 ## RM288 — polars-bio 0.37 and polars 2.x
 Severity: medium · Status: shipped 2026-11-16 (merge 0adf89c; full suite 2706 passed on polars 2.1.0, 2705 on 1.44.2)
 

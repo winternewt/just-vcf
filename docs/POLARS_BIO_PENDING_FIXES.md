@@ -22,8 +22,9 @@ Read marks, the last release read against this ledger:
 - **polars: 2.1.0, in part.** The lock moved to 2.1.0 with RM288. What breaks us and what fixed our
   workarounds were read there: the builder re-checked each of CLAUDE.md §5's polars 1.44 quirks on 2.1.0
   and recorded the three 2.x changes the suite met. P23 was re-run on 2.1.0 (2026-11-17) and still
-  holds. Not yet read: the 2.0.0–2.1.0 release notes for levers, meaning features that would replace a
-  piece of ours (unattended).
+  holds. The release notes of py-2.0.0-rc.1, rc.2, 2.0.0 and 2.1.0 were read for levers on 2026-11-17
+  (below, "Our pieces an upstream release could replace"). There is no 1.45 to 1.49. Changes made on the 2.0
+  branch before rc.1 appear only in polars' migration guide, which was not read.
 
 Fellow liaisons (the role's outbound step: poll them before a filing): none on this machine stands on
 polars-bio (checked 2026-11-16). just-prs and just-dna-lite lock it and run no seats; the seated
@@ -38,6 +39,26 @@ desk question says so (2026-11-16).
 polars-bio reads VCF through two layers it does not own in-repo: `datafusion-bio-formats` (the table
 provider, same org) and a biodatageeks fork of `noodles` (the parser). An entry names the layer the
 defect lives in, because that is where it has to be filed.
+
+## Our pieces an upstream release could replace
+
+The liaison role's register: a piece built here because an upstream lacked something, against the
+release that now has it. Each claim was checked against the release notes and our code, and run on
+polars 2.1.0 with synthetic frames (2026-11-17). Neither piece can be replaced while the floor still
+admits polars 1.x (RM288 keeps 1.x for consumers such as just-prs). Both go to the lead when that
+changes.
+
+| Ours | Theirs, since | What replacing ours costs |
+|---|---|---|
+| `schema.canonical_chrom_expr` (`src/just_vcf/schema.py:413`): `map_batches` + `replace`, because `replace(mapping)` falls back to the in-memory engine (P23) | polars 2.0.0, #29605 "Lower gathering from literal as elementwise": `pl.lit(Series(values)).gather(col.cast(pl.Enum(keys), strict=False).to_physical())`, coalesced with the column. It gives `replace(CONTIG_ALIASES)`'s values, nulls and unknown names included, and has no fallback node. The `Map` dtype (2.0.0-rc.2 #28984, #29296) is a second route; its `map.get(expr)` is unverified | small. It drops a Python callback per batch; `map_batches` already streams. A 2.x-only expression |
+| `loading._spill_files` / `canonical_parts` (`loading.py:545`, `:604`): sink unsorted, then sort one part at a time, because a global sort held 11 GB | polars 2.0.0, #29657 "Add streaming (out-of-core) sort", #29741 on by default at 80 % of RAM, #29734 a 64 GB disk budget; 2.1.0 #30268 and #30297 sort-spill memory fixes | a measured trial first. The sort's key, `replace_strict(CONTIG_RANK)` (`schema.py:433`), is still a fallback node on 2.1.0, so it would move to the gather form above first. `canonical_batches` (`loading.py:579`) also reads the parts one group at a time for `resolve_ref`, `normalize` and liftover. Where polars spills by default is unverified (the large caches belong on `/data`) |
+
+Read and found nothing for us: `join_where` with an equality is still planned as a filtered cross join
+(#29218 only fuses the filter into the join). No entry makes `replace` or `replace_strict` stream (#29535
+only parallelises the fallback). `sink_*` partitioning entries cover Iceberg only. No entry touches
+`tab_fields` or `vrs._EQUAL_HEIGHTS`. #29658 "Raise on ragged rows" is the refusal `tab_fields` works
+around, not a cure. 2.1.0 #29783 drops a streaming as-of join's memory when it is done, which may lower
+what `intervals.py:49` holds; not measured.
 
 ## Upstream status sweep (2026-09-30)
 

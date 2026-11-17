@@ -5,6 +5,9 @@ each reset.
 
 ## Open
 
+0. **Two polars majors (2026-11-17, CLAUDE.md §4):** every merge runs the full suite on the lock (polars 2.x) and on
+   `uv run --with polars==1.44.2`. At each merge, check `../just-prs`'s lock for polars: once it is on 2.x, raise the
+   floor to polars 2 and drop the 1.x run, `vrs._EQUAL_HEIGHTS`, `coverage._RAGGED` and §5's 1.x workarounds.
 0. **Acting duties, from 2026-11-16 (kit v0.1.222, L139):** the lead holds *milestones* acting, since the table
    has no pm seat. It keeps one post current in place, #just-vcf>state, with source `docs/seats/LEAD_STATE.md`
    (`watchdog.py keep lead state '#just-vcf>state' docs/seats/LEAD_STATE.md`), and posts one line per landed

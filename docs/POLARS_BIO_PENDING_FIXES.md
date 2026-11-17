@@ -16,10 +16,11 @@ each start.
 Read marks, the last release read against this ledger:
 
 - **polars-bio: 0.37.0** (read 2026-11-14, the desk sweep: P16 fixed there, P15, P17–P19, P21 and P22
-  still reproduce). The lock is on 0.36.0; it moves under RM288 (the lead's, building 2026-11-16).
-- **polars: 1.44.2**, the lock's. 2.0.0 to 2.1.0 (newest 2026-10-25) are unread here; they are read once
-  RM288 lands, whose builder re-checks each of CLAUDE.md §5's polars 1.44 quirks on 2.x, and P23 is
-  re-run on the new lock then.
+  still reproduce). The lock moved to 0.37.0 with RM288 (merged 2026-11-16, `0adf89c`); P16 passed its
+  repro on the lock and moved to `docs/PREVIOUS_ISSUES.md`.
+- **polars: 1.44.2.** The lock moved to 2.1.0 with RM288, whose builder re-checked each of CLAUDE.md §5's
+  polars 1.44 quirks on 2.x. 2.0.0 to 2.1.0 are not yet read here against what we use, and P23 is not
+  yet re-run on 2.1.0: both are the next pass (unattended).
 
 Fellow liaisons (the role's outbound step: poll them before a filing): none on this machine stands on
 polars-bio (checked 2026-11-16). just-prs and just-dna-lite lock it and run no seats; the seated
@@ -84,7 +85,6 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P13 `write_vcf` drops undeclared columns | write-side twin of P1; answered by recipe in pb #351; related open pb #474 | polars-bio |
 | P14 fork after a polars-bio call hangs the child | inherent to native thread pools (plain Polars hangs too) | polars-bio (docs), low |
 | P15 haploid no-call GT `.` read as null (2026-10-22) | noodles maps `.` to missing before its GT parser; dbf writes null, same as no GT | datafusion-bio-formats |
-| P16 `import polars_bio` configures the root logger (2026-10-23) | `basicConfig()` plus a root level of WARNING at import; already open as pb #291 | polars-bio (comment on #291) |
 | P17 `depth()` wraps past 32,767 (2026-10-24) | an `i32` count cast `as i16` into an Int16 column | datafusion-bio-functions |
 | P18 `depth()` block mode drops a run that reaches a contig's last base, 1-based only (2026-10-24) | the end marker of a 1-based read lands one past the dense array | datafusion-bio-functions |
 | P19 `depth()` block mode builds every contig's batches before emitting (2026-10-24) | `merge_dense_results` fills one queue for the whole file | datafusion-bio-functions |
@@ -111,7 +111,6 @@ another path is named.
 | P9 | a spec-legal POS 0 record fails the whole scan | datafusion-bio-formats | re-read without POS 0 rows, count them (done) |
 | P10 | spec-legal FORMAT `Number=LA/LR/LG/M` refuses the whole file | zaeleus/noodles | `Number=P` read through a copy declaring `Number=.`, warned (`8b72a46`, text VCF only); **none yet** for LA/LR/LG/M or for BCF |
 | P15 | a haploid no-call GT `.` reads as null, the same as a sample with no GT | datafusion-bio-formats | a no-call block for CGI VCFs only (`518f796`); elsewhere `gt`, `gt_alleles`, `source_gt` stay null |
-| P16 | `import polars_bio` adds a stderr handler to the root logger and sets its level to WARNING; Python's logging HOWTO says a library adds only a `NullHandler` | polars-bio | the CLI turns logging off while a command runs (`cli.py:149-152`); a library user still gets the handler |
 | P17 | `depth()` returns a depth over 32,767 wrapped negative; mosdepth and samtools count in 32 bits | datafusion-bio-functions | a negative depth is left out of its window and counted in a warning (`coverage.py`) |
 | P18 | 1-based `depth()` in block mode emits nothing for a run of coverage that reaches a contig's last base; 0-based and per-base mode count it | datafusion-bio-functions | per-base mode, folded into windows here (`coverage.py`) |
 | P22 | a key the scan drops for being undeclared (P1) still fails the whole scan when its value does not parse as the type the spec reserves for its name | datafusion-bio-formats | under 4.3+ the copy declares every undeclared reserved key `Number=.` and skips it (`c5daa78`, `READER_DEFINITIONS`); a Flag written with a value still fails, refused by name where read ahead (`b191114`) |
@@ -439,31 +438,6 @@ datafusion-bio-formats**, citing the noodles ordering; the same one-line reorder
 or at zaeleus/noodles would fix it at the root.
 
 *Rechecked (2026-11-14).* Still true on polars-bio 0.37.0 (2026-11-07, on datafusion-bio-formats v1.15.0 and datafusion-bio-functions v0.24.0): the draft 2 repro re-run as drafted still reads `.` as null. The newest tags, formats v1.16.0 and functions v0.25.0 (both 2026-11-14), leave the code path unchanged apart from line numbers, and noodles stays at the same pin. Nobody has reported it. The draft waits on desk #161 (desk #161's update says so); before posting, its version lines and code links move to the newest tags.
-
-## P16 — `import polars_bio` configures the root logger
-
-Found by the lead seat building the CLI (merged as `5b8700f`): after `import polars_bio`, every
-`logging` warning in the process, just-vcf's included, prints to stderr, whatever the application set
-up. polars-bio's `polars_bio/logging.py:3-5`, run on import through `__init__.py:26`, calls
-`logging.basicConfig()` and sets the root logger to WARNING; `set_loglevel` changes the root level
-again (`:30`, `:34`, `:38`). Reproduced on 0.36.0: a root logger with no handlers at DEBUG comes out
-of the import with a stderr `StreamHandler` at WARNING. Python's logging HOWTO ("Configuring Logging
-for a Library") says a library adds no handler but a `NullHandler` and leaves the root logger to the
-application.
-
-Mitigation: the CLI turns logging off while a command runs and back on when it closes
-(`src/just_vcf/cli.py:149-152`), because a library error's message must not reach stderr unredacted.
-A program that imports just-vcf as a library gets polars-bio's handler. Not worked around in the
-library: it would mean undoing another package's import side effect. Not filed.
-
-*Upstream (2026-10-23).* Already reported: pb #291, "How do I get polars-bio logging to not stomp on my
-colorlog logging?" (open since 2026-02-10, labelled "analysis needed"; the maintainer said they would look,
-the reporter asked again on 2026-09-17). It gives no cause and no fix. Upstream master after 0.36.0
-leaves `logging.py` unchanged (0.36.2 is the newest tag). **Comment on pb #291**, not a new issue:
-name the two lines, and the fix: drop `basicConfig()` and the root level, give the `polars_bio`
-logger a `NullHandler`, and let `set_loglevel` set that logger's level alone.
-
-*Fixed upstream (2026-11-14).* polars-bio 0.37.0 (2026-11-07) fixes it ("interference with application logging configuration", pb #496), and pb #291 closed on 2026-11-06. Read at the 0.37.0 tag: `logging.py` sets the `polars_bio` logger to WARNING and nothing else, no `basicConfig()` and no root level, and `set_loglevel` sets only that logger. Nothing to post: desk #105 withdrawn as moot. just-vcf pins 0.36.0, so the CLI's mitigation stays until the lock moves to 0.37; once it does, the root-logger part of that mitigation can go.
 
 ## P17 — `depth()` wraps a depth past 32,767
 

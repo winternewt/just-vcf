@@ -2516,9 +2516,9 @@ rows that carry fewer (with the fewest), the blank lines. In a `samtools depth` 
 `kind=CoverageFormat.SAMTOOLS_DEPTH` stated, the fields past the third are the depth columns of further
 alignment files, so that line says how many depth columns the rows carried and that the first was read
 (unstated, such a file is refused). The lines give counts only: a `samtools depth -H` header names the
-alignment files, which can carry a person's name. A quantized row with no label is counted with the
-short rows, not as a renamed bin. Rejected: a warning per row, which a whole-genome file would turn into
-millions of lines.
+alignment files, which can carry a person's name. A quantized row short of its label field is counted
+with the short rows, not as a renamed bin; one whose label is written empty is counted as a renamed bin.
+Rejected: a warning per row, which a whole-genome file would turn into millions of lines.
 
 **Quantized runs from the depth pass** (RM278, 2026-11-03). `alignment_coverage(path,
 quantize=(0, 1, 4, None))` adds `Coverage.quantized` to the windows it returns: a second coverage

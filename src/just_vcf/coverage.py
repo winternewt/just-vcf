@@ -572,7 +572,8 @@ def _read_regions(path: Path, widths: _RowWidths, *, named: bool) -> pl.DataFram
 
 def _read_quantized(path: Path, widths: _RowWidths) -> tuple[pl.DataFrame, int]:
     """mosdepth's bins are `lower:upper`, half-open (`0:1` is depth 0, `4:inf` four or more). The count is of
-    the intervals whose label names no range; a row with no label at all is counted with the short rows."""
+    the intervals whose label names no range, one written empty included; a row short of its label field
+    (or blank) is not in it, since `widths` counts it with the short rows."""
     frame = _read_tsv(path, ["chrom", "start", "end", "label"], [pl.String(), pl.UInt32(), pl.UInt32(), pl.String()], widths, skip_header=False)
     parts = pl.col("label").str.extract_groups(_BIN_LABEL.pattern)
     out = frame.with_columns(parts.alias("bin")).select(
@@ -585,7 +586,8 @@ def _read_quantized(path: Path, widths: _RowWidths) -> tuple[pl.DataFrame, int]:
         bases=(pl.col("end") - pl.col("start")).cast(pl.UInt32),
         label=pl.col("label"),
     )
-    return out, out.filter(pl.col("label").is_not_null() & pl.col("depth_min").is_null()).height
+    short = sum(rows for count, rows in widths.fields.items() if count < widths.columns)
+    return out, out["depth_min"].null_count() - short
 
 
 def _read_thresholds(path: Path, header: str, widths: _RowWidths) -> tuple[pl.DataFrame, pl.DataFrame, list[int]]:

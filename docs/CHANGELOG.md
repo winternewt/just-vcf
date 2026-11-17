@@ -23,8 +23,9 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
   rows carrying fewer, whose missing fields read as null; and the blank lines, which read as rows of
   nulls. A `samtools depth` file of several alignment files, read with `kind` stated, says how many depth
   columns its rows carried and that the first was read. The counts come from the same bytes the read
-  parses (`scan_lines`), about 0.05 s on top of 0.40 s for a 90 MB per-base BED. A quantized row with
-  no label is no longer counted as a renamed bin. A well-formed file warns of nothing new. Patch.
+  parses (`scan_lines`), about 0.05 s on top of 0.40 s for a 90 MB per-base BED. A quantized row short
+  of its label field is counted there, no longer as a renamed bin; an empty label still is one. A
+  well-formed file warns of nothing new. Patch.
 
 - Loading a VCF re-saved by a spreadsheet leaves no file for the collector to warn about (RM290). The
   stream `undo_resave` returns read through a text wrapper that, once the stream reached the payload's

@@ -282,6 +282,18 @@ def test_quantized_bins_become_depth_bounds(tmp_path: Path) -> None:
     assert coverage.facet.warnings == ["1 quantized interval(s) carry a bin label that names no depth range (a renamed bin); their depth is unknown"]
 
 
+def test_a_quantized_label_written_empty_is_unbounded_and_a_missing_one_is_short(tmp_path: Path) -> None:
+    """A label written empty names no depth range, as a renamed bin does; a row short of the label field
+    is counted with the short rows instead, never twice (RM291)."""
+    lines = ["chr1\t0\t10\t0:1", "chr1\t10\t20\t", "chr1\t20\t30\tCALLABLE", "chr1\t30\t40", "chr1\t40\t50\t1:4"]
+    warnings = read_coverage(write(tmp_path / "q.bed", lines), kind=CoverageFormat.QUANTIZED_BED).facet.warnings
+    fields = [line.split("\t") for line in lines]
+    unbounded = sum(len(f) == 4 and not re.fullmatch(r"\d+:(\d+|inf)", f[3]) for f in fields)
+    assert warnings[0].startswith(f"{unbounded} quantized interval(s) carry a bin label that names no depth range")
+    assert counted(warnings) == {"short": sum(len(f) < 4 for f in fields)}
+    assert len(warnings) == 2
+
+
 def test_mosdepth_summary_gives_contig_bounds_and_the_build(tmp_path: Path) -> None:
     grch38 = {chrom: next(iter(lengths)) if isinstance(lengths, (set, frozenset)) else lengths for chrom, lengths in ASSEMBLY_LENGTHS["GRCh38"].items()}
     names = ["1", "2", "3", "20", "X"]

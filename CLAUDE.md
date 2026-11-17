@@ -270,6 +270,20 @@ are read from env vars with sensible defaults, documented in `.env.template`, an
 
 In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DIR`, `JUST_VCF_MANIFESTS_DIR`, `JUST_VCF_TEST_REFERENCE_DIR`, `JUST_VCF_TEST_CHAIN_DIR`) are empty unless the shell sets them: `tests/conftest.py` defaults each to `""`, so a plain `uv run pytest` never opens a private genome because the repo `.env` names one. An opt-in run passes them on the command line, e.g. `JUST_VCF_SAMPLES_DIR=/data/genomes uv run pytest -q tests/test_load_vcf.py`.
 
+**Two polars majors are supported, and both are tested.** The lock holds polars 2.x, but the floor (`polars-bio>=0.37.0`,
+no polars pin of our own) still admits polars 1.4x, which just-prs runs on. The repo has no CI, so a merge to `main` runs
+the full suite twice: on the lock, and on polars 1.x through an overlay that leaves the project venv alone:
+
+```bash
+JUST_VCF_SAMPLES_DIR= JUST_VCF_ANCESTRY_DIR= uv run --with polars==1.44.2 pytest -q -p no:cacheprovider
+```
+
+A builder runs the touched tests both ways; the lead runs the full suite both ways before pushing a merge. Code that
+needs a polars-2-only call gates it on the major (`vrs._EQUAL_HEIGHTS`, `coverage._RAGGED`), never drops 1.x by accident.
+The person, 2026-11-17: "no specific reason to keep compatibility forever, but now it is sitll important". Polars 1.x
+goes when just-prs moves to polars 2: then the floor becomes polars 2, the 1.x run and the gates go, and so do the §5
+workarounds marked "stays while 1.x is admitted".
+
 **Timestamps: store ISO-8601 UTC, display local.** Never write a naive `YYYY-MM-DD HH:MM:SS`.
 
 ---

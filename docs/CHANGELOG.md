@@ -11,6 +11,19 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- Loading a VCF re-saved by a spreadsheet leaves no file for the collector to warn about (RM290). The
+  stream `undo_resave` returns read through a text wrapper that, once the stream reached the payload's
+  end, was collected with the payload still open: it closed the payload under `open_payload` and raised
+  `ResourceWarning: unclosed file`. The stream now lets go of the wrapper when it closes, never closing
+  the payload, and the loader closes it before the payload on every exit. Patch.
+
+- `read_coverage` reads a depth tool's output whose rows differ in width, alike on polars 1.x and 2.x
+  (RM289): a row's fields past the format's are not read and a field it lacks is null, whichever row is
+  the wide one. polars 2 refused a file holding any row wider than the format's columns, and polars
+  1.44 refused a wide row past the first hundred. A file with a header or comments and no row reads as
+  a facet with no intervals on both, where both raised polars' `NoDataError` before. A well-formed file
+  with rows reads as before. Patch.
+
 - The upstream-liaison seat now holds the kit's liaison role (`roles = "liaison"`), and with it the
   duty upstream-index: a final release of polars-bio, polars or gtars on PyPI reaches it as a watcher line
   the day it is out (`[seat.upstream-liaison.watch.upstream-index]`, the kit's

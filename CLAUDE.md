@@ -367,6 +367,9 @@ In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DI
   where 1.x cut every row to them and refused only a narrower first row; `extra_columns="ignore"`
   exists only in 2.x. A file whose rows differ in width is read with `loaders.text.tab_fields`, which
   splits each line itself and reads alike on both (met 2026-11-16, every PGP-HMS key=value load).
+  A typed read of bytes already in memory passes `schema=` and `truncate_ragged_lines=True`, plus
+  `extra_columns="ignore", missing_columns="insert"` on 2.x only (`coverage._RAGGED`): fields past the
+  schema dropped and missing ones null on both, at the native parser's speed (RM289, met 2026-11-17).
 - **Polars horizontal `concat` and `strict`:** polars 2 always requires equal heights and deprecates
   `strict`; polars 1.x pads the shorter frame unless `strict=True` and deprecates leaving it out. No
   call is silent on both, so `vrs._EQUAL_HEIGHTS` passes it only to 1.x (met 2026-11-16).

@@ -407,6 +407,83 @@ def test_what_is_not_a_coverage_output_is_refused(tmp_path: Path, lines: list[st
         read_coverage(write(tmp_path / "bad.txt", lines))
 
 
+def widened(lines: list[str], rows: list[int]) -> list[str]:
+    """`lines` with two trailing fields added to the lines at `rows`."""
+    return [f"{line}\textra\t9" if i in rows else line for i, line in enumerate(lines)]
+
+
+def fixed_width_files() -> dict[CoverageFormat, list[str]]:
+    """One file of each format read with a fixed set of columns."""
+    return {
+        CoverageFormat.PER_BASE_BED: per_base_lines(READS),
+        CoverageFormat.SAMTOOLS_DEPTH: [f"chr1\t{pos}\t{value}" for pos, value in sorted(depth_of(READS, contig="chr1").items())],
+        CoverageFormat.QUANTIZED_BED: ["chr1\t0\t10\t0:1", "chr1\t10\t30\t1:4", "chr1\t30\t60\t4:inf", "chr1\t60\t70\t1:4"],
+        CoverageFormat.THRESHOLDS_BED: thresholds_lines(READS, REGIONS, THRESHOLDS),
+    }
+
+
+@pytest.mark.parametrize("window", [None, 7])
+@pytest.mark.parametrize("wide", ["first", "later"])
+@pytest.mark.parametrize("kind", list(fixed_width_files()))
+def test_rows_wider_than_the_format_read_as_their_leading_fields(tmp_path: Path, kind: CoverageFormat, wide: str, window: int | None) -> None:
+    """A row with fields past the format's reads as the same row without them, whether the first data row
+    is the wide one or later ones are (RM289): polars 2 refuses a headerless read whose first row is wider
+    than the names, where 1.x read the extra fields into columns of their own."""
+    lines = fixed_width_files()[kind]
+    data = [i for i, line in enumerate(lines) if not line.startswith("#")]
+    mixed = widened(lines, data[:1] if wide == "first" else data[1::2])
+    plain = read_coverage(write(tmp_path / "plain.txt", lines), window=window, kind=kind)
+    read = read_coverage(write(tmp_path / "mixed.txt", mixed), window=window, kind=kind)
+    assert read.intervals.collect().equals(plain.intervals.collect())
+    assert (read.thresholds is None) == (plain.thresholds is None)
+    if plain.thresholds is not None:
+        assert read.thresholds.collect().equals(plain.thresholds.collect())
+
+
+@pytest.mark.parametrize("kind", list(fixed_width_files()))
+def test_a_first_row_short_of_a_field_reads_it_as_empty(tmp_path: Path, kind: CoverageFormat) -> None:
+    """A row lacking the format's last field reads as the row with that field written empty, the first
+    data row included, which polars 2 checks the columns against (RM289)."""
+    lines = fixed_width_files()[kind]
+    first = next(i for i, line in enumerate(lines) if not line.startswith("#"))
+    cut = lines[first].rsplit("\t", 1)[0]
+    empty = read_coverage(write(tmp_path / "empty.txt", [*lines[:first], cut + "\t", *lines[first + 1:]]), window=None, kind=kind)
+    short = read_coverage(write(tmp_path / "short.txt", [*lines[:first], cut, *lines[first + 1:]]), window=None, kind=kind)
+    assert short.intervals.collect().equals(empty.intervals.collect())
+
+
+@pytest.mark.parametrize(
+    ("lines", "kind"),
+    [
+        (["\t".join(["chrom", "length", "bases", "mean", "min", "max"])], None),
+        (["#rname\tstartpos\tendpos\tnumreads\tcovbases\tcoverage\tmeandepth\tmeanbaseq\tmeanmapq"], None),
+        (["#chrom\tstart\tend\tregion\t1X\t10X"], CoverageFormat.THRESHOLDS_BED),
+        (["# a comment, no row"], CoverageFormat.PER_BASE_BED),
+        (["# a comment, no row"], CoverageFormat.QUANTIZED_BED),
+    ],
+)
+@pytest.mark.parametrize("window", [None, 10])
+def test_a_file_with_no_rows_reads_as_no_intervals(tmp_path: Path, lines: list[str], kind: CoverageFormat | None, window: int | None) -> None:
+    """A header or comments and no row read as a facet with no intervals on polars 1.x and 2.x alike: 2.x
+    reads an empty frame where 1.x raises `NoDataError` (RM289)."""
+    coverage = read_coverage(write(tmp_path / "empty.txt", lines), kind=kind, window=window)
+    intervals = coverage.intervals.collect()
+    assert intervals.schema == pl.Schema(COVERAGE_INTERVALS) and intervals.height == 0
+    if coverage.thresholds is not None:
+        assert coverage.thresholds.collect().height == 0
+
+
+def test_wide_rows_past_the_sniffed_lines_leave_the_format_and_the_runs_as_they_are(tmp_path: Path) -> None:
+    # The format is told from the first lines alone, so a file whose wide rows come later is read unstated.
+    # Rows past the hundredth are past the lines polars infers a width from, which polars 1.x refused too.
+    lines = [f"chr1\t{i}\t{i + 1}\t{i % 4}" for i in range(150)]
+    mixed = widened(lines, list(range(120, 150, 3)))
+    plain = read_coverage(write(tmp_path / "plain.bed", lines), window=None)
+    read = read_coverage(write(tmp_path / "mixed.bed", mixed), window=None)
+    assert read.facet.format_id is plain.facet.format_id is CoverageFormat.PER_BASE_BED
+    assert read.intervals.collect().equals(plain.intervals.collect())
+
+
 # --- Callable --------------------------------------------------------------------------------------
 
 

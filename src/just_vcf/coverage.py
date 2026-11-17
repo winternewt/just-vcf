@@ -234,7 +234,7 @@ _RAGGED: dict[str, str] = {"extra_columns": "ignore", "missing_columns": "insert
 """What makes a headerless `read_csv` given a `schema` take a first row wider or narrower than it, on the
 installed polars: polars 2.x checks the schema against the first row and refuses either without these,
 polars 1.x has neither option and takes both (RM289). `truncate_ragged_lines` covers every later row on
-both. Drop the gate, and pass these always, once the floor is polars 2."""
+both. `atlas.read_bed` passes them too (RM292). Drop the gate, and pass these always, once the floor is polars 2."""
 
 _MOSDEPTH_SUMMARY_HEADER = ["chrom", "length", "bases", "mean", "min", "max"]
 _SAMTOOLS_COVERAGE_HEADER = ["#rname", "startpos", "endpos", "numreads", "covbases", "coverage", "meandepth", "meanbaseq", "meanmapq"]

@@ -11,6 +11,13 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `atlas.read_bed` skips UCSC `track` and `browser` lines wherever they stand, as its docstring said
+  (RM292): a BED opening with a `track` line failed with polars' `ColumnNotFoundError` on polars 1.44
+  and 2.1 alike, since the read took the file's width from that one-field line. It now reads the first
+  three fields by name, with no quote character (a track line's `description="a b"` is text), and a
+  line is a track or browser line only when the word stands alone, so a contig named `track_x` is
+  read. GIAB stratifications read as before. Patch.
+
 - `read_coverage` counts the rows it cut or padded (RM291). A coverage facet's `warnings` gain one line
   per reason: the rows carrying more fields than the format's, whose fields past them were not read; the
   rows carrying fewer, whose missing fields read as null; and the blank lines, which read as rows of

@@ -35,6 +35,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from just_vcf.concordance import SITES, AbsenceReading, Agreement, ComparisonBasis, _covered, _merged_intervals, concordance
+from just_vcf.coverage import _RAGGED
 from just_vcf.evidence import _calls_evidence
 from just_vcf.loading import Loaded
 from just_vcf.reference import ReferenceStore
@@ -130,13 +131,26 @@ class RegionSet(BaseModel):
 
 def read_bed(path: Path | str) -> pl.LazyFrame:
     """A BED file's intervals as `chrom`, `pos`, `end_pos`, 1-based closed (`pos` is the BED start + 1).
-    Header, track and browser lines are skipped; columns beyond the third are ignored."""
+    `#` comments and headers, and UCSC `track` and `browser` lines, are skipped wherever they stand;
+    columns beyond the third are ignored.
+
+    The first three fields are read by name (`schema=`), never by a width taken from the first line: a
+    `track` line is one field, and a frame of that width has no second column (RM292). No quote
+    character, as BED has none: a track line's `description="a b"` is text."""
     # read_csv, not scan_csv: it decompresses a gzipped BED, as the GIAB releases are.
-    frame = pl.read_csv(Path(path), separator="\t", has_header=False, comment_prefix="#", infer_schema=False, truncate_ragged_lines=True)
+    frame = pl.read_csv(
+        Path(path),
+        separator="\t",
+        has_header=False,
+        comment_prefix="#",
+        quote_char=None,
+        schema={"chrom": pl.String, "start": pl.String, "end": pl.String},
+        truncate_ragged_lines=True,
+        **_RAGGED,
+    )
     return (
         frame.lazy()
-        .select(pl.nth(0).alias("chrom"), pl.nth(1).alias("start"), pl.nth(2).alias("end"))
-        .filter(~pl.col("chrom").str.starts_with("track") & ~pl.col("chrom").str.starts_with("browser"))
+        .filter(~pl.col("chrom").str.contains(r"^(?:track|browser)(?:\s|$)"))
         .select("chrom", (pl.col("start").cast(pl.Int64) + 1).alias("pos"), pl.col("end").cast(pl.Int64).alias("end_pos"))
     )
 

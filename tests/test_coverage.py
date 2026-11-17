@@ -282,6 +282,18 @@ def test_quantized_bins_become_depth_bounds(tmp_path: Path) -> None:
     assert coverage.facet.warnings == ["1 quantized interval(s) carry a bin label that names no depth range (a renamed bin); their depth is unknown"]
 
 
+def test_a_quantized_label_written_empty_is_unbounded_and_a_missing_one_is_short(tmp_path: Path) -> None:
+    """A label written empty names no depth range, as a renamed bin does; a row short of the label field
+    is counted with the short rows instead, never twice (RM291)."""
+    lines = ["chr1\t0\t10\t0:1", "chr1\t10\t20\t", "chr1\t20\t30\tCALLABLE", "chr1\t30\t40", "chr1\t40\t50\t1:4"]
+    warnings = read_coverage(write(tmp_path / "q.bed", lines), kind=CoverageFormat.QUANTIZED_BED).facet.warnings
+    fields = [line.split("\t") for line in lines]
+    unbounded = sum(len(f) == 4 and not re.fullmatch(r"\d+:(\d+|inf)", f[3]) for f in fields)
+    assert warnings[0].startswith(f"{unbounded} quantized interval(s) carry a bin label that names no depth range")
+    assert counted(warnings) == {"short": sum(len(f) < 4 for f in fields)}
+    assert len(warnings) == 2
+
+
 def test_mosdepth_summary_gives_contig_bounds_and_the_build(tmp_path: Path) -> None:
     grch38 = {chrom: next(iter(lengths)) if isinstance(lengths, (set, frozenset)) else lengths for chrom, lengths in ASSEMBLY_LENGTHS["GRCh38"].items()}
     names = ["1", "2", "3", "20", "X"]
@@ -471,6 +483,105 @@ def test_a_file_with_no_rows_reads_as_no_intervals(tmp_path: Path, lines: list[s
     assert intervals.schema == pl.Schema(COVERAGE_INTERVALS) and intervals.height == 0
     if coverage.thresholds is not None:
         assert coverage.thresholds.collect().height == 0
+
+
+REASONS = {"wide": "more than the format's", "short": "fewer than the format's", "blank": "blank line", "depths": "depth columns"}
+"""The phrase that names each reason in a facet's warnings (RM291)."""
+
+
+def counted(warnings: list[str]) -> dict[str, int]:
+    """The rows each reason's warning counts, read from its leading number; one line per reason."""
+    out: dict[str, int] = {}
+    for line in warnings:
+        for reason, phrase in REASONS.items():
+            if phrase in line:
+                assert reason not in out, f"two lines for {reason}"
+                out[reason] = int(line.split(" ", 1)[0].replace(",", ""))
+    return out
+
+
+def expected_counts(lines: list[str], columns: int, kind: CoverageFormat) -> dict[str, int]:
+    """The rows of `lines` wider than, short of and blank against `columns`, from the lines as written."""
+    widths = [len(line.split("\t")) if line else 0 for line in lines if not line.startswith("#")]
+    counts = {
+        "depths" if kind is CoverageFormat.SAMTOOLS_DEPTH else "wide": sum(w > columns for w in widths),
+        "short": sum(0 < w < columns for w in widths),
+        "blank": widths.count(0),
+    }
+    return {reason: rows for reason, rows in counts.items() if rows}
+
+
+def shortened(lines: list[str], rows: list[int]) -> list[str]:
+    """`lines` with the last field taken off the lines at `rows`."""
+    return [line.rsplit("\t", 1)[0] if i in rows else line for i, line in enumerate(lines)]
+
+
+RAGGED_VARIANTS = ("none", "wide_first", "wide_later", "short", "mixed", "blank")
+
+
+def ragged_variants(lines: list[str]) -> dict[str, list[str]]:
+    """A fixture's lines with rows cut or padded each way RM291 counts. `mixed` widens as many rows by one
+    field as it shortens by one, so the file's field total is the format's: a count from totals sees nothing."""
+    data = [i for i, line in enumerate(lines) if not line.startswith("#")]
+    pairs = min(len(data[0::4]), len(data[2::4]))
+    mixed = [f"{line}\textra" if i in data[0::4][:pairs] else line for i, line in enumerate(shortened(lines, data[2::4][:pairs]))]
+    return {
+        "none": lines,
+        "wide_first": widened(lines, data[:1]),
+        "wide_later": widened(lines, data[1::2]),
+        "short": shortened(lines, data[2::3]),
+        "mixed": mixed,
+        "blank": [*lines[: data[1]], "", *lines[data[1] :], ""],
+    }
+
+
+@pytest.mark.parametrize("window", [None, 7])
+@pytest.mark.parametrize("variant", RAGGED_VARIANTS)
+@pytest.mark.parametrize("kind", list(fixed_width_files()))
+def test_rows_cut_or_padded_are_counted_by_reason(tmp_path: Path, kind: CoverageFormat, variant: str, window: int | None) -> None:
+    """Each row read as its leading fields, or with missing fields as null, is counted under its reason in
+    the facet's warnings, one line per reason (RM291); a file whose rows all hold the format's fields
+    warns of nothing."""
+    plain = fixed_width_files()[kind]
+    columns = len(next(line for line in plain if not line.startswith("#")).split("\t"))
+    variants = ragged_variants(plain)
+    assert tuple(variants) == RAGGED_VARIANTS
+    lines = variants[variant]
+    warnings = read_coverage(write(tmp_path / "rows.txt", lines), window=window, kind=kind).facet.warnings
+    expected = expected_counts(lines, columns, kind)
+    assert (variant == "none") == (not expected)
+    assert counted(warnings) == expected
+    assert len(warnings) == len(expected)
+
+
+@pytest.mark.parametrize("window", [None, 7])
+@pytest.mark.parametrize("kind", [CoverageFormat.PER_BASE_BED, CoverageFormat.SAMTOOLS_DEPTH])
+def test_rows_are_counted_across_the_read_s_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: CoverageFormat, window: int | None) -> None:
+    """A per-base source read in blocks counts its cut and padded rows over all of them, as one read does."""
+    path = write(tmp_path / "rows.txt", ragged_variants(fixed_width_files()[kind])["mixed"])
+    whole = read_coverage(path, window=window, kind=kind)
+    monkeypatch.setattr(coverage_module, "_CHUNK_BYTES", 64)
+    blocks = read_coverage(path, window=window, kind=kind)
+    assert blocks.facet.warnings == whole.facet.warnings and counted(whole.facet.warnings)
+    assert blocks.intervals.collect().equals(whole.intervals.collect())
+
+
+def test_samtools_depth_of_several_files_stated_reads_the_first_column_and_says_so(tmp_path: Path) -> None:
+    """`samtools depth` over several alignment files, read with `kind` stated, reads the first depth column
+    and says how many there were; the header's file names stay out of the warning."""
+    depth = sorted(depth_of(READS, contig="chr1").items())
+    rows = [f"chr1\t{pos}\t{value}\t{value + 1}" + ("\t7" if i % 3 == 0 else "") for i, (pos, value) in enumerate(depth)]
+    several = write(tmp_path / "several.txt", ["#CHROM\tPOS\tperson_a.bam\tperson_b.bam", *rows])
+    single = write(tmp_path / "single.txt", [f"chr1\t{pos}\t{value}" for pos, value in depth])
+    read = read_coverage(several, window=None, kind=CoverageFormat.SAMTOOLS_DEPTH)
+    assert read.intervals.collect().equals(read_coverage(single, window=None, kind=CoverageFormat.SAMTOOLS_DEPTH).intervals.collect())
+    columns = sorted({len(row.split("\t")) - 2 for row in rows})
+    (warning,) = read.facet.warnings
+    assert counted([warning]) == {"depths": len(rows)}
+    assert f"carry {columns[0]} to {columns[-1]} depth columns" in warning and "the first was read" in warning
+    assert "person" not in warning and ".bam" not in warning
+    two = read_coverage(write(tmp_path / "two.txt", [row.rsplit("\t", 1)[0] if row.count("\t") == 4 else row for row in rows]), window=None, kind=CoverageFormat.SAMTOOLS_DEPTH)
+    assert "carry 2 depth columns" in two.facet.warnings[0]
 
 
 def test_wide_rows_past_the_sniffed_lines_leave_the_format_and_the_runs_as_they_are(tmp_path: Path) -> None:

@@ -309,6 +309,45 @@ def test_giab_stratifications_are_found_by_name_and_read_one_based(tmp_path: Pat
         giab_stratifications(tmp_path, "T2T-CHM13")
 
 
+@pytest.mark.parametrize("compress", [False, True])
+def test_read_bed_skips_track_browser_and_comment_lines_wherever_they_are(tmp_path: Path, compress: bool) -> None:
+    """UCSC `track` and `browser` lines and `#` comments are not intervals (RM292): a BED opening with them,
+    or holding one between its rows, reads as the same rows without them. A track line's quoted text with
+    spaces is one field of it, never a quote that runs on into the rows. Only the words themselves mark
+    such a line: a contig whose name merely starts with them is read."""
+    rows = ["chr1\t0\t10\tfirst", "chr1\t10\t20", "chr2\t99\t100\tthird\t0\t+", "track_decoy\t4\t8"]
+    lines = [
+        'track name="easy regions" description="a b c" visibility=2',
+        "browser position chr1:1-100",
+        "browser hide all",
+        "# a comment",
+        rows[0],
+        'track name="second"',
+        rows[1],
+        "#another\tcomment",
+        rows[2],
+        "browser full altGraph",
+        rows[3],
+    ]
+    text = "".join(f"{line}\n" for line in lines)
+    plain = "".join(f"{line}\n" for line in rows)
+    marked, bare = tmp_path / "marked.bed", tmp_path / "bare.bed"
+    marked.write_bytes(gzip.compress(text.encode()) if compress else text.encode())
+    bare.write_text(plain)
+    read = read_bed(marked).collect()
+    assert read.equals(read_bed(bare).collect())
+    assert read.rows() == [(line.split("\t")[0], int(line.split("\t")[1]) + 1, int(line.split("\t")[2])) for line in rows]
+
+
+@pytest.mark.parametrize("lines", [["# a comment"], ['track name="none"', "browser hide all"], ["#chrom\tstart\tend"]])
+def test_read_bed_of_no_interval_reads_empty(tmp_path: Path, lines: list[str]) -> None:
+    """A BED of comments, or of track and browser lines, alone has no intervals, on polars 1.x as on 2.x."""
+    bed = tmp_path / "none.bed"
+    bed.write_text("".join(f"{line}\n" for line in lines))
+    read = read_bed(bed).collect()
+    assert read.height == 0 and read.schema == pl.Schema({"chrom": pl.String, "pos": pl.Int64, "end_pos": pl.Int64})
+
+
 def test_each_side_s_confidence_bands_its_own_rows(tmp_path: Path, store: ReferenceStore) -> None:
     # freeBayes's PL puts each het at a stated confidence (the gap to the next genotype, in phred);
     # GATK's rows state none. Each banded row counts the alleles in one band of one side's confidence,

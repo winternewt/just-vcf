@@ -11,6 +11,23 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `atlas.read_bed` skips UCSC `track` and `browser` lines wherever they stand, as its docstring said
+  (RM292): a BED opening with a `track` line failed with polars' `ColumnNotFoundError` on polars 1.44
+  and 2.1 alike, since the read took the file's width from that one-field line. It now reads the first
+  three fields by name, with no quote character (a track line's `description="a b"` is text), and a
+  line is a track or browser line only when the word stands alone, so a contig named `track_x` is
+  read. A BED of comments alone reads as no intervals on both versions, where both raised polars'
+  `NoDataError`. GIAB stratifications read as before. Patch.
+
+- `read_coverage` counts the rows it cut or padded (RM291). A coverage facet's `warnings` gain one line
+  per reason: the rows carrying more fields than the format's, whose fields past them were not read; the
+  rows carrying fewer, whose missing fields read as null; and the blank lines, which read as rows of
+  nulls. A `samtools depth` file of several alignment files, read with `kind` stated, says how many depth
+  columns its rows carried and that the first was read. The counts come from the same bytes the read
+  parses (`scan_lines`), about 0.05 s on top of 0.40 s for a 90 MB per-base BED. A quantized row short
+  of its label field is counted there, no longer as a renamed bin; an empty label still is one. A
+  well-formed file warns of nothing new. Patch.
+
 - Loading a VCF re-saved by a spreadsheet leaves no file for the collector to warn about (RM290). The
   stream `undo_resave` returns read through a text wrapper that, once the stream reached the payload's
   end, was collected with the payload still open: it closed the payload under `open_payload` and raised

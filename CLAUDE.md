@@ -387,7 +387,9 @@ These were learned the expensive way in the sibling repos. Each is a prohibition
   from `register_vcf`-named tables, and just-prs adds 1 to compensate. `scan_vcf` in 0.36 defaults to
   1-based closed instead (checked 2026-09-29), so always pass `use_zero_based` explicitly. Never mix the two in one frame;
   convert at the edge and name the column for the convention it holds.
-- **Never run concurrent `pb.scan_vcf` on the same table name.** It panics with "table already exists".
+- **Never run concurrent `pb.scan_vcf` on the same table name.** On polars-bio 0.36 it panicked with "table
+  already exists". 0.37.0 narrowed it (P6a): `collect_all` over several scans of one file now works, but scans
+  started from several threads still race on the file-stem table and fail with `No table named '<stem>'`.
   just-prs registers under a content-hash name behind a lock (`vcf.scan_vcf`).
 - **polars-bio joins multi-allelic ALT with `|`** and decodes FILTER `.` as `""`. Handle both
   explicitly; a naive equality against an allele silently misses every multi-allelic site.

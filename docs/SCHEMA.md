@@ -2508,6 +2508,18 @@ basis, `contig_lengths`, `resolution` (`base`, `window`, `bin`, `region`, `thres
 ascending; null otherwise), `quantize` (the bin edges a quantized facet was cut at by
 `alignment_coverage`; null otherwise). just-vcf's own shape (charter 2): GA4GH has no coverage model.
 
+**Rows of another width** (RM289, RM291). `read_coverage` reads each row of a file as the format's
+fields: a row with more is read as its leading ones, a row with fewer reads the ones it lacks as null,
+and a blank line reads as a row of nulls. The facet's `warnings` count them, one line per reason, never
+one per row: the rows that carry more fields than the format's (with the most any row carried), the
+rows that carry fewer (with the fewest), the blank lines. In a `samtools depth` file read with
+`kind=CoverageFormat.SAMTOOLS_DEPTH` stated, the fields past the third are the depth columns of further
+alignment files, so that line says how many depth columns the rows carried and that the first was read
+(unstated, such a file is refused). The lines give counts only: a `samtools depth -H` header names the
+alignment files, which can carry a person's name. A quantized row with no label is counted with the
+short rows, not as a renamed bin. Rejected: a warning per row, which a whole-genome file would turn into
+millions of lines.
+
 **Quantized runs from the depth pass** (RM278, 2026-11-03). `alignment_coverage(path,
 quantize=(0, 1, 4, None))` adds `Coverage.quantized` to the windows it returns: a second coverage
 facet, `format_id = alignment_depth`, `resolution = bin`, `window` null, `zero_filled` false,

@@ -45,7 +45,9 @@ import io
 import json
 import logging
 import re
+from collections import Counter
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, field
 from enum import Enum
 from importlib.metadata import version
 from itertools import pairwise
@@ -276,35 +278,38 @@ def read_coverage(
     lengths: list[dict] | None = None
     counts: pl.DataFrame | None = None
     thresholds: list[int] | None = None
+    widths = _RowWidths()
     folded = window if kind in (CoverageFormat.PER_BASE_BED, CoverageFormat.SAMTOOLS_DEPTH) else None
 
     if kind is CoverageFormat.MOSDEPTH_SUMMARY:
-        intervals, lengths, skipped = _read_summary(path)
+        intervals, lengths, skipped = _read_summary(path, widths)
         if skipped:
             warnings.append(f"{skipped:,} summary row(s) for the total or for --by regions carry no interval and were left out")
         resolution = Resolution.REGION
     elif kind is CoverageFormat.SAMTOOLS_COVERAGE:
-        intervals = _read_samtools_coverage(path)
+        intervals = _read_samtools_coverage(path, widths)
         dropped = ["numreads", "covbases", "coverage", "meanbaseq", "meanmapq"]
         resolution = Resolution.REGION
     elif kind is CoverageFormat.REGIONS_BED:
-        intervals = _read_regions(path, named=len(lines[0].split("\t")) >= 5)
+        intervals = _read_regions(path, widths, named=len(lines[0].split("\t")) >= 5)
         resolution = Resolution.REGION
     elif kind is CoverageFormat.QUANTIZED_BED:
-        intervals, unbounded = _read_quantized(path)
+        intervals, unbounded = _read_quantized(path, widths)
         if unbounded:
             warnings.append(f"{unbounded:,} quantized interval(s) carry a bin label that names no depth range (a renamed bin); their depth is unknown")
         resolution = Resolution.BIN
     elif kind is CoverageFormat.THRESHOLDS_BED:
-        intervals, counts, thresholds = _read_thresholds(path, lines[0])
+        intervals, counts, thresholds = _read_thresholds(path, lines[0], widths)
         resolution = Resolution.THRESHOLDS
     elif folded is not None:
-        partial = _fold_chunks(_depth_chunks(path, kind), folded)
+        partial = _fold_chunks(_depth_chunks(path, kind, widths), folded)
         intervals = _finish_windows(partial, folded, lengths=None, zero_filled=False)
         resolution = Resolution.WINDOW
     else:
-        intervals = _read_runs(path, kind)
+        intervals = _read_runs(path, kind, widths)
         resolution = Resolution.BASE
+
+    warnings += _width_warnings(widths, kind)
 
     label, basis, label_warnings = _assembly(assembly_label, lengths)
     warnings += label_warnings
@@ -428,22 +433,33 @@ def _coverage_kind(lines: list[str]) -> CoverageFormat:
     raise UnsupportedCoverageError(f"a BED of {width} columns whose last is not a depth")
 
 
-def _read_tsv(path: Path, names: list[str], dtypes: list[pl.DataType], *, skip_header: bool) -> pl.DataFrame:
+@dataclass
+class _RowWidths:
+    """The rows of one file whose field count is not its format's, summed over every block read (RM291)."""
+
+    columns: int = 0
+    """The format's fields: how many names the reads were given."""
+    fields: Counter[int] = field(default_factory=Counter)
+    """Rows by their field count, for every count other than `columns`; a blank line holds none (0)."""
+
+
+def _read_tsv(path: Path, names: list[str], dtypes: list[pl.DataType], widths: _RowWidths, *, skip_header: bool) -> pl.DataFrame:
     with _open_text(path) as handle:
         data = handle.read()
-    return _read_fields(data, names, dtypes, skip_header=skip_header)
+    return _read_fields(data, names, dtypes, widths, skip_header=skip_header)
 
 
-def _read_fields(data: bytes, names: list[str], dtypes: list[pl.DataType], *, skip_header: bool) -> pl.DataFrame:
+def _read_fields(data: bytes, names: list[str], dtypes: list[pl.DataType], widths: _RowWidths, *, skip_header: bool) -> pl.DataFrame:
     """Tab-separated rows as their first `len(names)` fields, typed `dtypes`: a row's fields past them are
     not read, and a field a row lacks is null, whatever the width of the first row (RM289). Lines that
-    start with `#` are comments, unless `skip_header` skips the first line instead.
+    start with `#` are comments, unless `skip_header` skips the first line instead. The rows of another
+    width than the names' are added to `widths` (RM291), for the facet's warnings.
 
     No rows at all (a header alone, comments alone) is an empty frame of the schema: polars 2.x reads it
     so, polars 1.x raises `NoDataError` for it."""
     schema = dict(zip(names, dtypes))
     try:
-        return pl.read_csv(
+        frame = pl.read_csv(
             data,
             separator="\t",
             has_header=False,
@@ -455,10 +471,58 @@ def _read_fields(data: bytes, names: list[str], dtypes: list[pl.DataType], *, sk
         )
     except pl.exceptions.NoDataError:
         return pl.DataFrame(schema=schema)
+    widths.columns = len(names)
+    widths.fields.update(_field_counts(data, len(names), skip_header=skip_header))
+    return frame
 
 
-def _read_summary(path: Path) -> tuple[pl.DataFrame, list[dict], int]:
-    frame = _read_tsv(path, _MOSDEPTH_SUMMARY_HEADER, [pl.String(), pl.UInt64(), pl.UInt64(), pl.Float64(), pl.UInt32(), pl.UInt32()], skip_header=True)
+def _field_counts(data: bytes, columns: int, *, skip_header: bool) -> Counter[int]:
+    """How many of the lines `_read_fields` reads as rows hold each field count other than `columns`, a
+    blank line holding none: the same bytes split into lines by `scan_lines`, about 30 ms a 64 MB block
+    against about 50 ms for the parse (polars 2.1 and 1.44, measured 2026-11-17). A blank line is a row
+    of nulls to `read_csv` on both, so it is counted, under a reason of its own."""
+    lines = pl.scan_lines(data, name="line")
+    lines = lines.slice(1) if skip_header else lines.filter(~pl.col("line").str.starts_with("#"))
+    line = pl.col("line")
+    count = pl.when((line == "") | (line == "\r")).then(0).otherwise(line.str.count_matches("\t", literal=True) + 1)
+    counts = lines.select(fields=count).filter(pl.col("fields") != columns).group_by("fields").len().collect()
+    return Counter(dict(counts.iter_rows()))
+
+
+def _width_warnings(widths: _RowWidths, kind: CoverageFormat) -> list[str]:
+    """One line per reason for the rows `_read_fields` cut or padded: past the format's fields, short of
+    them, blank. In a `samtools depth` file the fields past the third are the depth columns of further
+    alignment files, so that line says how many there were and that the first was read. Counts only:
+    a header there names the alignment files, which can carry a person's name."""
+    columns = widths.columns
+    wide = {count: rows for count, rows in widths.fields.items() if count > columns}
+    short = {count: rows for count, rows in widths.fields.items() if 0 < count < columns}
+    blank = widths.fields.get(0, 0)
+    warnings: list[str] = []
+    if wide and kind is CoverageFormat.SAMTOOLS_DEPTH:
+        fewest, most = min(wide) - 2, max(wide) - 2
+        depths = f"{fewest}" if fewest == most else f"{fewest} to {most}"
+        warnings.append(
+            f"{sum(wide.values()):,} row(s) carry {depths} depth columns, one per alignment file samtools depth was given; "
+            "the first was read, the others were not"
+        )
+    elif wide:
+        warnings.append(
+            f"{sum(wide.values()):,} row(s) carry more than the format's {columns} fields (up to {max(wide)}); "
+            f"the fields past the first {columns} were not read"
+        )
+    if short:
+        warnings.append(
+            f"{sum(short.values()):,} row(s) carry fewer than the format's {columns} fields (as few as {min(short)}); "
+            "the fields they lack read as null"
+        )
+    if blank:
+        warnings.append(f"{blank:,} blank line(s) read as row(s) whose every field is null")
+    return warnings
+
+
+def _read_summary(path: Path, widths: _RowWidths) -> tuple[pl.DataFrame, list[dict], int]:
+    frame = _read_tsv(path, _MOSDEPTH_SUMMARY_HEADER, [pl.String(), pl.UInt64(), pl.UInt64(), pl.Float64(), pl.UInt32(), pl.UInt32()], widths, skip_header=True)
     contigs = frame.filter((pl.col("chrom") != "total") & ~pl.col("chrom").str.ends_with("_region"))
     skipped = frame.height - contigs.height
     lengths = [{"source": row["chrom"], "chrom": canonical_chrom(row["chrom"]), "length": int(row["length"])} for row in contigs.iter_rows(named=True)]
@@ -475,9 +539,9 @@ def _read_summary(path: Path) -> tuple[pl.DataFrame, list[dict], int]:
     return intervals, lengths, skipped
 
 
-def _read_samtools_coverage(path: Path) -> pl.DataFrame:
+def _read_samtools_coverage(path: Path, widths: _RowWidths) -> pl.DataFrame:
     names = ["chrom", "startpos", "endpos", "numreads", "covbases", "coverage", "meandepth", "meanbaseq", "meanmapq"]
-    frame = _read_tsv(path, names, [pl.String(), pl.UInt32(), pl.UInt32(), pl.UInt64(), pl.UInt64(), pl.Float64(), pl.Float64(), pl.Float64(), pl.Float64()], skip_header=True)
+    frame = _read_tsv(path, names, [pl.String(), pl.UInt32(), pl.UInt32(), pl.UInt64(), pl.UInt64(), pl.Float64(), pl.Float64(), pl.Float64(), pl.Float64()], widths, skip_header=True)
     return frame.select(
         chrom=pl.col("chrom"),
         pos=pl.col("startpos"),
@@ -490,10 +554,10 @@ def _read_samtools_coverage(path: Path) -> pl.DataFrame:
     )
 
 
-def _read_regions(path: Path, *, named: bool) -> pl.DataFrame:
+def _read_regions(path: Path, widths: _RowWidths, *, named: bool) -> pl.DataFrame:
     names = ["chrom", "start", "end", "name", "mean"] if named else ["chrom", "start", "end", "mean"]
     dtypes: list[pl.DataType] = [pl.String(), pl.UInt32(), pl.UInt32(), pl.String(), pl.Float64()] if named else [pl.String(), pl.UInt32(), pl.UInt32(), pl.Float64()]
-    frame = _read_tsv(path, names, dtypes, skip_header=False)
+    frame = _read_tsv(path, names, dtypes, widths, skip_header=False)
     return frame.select(
         chrom=pl.col("chrom"),
         pos=(pl.col("start") + 1).cast(pl.UInt32),
@@ -506,9 +570,10 @@ def _read_regions(path: Path, *, named: bool) -> pl.DataFrame:
     )
 
 
-def _read_quantized(path: Path) -> tuple[pl.DataFrame, int]:
-    """mosdepth's bins are `lower:upper`, half-open (`0:1` is depth 0, `4:inf` four or more)."""
-    frame = _read_tsv(path, ["chrom", "start", "end", "label"], [pl.String(), pl.UInt32(), pl.UInt32(), pl.String()], skip_header=False)
+def _read_quantized(path: Path, widths: _RowWidths) -> tuple[pl.DataFrame, int]:
+    """mosdepth's bins are `lower:upper`, half-open (`0:1` is depth 0, `4:inf` four or more). The count is of
+    the intervals whose label names no range; a row with no label at all is counted with the short rows."""
+    frame = _read_tsv(path, ["chrom", "start", "end", "label"], [pl.String(), pl.UInt32(), pl.UInt32(), pl.String()], widths, skip_header=False)
     parts = pl.col("label").str.extract_groups(_BIN_LABEL.pattern)
     out = frame.with_columns(parts.alias("bin")).select(
         chrom=pl.col("chrom"),
@@ -520,10 +585,10 @@ def _read_quantized(path: Path) -> tuple[pl.DataFrame, int]:
         bases=(pl.col("end") - pl.col("start")).cast(pl.UInt32),
         label=pl.col("label"),
     )
-    return out, int(out["depth_min"].null_count())
+    return out, out.filter(pl.col("label").is_not_null() & pl.col("depth_min").is_null()).height
 
 
-def _read_thresholds(path: Path, header: str) -> tuple[pl.DataFrame, pl.DataFrame, list[int]]:
+def _read_thresholds(path: Path, header: str, widths: _RowWidths) -> tuple[pl.DataFrame, pl.DataFrame, list[int]]:
     """mosdepth's thresholds file: the regions as intervals with no depth, and the counts in long form.
 
     mosdepth (`write_thresholds`) writes `chrom, start, end` of each `--by` region (0-based, half-open),
@@ -540,7 +605,7 @@ def _read_thresholds(path: Path, header: str) -> tuple[pl.DataFrame, pl.DataFram
         raise UnsupportedCoverageError("a thresholds header whose thresholds do not rise strictly, as mosdepth writes them")
     names = [f"t{i}" for i in range(len(thresholds))]
     frame = _read_tsv(
-        path, ["chrom", "start", "end", "region", *names], [pl.String(), pl.UInt32(), pl.UInt32(), pl.String(), *[pl.UInt32()] * len(names)], skip_header=True
+        path, ["chrom", "start", "end", "region", *names], [pl.String(), pl.UInt32(), pl.UInt32(), pl.String(), *[pl.UInt32()] * len(names)], widths, skip_header=True
     )
     length = pl.col("end").cast(pl.Int64) - pl.col("start").cast(pl.Int64)
     over = frame.filter(pl.any_horizontal([pl.col(n).cast(pl.Int64) > length for n in names]) | (length <= 0)).height
@@ -577,9 +642,9 @@ def _read_thresholds(path: Path, header: str) -> tuple[pl.DataFrame, pl.DataFram
     return intervals, counts, thresholds
 
 
-def _read_runs(path: Path, kind: CoverageFormat) -> pl.DataFrame:
+def _read_runs(path: Path, kind: CoverageFormat, widths: _RowWidths) -> pl.DataFrame:
     """Every source row as one interval of one depth (`window=None`)."""
-    chunks = list(_depth_chunks(path, kind))
+    chunks = list(_depth_chunks(path, kind, widths))
     runs = pl.concat(chunks) if chunks else pl.DataFrame(schema={"chrom": pl.String, "pos": pl.Int64, "end_pos": pl.Int64, "depth": pl.Int64})
     return runs.select(
         chrom=pl.col("chrom"),
@@ -593,7 +658,7 @@ def _read_runs(path: Path, kind: CoverageFormat) -> pl.DataFrame:
     )
 
 
-def _depth_chunks(path: Path, kind: CoverageFormat) -> Iterator[pl.DataFrame]:
+def _depth_chunks(path: Path, kind: CoverageFormat, widths: _RowWidths) -> Iterator[pl.DataFrame]:
     """A per-base source as runs `chrom, pos, end_pos, depth` (1-based, inclusive), chunk by chunk."""
     if kind is CoverageFormat.PER_BASE_BED:
         names, dtypes = ["chrom", "start", "end", "depth"], [pl.String(), pl.Int64(), pl.Int64(), pl.Int64()]
@@ -613,7 +678,7 @@ def _depth_chunks(path: Path, kind: CoverageFormat) -> Iterator[pl.DataFrame]:
                     continue
             tail = data[cut:]
             if data[:cut].strip():
-                frame = _read_fields(data[:cut], names, dtypes, skip_header=False)
+                frame = _read_fields(data[:cut], names, dtypes, widths, skip_header=False)
                 if kind is CoverageFormat.PER_BASE_BED:
                     yield frame.select("chrom", pos=pl.col("start") + 1, end_pos=pl.col("end"), depth=pl.col("depth"))
                 else:

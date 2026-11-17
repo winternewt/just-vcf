@@ -440,6 +440,18 @@ def test_rows_wider_than_the_format_read_as_their_leading_fields(tmp_path: Path,
         assert read.thresholds.collect().equals(plain.thresholds.collect())
 
 
+@pytest.mark.parametrize("kind", list(fixed_width_files()))
+def test_a_first_row_short_of_a_field_reads_it_as_empty(tmp_path: Path, kind: CoverageFormat) -> None:
+    """A row lacking the format's last field reads as the row with that field written empty, the first
+    data row included, which polars 2 checks the columns against (RM289)."""
+    lines = fixed_width_files()[kind]
+    first = next(i for i, line in enumerate(lines) if not line.startswith("#"))
+    cut = lines[first].rsplit("\t", 1)[0]
+    empty = read_coverage(write(tmp_path / "empty.txt", [*lines[:first], cut + "\t", *lines[first + 1:]]), window=None, kind=kind)
+    short = read_coverage(write(tmp_path / "short.txt", [*lines[:first], cut, *lines[first + 1:]]), window=None, kind=kind)
+    assert short.intervals.collect().equals(empty.intervals.collect())
+
+
 def test_wide_rows_past_the_sniffed_lines_leave_the_format_and_the_runs_as_they_are(tmp_path: Path) -> None:
     # The format is told from the first lines alone, so a file whose wide rows come later is read unstated.
     # Rows past the hundredth are past the lines polars infers a width from, which polars 1.x refused too.

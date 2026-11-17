@@ -3,6 +3,23 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM291 — Coverage rows cut or padded are counted
+Severity: low · Status: shipped 2026-11-17 (merge 77cbd0b; full suite 2799 passed on polars 2.1.0 and on 1.44.2)
+
+**Built:** `coverage._read_fields` counts each row's fields from the same bytes it reads (`scan_lines`,
+`str.count_matches`), summed across blocks, and the facet's warnings say per reason how many rows were wider than the
+format (fields past it not read), short of it (missing fields null), or blank (all-null rows); a samtools `depth` file of
+several alignment files says the first depth column was read and how many there were. About 12–14% slower on a 90 MB
+per-base BED. **Left:** the read honours `"` quoting while the count splits on raw tabs, so a quoted field holding a tab
+would count as a wide row (no coverage tool writes quotes; `quote_char=None` would align them).
+
+## RM292 — `read_bed` skips track lines
+Severity: low · Status: shipped 2026-11-17 (merge 77cbd0b)
+
+**Built:** `atlas.read_bed` reads three named fields with `schema=`, `truncate_ragged_lines` and `coverage._RAGGED`, no
+quote character, and drops lines matching `^(track|browser)(\s|$)` wherever they stand; a BED of comments alone reads as
+no intervals on both polars majors. GIAB reads are unchanged.
+
 ## RM289 — Coverage BED rows of mixed width on polars 2
 Severity: low · Status: shipped 2026-11-17 (merge aac313d; full suite 2740 passed on polars 2.1.0, the touched tests on 1.44.2 too)
 

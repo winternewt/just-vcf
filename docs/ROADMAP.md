@@ -6,23 +6,6 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
-## RM292 — `read_bed` skips track lines
-**State:** building (2026-11-17, an Opus builder on branch `rm291-292`) · **Owner:** lead
-
-Severity: low. Found during RM289: `atlas.read_bed`'s docstring says `track` and `browser` lines are skipped, but a BED
-whose first line is a `track` line fails with `ColumnNotFoundError` on polars 1.44 and 2.1 alike. The read skips them
-as documented, with a test of a BED that opens with a `track` and a `browser` line.
-
-## RM291 — Coverage rows cut or padded are counted
-**State:** building (2026-11-17, an Opus builder on branch `rm291-292`) · **Owner:** lead
-
-Severity: low. Since RM289 (2026-11-17) a coverage row with fields past its format's columns is read as its leading
-fields, and one short of a field reads the missing ones as null, on polars 1.x and 2.x alike, with no warning. polars
-1.44 already cut a wide first row silently, but a wide row past the first hundred was refused on both, and a samtools
-`depth` file of several samples, read with `kind=` stated, now reads only its first depth column. CLAUDE.md §5 asks
-for repeated warnings aggregated by reason with a count, so the facet's warnings count the rows cut and the rows padded,
-each by reason, and a multi-sample `depth` file says which column it read. A test computes the counts from a fixture.
-
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
 

@@ -19,9 +19,11 @@ Read marks, the last release read against this ledger:
   still reproduce). The lock moved to 0.37.0 with RM288 (merged 2026-11-16, `0adf89c`); P16 passed its
   repro on the lock and moved to `docs/PREVIOUS_ISSUES.md`. P1–P14 were re-run on the lock on 2026-11-17:
   all hold except P6a, which 0.37.0 narrowed to concurrent scans.
-- **polars: 1.44.2.** The lock moved to 2.1.0 with RM288, whose builder re-checked each of CLAUDE.md §5's
-  polars 1.44 quirks on 2.x. 2.0.0 to 2.1.0 are not yet read here against what we use, and P23 is not
-  yet re-run on 2.1.0: both are the next pass (unattended).
+- **polars: 2.1.0, in part.** The lock moved to 2.1.0 with RM288. What breaks us and what fixed our
+  workarounds were read there: the builder re-checked each of CLAUDE.md §5's polars 1.44 quirks on 2.1.0
+  and recorded the three 2.x changes the suite met. P23 was re-run on 2.1.0 (2026-11-17) and still
+  holds. Not yet read: the 2.0.0–2.1.0 release notes for levers, meaning features that would replace a
+  piece of ours (unattended).
 
 Fellow liaisons (the role's outbound step: poll them before a filing): none on this machine stands on
 polars-bio (checked 2026-11-16). just-prs and just-dna-lite lock it and run no seats; the seated
@@ -673,6 +675,13 @@ writes. Under the kit's rule that a defect in a shared upstream goes up once wit
 reproduction, its liaison was asked on the seats' chat (topic `upstream polars`) whether it sees the
 same fallback. It does not: its one `replace_strict` runs on an eager frame and no sunk plan maps
 with `replace`. The #24393 comment stays just-vcf's alone.
+
+*Rechecked (2026-11-17), polars 2.1.0 (the lock since RM288).* Still true. The physical graph of a
+`with_columns` over `replace(mapping)` or `replace_strict(mapping, default=None)` still has a
+`columnar-function` node in the fallback colour, and the same mapping in `map_batches(...,
+is_elementwise=True)` has none (as the lead found on 2026-11-16, CLAUDE.md §5). pola-rs/polars #24393
+is still open, with no maintainer reply and nothing new since 2026-07-02. The comment would now name
+2.1.0.
 
 ## Harvested and closed without an entry (2026-09-30)
 

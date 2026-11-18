@@ -94,6 +94,12 @@ each reset.
    on the other. The export/genome pairs are in the session scratch (`id_pairs.tsv`, 36 rows). Building: a
    per-probe orientation table learned from WGS (`same` / `flipped`; a probe with no WGS evidence, or contradicting
    evidence, withheld), replacing the chip-wide gate for v3 and v4.
+0. **2026-11-18: audit 17 done; fixes merged as 571daec**; suite 2856 passed, 77 skipped, 8 xfailed on polars 2.1.0
+   and 1.44.2. The fix builder's calls for veto: `RESOLVE_VERSION` stays 14 (every loader builds one id per row, so no
+   loaded row reads differently); a row with a listed rsid and an unlisted one placed elsewhere, once `code_ambiguous`,
+   now resolves through the listed probe; a CGI file opening with a BOM keeps its `#TITLE` (beyond the brief). Left:
+   stash@{0} `audit17-bom-src-only` (committed content, the person's to drop); commit 53d1750's message holds a literal
+   U+FEFF (history, left). RM297 (coverage detection past a BOM) is merge 1 of 6 toward audit 18; RM298 building.
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

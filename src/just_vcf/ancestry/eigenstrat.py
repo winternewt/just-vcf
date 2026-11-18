@@ -67,9 +67,12 @@ def read_snp(path: Path) -> pl.DataFrame:
     """A `.snp` file as `snp_id, chrom, pos, allele1, allele2`, in file order. `allele1` is counted.
 
     Lines are read by `scan_lines`, so any byte but the line end is text (RM294). An empty line is a row
-    of nulls, as it was when `read_csv` read the lines."""
+    of nulls, and a UTF-8 BOM opening the file is dropped, as when `read_csv` read the lines: `scan_lines`
+    keeps the BOM as U+FEFF on the first line."""
     frame = pl.scan_lines(path, name="line").collect()
-    line = pl.when(pl.col("line") != "").then(pl.col("line"))
+    first = pl.int_range(pl.len()) == 0
+    text = pl.when(first).then(pl.col("line").str.strip_prefix("﻿")).otherwise(pl.col("line"))
+    line = pl.when(text != "").then(text)
     parts = frame.select(line.str.strip_chars().str.replace_all(r"\s+", " ").str.split(" ").alias("f"))
     widths = parts.select(pl.col("f").list.len()).to_series()
     if parts.height and (widths != 6).any():

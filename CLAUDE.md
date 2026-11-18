@@ -387,7 +387,8 @@ workarounds marked "stays while 1.x is admitted".
 - **Polars `scan_lines` reads lines, `read_csv` on an unlikely separator does not.** A one-column
   `read_csv` with `separator="\x1f"` (or any byte) fails on a line holding that byte. `scan_lines` takes a
   path or the bytes themselves on polars 2.1 and 1.44 alike, splits at LF alone (a CRLF's CR is dropped,
-  a bare CR, `\x0c` or U+2028 is text), reads a blank line as `""`, and refuses a byte that is not UTF-8
+  a bare CR, `\x0c` or U+2028 is text), reads a blank line as `""`, keeps a UTF-8 BOM as U+FEFF on the
+  first line (`read_csv` drops it; a gzip file is read through on both), and refuses a byte that is not UTF-8
   with `ComputeError: invalid utf8`; it has no lossy mode. Decode with `errors="replace"` first where
   `read_csv`'s `encoding="utf8-lossy"` was relied on: it gives the same U+FFFD per bad sequence (checked
   2026-11-18 on both majors, `loaders.text.lines`, RM294).

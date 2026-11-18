@@ -262,12 +262,14 @@ def test_the_readers_read_what_was_written(fixture: Fixture) -> None:
     assert anno.filter(pl.col("latitude").is_null())["genetic_id"].to_list() == ["Ref1.REF", "Nl1.HO"]
 
 
+@pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"])
 @pytest.mark.parametrize("ending", ["\n", "\r\n"])
-def test_a_snp_line_holding_the_unit_separator_is_read_as_text(tmp_path: Path, ending: str) -> None:
-    """0x1F inside a `.snp` field is text like any other byte but the line end (RM294)."""
+def test_a_snp_line_holding_the_unit_separator_is_read_as_text(tmp_path: Path, ending: str, bom: bytes) -> None:
+    """0x1F inside a `.snp` field is text like any other byte but the line end (RM294); a UTF-8 BOM is not
+    part of the first site's id."""
     rows = ["rs1 1 0.0 100 A G", "rs\x1f2 2 0.0 200 C T", "rs3\x1f 3 0.0 300 G\x1f A"]
     path = tmp_path / "x.snp"
-    path.write_bytes((ending.join(rows) + ending).encode())
+    path.write_bytes(bom + (ending.join(rows) + ending).encode())
     expected = [(f[0], f[1], int(f[3]), f[4], f[5]) for f in (row.split(" ") for row in rows)]
     assert read_snp(path).rows() == expected
 

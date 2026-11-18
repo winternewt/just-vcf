@@ -11,6 +11,15 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- A VCF opening with a UTF-8 BOM loads as the same file without it (RM298), plain, gzip or BGZF, and
+  re-saved by a spreadsheet or not. `sniff` dropped the BOM and named the file `vcf`, but the loader read
+  the BOM-led `##fileformat` line as a record: the copy it wrote put that line and the whole header after
+  it among the records, and polars-bio failed with a raw `unexpected EOL`. The loader now reads the payload
+  from past the BOM, and a file it would otherwise read as it is goes through the copy, since VCF 4.3 and
+  4.5 forbid a BOM and polars-bio does not read past one. `vcf_samples` reads past it too. No warning is
+  added: nothing in the file is changed. `REWRITE_VERSION` 20, so a copy 19 wrote of such a file is not
+  reused. Patch.
+
 - `COVERAGE_VERSION` is 2 (audit 17). RM289, RM291 and RM293 each changed the intervals or warnings
   `read_coverage` gives for some inputs, as do the BOM and blank-block fixes above, and none bumped the
   version its docstring says is bumped then. Every coverage facet's `facet_id` changes, and

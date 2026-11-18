@@ -282,7 +282,7 @@ _SV_PATTERN = rf"^<({'|'.join(_SV_LENGTH_TYPES)})(:[^>]*)?>$"
 _REGISTRATION_LOCK = Lock()
 _REGISTERED: set[str] = set()
 
-REWRITE_VERSION = 19
+REWRITE_VERSION = 20
 """Bumped whenever `readable_path` changes what it writes, so a cached copy from older code is not reused.
 7: every copy has a manifest beside it (RM268), so a copy without one is from an older version.
 8: the SV keys (SVTYPE, CIPOS, CIEND, CN) are carried, so a copy declares them where the rows use
@@ -317,7 +317,9 @@ retry.
 the rows use them undeclared, and a structural copy keeps them; a copy from 17 dropped their lines,
 and polars-bio panics on a requested key its header does not declare.
 19: INFO SVCLAIM is carried (VCF 4.5's per-ALT claim, `sv_claim`), so a copy declares it where the rows
-use it undeclared, and a structural copy keeps it; a copy from 18 dropped its line."""
+use it undeclared, and a structural copy keeps it; a copy from 18 dropped its line.
+20: a payload opening with a UTF-8 BOM is copied from past the BOM (RM298); a copy from 19 wrote the
+BOM-led `##fileformat` line and the whole header after it as records, and polars-bio failed on them."""
 
 HASHED_COLUMN_LINE = "##CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"
 """The VCF column line written with two `#` (F7). Read as the column line only where no `#CHROM` line
@@ -409,11 +411,14 @@ class Header:
     sample_meta: list[str] = field(default_factory=list)
     format_first: bool = True
     hashed_column_line: bool = False
+    """The column line was written `##CHROM` (F7: Veritas SV and CNV uploads), so polars-bio cannot
+    read the file as it is."""
     resaved: bool = False
     """The file was re-saved by a spreadsheet (F7): read through `undo_resave`, so polars-bio needs the
     rewritten copy. Set by the caller that chose to read it so."""
-    """The column line was written `##CHROM` (F7: Veritas SV and CNV uploads), so polars-bio cannot
-    read the file as it is."""
+    bom: bool = False
+    """The payload opens with a UTF-8 BOM (`UTF8_BOM`), read past (RM298), so polars-bio needs the
+    rewritten copy. Set by the caller that read past it."""
     split_markers: dict[str, str] = field(default_factory=dict)
     alt_ids: set[str] = field(default_factory=set)
     """Symbolic alleles the header declares with `##ALT` (`CGA_NOCALL`, `NON_REF`, `DEL`…)."""
@@ -471,6 +476,10 @@ def read_header(handle: BinaryIO) -> tuple[Header, list[bytes]]:
 
 RESAVE_HEAD_BYTES = 64 << 10
 """How much of a payload `is_resaved` looks at."""
+
+UTF8_BOM = b"\xef\xbb\xbf"
+"""A UTF-8 byte order mark. VCF 4.3 and 4.5 say a VCF must not hold one, and polars-bio does not read past
+one opening the file ("empty input"); `sniff` drops it, and so does the loader (`Header.bom`)."""
 
 _QUOTED_META = re.compile(rb'(\A|[\r\n])"##')
 
@@ -1010,6 +1019,7 @@ def readable_path(
         header.format_first
         and not header.hashed_column_line
         and not header.resaved
+        and not header.bom
         and not missing
         and not structural_only
         and not any_number_keys(header)

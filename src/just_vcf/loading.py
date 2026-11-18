@@ -721,21 +721,26 @@ def vcf_samples(source: Path | str | Sniffed) -> list[str]:
     if sniffed.format == vcf.BCF:
         with open_payload(sniffed) as handle:
             return vcf.read_bcf_header(handle)[0].samples
-    with _vcf_text(sniffed, _resaved(sniffed)) as handle:
+    with _vcf_text(sniffed, *_text_head(sniffed)) as handle:
         return vcf.read_header(handle)[0].samples
 
 
-def _resaved(sniffed: Sniffed) -> bool:
-    """Whether a text VCF was re-saved by a spreadsheet (F7), from the head of its payload."""
+def _text_head(sniffed: Sniffed) -> tuple[bool, bool]:
+    """Whether a text VCF's payload opens with a UTF-8 BOM (RM298), and whether what follows it was
+    re-saved by a spreadsheet (F7), from the head of the payload."""
     with open_payload(sniffed) as handle:
-        return vcf.is_resaved(handle.read(vcf.RESAVE_HEAD_BYTES))
+        head = handle.read(vcf.RESAVE_HEAD_BYTES)
+    return head.startswith(vcf.UTF8_BOM), vcf.is_resaved(head.removeprefix(vcf.UTF8_BOM))
 
 
 @contextmanager
-def _vcf_text(sniffed: Sniffed, resaved: bool) -> Iterator[BinaryIO]:
-    """A text VCF's payload, with a spreadsheet's re-save undone where `resaved` (F7). The undoing stream
-    is closed before the payload, on every exit (RM290)."""
+def _vcf_text(sniffed: Sniffed, bom: bool, resaved: bool) -> Iterator[BinaryIO]:
+    """A text VCF's payload, read from past its UTF-8 BOM where `bom` (RM298), with a spreadsheet's
+    re-save undone where `resaved` (F7). The undoing stream is closed before the payload, on every exit
+    (RM290)."""
     with open_payload(sniffed) as handle:
+        if bom:
+            handle.read(len(vcf.UTF8_BOM))
         if not resaved:
             yield handle
             return
@@ -757,15 +762,15 @@ def table_samples(source: Path | str | Sniffed) -> list[str]:
 
 def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
     binary = sniffed.format == vcf.BCF
-    resaved = not binary and _resaved(sniffed)
     if binary:
         with open_payload(sniffed) as handle:
             header, first_record = vcf.read_bcf_header(handle)
         data: list[bytes] = []
     else:
-        with _vcf_text(sniffed, resaved) as handle:
+        bom, resaved = _text_head(sniffed)
+        with _vcf_text(sniffed, bom, resaved) as handle:
             header, data = vcf.read_header(handle)
-        header.resaved = resaved
+        header.bom, header.resaved = bom, resaved
         first_record = data[0] if data else None
     warnings: list[str] = []
     if sniffed.format == vcf.FREEBAYES_VARSCAN2:
@@ -1062,7 +1067,7 @@ def _read_text_records(
     the key recorded in `Header.unparsed` and warned about. Each key is left out once at most
     (`vcf.can_leave_out`), so the retries end; an error that names no key, or one already left out, is
     raised as it is: the loader never guesses which key failed."""
-    opener = partial(_vcf_text, sniffed, header.resaved)
+    opener = partial(_vcf_text, sniffed, header.bom, header.resaved)
     stats_origin = _facet_origin(origin, facet_id)
     path = vcf.readable_path(sniffed.path, sniffed.layers, opener, header, missing, copy, origin)
     read = _read_part(path, header, part, data[0] if data else None, _read_sha256(path, sniffed, origin.source_sha256), stats_origin)

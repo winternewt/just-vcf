@@ -14,6 +14,7 @@ import polars as pl
 import pytest
 
 from just_vcf import MultiSampleError, NoSampleError, load, rejoin_split, vcf_samples, write_vcf
+from just_vcf.bgzf import BgzfWriter
 from just_vcf.loaders.text import GT_INDEX_MAX, PAST_GT_WARNING
 from just_vcf.loaders.vcf import FORMAT_KEYS, HeaderRefused, undo_resave
 from just_vcf.schema import BLOCKS, CALLS, canonical_order
@@ -853,7 +854,53 @@ def test_crlf_and_plain_vcfs_are_not_taken_for_a_resave(tmp_path: Path) -> None:
         assert not any("spreadsheet" in w for w in load(path).warnings), name
 
 
-GL_FLOAT = '##FORMAT=<ID=GL,Number=G,Type=Float,Description="Log10 likelihoods">'
+UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def _bgzf(data: bytes) -> bytes:
+    out = io.BytesIO()
+    with BgzfWriter(out) as writer:
+        writer.write(data)
+    return out.getvalue()
+
+
+def _loaded_as_compared(path: Path) -> tuple[pl.DataFrame, pl.DataFrame, tuple[str, ...]]:
+    """A load's facets and calls without the columns naming the source file, and its warnings."""
+    loaded = load(path)
+    facets, calls = pl.collect_all([loaded.facets, loaded.calls])
+    return facets.drop("facet_id", "source_sha256", "source_path"), calls.drop("facet_id"), loaded.warnings
+
+
+@pytest.mark.parametrize("layer", ["plain", "gzip", "bgzf"])
+@pytest.mark.parametrize("resaved", [False, True], ids=["tab", "resaved"])
+def test_a_vcf_opening_with_a_bom_loads_as_the_file_without_it(tmp_path: Path, layer: str, resaved: bool) -> None:
+    """RM298: a UTF-8 BOM opening a VCF, which VCF 4.3+ forbids and polars-bio does not read past, is
+    dropped as `sniff` drops it, plain or compressed, and before a spreadsheet's re-save is undone (a
+    spreadsheet saving "CSV UTF-8" writes both). A file read as it is otherwise is read through the copy."""
+    records = [
+        '1\t100\trs1\tA\tG\t50\tPASS\tEFF=A,B\tGT:AD:PL\t0/1:10,12:40,0,50',
+        "2\t300\t.\tC\tCT,T\t60\tPASS\t.\tGT:AD:PL\t1/2:1,5,6:90,30,80,20,0,70",
+    ]
+    meta = ('##INFO=<ID=EFF,Number=.,Type=String,Description="Effects">',)
+    text = vcf_text(records, fmt=("GT", "AD", "PL"), extra_meta=meta)
+    payload = _spreadsheet_resave(text) if resaved else text.encode()
+    wrap = {"plain": lambda data: data, "gzip": gzip.compress, "bgzf": _bgzf}[layer]
+    suffix = {"plain": ".vcf", "gzip": ".vcf.gz", "bgzf": ".vcf.gz"}[layer]
+    without = tmp_path / f"without{suffix}"
+    without.write_bytes(wrap(payload))
+    with_bom = tmp_path / f"with_bom{suffix}"
+    with_bom.write_bytes(wrap(UTF8_BOM + payload))
+
+    expected_facets, expected_calls, expected_warnings = _loaded_as_compared(without)
+    facets, calls, warnings = _loaded_as_compared(with_bom)
+    assert calls.height == len(records)
+    assert calls.equals(expected_calls)
+    assert facets.equals(expected_facets)
+    assert warnings == expected_warnings
+    assert vcf_samples(with_bom) == vcf_samples(without) == ["S1"]
+
+
+GL_FLOAT ='##FORMAT=<ID=GL,Number=G,Type=Float,Description="Log10 likelihoods">'
 
 
 @pytest.mark.parametrize(

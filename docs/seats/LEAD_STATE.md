@@ -5,7 +5,7 @@ just-vcf reads 23andMe-style array exports, other genotype tables and VCF/gVCF i
 **Headline results**
 - ✅ **More 23andMe insertion/deletion calls can now be read.** About 3,900 of 23,000 such rows on the v3 chip (17%) and 2,200 of 144,000 on v4 (1.5%). This was learned from 36 public PGP volunteers whose array exports could be checked against their whole genomes. The rest stay unread, each with its reason.
 - ⚠️ **How often two calling methods disagree depends on the person as well as the method.** Nine PGP volunteers were each sequenced twice by Complete Genomics, with the same two pipeline versions. Their disagreement on single-letter variants in easy regions ranges from about 0.1% to 1.8%. One pooled rate per method would hide that spread.
-- ✅ **Runs on polars 2.** It now uses polars-bio 0.37 and polars 2.1, and it still works with polars 1.44 for projects that haven't moved yet. The full test suite, 2,799 tests, passes on both versions.
+- ✅ **Runs on polars 2.** It now uses polars-bio 0.37 and polars 2.1, and it still works with polars 1.44 for projects that haven't moved yet. The full test suite, 2,889 tests, passes on both versions.
 
 **Next**
 1. ⏳ Release 0.1.0 — the person.

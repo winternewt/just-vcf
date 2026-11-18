@@ -119,6 +119,22 @@ def test_the_first_row_s_width_reads_no_other(first: str, tmp_path: Path) -> Non
     assert any(w.startswith("1 row(s) whose fields do not carry the twelve fixed keys") for w in loaded.warnings)
 
 
+def test_a_bom_opening_the_table_is_not_read_into_the_first_chromosome(tmp_path: Path) -> None:
+    """The line reader keeps a UTF-8 BOM as U+FEFF on the first line, where the `scan_csv` it replaced
+    dropped it: the first row's chromosome read `\\ufeffchr1`, a contig of its own in the `contig_map`."""
+    path = tmp_path / "AB12CD-orig.vcf.gz"
+    path.write_bytes(gzip.compress(b"\xef\xbb\xbf" + ("\n".join(ROWS) + "\n").encode()))
+    (tmp_path / "plain").mkdir()
+    plain = frames(write(tmp_path / "plain", ROWS))
+    loaded, facets, by_caller, rows, calls, _ = frames(path)
+    for prefix, caller in (("FB", "freeBayes"), ("VS", "VarScan2")):
+        got = rows[caller].select("chrom", "pos", "source_ref", "alts", "gt_alleles", "source_gt", "dp").to_dicts()
+        assert got == expected(prefix), caller
+        assert by_caller[caller]["contig_map"] == plain[2][caller]["contig_map"], caller
+    assert not any("\ufeff" in entry["source"] for entries in facets["contig_map"].to_list() for entry in entries)
+    assert loaded.warnings == plain[0].warnings
+
+
 def _classes(prefix: str) -> list[dict]:
     """The ALT alleles of each class a caller's rows carry, by the test's own reading of REF and ALT:
     an ALT of another length than its REF is an indel, one as long an SNV (one base) or an MNV."""

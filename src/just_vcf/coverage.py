@@ -64,9 +64,11 @@ from just_vcf.schema import CONTIG_RANK, AssemblyLabelBasis, canonical_chrom, ca
 
 logger = logging.getLogger(__name__)
 
-COVERAGE_VERSION = 1
+COVERAGE_VERSION = 2
 """Bumped when the same input would give different intervals; part of every `facet_id` and of the
-cache key of `alignment_coverage`'s spill."""
+cache key of `alignment_coverage`'s spill. 2: rows of another width read as their leading fields or with
+nulls (RM289), an empty quantized label counted unbounded (RM291), quotes read as text (RM293), a BOM and
+a block of blank lines counted as the read sees them (audit 17)."""
 
 POLARS_BIO_VERSION = version("polars-bio")
 """The polars-bio whose `depth()` computed a spill: part of its cache key and its manifest, so a
@@ -483,8 +485,10 @@ def _field_counts(data: bytes, columns: int, *, skip_header: bool) -> Counter[in
     """How many of the lines `_read_fields` reads as rows hold each field count other than `columns`, a
     blank line holding none: the same bytes split into lines by `scan_lines`, about 30 ms a 64 MB block
     against about 50 ms for the parse (polars 2.1 and 1.44, measured 2026-11-17). A blank line is a row
-    of nulls to `read_csv` on both, so it is counted, under a reason of its own."""
-    lines = pl.scan_lines(data, name="line")
+    of nulls to `read_csv` on both, so it is counted, under a reason of its own. A UTF-8 BOM opening `data`
+    is dropped first, as `read_csv` drops it: `scan_lines` keeps it on the first line, which then is no
+    `#` comment to the count where it is one to the read."""
+    lines = pl.scan_lines(data.removeprefix(b"\xef\xbb\xbf"), name="line")
     lines = lines.slice(1) if skip_header else lines.filter(~pl.col("line").str.starts_with("#"))
     line = pl.col("line")
     count = pl.when((line == "") | (line == "\r")).then(0).otherwise(line.str.count_matches("\t", literal=True) + 1)
@@ -664,7 +668,9 @@ def _read_runs(path: Path, kind: CoverageFormat, widths: _RowWidths) -> pl.DataF
 
 
 def _depth_chunks(path: Path, kind: CoverageFormat, widths: _RowWidths) -> Iterator[pl.DataFrame]:
-    """A per-base source as runs `chrom, pos, end_pos, depth` (1-based, inclusive), chunk by chunk."""
+    """A per-base source as runs `chrom, pos, end_pos, depth` (1-based, inclusive), chunk by chunk. Every
+    chunk of whole lines is read, one of blank or whitespace lines alone included, so its rows and its
+    counted lines are what one read of the file gives wherever a chunk ends."""
     if kind is CoverageFormat.PER_BASE_BED:
         names, dtypes = ["chrom", "start", "end", "depth"], [pl.String(), pl.Int64(), pl.Int64(), pl.Int64()]
     else:
@@ -682,7 +688,7 @@ def _depth_chunks(path: Path, kind: CoverageFormat, widths: _RowWidths) -> Itera
                     tail = data
                     continue
             tail = data[cut:]
-            if data[:cut].strip():
+            if cut:
                 frame = _read_fields(data[:cut], names, dtypes, widths, skip_header=False)
                 if kind is CoverageFormat.PER_BASE_BED:
                     yield frame.select("chrom", pos=pl.col("start") + 1, end_pos=pl.col("end"), depth=pl.col("depth"))

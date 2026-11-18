@@ -302,6 +302,21 @@ def test_shuffled_loci_give_the_same_rows(tmp_path: Path) -> None:
     assert a.blocks.drop("facet_id").collect().equals(b.blocks.drop("facet_id").collect())
 
 
+def test_a_bom_opening_the_file_hides_no_header_key(tmp_path: Path) -> None:
+    """A UTF-8 BOM before `#TITLE` is not part of the key: the title still says the file is a whole
+    genome, and the file loads as the same file without the BOM does."""
+    text = var_text(LOCI)
+    path = tmp_path / "var-GS000000002-ASM.tsv.bz2"
+    path.write_bytes(bz2.compress(b"\xef\xbb\xbf" + text.encode()))
+    _, plain, plain_calls, plain_blocks = frames(write(tmp_path, text, "var-GS000000001-ASM.tsv.bz2"))
+    _, facet, calls, blocks = frames(path)
+    assert (facet["callset_type"], facet["absence_means"]) == ("wgs", "blocks")
+    differ = {"facet_id", "source_path", "source_sha256"}
+    assert {k: v for k, v in facet.items() if k not in differ} == {k: v for k, v in plain.items() if k not in differ}
+    assert calls.drop("facet_id").equals(plain_calls.drop("facet_id"))
+    assert blocks.drop("facet_id").equals(plain_blocks.drop("facet_id"))
+
+
 def test_a_first_row_wider_than_the_columns_reads_as_the_rest(tmp_path: Path) -> None:
     """A field past the header's columns on the first data row is not read, as on any other row. polars
     2 refuses a headerless scan whose first row is wider than its names (polars 1.44 cut it), so the

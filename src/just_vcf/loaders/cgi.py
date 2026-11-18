@@ -168,10 +168,11 @@ def states_whole_genome(header: Header) -> bool:
 
 
 def copy_body(handle: BinaryIO, target: Path) -> Header:
-    """Read the header off `handle` and write the data rows after the `>` line to `target`."""
+    """Read the header off `handle` and write the data rows after the `>` line to `target`. A UTF-8 BOM
+    opening the file is dropped, so it never hides the first header key."""
     header = Header()
-    for raw in handle:
-        line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+    for number, raw in enumerate(handle):
+        line = raw.decode("utf-8-sig" if number == 0 else "utf-8", errors="replace").rstrip("\r\n")
         if line.startswith(">"):
             header.columns = line[1:].split("\t")
             break

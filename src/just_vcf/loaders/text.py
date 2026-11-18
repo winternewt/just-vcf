@@ -32,16 +32,29 @@ def lines(data: bytes) -> pl.DataFrame:
     return pl.scan_lines(data.decode("utf-8", errors="replace").encode("utf-8"), name="line").collect()
 
 
+def scan_text_lines(source: Path | bytes, name: str) -> pl.LazyFrame:
+    """`pl.scan_lines` of a path or of bytes, as one string column `name`, with a UTF-8 BOM opening the
+    source dropped: `scan_lines` keeps it as U+FEFF on the first line, where `read_csv` and `scan_csv`
+    drop it (polars 2.1 and 1.44). A U+FEFF on any later line is text. A gzip file is read through, as
+    `scan_lines` reads it, so the BOM is looked for in the decompressed text."""
+    line = pl.col(name)
+    first = pl.col("_line_number") == 0
+    return pl.scan_lines(source, name=name).with_row_index("_line_number").select(
+        pl.when(first).then(line.str.strip_prefix("\ufeff")).otherwise(line).alias(name)
+    )
+
+
 def tab_fields(path: Path, names: Sequence[str]) -> pl.LazyFrame:
     """A headerless tab-separated file's first `len(names)` fields of every line, as text named `names`:
     a line with fewer fields has `""` for each it lacks, and the fields past them are not read. Quotes are
-    text like any other character.
+    text like any other character. A UTF-8 BOM opening the file is dropped (`scan_text_lines`), as the
+    `scan_csv` this replaced dropped it.
 
     Each line is split here, not by `scan_csv`: polars 2 refuses a headerless scan whose first row is
     wider or narrower than the names given (`extra_columns="ignore"` exists only in polars 2), where 1.x
     cut every row to them and refused only a narrower first row. The two read every other row alike."""
     fields = pl.col("_line").str.splitn("\t", len(names) + 1).struct.rename_fields([*names, "_past"])
-    return pl.scan_lines(path, name="_line").select(fields.struct.field(name).fill_null("") for name in names)
+    return scan_text_lines(path, "_line").select(fields.struct.field(name).fill_null("") for name in names)
 
 
 def one_field_alleles(column: str, no_call: tuple[str, ...], no_call_width: int | None = None) -> pl.Expr:

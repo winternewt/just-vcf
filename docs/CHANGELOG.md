@@ -11,6 +11,45 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `COVERAGE_VERSION` is 2 (audit 17). RM289, RM291 and RM293 each changed the intervals or warnings
+  `read_coverage` gives for some inputs, as do the BOM and blank-block fixes above, and none bumped the
+  version its docstring says is bumped then. Every coverage facet's `facet_id` changes, and
+  `alignment_coverage` reads each BAM once more, since its spill is keyed by the version, though its
+  windows are the same. Patch.
+
+- On a chip read per probe (23andMe v3 and v4, RM281), an `I`/`D` row is read only through the probes of
+  the rsids its orientation table lists (audit 17). A row of two rsids, one listed `flipped` with no probe
+  and one unlisted with a probe, had its codes swapped by the first and was resolved through the second's
+  probe, which nothing had checked. `resolve_ref` now keeps only the listed rsids of a row when matching it
+  with a probe; a row whose listed rsids name no probe is left as loaded and counted with the rows that
+  have no probe. The ungated read the table is learned with is unchanged. Every array loader writes one
+  rsid per row, so no row a loader gives reads differently, and `RESOLVE_VERSION` stays 14. Patch.
+
+- A per-base coverage file's blank lines read the same wherever its 64 MiB blocks end (audit 17). The
+  block reader behind `read_coverage` for a mosdepth per-base BED and a `samtools depth` output skipped a
+  block whose bytes were whitespace alone, so blank lines that filled a block of their own lost their null
+  rows and their count in the facet's warnings, and a line of spaces lost its short-row count, where one
+  read of the file has both. Every block of whole lines is now read. Patch.
+
+- `read_coverage` counts a file opening with a UTF-8 BOM as it reads it (audit 17). The read drops the
+  BOM and then skips a `#` comment line, while the count of cut and padded rows (RM291) split the lines
+  with the BOM still on the first, saw no comment there and counted a short row. A file opening with a BOM
+  and a comment warned of a short row it did not have, and a quantized BED took that row off its count of
+  bins naming no depth range, so the warning could read `-1` or vanish. The count now drops the BOM first,
+  on polars 2.1 and 1.44. Patch.
+
+- A UTF-8 BOM opening a Complete Genomics `var` or `masterVar` file no longer hides its first header key
+  (audit 17, found beside finding 1). The header reader (`loaders.cgi.copy_body`) decoded the first line
+  with the BOM kept, so `#TITLE` read as a key the reader did not know, and a whole-genome file's facet
+  lost `callset_type = wgs`. The first line is now decoded with the BOM dropped. Patch.
+
+- A UTF-8 BOM opening a key=value table no longer lands in its first chromosome (audit 17). The table's
+  line reader (`loaders.text.tab_fields`, RM288) reads with `scan_lines`, which keeps a BOM as U+FEFF on
+  the first line where the `scan_csv` it replaced dropped it, so a PGP-HMS key=value payload opening with
+  one loaded its first row on a contig `\ufeffchr1` of its own. A shared reader,
+  `loaders.text.scan_text_lines`, drops it from the first line, on polars 2.1 and 1.44; the EIGENSTRAT
+  `.ind` and `.snp` reader (RM296) now reads through it too, with no change to what it reads. Patch.
+
 - An EIGENSTRAT `.ind` is read as its `.snp` is (RM296). `ancestry.eigenstrat.read_ind` split lines and
   fields with Python's `splitlines` and `split`, so a byte 0x1C to 0x1F broke a line or a field that
   `read_snp` reads as text, a UTF-8 BOM stayed on the first genetic id as U+FEFF, and the line an error

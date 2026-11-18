@@ -567,6 +567,31 @@ def test_rows_are_counted_across_the_read_s_blocks(tmp_path: Path, monkeypatch: 
     assert blocks.intervals.collect().equals(whole.intervals.collect())
 
 
+BLANK_LINES = {
+    CoverageFormat.PER_BASE_BED: [b"chr1\t0\t10\t3", b"", b"", b"chr1\t10\t20\t5", b"\r", b" ", b"#c", b"chr1\t20\t30\t4", b"", b""],
+    CoverageFormat.SAMTOOLS_DEPTH: [b"chr1\t1\t3", b"", b"", b"chr1\t2\t5", b"\r", b" ", b"#c", b"chr1\t3\t4", b"", b""],
+}
+
+
+@pytest.mark.parametrize("window", [None, 7])
+@pytest.mark.parametrize("kind", list(BLANK_LINES))
+def test_blank_lines_read_alike_wherever_a_block_ends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: CoverageFormat, window: int | None) -> None:
+    """A block of the per-base read holding blank or whitespace lines alone is read as one read reads
+    them: the rows and the warnings do not depend on where the block ends. A block was skipped when its
+    bytes stripped to nothing, so its blank lines went uncounted and its null rows unread."""
+    path = tmp_path / "rows.txt"
+    data = b"\n".join(BLANK_LINES[kind]) + b"\n"
+    path.write_bytes(data)
+    whole = read_coverage(path, window=window, kind=kind)
+    assert counted(whole.facet.warnings)["blank"] == sum(line in (b"", b"\r") for line in BLANK_LINES[kind])
+    intervals = whole.intervals.collect()
+    for size in range(1, len(data) + 1):
+        monkeypatch.setattr(coverage_module, "_CHUNK_BYTES", size)
+        blocks = read_coverage(path, window=window, kind=kind)
+        assert blocks.facet.warnings == whole.facet.warnings, size
+        assert blocks.intervals.collect().equals(intervals), size
+
+
 QUOTED_FIELDS = {
     "tab_inside": ['chr1\t0\t10\t"a\tb"', "chr1\t10\t20\tc"],
     "line_inside": ['chr1\t0\t10\t"0:1', 'chr1\t10\t30\t1:4"', "chr1\t30\t60\t4:inf"],
@@ -587,6 +612,27 @@ def test_a_double_quote_is_text_to_the_read_and_to_its_row_count(case: str) -> N
     fields = [line.split("\t") for line in lines]
     assert frame.rows() == [tuple(f[: len(names)] + [None] * (len(names) - len(f))) for f in fields]
     assert dict(widths.fields) == dict(Counter(len(f) for f in fields if len(f) != len(names)))
+
+
+BOM_CASES = {
+    "quantized_comment": (CoverageFormat.QUANTIZED_BED, ["#comment", "chr1\t0\t10\t0:1"]),
+    "quantized_comment_renamed_bin": (CoverageFormat.QUANTIZED_BED, ["#comment", "chr1\t0\t10\tCALLABLE", "chr1\t10\t20\t1:4"]),
+    "per_base_comment": (CoverageFormat.PER_BASE_BED, ["#comment", "chr1\t0\t10\t3", "chr1\t10\t20\t5"]),
+}
+
+
+@pytest.mark.parametrize("case", list(BOM_CASES))
+def test_a_bom_before_a_comment_reads_and_counts_as_the_file_without_it(tmp_path: Path, case: str) -> None:
+    """`read_csv` drops a UTF-8 BOM and then skips the `#` line; the row count saw the line with the BOM
+    on it as a short row, and the quantized read took that row off its count of unnamed bins."""
+    kind, lines = BOM_CASES[case]
+    plain = read_coverage(write(tmp_path / "plain.bed", lines), window=None, kind=kind)
+    path = tmp_path / "bom.bed"
+    path.write_bytes(b"\xef\xbb\xbf" + ("\n".join(lines) + "\n").encode())
+    marked = read_coverage(path, window=None, kind=kind)
+    assert marked.intervals.collect().equals(plain.intervals.collect())
+    assert marked.facet.warnings == plain.facet.warnings
+    assert not counted(plain.facet.warnings), "every row holds the format's fields"
 
 
 def test_a_quoted_label_spanning_lines_reads_every_line(tmp_path: Path) -> None:

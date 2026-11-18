@@ -3,6 +3,34 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM296 — An EIGENSTRAT `.ind` is read as its `.snp` is
+Severity: low · Status: shipped 2026-11-18 (merge b5e1f94)
+
+**Built:** `ancestry.eigenstrat._fields` reads both files' lines with `scan_lines`: a leading UTF-8 BOM dropped, a
+line empty or whitespace alone skipped, fields split on runs of whitespace, a width error naming the line in the file.
+`read_ind` and `read_snp` only pick their columns. A gzip `.ind` now reads as a `.snp` did (pinned by a test); a
+bare-CR `.ind` is refused, not misread; invalid UTF-8 raises polars' `ComputeError`.
+
+## RM295 — A blank line in an EIGENSTRAT `.snp` is no site
+Severity: low · Status: shipped 2026-11-18 (merge b5e1f94)
+
+**Built:** `read_snp` skips a blank or whitespace-only line, as `read_ind` did, so a `.snp` ending in one no longer
+fails the panel build on the `.geno` header's site count; `AadrBuild.n_snps`/`n_individuals` and `read_genotypes` say
+they count rows, not lines.
+
+## RM294 — A text line holding 0x1F is read
+Severity: low · Status: shipped 2026-11-18 (merge 47edcd6; full suite 2819 passed on polars 2.1.0 and 1.44.2)
+
+**Built:** `loaders.text.lines` and `eigenstrat.read_snp` read lines with `scan_lines`; `lines()` decodes invalid UTF-8
+with replacement first, the same U+FFFD per bad sequence as `utf8-lossy` gave. **Left:** `loaders/table.py` and
+`consensus.py` still use 0x1F as a join key (a collision needs a field holding it).
+
+## RM293 — Coverage's read and its row count agree on quotes
+Severity: low · Status: shipped 2026-11-18 (merge 47edcd6)
+
+**Built:** `coverage._read_fields` passes `quote_char=None`, so a double quote is text to the read as to its count of
+cut and padded rows. A field written `"chr1"` keeps its quotes; a quoted number in a typed column fails the read.
+
 ## RM291 — Coverage rows cut or padded are counted
 Severity: low · Status: shipped 2026-11-17 (merge 77cbd0b; full suite 2799 passed on polars 2.1.0 and on 1.44.2)
 

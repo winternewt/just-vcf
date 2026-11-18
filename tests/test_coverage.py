@@ -3,6 +3,7 @@
 import gzip
 import hashlib
 import re
+from collections import Counter
 from datetime import timedelta
 from itertools import pairwise
 from pathlib import Path
@@ -564,6 +565,37 @@ def test_rows_are_counted_across_the_read_s_blocks(tmp_path: Path, monkeypatch: 
     blocks = read_coverage(path, window=window, kind=kind)
     assert blocks.facet.warnings == whole.facet.warnings and counted(whole.facet.warnings)
     assert blocks.intervals.collect().equals(whole.intervals.collect())
+
+
+QUOTED_FIELDS = {
+    "tab_inside": ['chr1\t0\t10\t"a\tb"', "chr1\t10\t20\tc"],
+    "line_inside": ['chr1\t0\t10\t"0:1', 'chr1\t10\t30\t1:4"', "chr1\t30\t60\t4:inf"],
+    "never_closed": ['"chr1\t0\t10\t0:1', "chr1\t10\t30\t1:4", "chr1\t30\t60\t4:inf"],
+    "whole_field": ['"chr1"\t0\t10\t"0:1"'],
+}
+
+
+@pytest.mark.parametrize("case", list(QUOTED_FIELDS))
+def test_a_double_quote_is_text_to_the_read_and_to_its_row_count(case: str) -> None:
+    """A field opening with `"` is read as the plain lines split at tabs, the same rows `_field_counts`
+    counts as cut or padded (RM293): a quote never joins tabs or lines."""
+    lines = QUOTED_FIELDS[case]
+    names = ["chrom", "start", "end", "label"]
+    widths = coverage_module._RowWidths()
+    data = ("\n".join(lines) + "\n").encode()
+    frame = coverage_module._read_fields(data, names, [pl.String()] * len(names), widths, skip_header=False)
+    fields = [line.split("\t") for line in lines]
+    assert frame.rows() == [tuple(f[: len(names)] + [None] * (len(names) - len(f))) for f in fields]
+    assert dict(widths.fields) == dict(Counter(len(f) for f in fields if len(f) != len(names)))
+
+
+def test_a_quoted_label_spanning_lines_reads_every_line(tmp_path: Path) -> None:
+    """A quantized file whose label opens a quote closed on the next line reads one interval per line (RM293)."""
+    lines = QUOTED_FIELDS["line_inside"]
+    coverage = read_coverage(write(tmp_path / "q.bed", lines), kind=CoverageFormat.QUANTIZED_BED)
+    assert coverage.intervals.select("pos", "end_pos").collect().rows() == [(int(line.split("\t")[1]) + 1, int(line.split("\t")[2])) for line in lines]
+    unbounded = sum(not re.fullmatch(r"\d+:(\d+|inf)", line.split("\t")[3]) for line in lines)
+    assert coverage.facet.warnings == [f"{unbounded} quantized interval(s) carry a bin label that names no depth range (a renamed bin); their depth is unknown"]
 
 
 def test_samtools_depth_of_several_files_stated_reads_the_first_column_and_says_so(tmp_path: Path) -> None:

@@ -11,6 +11,15 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `read_coverage` tells a file opening with a UTF-8 BOM as it tells the file without it (RM297). The
+  lines its kind is detected from kept the BOM on the first, where the reads drop it, so a header or a
+  `#` comment there was no longer one: with no `kind`, a mosdepth summary, a `samtools coverage` output,
+  a `samtools depth` output with its `#CHROM` header and a thresholds file were refused "not a BED of
+  depths", and a per-base or quantized BED opening with a comment "rows of different widths". A
+  thresholds file was refused even with `kind` stated, since its read takes the thresholds from the
+  same first line. The BOM is now dropped there too, gzip or not. Only files that were refused read
+  differently, so `COVERAGE_VERSION` stays 2. Patch.
+
 - `COVERAGE_VERSION` is 2 (audit 17). RM289, RM291 and RM293 each changed the intervals or warnings
   `read_coverage` gives for some inputs, as do the BOM and blank-block fixes above, and none bumped the
   version its docstring says is bumped then. Every coverage facet's `facet_id` changes, and

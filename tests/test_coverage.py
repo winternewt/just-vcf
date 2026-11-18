@@ -635,6 +635,55 @@ def test_a_bom_before_a_comment_reads_and_counts_as_the_file_without_it(tmp_path
     assert not counted(plain.facet.warnings), "every row holds the format's fields"
 
 
+DETECTED_WITH_A_BOM = {
+    "mosdepth_summary": (CoverageFormat.MOSDEPTH_SUMMARY, ["chrom\tlength\tbases\tmean\tmin\tmax", "chr1\t100\t3000\t30.00\t0\t90", "chrX\t50\t500\t10.00\t0\t20"]),
+    "samtools_coverage": (
+        CoverageFormat.SAMTOOLS_COVERAGE,
+        ["#rname\tstartpos\tendpos\tnumreads\tcovbases\tcoverage\tmeandepth\tmeanbaseq\tmeanmapq", "chrX\t1\t50\t10\t45\t90.0\t15.2\t35\t58"],
+    ),
+    "samtools_depth_header": (CoverageFormat.SAMTOOLS_DEPTH, ["#CHROM\tPOS\ta.bam", *fixed_width_files()[CoverageFormat.SAMTOOLS_DEPTH]]),
+    "samtools_depth": (CoverageFormat.SAMTOOLS_DEPTH, fixed_width_files()[CoverageFormat.SAMTOOLS_DEPTH]),
+    "thresholds": (CoverageFormat.THRESHOLDS_BED, fixed_width_files()[CoverageFormat.THRESHOLDS_BED]),
+    "per_base": (CoverageFormat.PER_BASE_BED, fixed_width_files()[CoverageFormat.PER_BASE_BED]),
+    "per_base_comment": (CoverageFormat.PER_BASE_BED, ["#comment", *fixed_width_files()[CoverageFormat.PER_BASE_BED]]),
+    "regions": (CoverageFormat.REGIONS_BED, ["chr1\t0\t10\t1.50", "chr1\t10\t20\t2.25"]),
+    "regions_named": (CoverageFormat.REGIONS_BED, ["chr1\t0\t10\tgeneA\t1.50", "chrX\t5\t30\tgeneX\t2.00"]),
+    "quantized": (CoverageFormat.QUANTIZED_BED, fixed_width_files()[CoverageFormat.QUANTIZED_BED]),
+    "quantized_comment": (CoverageFormat.QUANTIZED_BED, ["#comment", *fixed_width_files()[CoverageFormat.QUANTIZED_BED]]),
+}
+"""A file of each kind `read_coverage` tells from its content, headers and comments included (RM297)."""
+
+
+@pytest.mark.parametrize("compress", [False, True])
+@pytest.mark.parametrize("case", list(DETECTED_WITH_A_BOM))
+def test_a_bom_is_detected_and_read_as_the_file_without_it(tmp_path: Path, case: str, compress: bool) -> None:
+    """With no `kind`, a file opening with a UTF-8 BOM is told and read as the same file without it, gzip
+    or not (RM297): the detection read the BOM on the first line, so a comment or a header was no longer
+    one to it, while the read drops it."""
+    kind, lines = DETECTED_WITH_A_BOM[case]
+    plain = read_coverage(write(tmp_path / "plain.txt", lines, compress=compress), window=None)
+    assert plain.facet.format_id is kind
+    data = b"\xef\xbb\xbf" + ("\n".join(lines) + "\n").encode()
+    path = tmp_path / "bom.txt"
+    path.write_bytes(gzip.compress(data) if compress else data)
+    marked = read_coverage(path, window=None)
+    assert marked.facet.format_id is kind
+    assert marked.intervals.collect().equals(plain.intervals.collect())
+    assert marked.facet.warnings == plain.facet.warnings
+    assert (marked.facet.contig_lengths, marked.facet.dropped_fields, marked.facet.thresholds) == (
+        plain.facet.contig_lengths,
+        plain.facet.dropped_fields,
+        plain.facet.thresholds,
+    )
+    assert (marked.thresholds is None) == (plain.thresholds is None)
+    if plain.thresholds is not None:
+        assert marked.thresholds.collect().equals(plain.thresholds.collect())
+    # Stated, the kind reads alike too: the thresholds read took its header from the detection's lines.
+    stated = read_coverage(path, window=None, kind=kind)
+    assert stated.intervals.collect().equals(plain.intervals.collect())
+    assert stated.facet.warnings == plain.facet.warnings
+
+
 def test_a_quoted_label_spanning_lines_reads_every_line(tmp_path: Path) -> None:
     """A quantized file whose label opens a quote closed on the next line reads one interval per line (RM293)."""
     lines = QUOTED_FIELDS["line_inside"]

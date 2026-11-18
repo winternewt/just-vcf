@@ -1087,9 +1087,9 @@ def _resolve_codes(work: pl.DataFrame, store: ReferenceStore, contig: Contig, co
     The chip's gate (`probes.ID_CALIBRATION`) comes first. A chip resolved chip-wide reads every row as
     written. A chip resolved per probe reads a row only when its rsid is in the chip's orientation table
     (`probes.id_orientation`): `same` as written, `flipped` with `I` and `D` swapped before the probe
-    reads them (counted); a row the table does not list is left as loaded, counted
-    `id_orientation_unverified`, and one whose rsids the table lists both ways likewise, under its own
-    reason. A chip withheld, or read per probe with nothing listed, has every code row left as loaded,
+    reads them (counted), and only through the probes of the rsids the table lists; a row the table does
+    not list is left as loaded, counted `id_orientation_unverified`, and one whose rsids the table lists
+    both ways likewise, under its own reason. A chip withheld, or read per probe with nothing listed, has every code row left as loaded,
     counted `id_orientation_unverified`. Returns `work` with the `_split_*` slots filled for the rows
     resolved here, and their `gt_alleles` replaced.
     """
@@ -1135,7 +1135,12 @@ def _orient_code_rows(rows: pl.DataFrame, orientation: Mapping[str, IdOrientatio
     """A per-probe chip's code rows by its orientation table: the rows to resolve, the codes of a
     `flipped` probe's rows swapped (`I` ↔ `D`), and which rows were swapped. A row the table does not
     list, by any rsid among its `ids`, is counted `id_orientation_unverified`; one whose rsids it lists
-    both ways, `orientation_ambiguous`. Neither is returned."""
+    both ways, `orientation_ambiguous`. Neither is returned.
+
+    A returned row's `ids` keep only the rsids the table lists, so `_resolve_code_rows` reads it through
+    their probes alone: the orientation used is the one the table holds for the probe that reads the row,
+    never one rsid's orientation applied through another rsid's probe the table does not vouch for. A row
+    whose listed rsids name no probe is counted `no_probe` there."""
     table = pl.DataFrame(
         {"rsid": list(orientation), "_orientation": [entry.orientation.value for entry in orientation.values()]},
         schema={"rsid": pl.String, "_orientation": pl.String},
@@ -1143,17 +1148,18 @@ def _orient_code_rows(rows: pl.DataFrame, orientation: Mapping[str, IdOrientatio
     listed = (
         rows.select("_row", pl.col("ids").list.unique().alias("rsid")).explode("rsid", empty_as_null=False)
         .join(table, on="rsid", how="inner")
-        .group_by("_row").agg(pl.col("_orientation").unique())
+        .group_by("_row").agg(pl.col("_orientation").unique(), pl.col("rsid").unique().sort().alias("_listed"))
     )  # fmt: skip
     rows = rows.join(listed, on="_row", how="left", maintain_order="left")
     length = pl.col("_orientation").list.len().fill_null(0)
     counts["code_id_orientation_unverified"] += rows.filter(length == 0).height
     counts["code_orientation_ambiguous"] += rows.filter(length > 1).height
-    rows = rows.filter(length == 1).with_columns(pl.col("_orientation").list.first())
+    rows = rows.filter(length == 1).with_columns(pl.col("_orientation").list.first(), pl.col("_listed").alias("ids"))
     swap = pl.col("_orientation") == Orientation.FLIPPED.value
     flipped = set(rows.filter(swap)["_row"].to_list())
     swapped = pl.col("gt_alleles").list.eval(pl.element().replace_strict(_SWAP, default=None))
-    return rows.with_columns(pl.when(swap).then(swapped).otherwise(pl.col("gt_alleles")).alias("gt_alleles")).drop("_orientation"), flipped
+    oriented = rows.with_columns(pl.when(swap).then(swapped).otherwise(pl.col("gt_alleles")).alias("gt_alleles"))
+    return oriented.drop("_orientation", "_listed"), flipped
 
 
 def _resolve_code_rows(

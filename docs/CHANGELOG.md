@@ -11,6 +11,14 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- On a chip read per probe (23andMe v3 and v4, RM281), an `I`/`D` row is read only through the probes of
+  the rsids its orientation table lists (audit 17). A row of two rsids, one listed `flipped` with no probe
+  and one unlisted with a probe, had its codes swapped by the first and was resolved through the second's
+  probe, which nothing had checked. `resolve_ref` now keeps only the listed rsids of a row when matching it
+  with a probe; a row whose listed rsids name no probe is left as loaded and counted with the rows that
+  have no probe. The ungated read the table is learned with is unchanged. Every array loader writes one
+  rsid per row, so no row a loader gives reads differently, and `RESOLVE_VERSION` stays 14. Patch.
+
 - A per-base coverage file's blank lines read the same wherever its 64 MiB blocks end (audit 17). The
   block reader behind `read_coverage` for a mosdepth per-base BED and a `samtools depth` output skipped a
   block whose bytes were whitespace alone, so blank lines that filled a block of their own lost their null

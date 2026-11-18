@@ -589,6 +589,35 @@ def test_a_per_probe_chip_reads_each_listed_probe_its_way_and_withholds_the_rest
     ) in warnings
 
 
+def test_a_per_probe_row_is_read_only_through_the_probes_of_its_listed_rsids(
+    tmp_path: Path, grch37_store: ReferenceStore, oriented_manifests: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row of two rsids is oriented by the one the table lists and read through that rsid's probe
+    alone: never swapped by one rsid and read through another's probe the table says nothing of. rs900 is
+    listed `flipped` and has no probe; rs500 has a probe and is not listed; rs200 is listed and has one."""
+    chip = "23andme_v4"
+    with_table(monkeypatch, {chip: {"rs900": (0, 3), "rs200": (0, 4)}})
+    loaded = as_chip(load(coded_export(tmp_path, [("rs200", "1", 1001, "DD"), ("rs500", "1", 2001, "DI")])), chip)
+    two_ids = pl.when(pl.col("pos") == 1001).then(pl.lit(["rs200", "rs500"])).otherwise(pl.lit(["rs900", "rs500"]))
+    paired = loaded.model_copy(update={"calls": loaded.calls.with_columns(two_ids.alias("ids"))})
+    single = by_codes(resolve_ref(loaded, grch37_store))
+    resolved = resolve_ref(paired, grch37_store)
+    rows = by_codes(resolved)
+    slots = ("ref", "alts", "gt", "end_pos", "gt_alleles")
+
+    # rs900's orientation names no probe, and rs500's probe is not one the table vouches for.
+    unlisted = rows[("rs900", "DI")]
+    assert (unlisted["ref"], unlisted["gt"], unlisted["gt_alleles"]) == (None, None, ["D", "I"])
+    assert single[("rs500", "DI")]["ref"] is None, "rs500 alone is unlisted, and left as loaded"
+    # rs200 reads as it reads alone: flipped, through its own probe, rs500's probe elsewhere not consulted.
+    assert [rows[("rs200", "DD")][s] for s in slots] == [single[("rs200", "DD")][s] for s in slots]
+    assert rows[("rs200", "DD")]["gt"] == [1, 1]
+    warnings = "\n".join(resolved.warnings)
+    assert "1 of 2 array row(s) with an I/D indel code resolved" in warnings
+    assert "1 of them with I and D swapped first" in warnings
+    assert "1 array row(s) with an I/D indel code left unread: no indel probe of the manifests carries one of their rsids" in warnings
+
+
 def test_a_chip_resolved_chip_wide_ignores_the_orientation_table(
     tmp_path: Path, grch37_store: ReferenceStore, oriented_manifests: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -645,16 +674,17 @@ def test_rows_are_oriented_by_the_table_and_a_row_listed_both_ways_is_withheld()
     table = {"rs1": IdOrientation(Orientation.SAME, 3, 0), "rs2": IdOrientation(Orientation.FLIPPED, 0, 3)}
     rows = pl.DataFrame(
         {
-            "_row": [0, 1, 2, 3, 4],
-            "ids": [["rs1"], ["rs2"], ["rs1", "rs2"], ["rs9"], ["rs2"]],
-            "gt_alleles": [["I", "D"], ["I", "D"], ["I", "I"], ["D", "D"], ["I", None]],
+            "_row": [0, 1, 2, 3, 4, 5],
+            "ids": [["rs1"], ["rs2"], ["rs1", "rs2"], ["rs9"], ["rs2"], ["rs9", "rs2"]],
+            "gt_alleles": [["I", "D"], ["I", "D"], ["I", "I"], ["D", "D"], ["I", None], ["D", "D"]],
         },
         schema={"_row": pl.UInt32, "ids": pl.List(pl.String), "gt_alleles": pl.List(pl.String)},
     )
     counts: Counter[str] = Counter()
     oriented, flipped = _orient_code_rows(rows, table, counts)
-    assert dict(zip(oriented["_row"].to_list(), oriented["gt_alleles"].to_list())) == {0: ["I", "D"], 1: ["D", "I"], 4: ["D", None]}
-    assert flipped == {1, 4}
+    assert dict(zip(oriented["_row"].to_list(), oriented["gt_alleles"].to_list())) == {0: ["I", "D"], 1: ["D", "I"], 4: ["D", None], 5: ["I", "I"]}
+    assert dict(zip(oriented["_row"].to_list(), oriented["ids"].to_list())) == {0: ["rs1"], 1: ["rs2"], 4: ["rs2"], 5: ["rs2"]}, "only listed rsids reach the probes"
+    assert flipped == {1, 4, 5}
     assert counts == Counter({"code_id_orientation_unverified": 1, "code_orientation_ambiguous": 1})
 
 

@@ -360,7 +360,7 @@ def test_an_ind_line_holding_a_separator_byte_is_read_as_text(tmp_path: Path, en
 @pytest.mark.parametrize("after_bom", ["", "\n"], ids=["BOM opening the first id", "BOM alone on the first line"])
 def test_a_bom_opening_an_ind_file_is_not_part_of_the_first_id(tmp_path: Path, after_bom: str) -> None:
     path = tmp_path / "x.ind"
-    path.write_bytes(f"﻿{after_bom}I1 M popA\nI2 F popB\n".encode())
+    path.write_bytes(f"\ufeff{after_bom}I1 M popA\nI2 F popB\n".encode())
     assert read_ind(path)["genetic_id"].to_list() == ["I1", "I2"]
 
 

@@ -84,7 +84,7 @@ def _fields(path: Path, width: int) -> pl.DataFrame:
     not UTF-8 is refused with polars' `ComputeError`."""
     frame = pl.scan_lines(path, name="line").with_row_index("number", offset=1).collect()
     line = pl.col("line")
-    text = pl.when(pl.col("number") == 1).then(line.str.strip_prefix("﻿")).otherwise(line).str.strip_chars()
+    text = pl.when(pl.col("number") == 1).then(line.str.strip_prefix("\ufeff")).otherwise(line).str.strip_chars()
     parts = frame.select("number", text.alias("text")).filter(pl.col("text") != "")
     parts = parts.select("number", pl.col("text").str.replace_all(r"\s+", " ").str.split(" ").alias("f"))
     widths = parts.select(pl.col("f").list.len()).to_series()

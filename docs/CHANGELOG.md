@@ -16,7 +16,8 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
   tabs, or whole lines, the count saw apart: a warning could name a row the read did not cut, a line
   could vanish into the field before it, and a quote never closed failed the read. No coverage format
   quotes a field; the read now splits at tabs and lines alone, on polars 2.1 and 1.44, and a field
-  written `"chr1"` keeps its quotes. Patch.
+  written `"chr1"` keeps its quotes. A number written in quotes (a depth `"5"`) is no longer read as the
+  number: the read fails with polars' `ComputeError`, as it does for any depth that is not a number. Patch.
 
 - A text line holding the byte 0x1F is read (RM294). The text loaders' line reader (`loaders.text.lines`,
   behind the 23andMe-layout and vendor tables) and the EIGENSTRAT `.snp` reader split lines with

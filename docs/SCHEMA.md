@@ -274,7 +274,9 @@ second identity rejected above.
   person whose genome has a reference block there is hom-ref, so the export's code says which code
   means the reference. A row the table does not list is left as loaded, counted
   `id_orientation_unverified` ("no WGS evidence of this probe's orientation"); one whose rsids it lists
-  both ways likewise, under its own reason. While the table lists no probe of a chip, every code row of
+  both ways likewise, under its own reason. A listed row is read only through the probes of the rsids
+  the table lists, never through another rsid's probe the table says nothing of; one whose listed rsids
+  name no probe is left as loaded, counted with the rows that have no probe (audit 17). While the table lists no probe of a chip, every code row of
   it is left as loaded and no manifest is read, as before. The table's orientations (not its counts)
   are folded into `facets.resolve_inputs` with the manifests (`probes.orientation_digest`), so a facet
   resolved by one table and by another are two REF states. Every other chip (`23andme_v1_v2` on 6

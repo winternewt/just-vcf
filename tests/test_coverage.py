@@ -589,6 +589,27 @@ def test_a_double_quote_is_text_to_the_read_and_to_its_row_count(case: str) -> N
     assert dict(widths.fields) == dict(Counter(len(f) for f in fields if len(f) != len(names)))
 
 
+BOM_CASES = {
+    "quantized_comment": (CoverageFormat.QUANTIZED_BED, ["#comment", "chr1\t0\t10\t0:1"]),
+    "quantized_comment_renamed_bin": (CoverageFormat.QUANTIZED_BED, ["#comment", "chr1\t0\t10\tCALLABLE", "chr1\t10\t20\t1:4"]),
+    "per_base_comment": (CoverageFormat.PER_BASE_BED, ["#comment", "chr1\t0\t10\t3", "chr1\t10\t20\t5"]),
+}
+
+
+@pytest.mark.parametrize("case", list(BOM_CASES))
+def test_a_bom_before_a_comment_reads_and_counts_as_the_file_without_it(tmp_path: Path, case: str) -> None:
+    """`read_csv` drops a UTF-8 BOM and then skips the `#` line; the row count saw the line with the BOM
+    on it as a short row, and the quantized read took that row off its count of unnamed bins."""
+    kind, lines = BOM_CASES[case]
+    plain = read_coverage(write(tmp_path / "plain.bed", lines), window=None, kind=kind)
+    path = tmp_path / "bom.bed"
+    path.write_bytes(b"\xef\xbb\xbf" + ("\n".join(lines) + "\n").encode())
+    marked = read_coverage(path, window=None, kind=kind)
+    assert marked.intervals.collect().equals(plain.intervals.collect())
+    assert marked.facet.warnings == plain.facet.warnings
+    assert not counted(plain.facet.warnings), "every row holds the format's fields"
+
+
 def test_a_quoted_label_spanning_lines_reads_every_line(tmp_path: Path) -> None:
     """A quantized file whose label opens a quote closed on the next line reads one interval per line (RM293)."""
     lines = QUOTED_FIELDS["line_inside"]

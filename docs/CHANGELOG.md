@@ -11,6 +11,13 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `read_coverage` counts a file opening with a UTF-8 BOM as it reads it (audit 17). The read drops the
+  BOM and then skips a `#` comment line, while the count of cut and padded rows (RM291) split the lines
+  with the BOM still on the first, saw no comment there and counted a short row. A file opening with a BOM
+  and a comment warned of a short row it did not have, and a quantized BED took that row off its count of
+  bins naming no depth range, so the warning could read `-1` or vanish. The count now drops the BOM first,
+  on polars 2.1 and 1.44. Patch.
+
 - A UTF-8 BOM opening a Complete Genomics `var` or `masterVar` file no longer hides its first header key
   (audit 17, found beside finding 1). The header reader (`loaders.cgi.copy_body`) decoded the first line
   with the BOM kept, so `#TITLE` read as a key the reader did not know, and a whole-genome file's facet

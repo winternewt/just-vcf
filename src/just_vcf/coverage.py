@@ -483,8 +483,10 @@ def _field_counts(data: bytes, columns: int, *, skip_header: bool) -> Counter[in
     """How many of the lines `_read_fields` reads as rows hold each field count other than `columns`, a
     blank line holding none: the same bytes split into lines by `scan_lines`, about 30 ms a 64 MB block
     against about 50 ms for the parse (polars 2.1 and 1.44, measured 2026-11-17). A blank line is a row
-    of nulls to `read_csv` on both, so it is counted, under a reason of its own."""
-    lines = pl.scan_lines(data, name="line")
+    of nulls to `read_csv` on both, so it is counted, under a reason of its own. A UTF-8 BOM opening `data`
+    is dropped first, as `read_csv` drops it: `scan_lines` keeps it on the first line, which then is no
+    `#` comment to the count where it is one to the read."""
+    lines = pl.scan_lines(data.removeprefix(b"\xef\xbb\xbf"), name="line")
     lines = lines.slice(1) if skip_header else lines.filter(~pl.col("line").str.starts_with("#"))
     line = pl.col("line")
     count = pl.when((line == "") | (line == "\r")).then(0).otherwise(line.str.count_matches("\t", literal=True) + 1)

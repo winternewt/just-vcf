@@ -17,8 +17,9 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
   a `samtools depth` output with its `#CHROM` header and a thresholds file were refused "not a BED of
   depths", and a per-base or quantized BED opening with a comment "rows of different widths". A
   thresholds file was refused even with `kind` stated, since its read takes the thresholds from the
-  same first line. The BOM is now dropped there too, gzip or not. Only files that were refused read
-  differently, so `COVERAGE_VERSION` stays 2. Patch.
+  same first line. The BOM is now dropped there too, gzip or not. A file read before reads differently
+  only where the BOM hid a `#` line shaped like one of its rows, which then set the kind (a per-base BED
+  told as quantized). `COVERAGE_VERSION` stays 2, which is not released yet. Patch.
 
 - `COVERAGE_VERSION` is 2 (audit 17). RM289, RM291 and RM293 each changed the intervals or warnings
   `read_coverage` gives for some inputs, as do the BOM and blank-block fixes above, and none bumped the

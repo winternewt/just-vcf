@@ -11,6 +11,12 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- A per-base coverage file's blank lines read the same wherever its 64 MiB blocks end (audit 17). The
+  block reader behind `read_coverage` for a mosdepth per-base BED and a `samtools depth` output skipped a
+  block whose bytes were whitespace alone, so blank lines that filled a block of their own lost their null
+  rows and their count in the facet's warnings, and a line of spaces lost its short-row count, where one
+  read of the file has both. Every block of whole lines is now read. Patch.
+
 - `read_coverage` counts a file opening with a UTF-8 BOM as it reads it (audit 17). The read drops the
   BOM and then skips a `#` comment line, while the count of cut and padded rows (RM291) split the lines
   with the BOM still on the first, saw no comment there and counted a short row. A file opening with a BOM

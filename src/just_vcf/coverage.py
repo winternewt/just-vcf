@@ -666,7 +666,9 @@ def _read_runs(path: Path, kind: CoverageFormat, widths: _RowWidths) -> pl.DataF
 
 
 def _depth_chunks(path: Path, kind: CoverageFormat, widths: _RowWidths) -> Iterator[pl.DataFrame]:
-    """A per-base source as runs `chrom, pos, end_pos, depth` (1-based, inclusive), chunk by chunk."""
+    """A per-base source as runs `chrom, pos, end_pos, depth` (1-based, inclusive), chunk by chunk. Every
+    chunk of whole lines is read, one of blank or whitespace lines alone included, so its rows and its
+    counted lines are what one read of the file gives wherever a chunk ends."""
     if kind is CoverageFormat.PER_BASE_BED:
         names, dtypes = ["chrom", "start", "end", "depth"], [pl.String(), pl.Int64(), pl.Int64(), pl.Int64()]
     else:
@@ -684,7 +686,7 @@ def _depth_chunks(path: Path, kind: CoverageFormat, widths: _RowWidths) -> Itera
                     tail = data
                     continue
             tail = data[cut:]
-            if data[:cut].strip():
+            if cut:
                 frame = _read_fields(data[:cut], names, dtypes, widths, skip_header=False)
                 if kind is CoverageFormat.PER_BASE_BED:
                     yield frame.select("chrom", pos=pl.col("start") + 1, end_pos=pl.col("end"), depth=pl.col("depth"))

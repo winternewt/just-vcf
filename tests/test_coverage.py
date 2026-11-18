@@ -567,6 +567,31 @@ def test_rows_are_counted_across_the_read_s_blocks(tmp_path: Path, monkeypatch: 
     assert blocks.intervals.collect().equals(whole.intervals.collect())
 
 
+BLANK_LINES = {
+    CoverageFormat.PER_BASE_BED: [b"chr1\t0\t10\t3", b"", b"", b"chr1\t10\t20\t5", b"\r", b" ", b"#c", b"chr1\t20\t30\t4", b"", b""],
+    CoverageFormat.SAMTOOLS_DEPTH: [b"chr1\t1\t3", b"", b"", b"chr1\t2\t5", b"\r", b" ", b"#c", b"chr1\t3\t4", b"", b""],
+}
+
+
+@pytest.mark.parametrize("window", [None, 7])
+@pytest.mark.parametrize("kind", list(BLANK_LINES))
+def test_blank_lines_read_alike_wherever_a_block_ends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: CoverageFormat, window: int | None) -> None:
+    """A block of the per-base read holding blank or whitespace lines alone is read as one read reads
+    them: the rows and the warnings do not depend on where the block ends. A block was skipped when its
+    bytes stripped to nothing, so its blank lines went uncounted and its null rows unread."""
+    path = tmp_path / "rows.txt"
+    data = b"\n".join(BLANK_LINES[kind]) + b"\n"
+    path.write_bytes(data)
+    whole = read_coverage(path, window=window, kind=kind)
+    assert counted(whole.facet.warnings)["blank"] == sum(line in (b"", b"\r") for line in BLANK_LINES[kind])
+    intervals = whole.intervals.collect()
+    for size in range(1, len(data) + 1):
+        monkeypatch.setattr(coverage_module, "_CHUNK_BYTES", size)
+        blocks = read_coverage(path, window=window, kind=kind)
+        assert blocks.facet.warnings == whole.facet.warnings, size
+        assert blocks.intervals.collect().equals(intervals), size
+
+
 QUOTED_FIELDS = {
     "tab_inside": ['chr1\t0\t10\t"a\tb"', "chr1\t10\t20\tc"],
     "line_inside": ['chr1\t0\t10\t"0:1', 'chr1\t10\t30\t1:4"', "chr1\t30\t60\t4:inf"],

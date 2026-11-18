@@ -6,6 +6,18 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM298 — The remaining readers take a leading BOM as their neighbours do
+**State:** unattended · **Owner:** lead
+
+Severity: low · Status: open (found while building RM297, 2026-11-18)
+
+A UTF-8 BOM opening a file is dropped by `sniff`, the text, chip, CGI, key=value, EIGENSTRAT and coverage readers,
+but not by four others: a VCF sniffs as `vcf` and `load` then fails with polars-bio's raw `unexpected EOL` (read it
+as a VCF polars-bio cannot read as it is, through the rewritten copy, or refuse it with a typed error; an upstream
+note to the liaison if noodles should take it); `loaders.rsid_table.column_line_ok` decodes its head with the BOM,
+so a column line behind one loses the "columns taken by position" warning; `nirvana.copy_positions` and
+`liftover.read_chain` read their text with it. Each with a test on polars 2.x and 1.x.
+
 ## RM297 — Coverage detection reads past a BOM
 **State:** unattended · **Owner:** lead
 

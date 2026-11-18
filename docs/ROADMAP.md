@@ -6,6 +6,16 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM295 — A blank line in an EIGENSTRAT `.snp` is no site
+**State:** unattended · **Owner:** lead
+
+Severity: low · Status: open (found while building RM294, 2026-11-18)
+
+`ancestry.eigenstrat.read_snp` reads an empty line as a row of nulls, as `read_csv` did, so a `.snp`
+ending in a blank line has one site too many and the `.geno` header's site count then disagrees. `read_ind`
+already skips blank lines. Skip them in `read_snp` too, and test a trailing and an interior blank line on
+polars 2.x and 1.x.
+
 ## RM294 — A text line holding 0x1F is read
 **State:** unattended · **Owner:** lead
 

@@ -11,6 +11,12 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- A blank line in an EIGENSTRAT `.snp` is no site (RM295). `ancestry.eigenstrat.read_snp` read an empty
+  line as a row of nulls and refused a line of spaces or tabs as one field, so a `.snp` ending in a blank
+  line had one site too many and `build_aadr_panel` then refused the `.geno`, whose header counts the sites.
+  A line that is empty or whitespace alone is now skipped, as `read_ind` already skipped one, on polars
+  2.1 and 1.44; a line of the wrong width is still named by its line number in the file. Patch.
+
 - `read_coverage` reads a double quote as text (RM293). The read parsed with `read_csv`'s default quote
   while the count of cut and padded rows (RM291) split plain lines, so a field opening with `"` joined
   tabs, or whole lines, the count saw apart: a warning could name a row the read did not cut, a line

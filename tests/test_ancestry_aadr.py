@@ -274,6 +274,73 @@ def test_a_snp_line_holding_the_unit_separator_is_read_as_text(tmp_path: Path, e
     assert read_snp(path).rows() == expected
 
 
+SNP_ROWS = ["rs1 1 0.0 100 A G", "rs2 2 0.0 200 C T", "rs3 3 0.0 300 G A"]
+
+BLANK_SNP_LINES = {
+    # name: the file's text, the three sites with blank or whitespace-only lines among them
+    "a trailing blank line": "\n".join(SNP_ROWS) + "\n\n",
+    "an interior blank line": f"{SNP_ROWS[0]}\n\n{SNP_ROWS[1]}\n{SNP_ROWS[2]}\n",
+    "a leading blank line": "\n" + "\n".join(SNP_ROWS) + "\n",
+    "an interior line of spaces and tabs": f"{SNP_ROWS[0]}\n \t \n{SNP_ROWS[1]}\n{SNP_ROWS[2]}\n",
+    "a trailing line of spaces": "\n".join(SNP_ROWS) + "\n   \n",
+    "blank lines in CRLF": "\r\n".join([SNP_ROWS[0], "", SNP_ROWS[1], SNP_ROWS[2], "", ""]),
+}
+
+
+@pytest.mark.parametrize("text", BLANK_SNP_LINES.values(), ids=BLANK_SNP_LINES.keys())
+def test_a_blank_snp_line_is_no_site_as_a_blank_ind_line_is_no_individual(tmp_path: Path, text: str) -> None:
+    """A `.snp` line that is empty or whitespace alone is skipped, as `read_ind` skips one (RM295), so a
+    file ending in a blank line has no site too many."""
+    path = tmp_path / "x.snp"
+    path.write_bytes(text.encode())
+    expected = [(f[0], f[1], int(f[3]), f[4], f[5]) for f in (row.split(" ") for row in SNP_ROWS)]
+    assert read_snp(path).rows() == expected
+    ind_text = text
+    for row in SNP_ROWS:
+        ind_text = ind_text.replace(row, f"{row.split()[0]} U G")
+    ind = tmp_path / "x.ind"
+    ind.write_bytes(ind_text.encode())
+    assert read_ind(ind)["genetic_id"].to_list() == read_snp(path)["snp_id"].to_list()
+
+
+@pytest.mark.parametrize("text", ["", "\n", "\n \t\n\n"], ids=["empty", "one blank line", "blank lines alone"])
+def test_a_snp_file_of_blank_lines_alone_has_no_sites(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "x.snp"
+    path.write_bytes(text.encode())
+    snp = read_snp(path)
+    assert snp.height == 0
+    assert snp.schema == pl.Schema({"snp_id": pl.String, "chrom": pl.String, "pos": pl.Int64, "allele1": pl.String, "allele2": pl.String})
+
+
+def test_a_snp_file_whose_first_line_is_a_bom_alone_reads_from_its_second(tmp_path: Path) -> None:
+    path = tmp_path / "x.snp"
+    path.write_bytes(("\ufeff\n" + "\n".join(SNP_ROWS) + "\n").encode())
+    assert read_snp(path)["snp_id"].to_list() == ["rs1", "rs2", "rs3"]
+
+
+def test_a_bad_snp_line_after_a_blank_one_is_named_by_its_line_in_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "x.snp"
+    path.write_text(f"{SNP_ROWS[0]}\n\n \n{SNP_ROWS[1]}\nrs9 9 0.0 900 A\n")
+    with pytest.raises(ValueError, match="line 5 has 5 fields, not 6"):
+        read_snp(path)
+
+
+@pytest.mark.parametrize("blank", ["", " \t "], ids=["empty", "whitespace"])
+def test_a_snp_file_holding_blank_lines_builds_the_same_panel(fixture: Fixture, built: dict, tmp_path: Path, blank: str) -> None:
+    """Blank lines in the `.snp`, inside it and at its end, neither add a site nor shift the `.geno` records
+    the sites are read from: the `.geno` header's site count still agrees."""
+    prefix = tmp_path / fixture.prefix.name
+    Path(f"{prefix}.ind").write_bytes(Path(f"{fixture.prefix}.ind").read_bytes())
+    lines = Path(f"{fixture.prefix}.snp").read_text().splitlines()
+    Path(f"{prefix}.snp").write_text("\n".join(lines[:5] + [blank] + lines[5:] + [blank]) + "\n")
+    fixture.write_geno("tgeno", Path(f"{prefix}.geno"))
+    build = build_aadr_panel(prefix, fixture.anno, tmp_path / "panel", reference=fixture.store(tmp_path), dim_ref=DIM_REF)
+    expected, _ = built["tgeno"]
+    assert build.n_snps == expected.n_snps == len(fixture.sites)
+    assert pl.read_parquet(build.panel.sites_path).equals(pl.read_parquet(expected.panel.sites_path))
+    assert pl.read_parquet(build.panel.refpcs_path).equals(pl.read_parquet(expected.panel.refpcs_path))
+
+
 def test_an_annotation_file_without_a_column_it_needs_is_refused(tmp_path: Path) -> None:
     path = tmp_path / "short.anno"
     path.write_text("\t".join(h for h in ANNO_HEADER if not h.startswith("Political")) + "\n")

@@ -804,6 +804,22 @@ def test_lifted_rows_mint_on_the_target(tmp_path: Path, setup) -> None:
     assert minted["vrs_allele_ids"].list.drop_nulls().list.len().to_list() == (minted["alts"].list.len() + 1).to_list()
 
 
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+def test_a_chain_file_opening_with_a_bom_reads_as_the_file_without_it(tmp_path: Path, compressed: bool) -> None:
+    """RM298: a UTF-8 BOM opening a chain file (inside the gzip, for a gzipped one) is dropped before the
+    first `chain` header is read."""
+    text = (chain_text() + "\n").encode()
+    wrap = gzip.compress if compressed else (lambda data: data)
+    without = tmp_path / "without.chain"
+    without.write_bytes(wrap(text))
+    with_bom = tmp_path / "with_bom.chain"
+    with_bom.write_bytes(wrap(b"\xef\xbb\xbf" + text))
+    expected, chain = read_chain(without), read_chain(with_bom)
+    assert chain.blocks.equals(expected.blocks)
+    assert (chain.source_sizes, chain.target_sizes) == (expected.source_sizes, expected.target_sizes)
+    assert chain.blocks["chain"].n_unique() == chain_text().count("chain ")
+
+
 def test_positions_agree_with_pyliftover(tmp_path: Path, setup) -> None:
     pyliftover = pytest.importorskip("pyliftover")
     _, _, _, chain = setup

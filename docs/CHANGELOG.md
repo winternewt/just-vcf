@@ -11,6 +11,10 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `read_chain` reads a chain file opening with a UTF-8 BOM, plain or inside its gzip, as the file without
+  it (RM298). It decoded the text with the BOM kept, so the first header's `chain` token did not read as
+  one and the read failed with a raw `ValueError` from `int()`. The BOM is dropped now. Patch.
+
 - A 23andMe-layout table whose column line does not name the four columns is warned of when a UTF-8 BOM
   opens the file and the column line is its first line (RM298). `loaders.rsid_table.column_line_ok`
   decoded its head with the BOM kept, found no column line there and answered unknown, so the "columns

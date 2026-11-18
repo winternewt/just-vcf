@@ -3,6 +3,22 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM298 — The remaining readers take a leading BOM as their neighbours do
+Severity: low · Status: shipped 2026-11-18 (merge 26ee0c9)
+
+**Built:** a VCF opening with a BOM loads as the file without it, plain, gzip or BGZF, re-saved or not: the loader
+reads past it and such a file always goes through the rewritten copy (`Header.bom`, `REWRITE_VERSION` 20; the copy
+19 wrote put the header among the records). `rsid_table.column_line_ok` and `liftover.read_chain` decode with
+`utf-8-sig`. Nirvana already read past it (`json.loads` on bytes); a test pins it. **Not upstream:** VCF 4.3 and 4.5
+forbid a BOM, so polars-bio refusing one ("empty input") is conformant.
+
+## RM297 — Coverage detection reads past a BOM
+Severity: low · Status: shipped 2026-11-18 (merge ee8cb8a)
+
+**Built:** `coverage._head_lines` drops a BOM from the first line, gzip or not, so six kinds detect as without it
+(mosdepth summary, `samtools coverage`, `samtools depth` with `#CHROM`, thresholds, per-base and quantized BEDs
+opening with a comment); a thresholds file with a BOM reads with `kind=` stated too.
+
 ## RM296 — An EIGENSTRAT `.ind` is read as its `.snp` is
 Severity: low · Status: shipped 2026-11-18 (merge b5e1f94)
 

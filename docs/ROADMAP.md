@@ -6,28 +6,6 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
-## RM298 — The remaining readers take a leading BOM as their neighbours do
-**State:** unattended · **Owner:** lead
-
-Severity: low · Status: open (found while building RM297, 2026-11-18)
-
-A UTF-8 BOM opening a file is dropped by `sniff`, the text, chip, CGI, key=value, EIGENSTRAT and coverage readers,
-but not by four others: a VCF sniffs as `vcf` and `load` then fails with polars-bio's raw `unexpected EOL` (read it
-as a VCF polars-bio cannot read as it is, through the rewritten copy, or refuse it with a typed error; an upstream
-note to the liaison if noodles should take it); `loaders.rsid_table.column_line_ok` decodes its head with the BOM,
-so a column line behind one loses the "columns taken by position" warning; `nirvana.copy_positions` and
-`liftover.read_chain` read their text with it. Each with a test on polars 2.x and 1.x.
-
-## RM297 — Coverage detection reads past a BOM
-**State:** unattended · **Owner:** lead
-
-Severity: low · Status: open (found while fixing audit 17, 2026-11-18)
-
-`coverage._head_lines`, which `read_coverage` detects a file's kind from, keeps a UTF-8 BOM on the first line. A
-quantized BED opening with a comment is then refused ("rows of different widths"), and a thresholds file or a
-`#CHROM` samtools depth file "not a BED of depths"; each reads when `kind=` is given. Drop the BOM there as the reads
-now do, with a test per kind on polars 2.x and 1.x.
-
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
 

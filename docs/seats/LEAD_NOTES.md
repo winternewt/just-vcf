@@ -99,7 +99,9 @@ each reset.
    loaded row reads differently); a row with a listed rsid and an unlisted one placed elsewhere, once `code_ambiguous`,
    now resolves through the listed probe; a CGI file opening with a BOM keeps its `#TITLE` (beyond the brief). Left:
    stash@{0} `audit17-bom-src-only` (committed content, the person's to drop); commit 53d1750's message holds a literal
-   U+FEFF (history, left). RM297 (coverage detection past a BOM) is merge 1 of 6 toward audit 18; RM298 building.
+   U+FEFF (history, left). RM297 (coverage detection past a BOM) merged as ee8cb8a, merge 1 of 6 toward audit 18; RM298 (a VCF, an rsid
+   column line and a chain file past a BOM; `REWRITE_VERSION` 20) as 26ee0c9, merge 2 of 6. RM298's commit 00a5641
+   also carries a literal U+FEFF in its message (left).
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

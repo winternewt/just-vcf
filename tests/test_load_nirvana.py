@@ -82,6 +82,20 @@ def test_positions_are_vcf_rows(tmp_path: Path) -> None:
                                    {"source": "chr3", "chrom": "3"}, {"source": "chrM", "chrom": "MT"}]
 
 
+def test_a_file_opening_with_a_bom_loads_as_the_file_without_it(tmp_path: Path) -> None:
+    """RM298: a UTF-8 BOM opening the file is dropped as `sniff` drops it, before the header object on
+    the first line is read as JSON."""
+    without = _write(tmp_path / "without.json", POSITIONS)
+    with_bom = tmp_path / "with_bom.json"
+    with_bom.write_bytes(b"\xef\xbb\xbf" + without.read_bytes())
+    expected, loaded = load(without), load(with_bom)
+    assert loaded.calls.collect().drop("facet_id").equals(expected.calls.collect().drop("facet_id"))
+    assert loaded.facets.collect().drop("facet_id", "source_sha256", "source_path").equals(
+        expected.facets.collect().drop("facet_id", "source_sha256", "source_path")
+    )
+    assert loaded.warnings == expected.warnings
+
+
 def test_the_example_loads_and_a_rerun_is_identical(tmp_path: Path) -> None:
     path = tmp_path / "example.json"
     path.write_text(get_spec("nirvana_json").example)

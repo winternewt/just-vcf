@@ -9,6 +9,7 @@ how, and the ALT dosages it drew before encoding them as the file's counts of it
 The opt-in test at the end builds from the real AADR files and places one public PGP-HMS genome.
 """
 
+import gzip
 import json
 import math
 import time
@@ -389,6 +390,20 @@ def test_an_eigenstrat_text_file_that_is_not_utf8_is_refused(tmp_path: Path, suf
     reader = read_ind if suffix == "ind" else read_snp
     with pytest.raises(pl.exceptions.ComputeError):
         reader(path)
+
+
+@pytest.mark.parametrize("suffix", ["ind", "snp"])
+def test_a_gzipped_eigenstrat_text_file_reads_as_the_plain_one(fixture: Fixture, tmp_path: Path, suffix: str) -> None:
+    """A gzip `.ind` or `.snp` reads through to the same rows as the plain file (`scan_lines` decompresses
+    it on polars 2.x and 1.x alike), where `read_ind` once failed to decode one (RM296)."""
+    plain = Path(f"{fixture.prefix}.{suffix}")
+    packed = tmp_path / f"x.{suffix}"
+    packed.write_bytes(gzip.compress(plain.read_bytes()))
+    assert packed.read_bytes()[:2] == b"\x1f\x8b"
+    reader = read_ind if suffix == "ind" else read_snp
+    expected = reader(plain)
+    assert expected.height > 0
+    assert reader(packed).equals(expected)
 
 
 def test_an_annotation_file_without_a_column_it_needs_is_refused(tmp_path: Path) -> None:

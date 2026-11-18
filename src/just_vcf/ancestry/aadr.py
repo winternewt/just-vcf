@@ -189,7 +189,7 @@ class AadrBuild(BaseModel):
 
     panel: PanelBuild
     n_individuals: int
-    """Lines of the `.ind` file."""
+    """Individuals the `.ind` file lists: its lines, blank ones not counted."""
     n_selected: int
     excluded: dict[str, int]
     """Per `INDIVIDUAL_EXCLUSIONS` reason, every one listed."""
@@ -197,7 +197,7 @@ class AadrBuild(BaseModel):
     """Chosen individuals per region."""
     n_populations: int
     n_snps: int
-    """Lines of the `.snp` file."""
+    """Sites the `.snp` file lists: its lines, blank ones not counted."""
     n_sites: int
     dropped: dict[str, int]
     """Per `SITE_DROPS` reason, every one listed."""

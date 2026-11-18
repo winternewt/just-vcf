@@ -9,6 +9,7 @@ how, and the ALT dosages it drew before encoding them as the file's counts of it
 The opt-in test at the end builds from the real AADR files and places one public PGP-HMS genome.
 """
 
+import gzip
 import json
 import math
 import time
@@ -272,6 +273,137 @@ def test_a_snp_line_holding_the_unit_separator_is_read_as_text(tmp_path: Path, e
     path.write_bytes(bom + (ending.join(rows) + ending).encode())
     expected = [(f[0], f[1], int(f[3]), f[4], f[5]) for f in (row.split(" ") for row in rows)]
     assert read_snp(path).rows() == expected
+
+
+SNP_ROWS = ["rs1 1 0.0 100 A G", "rs2 2 0.0 200 C T", "rs3 3 0.0 300 G A"]
+
+BLANK_SNP_LINES = {
+    # name: the file's text, the three sites with blank or whitespace-only lines among them
+    "a trailing blank line": "\n".join(SNP_ROWS) + "\n\n",
+    "an interior blank line": f"{SNP_ROWS[0]}\n\n{SNP_ROWS[1]}\n{SNP_ROWS[2]}\n",
+    "a leading blank line": "\n" + "\n".join(SNP_ROWS) + "\n",
+    "an interior line of spaces and tabs": f"{SNP_ROWS[0]}\n \t \n{SNP_ROWS[1]}\n{SNP_ROWS[2]}\n",
+    "a trailing line of spaces": "\n".join(SNP_ROWS) + "\n   \n",
+    "blank lines in CRLF": "\r\n".join([SNP_ROWS[0], "", SNP_ROWS[1], SNP_ROWS[2], "", ""]),
+}
+
+
+@pytest.mark.parametrize("text", BLANK_SNP_LINES.values(), ids=BLANK_SNP_LINES.keys())
+def test_a_blank_snp_line_is_no_site_as_a_blank_ind_line_is_no_individual(tmp_path: Path, text: str) -> None:
+    """A `.snp` line that is empty or whitespace alone is skipped, as `read_ind` skips one (RM295), so a
+    file ending in a blank line has no site too many."""
+    path = tmp_path / "x.snp"
+    path.write_bytes(text.encode())
+    expected = [(f[0], f[1], int(f[3]), f[4], f[5]) for f in (row.split(" ") for row in SNP_ROWS)]
+    assert read_snp(path).rows() == expected
+    ind_text = text
+    for row in SNP_ROWS:
+        ind_text = ind_text.replace(row, f"{row.split()[0]} U G")
+    ind = tmp_path / "x.ind"
+    ind.write_bytes(ind_text.encode())
+    assert read_ind(ind)["genetic_id"].to_list() == read_snp(path)["snp_id"].to_list()
+
+
+@pytest.mark.parametrize("text", ["", "\n", "\n \t\n\n"], ids=["empty", "one blank line", "blank lines alone"])
+def test_a_snp_file_of_blank_lines_alone_has_no_sites(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "x.snp"
+    path.write_bytes(text.encode())
+    snp = read_snp(path)
+    assert snp.height == 0
+    assert snp.schema == pl.Schema({"snp_id": pl.String, "chrom": pl.String, "pos": pl.Int64, "allele1": pl.String, "allele2": pl.String})
+
+
+def test_a_snp_file_whose_first_line_is_a_bom_alone_reads_from_its_second(tmp_path: Path) -> None:
+    path = tmp_path / "x.snp"
+    path.write_bytes(("\ufeff\n" + "\n".join(SNP_ROWS) + "\n").encode())
+    assert read_snp(path)["snp_id"].to_list() == ["rs1", "rs2", "rs3"]
+
+
+def test_a_bad_snp_line_after_a_blank_one_is_named_by_its_line_in_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "x.snp"
+    path.write_text(f"{SNP_ROWS[0]}\n\n \n{SNP_ROWS[1]}\nrs9 9 0.0 900 A\n")
+    with pytest.raises(ValueError, match="line 5 has 5 fields, not 6"):
+        read_snp(path)
+
+
+@pytest.mark.parametrize("blank", ["", " \t "], ids=["empty", "whitespace"])
+def test_a_snp_file_holding_blank_lines_builds_the_same_panel(fixture: Fixture, built: dict, tmp_path: Path, blank: str) -> None:
+    """Blank lines in the `.snp`, inside it and at its end, neither add a site nor shift the `.geno` records
+    the sites are read from: the `.geno` header's site count still agrees."""
+    prefix = tmp_path / fixture.prefix.name
+    Path(f"{prefix}.ind").write_bytes(Path(f"{fixture.prefix}.ind").read_bytes())
+    lines = Path(f"{fixture.prefix}.snp").read_text().splitlines()
+    Path(f"{prefix}.snp").write_text("\n".join(lines[:5] + [blank] + lines[5:] + [blank]) + "\n")
+    fixture.write_geno("tgeno", Path(f"{prefix}.geno"))
+    build = build_aadr_panel(prefix, fixture.anno, tmp_path / "panel", reference=fixture.store(tmp_path), dim_ref=DIM_REF)
+    expected, _ = built["tgeno"]
+    assert build.n_snps == expected.n_snps == len(fixture.sites)
+    assert pl.read_parquet(build.panel.sites_path).equals(pl.read_parquet(expected.panel.sites_path))
+    assert pl.read_parquet(build.panel.refpcs_path).equals(pl.read_parquet(expected.panel.refpcs_path))
+
+
+IND_SCHEMA = pl.Schema({"genetic_id": pl.String, "sex": pl.String, "group": pl.String})
+
+
+@pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"], ids=["no BOM", "BOM"])
+@pytest.mark.parametrize("ending", ["\n", "\r\n"], ids=["LF", "CRLF"])
+def test_an_ind_line_holding_a_separator_byte_is_read_as_text(tmp_path: Path, ending: str, bom: bytes) -> None:
+    """0x1C to 0x1F inside a `.ind` line are text, as in a `.snp` line (RM296): neither a line end nor a
+    field break. A UTF-8 BOM is not part of the first individual's id."""
+    rows = ["I1 M popA", "I\x1f2 F pop\x1cB", "I3\x1d U popC\x1e"]
+    path = tmp_path / "x.ind"
+    path.write_bytes(bom + (ending.join(rows) + ending).encode())
+    ind = read_ind(path)
+    assert ind.schema == IND_SCHEMA
+    assert ind.rows() == [tuple(row.split(" ")) for row in rows]
+
+
+@pytest.mark.parametrize("after_bom", ["", "\n"], ids=["BOM opening the first id", "BOM alone on the first line"])
+def test_a_bom_opening_an_ind_file_is_not_part_of_the_first_id(tmp_path: Path, after_bom: str) -> None:
+    path = tmp_path / "x.ind"
+    path.write_bytes(f"\ufeff{after_bom}I1 M popA\nI2 F popB\n".encode())
+    assert read_ind(path)["genetic_id"].to_list() == ["I1", "I2"]
+
+
+def test_a_bad_ind_line_after_a_blank_one_is_named_by_its_line_in_the_file(tmp_path: Path) -> None:
+    """The line number in the error counts every line of the file, blank ones too, as `read_snp`'s does."""
+    path = tmp_path / "x.ind"
+    path.write_text("I1 M popA\n\n \t \nI2 F popB\nI3 U\n")
+    with pytest.raises(ValueError, match="line 5 has 2 fields, not 3"):
+        read_ind(path)
+
+
+@pytest.mark.parametrize("text", ["", "\n", "\n \t\n\n"], ids=["empty", "one blank line", "blank lines alone"])
+def test_an_ind_file_of_blank_lines_alone_has_no_individuals(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "x.ind"
+    path.write_bytes(text.encode())
+    ind = read_ind(path)
+    assert ind.height == 0
+    assert ind.schema == IND_SCHEMA
+
+
+@pytest.mark.parametrize("suffix", ["ind", "snp"])
+def test_an_eigenstrat_text_file_that_is_not_utf8_is_refused(tmp_path: Path, suffix: str) -> None:
+    """A byte that is not UTF-8 refuses the `.ind` as it refuses the `.snp`, with polars' `ComputeError`."""
+    path = tmp_path / f"x.{suffix}"
+    path.write_bytes(b"I\xff1 M popA\n" if suffix == "ind" else b"rs\xff1 1 0.0 100 A G\n")
+    reader = read_ind if suffix == "ind" else read_snp
+    with pytest.raises(pl.exceptions.ComputeError):
+        reader(path)
+
+
+@pytest.mark.parametrize("suffix", ["ind", "snp"])
+def test_a_gzipped_eigenstrat_text_file_reads_as_the_plain_one(fixture: Fixture, tmp_path: Path, suffix: str) -> None:
+    """A gzip `.ind` or `.snp` reads through to the same rows as the plain file (`scan_lines` decompresses
+    it on polars 2.x and 1.x alike), where `read_ind` once failed to decode one (RM296)."""
+    plain = Path(f"{fixture.prefix}.{suffix}")
+    packed = tmp_path / f"x.{suffix}"
+    packed.write_bytes(gzip.compress(plain.read_bytes()))
+    assert packed.read_bytes()[:2] == b"\x1f\x8b"
+    reader = read_ind if suffix == "ind" else read_snp
+    expected = reader(plain)
+    assert expected.height > 0
+    assert reader(packed).equals(expected)
 
 
 def test_an_annotation_file_without_a_column_it_needs_is_refused(tmp_path: Path) -> None:

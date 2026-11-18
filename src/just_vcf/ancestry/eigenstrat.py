@@ -55,36 +55,43 @@ not confused with the `ASSESSMENT WARNINGS: …` column after it."""
 
 
 def read_ind(path: Path) -> pl.DataFrame:
-    """A `.ind` file as `genetic_id, sex, group`, in the `.geno` record order."""
-    rows = [line.split() for line in path.read_text().splitlines() if line.strip()]
-    bad = [i for i, row in enumerate(rows) if len(row) != 3]
-    if bad:
-        raise ValueError(f"{path.name}: line {bad[0] + 1} has {len(rows[bad[0]])} fields, not 3")
-    return pl.DataFrame(rows, schema={"genetic_id": pl.String, "sex": pl.String, "group": pl.String}, orient="row")
+    """A `.ind` file as `genetic_id, sex, group`, in the `.geno` record order. Its lines are read as
+    `read_snp` reads a `.snp`'s (`_fields`, RM296)."""
+    names = ("genetic_id", "sex", "group")
+    return _fields(path, len(names)).select(pl.col("f").list.get(i).alias(name) for i, name in enumerate(names))
 
 
 def read_snp(path: Path) -> pl.DataFrame:
-    """A `.snp` file as `snp_id, chrom, pos, allele1, allele2`, in file order. `allele1` is counted.
-
-    Lines are read by `scan_lines`, so any byte but the line end is text (RM294). An empty line is a row
-    of nulls, and a UTF-8 BOM opening the file is dropped, as when `read_csv` read the lines: `scan_lines`
-    keeps the BOM as U+FEFF on the first line."""
-    frame = pl.scan_lines(path, name="line").collect()
-    first = pl.int_range(pl.len()) == 0
-    text = pl.when(first).then(pl.col("line").str.strip_prefix("\ufeff")).otherwise(pl.col("line"))
-    line = pl.when(text != "").then(text)
-    parts = frame.select(line.str.strip_chars().str.replace_all(r"\s+", " ").str.split(" ").alias("f"))
-    widths = parts.select(pl.col("f").list.len()).to_series()
-    if parts.height and (widths != 6).any():
-        first = int((widths != 6).arg_max())
-        raise ValueError(f"{path.name}: line {first + 1} has {widths[first]} fields, not 6")
-    return parts.select(
+    """A `.snp` file as `snp_id, chrom, pos, allele1, allele2`, in file order. `allele1` is counted. Its
+    lines are read as `read_ind` reads a `.ind`'s (`_fields`)."""
+    return _fields(path, 6).select(
         pl.col("f").list.get(0).alias("snp_id"),
         pl.col("f").list.get(1).alias("chrom"),
         pl.col("f").list.get(3).cast(pl.Int64).alias("pos"),
         pl.col("f").list.get(4).alias("allele1"),
         pl.col("f").list.get(5).alias("allele2"),
     )
+
+
+def _fields(path: Path, width: int) -> pl.DataFrame:
+    """An EIGENSTRAT text file's lines (`.ind`, `.snp`) as one list column `f` of their fields, each line
+    holding `width` of them.
+
+    Lines are read by `scan_lines`, so any byte but the line end is text, 0x1C to 0x1F included (RM294,
+    RM296). A UTF-8 BOM opening the file is dropped: `scan_lines` keeps it as U+FEFF on the first line. A
+    line that is empty or whitespace alone is skipped (RM295), and fields are split on runs of whitespace.
+    A line of another width is named by its line number in the file, blank lines counted. A byte that is
+    not UTF-8 is refused with polars' `ComputeError`."""
+    frame = pl.scan_lines(path, name="line").with_row_index("number", offset=1).collect()
+    line = pl.col("line")
+    text = pl.when(pl.col("number") == 1).then(line.str.strip_prefix("\ufeff")).otherwise(line).str.strip_chars()
+    parts = frame.select("number", text.alias("text")).filter(pl.col("text") != "")
+    parts = parts.select("number", pl.col("text").str.replace_all(r"\s+", " ").str.split(" ").alias("f"))
+    widths = parts.select(pl.col("f").list.len()).to_series()
+    if parts.height and (widths != width).any():
+        first = int((widths != width).arg_max())
+        raise ValueError(f"{path.name}: line {parts['number'][first]} has {widths[first]} fields, not {width}")
+    return parts.select("f")
 
 
 def read_anno(path: Path) -> pl.DataFrame:
@@ -124,8 +131,8 @@ def read_genotypes(path: Path, n_ind: int, n_snp: int, individuals: np.ndarray) 
     """The genotypes of `individuals` (row numbers of the `.ind` file) at every site.
 
     Returns an `(n_snp, len(individuals))` int8 matrix of counts of `allele1`, `MISSING` where the
-    file has no genotype. `n_ind` and `n_snp` are the `.ind` and `.snp` line counts; a packed header
-    or a file size that disagrees with them is refused.
+    file has no genotype. `n_ind` and `n_snp` are the rows `read_ind` and `read_snp` return (blank
+    lines are none); a packed header or a file size that disagrees with them is refused.
     """
     individuals = np.asarray(individuals, dtype=np.int64)
     layout = geno_layout(path)

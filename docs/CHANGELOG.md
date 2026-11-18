@@ -11,6 +11,17 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- An EIGENSTRAT `.ind` is read as its `.snp` is (RM296). `ancestry.eigenstrat.read_ind` split lines and
+  fields with Python's `splitlines` and `split`, so a byte 0x1C to 0x1F broke a line or a field that
+  `read_snp` reads as text, a UTF-8 BOM stayed on the first genetic id as U+FEFF, and the line an error
+  named counted only the non-blank lines. Both readers now share one line reader (`scan_lines`, BOM
+  dropped, blank lines skipped, fields split on runs of whitespace, errors naming the line in the file), on
+  polars 2.1 and 1.44. Other differences that follow: a bare CR, 0x0B or 0x0C no longer ends a `.ind` line
+  (a file ending its lines with bare CRs is refused for its width, where it was read); a byte that is not
+  UTF-8 is refused with polars' `ComputeError`, not Python's `UnicodeDecodeError`; and a gzip `.ind` is
+  read through, as a `.snp` already was, where it failed to decode. Output columns and order are unchanged.
+  Patch.
+
 - A blank line in an EIGENSTRAT `.snp` is no site (RM295). `ancestry.eigenstrat.read_snp` read an empty
   line as a row of nulls and refused a line of spaces or tabs as one field, so a `.snp` ending in a blank
   line had one site too many and `build_aadr_panel` then refused the `.geno`, whose header counts the sites.

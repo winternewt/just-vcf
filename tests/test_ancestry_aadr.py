@@ -341,6 +341,56 @@ def test_a_snp_file_holding_blank_lines_builds_the_same_panel(fixture: Fixture, 
     assert pl.read_parquet(build.panel.refpcs_path).equals(pl.read_parquet(expected.panel.refpcs_path))
 
 
+IND_SCHEMA = pl.Schema({"genetic_id": pl.String, "sex": pl.String, "group": pl.String})
+
+
+@pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"], ids=["no BOM", "BOM"])
+@pytest.mark.parametrize("ending", ["\n", "\r\n"], ids=["LF", "CRLF"])
+def test_an_ind_line_holding_a_separator_byte_is_read_as_text(tmp_path: Path, ending: str, bom: bytes) -> None:
+    """0x1C to 0x1F inside a `.ind` line are text, as in a `.snp` line (RM296): neither a line end nor a
+    field break. A UTF-8 BOM is not part of the first individual's id."""
+    rows = ["I1 M popA", "I\x1f2 F pop\x1cB", "I3\x1d U popC\x1e"]
+    path = tmp_path / "x.ind"
+    path.write_bytes(bom + (ending.join(rows) + ending).encode())
+    ind = read_ind(path)
+    assert ind.schema == IND_SCHEMA
+    assert ind.rows() == [tuple(row.split(" ")) for row in rows]
+
+
+@pytest.mark.parametrize("after_bom", ["", "\n"], ids=["BOM opening the first id", "BOM alone on the first line"])
+def test_a_bom_opening_an_ind_file_is_not_part_of_the_first_id(tmp_path: Path, after_bom: str) -> None:
+    path = tmp_path / "x.ind"
+    path.write_bytes(f"﻿{after_bom}I1 M popA\nI2 F popB\n".encode())
+    assert read_ind(path)["genetic_id"].to_list() == ["I1", "I2"]
+
+
+def test_a_bad_ind_line_after_a_blank_one_is_named_by_its_line_in_the_file(tmp_path: Path) -> None:
+    """The line number in the error counts every line of the file, blank ones too, as `read_snp`'s does."""
+    path = tmp_path / "x.ind"
+    path.write_text("I1 M popA\n\n \t \nI2 F popB\nI3 U\n")
+    with pytest.raises(ValueError, match="line 5 has 2 fields, not 3"):
+        read_ind(path)
+
+
+@pytest.mark.parametrize("text", ["", "\n", "\n \t\n\n"], ids=["empty", "one blank line", "blank lines alone"])
+def test_an_ind_file_of_blank_lines_alone_has_no_individuals(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "x.ind"
+    path.write_bytes(text.encode())
+    ind = read_ind(path)
+    assert ind.height == 0
+    assert ind.schema == IND_SCHEMA
+
+
+@pytest.mark.parametrize("suffix", ["ind", "snp"])
+def test_an_eigenstrat_text_file_that_is_not_utf8_is_refused(tmp_path: Path, suffix: str) -> None:
+    """A byte that is not UTF-8 refuses the `.ind` as it refuses the `.snp`, with polars' `ComputeError`."""
+    path = tmp_path / f"x.{suffix}"
+    path.write_bytes(b"I\xff1 M popA\n" if suffix == "ind" else b"rs\xff1 1 0.0 100 A G\n")
+    reader = read_ind if suffix == "ind" else read_snp
+    with pytest.raises(pl.exceptions.ComputeError):
+        reader(path)
+
+
 def test_an_annotation_file_without_a_column_it_needs_is_refused(tmp_path: Path) -> None:
     path = tmp_path / "short.anno"
     path.write_text("\t".join(h for h in ANNO_HEADER if not h.startswith("Political")) + "\n")

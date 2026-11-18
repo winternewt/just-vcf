@@ -1586,7 +1586,7 @@ with `chr` declares all 1,216 mates.
 
 
 ## RM271 — VRS allele ids
-**State:** waits until 2026-11-19: the gtars gap (G1) is the upstream-liaison seat's to file on the person's go; nothing left for the lead · **Owner:** lead
+**State:** blocked: desk #77, the gtars gap (G1), the upstream-liaison seat's to file on the person's go; nothing left for the lead · **Owner:** lead
 
 Severity: high · Status: in progress (`mint_vrs_ids` and `vrs_withheld` shipped 2026-10-22 for VCF and array rows, merge b41bda5, equal to vrs-python on 19,000 real alleles. The opt-in test in `tests/test_vrs.py` that mints on the real store `JUST_VCF_TEST_REFERENCE_DIR` names and compares every slot with vrs-python (`scripts/vrs_oracle.py`) shipped 2026-10-26, merge 19a9753; measured below, 0 mismatch. Waiting on the person: filing the gtars gap, G1 in docs/GTARS_PENDING_FIXES.md, not filed, needs the person's go per batch, the upstream-liaison seat's)
 

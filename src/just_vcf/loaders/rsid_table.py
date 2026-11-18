@@ -235,9 +235,10 @@ def to_calls_frame(calls: pl.DataFrame, facet_id: str) -> pl.LazyFrame:
 def column_line_ok(data: bytes, spec: FormatSpec) -> bool | None:
     """Whether the file's column line names the four columns in the expected order.
 
-    None when the format has no column line (headerless) or none was found.
+    None when the format has no column line (headerless) or none was found. A UTF-8 BOM opening the
+    file is dropped first, as the rows' reader drops it (RM298).
     """
-    head = data[: 1 << 16].decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    head = data[: 1 << 16].decode("utf-8-sig", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
     delimiter = spec.delimiter or "\t"
     found = re.findall(rf"^#\s*(rsid{re.escape(delimiter)}[^\n]*)$", head, flags=re.MULTILINE)
     if not found:

@@ -309,7 +309,8 @@ def _contig_segments(chain: Chain, chrom: str) -> pl.DataFrame:
 
 
 def read_chain(path: Path | str) -> Chain:
-    """Read a UCSC chain file (plain or gzipped, by magic bytes) into blocks.
+    """Read a UCSC chain file (plain or gzipped, by magic bytes) into blocks. A UTF-8 BOM opening the
+    text is dropped (RM298).
 
     The format: a header `chain score tName tSize tStrand tStart tEnd qName qSize qStrand qStart qEnd
     id`, then lines `size dt dq` and a last `size`. `t` is the source, `q` the target; `tStrand` is
@@ -317,7 +318,7 @@ def read_chain(path: Path | str) -> Chain:
     """
     path = Path(path)
     data = path.read_bytes()
-    text = (gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data).decode()
+    text = (gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data).decode("utf-8-sig")
     columns: dict[str, list] = {name: [] for name in ("t_chrom", "t_start", "t_end", "q_chrom", "q_start", "q_size", "q_minus", "chain")}
     source_sizes: dict[str, set[int]] = {}
     target_sizes: dict[str, set[int]] = {}

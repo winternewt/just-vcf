@@ -74,7 +74,9 @@ class NirvanaLayoutError(ValueError):
 
 def copy_positions(handle: BinaryIO, target: Path) -> tuple[dict, list[bytes], int]:
     """Write the position objects to `target` as NDJSON, one per line, and return the header object,
-    the first position lines (for the dropped fields) and the count of other lines inside the array."""
+    the first position lines (for the dropped fields) and the count of other lines inside the array.
+    The header is parsed from bytes, which `json.loads` reads past a UTF-8 BOM opening them; decoded
+    to text first, a BOM would fail the parse (RM298)."""
     first = handle.readline().rstrip(b"\r\n")
     marker = b',"positions":['
     if not first.endswith(marker):

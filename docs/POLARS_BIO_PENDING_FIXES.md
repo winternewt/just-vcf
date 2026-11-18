@@ -19,6 +19,14 @@ Read marks, the last release read against this ledger:
   still reproduce). The lock moved to 0.37.0 with RM288 (merged 2026-11-16, `0adf89c`); P16 passed its
   repro on the lock and moved to `docs/PREVIOUS_ISSUES.md`. P1–P14 were re-run on the lock on 2026-11-17:
   all hold except P6a, which 0.37.0 narrowed to concurrent scans.
+- **polars-bio: 0.38.0** (2026-11-17; read 2026-11-18, the lock stays on 0.37.0). Its notes have nothing
+  for us: a progress-bar session option (#506), sequence operations (`seq` namespace, #510), a fix to the
+  frames' `config_meta` cache (#505), and build changes. It moves datafusion-bio-formats to v1.17.0 and
+  datafusion-bio-functions to v0.27.0. In bio-formats v1.16.1 and v1.17.0 the VCF and core crates change
+  only their version (the work is FASTQ and FASTA); bio-functions v0.26.0 adds sequence kernels and
+  v0.27.0 bumps bio-formats. Every repro re-run on 0.38.0 with synthetic files (polars 2.1.0): P1–P15,
+  P17–P19, P21 and P22 all hold as recorded. Concurrent threaded scans (P6a) panic again with "table
+  already exists"; on 0.37.0 the same race showed "No table named"; it is one race either way.
 - **polars: 2.1.0, in part.** The lock moved to 2.1.0 with RM288. What breaks us and what fixed our
   workarounds were read there: the builder re-checked each of CLAUDE.md §5's polars 1.44 quirks on 2.1.0
   and recorded the three 2.x changes the suite met. P23 was re-run on 2.1.0 (2026-11-17) and still

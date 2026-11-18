@@ -11,6 +11,12 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `COVERAGE_VERSION` is 2 (audit 17). RM289, RM291 and RM293 each changed the intervals or warnings
+  `read_coverage` gives for some inputs, as do the BOM and blank-block fixes above, and none bumped the
+  version its docstring says is bumped then. Every coverage facet's `facet_id` changes, and
+  `alignment_coverage` reads each BAM once more, since its spill is keyed by the version, though its
+  windows are the same. Patch.
+
 - On a chip read per probe (23andMe v3 and v4, RM281), an `I`/`D` row is read only through the probes of
   the rsids its orientation table lists (audit 17). A row of two rsids, one listed `flipped` with no probe
   and one unlisted with a probe, had its codes swapped by the first and was resolved through the second's

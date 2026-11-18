@@ -2545,7 +2545,7 @@ read in mosdepth.nim (`get_quantize_args`, `linear_search`, `make_lookup`, `gen_
   per batch, a batch being 1,000,000 bases (`_BATCH_ROWS`, about 3,100 for a human genome). Not
   measured on a whole-genome BAM yet.
 - **The spill** holds both (groups `intervals` and `quantized`), and the edges enter its key only when
-  given, so the spills written before stay valid and `COVERAGE_VERSION` stays 1. A call with other
+  given, so the spills written before stayed valid with no `COVERAGE_VERSION` bump. A call with other
   edges, or none, after one with edges reads the file again; one spill does not serve another's
   parameters, as with `window`.
 - **The lead's call, for veto:** mosdepth's `gen_quantized` loops to a contig's second-to-last base and
@@ -4019,6 +4019,13 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-18, audit 17: `COVERAGE_VERSION` 2): no column changes. RM289 (rows
+  of another width), RM291 (an empty quantized label counted as naming no depth range), RM293 (a double
+  quote read as text) and audit 17 (a BOM before a comment, a block of blank lines) each changed what
+  `read_coverage` gives for some inputs without a bump. **Values change**: every coverage facet's
+  `facet_id`, `read_coverage`'s and `alignment_coverage`'s alike, and `alignment_coverage`'s spill, keyed
+  by the version, is computed again on its next call, though its windows are the same.
 
 - **No version change** (2026-11-07, RM281: I/D codes per probe on 23andMe v3 and v4): no column
   changes. Rule changed (Decision 2): `23andme_v3` and `23andme_v4` read their `I`/`D` codes per probe

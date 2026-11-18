@@ -64,9 +64,11 @@ from just_vcf.schema import CONTIG_RANK, AssemblyLabelBasis, canonical_chrom, ca
 
 logger = logging.getLogger(__name__)
 
-COVERAGE_VERSION = 1
+COVERAGE_VERSION = 2
 """Bumped when the same input would give different intervals; part of every `facet_id` and of the
-cache key of `alignment_coverage`'s spill."""
+cache key of `alignment_coverage`'s spill. 2: rows of another width read as their leading fields or with
+nulls (RM289), an empty quantized label counted unbounded (RM291), quotes read as text (RM293), a BOM and
+a block of blank lines counted as the read sees them (audit 17)."""
 
 POLARS_BIO_VERSION = version("polars-bio")
 """The polars-bio whose `depth()` computed a spill: part of its cache key and its manifest, so a

@@ -6,6 +6,17 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM296 — An EIGENSTRAT `.ind` is read as its `.snp` is
+**State:** unattended · **Owner:** lead
+
+Severity: low · Status: open (found while building RM295, 2026-11-18)
+
+`ancestry.eigenstrat.read_ind` reads with Python's `read_text`, `splitlines` and `split`, so it differs from
+`read_snp` (RM294, RM295): it splits lines and fields at 0x1C to 0x1F, which `read_snp` reads as text; it keeps
+a UTF-8 BOM as U+FEFF in the first genetic id; and its "line N" in an error counts only the non-blank lines.
+Read it as `read_snp` does (`scan_lines`, BOM dropped, blank lines skipped, line numbers counted in the
+file), with tests for each case on polars 2.x and 1.x.
+
 ## RM295 — A blank line in an EIGENSTRAT `.snp` is no site
 **State:** unattended · **Owner:** lead
 

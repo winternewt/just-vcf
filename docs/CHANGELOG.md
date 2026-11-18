@@ -11,6 +11,13 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- A 23andMe-layout table whose column line does not name the four columns is warned of when a UTF-8 BOM
+  opens the file and the column line is its first line (RM298). `loaders.rsid_table.column_line_ok`
+  decoded its head with the BOM kept, found no column line there and answered unknown, so the "columns
+  taken by position" warning was lost. `sniff` reads a 23andMe preamble line anywhere in the head, so such
+  a file loads as `23andme` with its column line first. The head is now decoded with the BOM dropped, as
+  the rows' reader drops it. Patch.
+
 - A VCF opening with a UTF-8 BOM loads as the same file without it (RM298), plain, gzip or BGZF, and
   re-saved by a spreadsheet or not. `sniff` dropped the BOM and named the file `vcf`, but the loader read
   the BOM-led `##fileformat` line as a record: the copy it wrote put that line and the whole header after

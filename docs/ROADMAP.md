@@ -6,6 +6,27 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM294 — A text line holding 0x1F is read
+**State:** unattended · **Owner:** lead
+
+Severity: low · Status: open (found at RM291's review, 2026-11-17)
+
+`loaders.text.lines` and `ancestry.eigenstrat.read_snp` read a payload's lines with `read_csv` and the
+separator `\x1f`, so a line holding that byte is two fields to the parser and the read fails or splits it.
+Read lines with `scan_lines` (as `tab_fields` and `coverage._field_counts` already do), so any byte but
+the line end is text. Test with a line holding `\x1f`, on polars 2.x and 1.x.
+
+## RM293 — Coverage's read and its row count agree on quotes
+**State:** unattended · **Owner:** lead
+
+Severity: low · Status: open (found at RM291's review, 2026-11-17)
+
+`coverage._read_fields` parses with `read_csv`'s default quote `"`, while `_field_counts`, which counts
+the rows it cut or padded (RM291), splits plain lines. A field opening with `"` makes the parser join
+tabs, or lines, the count sees apart, so the warnings can name rows the read did not cut. No coverage
+format quotes a field: read with `quote_char=None`, so both see the same rows. Test with a quoted field,
+on polars 2.x and 1.x.
+
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
 

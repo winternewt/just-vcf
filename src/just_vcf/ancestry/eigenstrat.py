@@ -71,7 +71,7 @@ def read_snp(path: Path) -> pl.DataFrame:
     keeps the BOM as U+FEFF on the first line."""
     frame = pl.scan_lines(path, name="line").collect()
     first = pl.int_range(pl.len()) == 0
-    text = pl.when(first).then(pl.col("line").str.strip_prefix("﻿")).otherwise(pl.col("line"))
+    text = pl.when(first).then(pl.col("line").str.strip_prefix("\ufeff")).otherwise(pl.col("line"))
     line = pl.when(text != "").then(text)
     parts = frame.select(line.str.strip_chars().str.replace_all(r"\s+", " ").str.split(" ").alias("f"))
     widths = parts.select(pl.col("f").list.len()).to_series()

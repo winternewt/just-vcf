@@ -357,9 +357,14 @@ def _open_text(path: Path) -> io.BufferedIOBase:
 
 
 def _head_lines(path: Path, count: int = 50) -> list[str]:
+    """The file's first `count` non-empty lines, decompressed, for `_coverage_kind` and the header a
+    thresholds read takes its thresholds from. A UTF-8 BOM opening the text is dropped, as the reads drop
+    it (`read_csv`, `_field_counts`), so a `#` comment or a header line is one here too (RM297)."""
     lines: list[str] = []
     with _open_text(path) as handle:
-        for raw in handle:
+        for number, raw in enumerate(handle):
+            if number == 0:
+                raw = raw.removeprefix(b"\xef\xbb\xbf")
             text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
             if text:
                 lines.append(text)

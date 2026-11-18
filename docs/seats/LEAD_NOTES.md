@@ -94,6 +94,14 @@ each reset.
    on the other. The export/genome pairs are in the session scratch (`id_pairs.tsv`, 36 rows). Building: a
    per-probe orientation table learned from WGS (`same` / `flipped`; a probe with no WGS evidence, or contradicting
    evidence, withheld), replacing the chip-wide gate for v3 and v4.
+0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
+   models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
+   UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a
+   short row the read skips (the unbounded count can go to -1); `_depth_chunks` skips a chunk of blank lines, so the
+   blank-row warning depends on the 64 MiB boundary; a two-rsid code row is swapped by one rsid's orientation and
+   resolved through the other's unverified probe; `COVERAGE_VERSION` not bumped though RM289, RM291 and RM293 change
+   intervals. One fix builder running. The lead's call for veto: a gated code row resolves only through probes whose
+   rsid the orientation table lists.
 0. **2026-11-07: audit 16 done; fixes merged as 8910d63**; suite 2677 passed, 77 skipped, 8 xfailed (2658 + 19
    new; the ancestry tests run at merge with numpy, 47 passed; the old `svd_online` on a zero residual raised
    "SVD did not converge"). The fix builder's calls for veto: SVCLAIM's first version is 4.4 (the 4.5 spec's change

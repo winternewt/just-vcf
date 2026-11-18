@@ -393,5 +393,5 @@ def header_lines(data: bytes, limit: int = 200) -> list[str]:
     if head.startswith((b"\xff\xfe", b"\xfe\xff")):
         text = data[: 1 << 17].decode("utf-16", errors="replace")
     else:
-        text = head.decode("utf-8", errors="replace").removeprefix("﻿")
+        text = head.decode("utf-8", errors="replace").removeprefix("\ufeff")
     return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")[:limit]

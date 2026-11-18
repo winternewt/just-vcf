@@ -15,7 +15,13 @@ _BASES = list("ACGT")
 
 
 def lines(data: bytes) -> pl.DataFrame:
-    """The payload's lines as one string column `line`. BOM-aware; CRLF and bare CR become LF."""
+    """The payload's lines as one string column `line`. BOM-aware; CRLF and bare CR become LF, and every
+    other byte is text (RM294). A byte that is not UTF-8 reads as U+FFFD; a payload of whitespace alone
+    has no lines.
+
+    `scan_lines` refuses a byte that is not UTF-8 and has no lossy mode (polars 2.1 and 1.44), so the
+    payload is decoded with replacement first, which gives the same U+FFFD per bad sequence as
+    `read_csv`'s `utf8-lossy` did."""
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
         data = data.decode("utf-16").encode("utf-8")
     elif data.startswith(b"\xef\xbb\xbf"):
@@ -23,15 +29,7 @@ def lines(data: bytes) -> pl.DataFrame:
     data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     if not data.strip():
         return pl.DataFrame({"line": []}, schema={"line": pl.String})
-    return pl.read_csv(
-        data,
-        has_header=False,
-        separator="\x1f",
-        quote_char=None,
-        new_columns=["line"],
-        schema={"line": pl.String},
-        encoding="utf8-lossy",
-    ).with_columns(pl.col("line").fill_null(""))
+    return pl.scan_lines(data.decode("utf-8", errors="replace").encode("utf-8"), name="line").collect()
 
 
 def tab_fields(path: Path, names: Sequence[str]) -> pl.LazyFrame:

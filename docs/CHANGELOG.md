@@ -11,6 +11,15 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- A text line holding the byte 0x1F is read (RM294). The text loaders' line reader (`loaders.text.lines`,
+  behind the 23andMe-layout and vendor tables) and the EIGENSTRAT `.snp` reader split lines with
+  `read_csv` on that byte as the separator, so a line holding it, even in a comment, failed the load with
+  polars' `SchemaError` or `ComputeError` on 2.1 and 1.44. Both now read lines with `scan_lines`: any byte
+  but the line end is text. Every other line comes out as before (BOMs, CRLF and bare CR, blank lines, a
+  last line without its newline, a byte that is not UTF-8 read as U+FFFD by the text loaders and refused
+  by the `.snp` reader). An empty `.snp` reads as no sites on polars 1.44 too, where it raised
+  `NoDataError`. Patch.
+
 - `atlas.read_bed` skips UCSC `track` and `browser` lines wherever they stand, as its docstring said
   (RM292): a BED opening with a `track` line failed with polars' `ColumnNotFoundError` on polars 1.44
   and 2.1 alike, since the read took the file's width from that one-field line. It now reads the first

@@ -8,6 +8,7 @@ import pytest
 
 from just_vcf.formats import get_spec
 from just_vcf.loaders.rsid_table import FORMATS as RSID_FORMATS
+from just_vcf.loaders.text import lines
 from just_vcf.loading import Loaded, UnsupportedFormatError, load
 from just_vcf.schema import CALLS, FACETS, canonical_chrom
 from just_vcf.sniff import sniff
@@ -249,6 +250,38 @@ def test_preamble_quirks_and_line_endings(tmp_path: Path) -> None:
         path.write_bytes(text)
         assert sniff(path).format == "genes_for_good", name
         assert load(path).calls.collect().drop("facet_id").equals(expected), name
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (b"a\x1fb\nc\n", ["a\x1fb", "c"]),
+        (b"\x1f\n\x1f\x1f", ["\x1f", "\x1f\x1f"]),
+        (b"\xef\xbb\xbfa\r\nb\rc", ["a", "b", "c"]),
+        ("a\nb\n".encode("utf-16"), ["a", "b"]),
+        (b"a\n\nb\n\n", ["a", "", "b", ""]),
+        (b"  a \n\tb", ["  a ", "\tb"]),
+        (b'"a\tb\nc"', ['"a\tb', 'c"']),
+        (b"a\xffb\nc\xe2\x82\n", ["a�b", "c�"]),
+        (b" \n\t\n", []),
+        (b"", []),
+    ],
+)
+def test_lines_reads_every_byte_but_the_line_end_as_text(data: bytes, expected: list[str]) -> None:
+    """`lines()` splits at LF, CRLF and bare CR alone; any other byte, 0x1F included (RM294), is text, a
+    byte that is not UTF-8 reads as U+FFFD, and a payload of whitespace alone has no lines."""
+    frame = lines(data)
+    assert frame.schema == pl.Schema({"line": pl.String})
+    assert frame["line"].to_list() == expected
+
+
+def test_a_line_holding_the_unit_separator_is_read_as_text(tmp_path: Path) -> None:
+    """A comment holding 0x1F, or a byte that is not UTF-8, is still a comment: the export loads as it does
+    without them (RM294)."""
+    rows = "".join(f"rs{i}\t1\t{1000 + i}\tAG\n" for i in range(20))
+    expected = _load_text(tmp_path, PREAMBLE_23 + rows, "plain.txt").calls.collect().drop("facet_id")
+    odd = (PREAMBLE_23 + "# a note\x1fwith a unit separator\n").encode() + b"# and \xff\n" + rows.encode()
+    assert _load_text(tmp_path, odd, "odd.txt").calls.collect().drop("facet_id").equals(expected)
 
 
 def test_load_is_deterministic_and_order_free(tmp_path: Path) -> None:

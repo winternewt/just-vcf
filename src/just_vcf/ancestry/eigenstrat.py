@@ -64,15 +64,13 @@ def read_ind(path: Path) -> pl.DataFrame:
 
 
 def read_snp(path: Path) -> pl.DataFrame:
-    """A `.snp` file as `snp_id, chrom, pos, allele1, allele2`, in file order. `allele1` is counted."""
-    frame = pl.read_csv(
-        path,
-        has_header=False,
-        separator="\x1f",
-        schema={"line": pl.String},
-        quote_char=None,
-    )
-    parts = frame.select(pl.col("line").str.strip_chars().str.replace_all(r"\s+", " ").str.split(" ").alias("f"))
+    """A `.snp` file as `snp_id, chrom, pos, allele1, allele2`, in file order. `allele1` is counted.
+
+    Lines are read by `scan_lines`, so any byte but the line end is text (RM294). An empty line is a row
+    of nulls, as it was when `read_csv` read the lines."""
+    frame = pl.scan_lines(path, name="line").collect()
+    line = pl.when(pl.col("line") != "").then(pl.col("line"))
+    parts = frame.select(line.str.strip_chars().str.replace_all(r"\s+", " ").str.split(" ").alias("f"))
     widths = parts.select(pl.col("f").list.len()).to_series()
     if parts.height and (widths != 6).any():
         first = int((widths != 6).arg_max())

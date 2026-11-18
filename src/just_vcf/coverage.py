@@ -453,7 +453,9 @@ def _read_fields(data: bytes, names: list[str], dtypes: list[pl.DataType], width
     """Tab-separated rows as their first `len(names)` fields, typed `dtypes`: a row's fields past them are
     not read, and a field a row lacks is null, whatever the width of the first row (RM289). Lines that
     start with `#` are comments, unless `skip_header` skips the first line instead. The rows of another
-    width than the names' are added to `widths` (RM291), for the facet's warnings.
+    width than the names' are added to `widths` (RM291), for the facet's warnings. A double quote is text, as
+    it is to that count: no coverage format quotes a field, and a quote must not join tabs or lines the
+    count sees apart (RM293).
 
     No rows at all (a header alone, comments alone) is an empty frame of the schema: polars 2.x reads it
     so, polars 1.x raises `NoDataError` for it."""
@@ -465,6 +467,7 @@ def _read_fields(data: bytes, names: list[str], dtypes: list[pl.DataType], width
             has_header=False,
             skip_rows=1 if skip_header else 0,
             comment_prefix=None if skip_header else "#",
+            quote_char=None,
             schema=schema,
             truncate_ragged_lines=True,
             **_RAGGED,

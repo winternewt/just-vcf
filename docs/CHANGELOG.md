@@ -11,6 +11,13 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `read_coverage` reads a double quote as text (RM293). The read parsed with `read_csv`'s default quote
+  while the count of cut and padded rows (RM291) split plain lines, so a field opening with `"` joined
+  tabs, or whole lines, the count saw apart: a warning could name a row the read did not cut, a line
+  could vanish into the field before it, and a quote never closed failed the read. No coverage format
+  quotes a field; the read now splits at tabs and lines alone, on polars 2.1 and 1.44, and a field
+  written `"chr1"` keeps its quotes. Patch.
+
 - A text line holding the byte 0x1F is read (RM294). The text loaders' line reader (`loaders.text.lines`,
   behind the 23andMe-layout and vendor tables) and the EIGENSTRAT `.snp` reader split lines with
   `read_csv` on that byte as the separator, so a line holding it, even in a comment, failed the load with

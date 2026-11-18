@@ -30,6 +30,7 @@ import numpy as np
 import polars as pl
 
 from just_vcf.ancestry._projection import DEFAULT_MISSING
+from just_vcf.loaders.text import scan_text_lines
 
 MISSING = int(DEFAULT_MISSING)
 """The value a missing genotype gets in what `read_genotypes` returns."""
@@ -78,14 +79,12 @@ def _fields(path: Path, width: int) -> pl.DataFrame:
     holding `width` of them.
 
     Lines are read by `scan_lines`, so any byte but the line end is text, 0x1C to 0x1F included (RM294,
-    RM296). A UTF-8 BOM opening the file is dropped: `scan_lines` keeps it as U+FEFF on the first line. A
-    line that is empty or whitespace alone is skipped (RM295), and fields are split on runs of whitespace.
-    A line of another width is named by its line number in the file, blank lines counted. A byte that is
-    not UTF-8 is refused with polars' `ComputeError`."""
-    frame = pl.scan_lines(path, name="line").with_row_index("number", offset=1).collect()
-    line = pl.col("line")
-    text = pl.when(pl.col("number") == 1).then(line.str.strip_prefix("\ufeff")).otherwise(line).str.strip_chars()
-    parts = frame.select("number", text.alias("text")).filter(pl.col("text") != "")
+    RM296). A UTF-8 BOM opening the file is dropped (`loaders.text.scan_text_lines`). A line that is empty
+    or whitespace alone is skipped (RM295), and fields are split on runs of whitespace. A line of another
+    width is named by its line number in the file, blank lines counted. A byte that is not UTF-8 is refused
+    with polars' `ComputeError`."""
+    frame = scan_text_lines(path, "line").with_row_index("number", offset=1).collect()
+    parts = frame.select("number", pl.col("line").str.strip_chars().alias("text")).filter(pl.col("text") != "")
     parts = parts.select("number", pl.col("text").str.replace_all(r"\s+", " ").str.split(" ").alias("f"))
     widths = parts.select(pl.col("f").list.len()).to_series()
     if parts.height and (widths != width).any():

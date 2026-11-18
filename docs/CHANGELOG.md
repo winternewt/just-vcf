@@ -11,6 +11,11 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- A UTF-8 BOM opening a Complete Genomics `var` or `masterVar` file no longer hides its first header key
+  (audit 17, found beside finding 1). The header reader (`loaders.cgi.copy_body`) decoded the first line
+  with the BOM kept, so `#TITLE` read as a key the reader did not know, and a whole-genome file's facet
+  lost `callset_type = wgs`. The first line is now decoded with the BOM dropped. Patch.
+
 - A UTF-8 BOM opening a key=value table no longer lands in its first chromosome (audit 17). The table's
   line reader (`loaders.text.tab_fields`, RM288) reads with `scan_lines`, which keeps a BOM as U+FEFF on
   the first line where the `scan_csv` it replaced dropped it, so a PGP-HMS key=value payload opening with

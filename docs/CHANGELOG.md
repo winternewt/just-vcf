@@ -14,7 +14,7 @@ which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entrie
 - A UTF-8 BOM opening a key=value table no longer lands in its first chromosome (audit 17). The table's
   line reader (`loaders.text.tab_fields`, RM288) reads with `scan_lines`, which keeps a BOM as U+FEFF on
   the first line where the `scan_csv` it replaced dropped it, so a PGP-HMS key=value payload opening with
-  one loaded its first row on a contig `﻿chr1` of its own. A shared reader,
+  one loaded its first row on a contig `\ufeffchr1` of its own. A shared reader,
   `loaders.text.scan_text_lines`, drops it from the first line, on polars 2.1 and 1.44; the EIGENSTRAT
   `.ind` and `.snp` reader (RM296) now reads through it too, with no change to what it reads. Patch.
 

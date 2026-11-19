@@ -250,8 +250,12 @@ Sibling repos, read-only unless a task explicitly targets them:
 ```bash
 uv sync                      # core
 uv sync --all-extras         # + reference (pysam), liftover (pyliftover), ancestry (numpy)
-uv run pytest -vvv           # the suite; -vvv when diagnosing
+nice -n 19 uv run pytest -vvv   # the suite; -vvv when diagnosing
 ```
+
+**Every test run starts with `nice -n 19`** and caps its workers at `-n 4` where it uses any; on this machine a hook
+refuses a test command that does not (the person, 2026-11-19: "Make nice 19 tests a user-wide rule, fo real"). Put the
+opt-in variables after it, through `env`: `nice -n 19 env JUST_VCF_SAMPLES_DIR=... uv run pytest ...`.
 
 The CLI is `just-vcf` (`src/just_vcf/cli.py`): Typer, registered in `[project.scripts]`, and it
 loads `.env` via `python-dotenv` at startup before reading configuration. It is a privacy boundary:
@@ -268,14 +272,14 @@ are read from env vars with sensible defaults, documented in `.env.template`, an
 | `JUST_VCF_ANCESTRY_DIR` | unset | directory of ancestry reference panels (docs/ANCESTRY_PANELS.md) for the opt-in panel tests, and of AADR's `compatibility_HO` release (top level or one directory down) for the opt-in `aadr_ho` build; they skip without it. The library itself takes a panel path, and the AADR files' path, as an argument |
 | `JUST_VCF_MANIFESTS_DIR` | unset | directory holding Illumina's manifest zips (docs/PROVENANCE.md). `resolve_ref` reads their indel probes to resolve an array's `I`/`D` codes (RM281, `just_vcf.probes`), each read once into the cache's `probes/`; unset, those rows stay unread, with a warning. The opt-in test that re-derives the packaged chip marker sample reads them too, and skips without them |
 
-In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DIR`, `JUST_VCF_MANIFESTS_DIR`, `JUST_VCF_TEST_REFERENCE_DIR`, `JUST_VCF_TEST_CHAIN_DIR`) are empty unless the shell sets them: `tests/conftest.py` defaults each to `""`, so a plain `uv run pytest` never opens a private genome because the repo `.env` names one. An opt-in run passes them on the command line, e.g. `JUST_VCF_SAMPLES_DIR=/data/genomes uv run pytest -q tests/test_load_vcf.py`.
+In the suite the opt-in variables (`JUST_VCF_SAMPLES_DIR`, `JUST_VCF_ANCESTRY_DIR`, `JUST_VCF_MANIFESTS_DIR`, `JUST_VCF_TEST_REFERENCE_DIR`, `JUST_VCF_TEST_CHAIN_DIR`) are empty unless the shell sets them: `tests/conftest.py` defaults each to `""`, so a plain `uv run pytest` never opens a private genome because the repo `.env` names one. An opt-in run passes them on the command line, e.g. `nice -n 19 env JUST_VCF_SAMPLES_DIR=/data/genomes uv run pytest -q tests/test_load_vcf.py`.
 
 **Two polars majors are supported, and both are tested.** The lock holds polars 2.x, but the floor (`polars-bio>=0.37.0`,
 no polars pin of our own) still admits polars 1.4x, which just-prs runs on. The repo has no CI, so a merge to `main` runs
 the full suite twice: on the lock, and on polars 1.x through an overlay that leaves the project venv alone:
 
 ```bash
-JUST_VCF_SAMPLES_DIR= JUST_VCF_ANCESTRY_DIR= uv run --with polars==1.44.2 pytest -q -p no:cacheprovider
+nice -n 19 env JUST_VCF_SAMPLES_DIR= JUST_VCF_ANCESTRY_DIR= uv run --with polars==1.44.2 pytest -q -p no:cacheprovider
 ```
 
 A builder runs the touched tests both ways; the lead runs the full suite both ways before pushing a merge. Code that

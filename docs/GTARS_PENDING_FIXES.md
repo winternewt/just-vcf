@@ -11,15 +11,19 @@ The mirror: `data/interim/gtars/`, a read-only clone of databio/gtars at the tag
 with `git -C data/interim/gtars fetch --tags` and a checkout of the new `gtars-python-v<version>` tag.
 The seat's `upstream-index` watcher says a final gtars release on PyPI the day it is out (added
 2026-11-16); the seat's start check still compares `uv.lock`'s gtars version against the pin above.
-Read mark: gtars-python 0.11.2 (read 2026-11-14: G1 still true there); the lock is on 0.10.0, and G2's
-one-base residual is re-checked when it moves.
+Read mark: gtars-python 0.12.0 (read 2026-11-20: G1 still true there, G2's one-base case reproduces
+there); the lock is on 0.10.0. Bump note for 0.12: `tests/test_reference.py`, `test_reference_support.py`,
+`test_unstated_ref.py` and `test_vrs.py` pass on it (105 passed, 5 skipped), but its collection aliases are
+one-to-one and refuse a re-point (`OSError: alias conflict`), so `ReferenceStore.add_fasta(…,
+assembly_label=X)` for a second collection of X raises there; on the lock it silently moves the label off
+the first collection (synthetic two-FASTA probe, 2026-11-20; told the lead).
 
 ## Verdicts at a glance
 
 | Item | Verdict | File at |
 |---|---|---|
 | G1 VRS ids differ from vrs-python on deletions, repeat insertions and reference alleles | normalization never returns a `ReferenceLengthExpression`; the Python API digests literal states only | databio/gtars |
-| G2 `add_sequence` into an Encoded store reads back wrong bases (2026-10-26) | a record's ASCII bytes are kept as if already bit-packed, any case; fixed upstream after 0.10.0 (`03656182`, in the `gtars-python-v0.11.0` tag, not on PyPI yet) | nothing to file; re-check at the 0.11 bump |
+| G2 `add_sequence` into an Encoded store reads back wrong bases (2026-10-26) | a record's ASCII bytes are kept as if already bit-packed; fixed for two bases and more in 0.11.0 (`03656182`); a one-base sequence still reads back `C` on 0.12.0 through Python `add_sequence`, whose Rust-only escape `ingest_sequence` Python lacks | databio/gtars (the one-base case) |
 
 ## G1 — VRS ids differ from vrs-python on deletions, repeat insertions and reference alleles
 
@@ -50,7 +54,7 @@ state). gtars main after 0.10.0 changes none of these files. **File at databio/g
 normalization result (the RLE state where the spec ends in one), in `normalize_ref`, the Python API and
 the VCF batch path; cite vrs-python's steps and the repro.
 
-*Rechecked (2026-11-14).* Still true at gtars-python v0.11.2, the newest tag (2026-11-03): `NormalizedAllele` (`gtars-vrs/src/normalize.rs:170`) still carries literal bytes, the Python `vrs_id` and `vrs_digest` build only a literal allele (`gtars-python/src/vrs/funcs.rs:11`), and the VCF path digests through `allele_identifier_literal` (`gtars-vrs/src/vcf.rs:154`). Nothing on gtars' tracker. Desk #77 updated: still waiting, nothing filed by default.
+*Rechecked (2026-11-14).* Still true at gtars-python v0.11.2, the newest tag (2026-11-03): `NormalizedAllele` (`gtars-vrs/src/normalize.rs:170`) still carries literal bytes, the Python `vrs_id` and `vrs_digest` build only a literal allele (`gtars-python/src/vrs/funcs.rs:11`), and the VCF path digests through `allele_identifier_literal` (`gtars-vrs/src/vcf.rs:154`). Nothing on gtars' tracker. Desk #77 updated: still waiting, nothing filed by default. Again at gtars-python v0.12.0 (2026-11-20): the release touches only `ref_view_for` in `gtars-vrs/src/normalize.rs` (how a stored sequence is viewed); `NormalizedAllele` (`:170`), the literal-only Python `vrs_id` and `vrs_digest` (`gtars-python/src/vrs/funcs.rs:11`) and `allele_identifier_literal` in the VCF path (`gtars-vrs/src/vcf.rs:154`) are as they were.
 
 ## G2 — `add_sequence` into an Encoded store reads back wrong bases
 
@@ -79,3 +83,17 @@ newest is still 0.10.0. Nothing to file. Read, not run: the new check takes byte
 their length differs from the packed size, which for the 2- and 3-bit DNA alphabets is false at length 1,
 so a one-base hand-added sequence would still be stored unpacked. Too small to file on a reading; check it
 when `uv.lock` moves to 0.11 and file then if it reproduces.
+
+*Rechecked (2026-11-20), gtars 0.12.0.* The one-base case reproduces, run in an overlay
+(`uv run --with gtars==0.12.0`) on synthetic bases only: `digest_sequence(b"A")` (and `C`, `G`, `T`) added
+with `add_sequence` to `RefgetStore.in_memory()` reads back `C` from `get_substring`; `AC` and `ACGTACGA`
+read back as given. Upstream knows the ambiguity: 0.12.0's `pack_raw_ascii_for_encoded_mode`
+(`gtars-refget/src/store/readonly.rs:1267-1272`) says a single-base sequence is ambiguous and points to
+`ingest_sequence` (`:1308`, added with `03656182`), which takes raw bytes and packs them always. That
+method is Rust only; the Python `add_sequence` (`gtars-python/src/refget/mod.rs:1766`), whose own
+docstring shows `digest_sequence` then `add_sequence`, still goes through the ambiguous check. Not on
+gtars' tracker (searched live: "single base", "add_sequence", "ingest_sequence", "one base"). Still no
+mitigation needed here: `src/` never calls `add_sequence`. **File at databio/gtars:** a one-base record
+from `digest_sequence` added with Python `add_sequence` to an Encoded store reads back wrong; expose
+`ingest_sequence` to Python, or have `add_sequence` pack a record `digest_sequence` made (its bytes are
+always raw). Rides with G1 on desk #77.

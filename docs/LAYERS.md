@@ -26,16 +26,10 @@ meanwhile. The desk carries the ones filed there.
   Meanwhile they are refused with an error that says why.
 - **Layer 1, F17:** Living DNA indel REF needs the Sirius chip's site alleles, and no manifest is public
   or on disk. Needs a source the person may have, or stays withheld.
-- **Layer 4, desk #72:** who is who in felis, ksuhaster and newton. Meanwhile no file in those folders is
-  assumed to be another's person; the atlas pairs only files that share one alignment chain (felis's
-  three callers on one BAM) or one folder's caller versions (newton's DeepVariant releases), each checked
-  by `same_person` (the lead's call: the four open facts concern other pairings).
-- **Layer 5/7, desk #80:** merge duplicate rows that differ only in record id. Meanwhile both stay.
 - **Layer 3, desk #89:** mint SVs as VRS 2 CopyNumber/Adjacency objects, or keep withholding (RM282).
   Meanwhile withheld (`sv_no_vrs_model`).
 - **Layer 8, desk #90:** offer CisPhasedBlocks per window, so one symbolic allele does not withhold a whole
   chromosome's block (RM284). Meanwhile whole blocks.
-- **Layer 4, desk #73:** may Privé's ancestry files be redistributed as a fixture. Meanwhile local only.
 - **Layer 8, a reading to veto:** when a 4.4+ record's first slot carries a PSL name, the loader reads it
   as phased (`phased[0] = true`); VCF 4.5 writes an unphased allele as `.`. The alternative is null, which
   withholds every such block as `phase_unknown`. Built as the first; reversible (SCHEMA Decision 2).
@@ -193,3 +187,14 @@ meanwhile. The desk carries the ones filed there.
 - **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.
+
+## Settled by default
+
+Desk questions whose term ended unanswered; each default is now the decision.
+
+- **Layer 4, desk #72** (2026-11-21): the four facts about felis, ksuhaster and newton stay unknown, and none of
+  those folders is paired as one person's; the atlas pairs only one alignment chain's callers (felis) or one
+  folder's caller versions (newton), each checked by `same_person`.
+- **Layer 4, desk #73** (2026-11-21): Privé's ancestry files stay local, their tests opt-in.
+- **Layer 5/7, desk #80** (2026-11-21): `normalize` keeps the record id in its duplicate test, so two rows that
+  differ only in id both stay, counted in a warning.

@@ -233,8 +233,11 @@ class ReferenceStore:
         `assembly_label` names the assembly when the sequence's own lengths cannot (a reference
         without contig 1). A label that the lengths contradict is refused: any sequence whose canonical
         name is `1` at a length `CHR1_LENGTHS` gives to another assembly refuses it, also where the
-        collection serves contig 1 twice and its lengths name no assembly. A FASTA added before, same
-        path, size and modification time, is not read again.
+        collection serves contig 1 twice and its lengths name no assembly. A label already asserted for
+        another collection is refused too: a store keeps one collection per asserted label, as
+        `collection_for` reads it (gtars 0.10 would move the label off the first collection silently,
+        0.12 refuses with its own `alias conflict`). A FASTA added before, same path, size and
+        modification time, is not read again.
         """
         fasta = Path(fasta).resolve()
         stat = fasta.stat()
@@ -253,6 +256,11 @@ class ReferenceStore:
                     f"{fasta.name}: its contig 1 is {' and '.join(measured)}'s length, not {assembly_label}'s"
                 )
             if assembly_label not in self.asserted_labels(digest):
+                holder = self._asserted_for(assembly_label)
+                if holder is not None:
+                    raise ReferenceMismatchError(
+                        f"{fasta.name}: {assembly_label} is already asserted for collection {holder}; a store keeps one collection per asserted label"
+                    )
                 self.store.add_collection_alias(ASSEMBLY_NAMESPACE, assembly_label, digest)
         return digest
 
@@ -371,6 +379,12 @@ class ReferenceStore:
 
     def _namespaces(self) -> list[str]:
         return list(self.store.list_collection_alias_namespaces())
+
+    def _asserted_for(self, assembly_label: str) -> str | None:
+        """The collection `assembly_label` is asserted for, or None."""
+        if ASSEMBLY_NAMESPACE not in self._namespaces() or assembly_label not in self.store.list_collection_aliases(ASSEMBLY_NAMESPACE):
+            return None
+        return self.store.get_collection_metadata_by_alias(ASSEMBLY_NAMESPACE, assembly_label).digest
 
 
 @dataclass(frozen=True)

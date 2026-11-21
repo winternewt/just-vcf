@@ -11,6 +11,12 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `ReferenceStore.add_fasta(…, assembly_label=X)` refuses X for a second collection while X is asserted for
+  another, with a `ReferenceMismatchError` naming the collection that holds it. On the locked gtars 0.10 the
+  label moved off the first collection without a word, so that collection lost its assembly; gtars 0.12
+  refuses the call with its own `OSError: alias conflict`. A store keeps one collection per asserted label,
+  as `collection_for` already read it. Found by the upstream-liaison seat reading gtars 0.12. Patch.
+
 - `read_chain` reads a chain file opening with a UTF-8 BOM, plain or inside its gzip, as the file without
   it (RM298). It decoded the text with the BOM kept, so the first header's `chain` token did not read as
   one and the read failed with a raw `ValueError` from `int()`. The BOM is dropped now. Patch.

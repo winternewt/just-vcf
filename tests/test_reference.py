@@ -671,6 +671,25 @@ def test_a_collection_serving_contig_1_twice_names_no_assembly(tmp_path: Path) -
     assert s.assembly_label(digest) is None
 
 
+def test_a_label_asserted_for_a_second_collection_is_refused_and_the_first_keeps_it(tmp_path: Path) -> None:
+    """Two different collections, one asserted label: the second assertion is refused with our own
+    message, on gtars 0.10 (which would move the label off the first silently) and 0.12 (which raises
+    its own alias conflict) alike. The first keeps its label, the second stays unlabelled, and the
+    label still names exactly one collection. Asserting it again for the first is a no-op."""
+    s = ReferenceStore.in_memory()
+    first = s.add_fasta(write_fasta(tmp_path / "first.fa", SEQ), assembly_label="GRCh37")
+    second_seqs = {name: seq for name, seq in SEQ.items() if name != "MT"}
+    with pytest.raises(ReferenceMismatchError, match=rf"second\.fa: GRCh37 is already asserted for collection {first}"):
+        s.add_fasta(write_fasta(tmp_path / "second.fa", second_seqs), assembly_label="GRCh37")
+    second = s.add_fasta(tmp_path / "second.fa")
+    assert second != first
+    assert s.asserted_labels(first) == ["GRCh37"]
+    assert s.asserted_labels(second) == []
+    assert s.collection_for("GRCh37") == first
+    assert s.add_fasta(tmp_path / "first.fa", assembly_label="GRCh37") == first
+    assert s.asserted_labels(first) == ["GRCh37"]
+
+
 def test_a_label_asserted_over_two_contig_1s_holds_where_no_length_names_another(tmp_path: Path) -> None:
     """`chr1` at GRCh37's length and `1` at a length that names nothing: no length contradicts
     GRCh37, so the asserted label is kept and names the collection, which its lengths alone do not."""

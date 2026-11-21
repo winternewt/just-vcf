@@ -1,8 +1,91 @@
 # Roadmap history
-
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM271 — VRS allele ids
+
+Severity: high · Status: shipped 2026-10-22, closed 2026-11-21 (`mint_vrs_ids` and `vrs_withheld` shipped 2026-10-22 for VCF and array rows, merge b41bda5, equal to vrs-python on 19,000 real alleles. The opt-in test in `tests/test_vrs.py` that mints on the real store `JUST_VCF_TEST_REFERENCE_DIR` names and compares every slot with vrs-python (`scripts/vrs_oracle.py`) shipped 2026-10-26, merge 19a9753; measured below, 0 mismatch. Closed 2026-11-21: desk #77's term ended on its default, so the gtars gap G1 is not filed; it stays recorded in docs/GTARS_PENDING_FIXES.md and just-vcf keeps writing the VRS state itself)
+
+Charter invariant 4: a call's identity is the VRS Allele id of its fully justified allele on a
+refget-addressed sequence, and that id is the join key between facets on the same assembly. Today
+`calls.vrs_allele_ids` is filled nowhere, though gtars (a core dependency) mints VRS ids and normalizes
+alleles. It became possible with RM3: `resolve_ref` reads REF from a refget store and records the
+collection on `facets.ref_seqcol_digest`, so each allele can be placed on a sequence with a refget
+accession. An id that cannot be minted conformantly (an allele that cannot be justified, a contig with
+no refget accession, an unresolved REF, an array I/D code) is withheld with a counted reason in
+`vrs_errors`, never approximated. vrs-python is a test oracle only (CLAUDE.md §5).
+**Shipped 2026-10-22: `mint_vrs_ids(loaded, reference)` and `vrs_withheld(calls)` (`just_vcf.vrs`).**
+The rules are in docs/SCHEMA.md ("When an id is minted", "Why an id is missing"). Choices made, each
+with the alternative rejected:
+- **A step after `resolve_ref`, not inside it.** It refuses a facet whose REF was never read, and
+  reads the collection `ref_seqcol_digest` names from the same store. Rejected: minting inside
+  `resolve_ref`, which would make every REF read pay for ids, and leave no way to re-mint when the
+  rule changes (`MINT_VERSION`) without reading REF again.
+- **Every allele waits for `ref`, substitutions too.** Rejected: SCHEMA's earlier no-bases path for
+  substitutions from a table of contig accessions per assembly. No table exists, and a contig
+  `resolve_ref` could not match has no accession shown to be the facet's.
+- **`[ref] + alts`, the REF slot minted** as VRS's reference allele (a `ReferenceLengthExpression`
+  over REF's span), as SCHEMA and gnomAD have it. Rejected: one id per ALT only, which the brief
+  named; it would retype a signed-off column.
+- **The state choice and canonical JSON are ours; rolling and sha512t24u are gtars'.** gtars 0.10
+  rolls an indel correctly but always returns a literal sequence, and its Python API digests only
+  `LiteralSequenceExpression`; vrs-python gives a `ReferenceLengthExpression` for every deletion, every
+  repeat insertion and the reference allele (VRS 2.x), so gtars' own ids differ from vrs-python's
+  there. Rejected: withholding those alleles until gtars has it (most indels and every REF slot), and
+  vrs-python in core (CLAUDE.md §5). Owed upstream: a VRS 2.x state in gtars' normalization and an RLE
+  digest in its Python API; then `_justify` and the JSON shrink to calls. Not filed.
+- **Rows walked as runs of one contig** (`rle` over the spilled input), reading only the columns
+  minting needs; the ids go to their own files and sit beside the spilled rows by position. Rejected:
+  a filtered scan per contig with a re-sort (resolve_ref's shape), one scan of the file per contig (170
+  on the GRCh38 genome). *Amended 2026-10-26:* the runs are minted a group at a time, consecutive runs
+  up to `SPILL_PART_ROWS` rows (`loading.bounded_groups`), one slice, one pass and one ids part per
+  group, since a pass per run was a fixed cost per contig (F24, docs/PREVIOUS_ISSUES.md).
+- **The oracle is `scripts/vrs_oracle.py`**: a vrs-python data proxy over the same gtars store, so
+  both sides read the same sequence; vrs-python is a dev dependency.
+**Dogfooded 2026-10-22** on three PGP-HMS VCFs, aggregates only (`scripts/vrs_conformance.py`), each
+sample drawn with a fixed seed from the minted alleles and checked against vrs-python on the same
+store:
+- A GRCh38 genome, 4,651,432 rows: 9,256,478 of 9,345,929 alleles minted (363,409 deletions, 412,401
+  insertions); 89,451 withheld as `ref_unchecked`, all on contigs `resolve_ref` left unread (UCSC
+  `_random`/`chrUn_` names, RM3). 8,000 checked, 0 mismatch.
+- A GRCh37 indel-only genome split, 956,064 rows, 1,039,271 ALTs: every allele minted; 9,000 checked
+  (deletions, insertions, REF), 0 mismatch.
+- A GRCh37 SNV-only genome split, 3,461,640 rows: all but 4 alleles minted (the 4 on rows whose source
+  REF the reference contradicts); 2,000 checked, 0 mismatch.
+- Time on the 4.65M-row genome: 59 s wall and 103–112 s CPU with the cache on a fast local disk; 112–208
+  s wall with the cache under `data/interim/` on the NTFS disk, which `dd` measured at 2.5 MB/s during
+  the runs (other sessions were writing to it; the workspace note says about 350 MB/s). Peak RSS of the
+  minting process 1.5–2.0 GB; one contig's alleles and, for its indels, its sequence are in memory.
+- *Measured 2026-10-26* (F24's amendment, library only, VRS spill fresh after a cached `load` and
+  `resolve_ref`, every output hashing the same before and after): hu416394's bcftools gVCF, 9,651,143
+  calls on 2,057 contigs, minted in 97.5–108.8 s a pass per contig, 70.5–75.0 s in 12 groups, at a
+  sampled peak of 4.7 GB either way; its Manta file, 9,373 rows on 942 contigs, 18.6–18.8 s → 11.4 s. What
+  remains is per allele (24.4 million gtars digest calls, the indels' justification) and 25 whole-contig
+  fetches; docs/PREVIOUS_ISSUES.md, F24.
+**Measured 2026-10-26**, the opt-in tests in `tests/test_vrs.py` on the store at
+`/data/just-dna-cache/reference/store` (GRCh37 and GRCh38) and PGP-HMS uploads from the Krypton copy,
+aggregates only; every expected id computed by vrs-python at test time:
+- Synthetic alleles on real chromosome 22 (a 400 kb window, its repeats found at test time) and MT:
+  SNVs, MNVs, insertions, deletions, delins, one and two units into homopolymer and di-, tri- and
+  tetranucleotide repeats, part-unit deletions, a deletion anchored on the last leading N,
+  multi-allelic rows, a lowercase ALT, a monomorphic row, MT written `MT` (GRCh37) and `chrM`
+  (GRCh38), and a seeded random batch over the window and inside its repeats. GRCh37: 700 rows, 1,394
+  alleles equal (697 REF, 120 SNV, 122 MNV, 273 insertions, 182 deletions); GRCh38: 694 rows, 1,382
+  equal (691 REF, 118 SNV, 118 MNV, 278 insertions, 177 deletions). 11 alleles withheld on each, every
+  one with SCHEMA's reason: `spanning_deletion`, `sv_no_vrs_model` (`<DEL>`, a breakend),
+  `unspecified`, `not_sequence`, `ref_mismatch` (2), `ref_unchecked` (2 for REF past MT's end, 2 on
+  a contig the collection lacks, `hs37d5` and `chrEBV`).
+- A 23andMe-shaped build 37 export on real chromosome 22: hom-ref and het ids equal; `DI` is
+  `array_code`, `--` is `ref_unresolved`.
+- PGP-HMS, the smallest upload per build the store places, the first 3,000 chromosome 22 rows and up
+  to 500 MT rows: GRCh37, 3,295 rows, 6,000 alleles equal (3,000 REF, 2,940 SNV, 27 insertions, 33
+  deletions), the 590 MT alleles `ref_unchecked` (`resolve_ref` left that file's MT unread); GRCh38,
+  3,032 rows, 6,113 equal (3,032 REF, 2,596 SNV, 233 insertions, 252 deletions), none withheld.
+- Sensitivity: a deletion's `repeatSubunitLength` taken from the expanded REF instead of the
+  deleted length fails both synthetic runs.
+- Not reachable on the real store: `refused` and `no_contig`. After `resolve_ref`, REF was read from
+  the very sequence minting rolls on, and neither collection holds a name twice; `_justify` is driven
+  directly for `refused` in the synthetic suite.
 ## RM298 — The remaining readers take a leading BOM as their neighbours do
 Severity: low · Status: shipped 2026-11-18 (merge 26ee0c9)
 
@@ -14,11 +97,9 @@ forbid a BOM, so polars-bio refusing one ("empty input") is conformant.
 
 ## RM297 — Coverage detection reads past a BOM
 Severity: low · Status: shipped 2026-11-18 (merge ee8cb8a)
-
 **Built:** `coverage._head_lines` drops a BOM from the first line, gzip or not, so six kinds detect as without it
 (mosdepth summary, `samtools coverage`, `samtools depth` with `#CHROM`, thresholds, per-base and quantized BEDs
 opening with a comment); a thresholds file with a BOM reads with `kind=` stated too.
-
 ## RM296 — An EIGENSTRAT `.ind` is read as its `.snp` is
 Severity: low · Status: shipped 2026-11-18 (merge b5e1f94)
 
@@ -26,7 +107,6 @@ Severity: low · Status: shipped 2026-11-18 (merge b5e1f94)
 line empty or whitespace alone skipped, fields split on runs of whitespace, a width error naming the line in the file.
 `read_ind` and `read_snp` only pick their columns. A gzip `.ind` now reads as a `.snp` did (pinned by a test); a
 bare-CR `.ind` is refused, not misread; invalid UTF-8 raises polars' `ComputeError`.
-
 ## RM295 — A blank line in an EIGENSTRAT `.snp` is no site
 Severity: low · Status: shipped 2026-11-18 (merge b5e1f94)
 
@@ -36,17 +116,14 @@ they count rows, not lines.
 
 ## RM294 — A text line holding 0x1F is read
 Severity: low · Status: shipped 2026-11-18 (merge 47edcd6; full suite 2819 passed on polars 2.1.0 and 1.44.2)
-
 **Built:** `loaders.text.lines` and `eigenstrat.read_snp` read lines with `scan_lines`; `lines()` decodes invalid UTF-8
 with replacement first, the same U+FFFD per bad sequence as `utf8-lossy` gave. **Left:** `loaders/table.py` and
 `consensus.py` still use 0x1F as a join key (a collision needs a field holding it).
-
 ## RM293 — Coverage's read and its row count agree on quotes
 Severity: low · Status: shipped 2026-11-18 (merge 47edcd6)
 
 **Built:** `coverage._read_fields` passes `quote_char=None`, so a double quote is text to the read as to its count of
 cut and padded rows. A field written `"chr1"` keeps its quotes; a quoted number in a typed column fails the read.
-
 ## RM291 — Coverage rows cut or padded are counted
 Severity: low · Status: shipped 2026-11-17 (merge 77cbd0b; full suite 2799 passed on polars 2.1.0 and on 1.44.2)
 
@@ -56,7 +133,6 @@ format (fields past it not read), short of it (missing fields null), or blank (a
 several alignment files says the first depth column was read and how many there were. About 12–14% slower on a 90 MB
 per-base BED. **Left:** the read honours `"` quoting while the count splits on raw tabs, so a quoted field holding a tab
 would count as a wide row (no coverage tool writes quotes; `quote_char=None` would align them).
-
 ## RM292 — `read_bed` skips track lines
 Severity: low · Status: shipped 2026-11-17 (merge 77cbd0b)
 
@@ -66,13 +142,11 @@ no intervals on both polars majors. GIAB reads are unchanged.
 
 ## RM289 — Coverage BED rows of mixed width on polars 2
 Severity: low · Status: shipped 2026-11-17 (merge aac313d; full suite 2740 passed on polars 2.1.0, the touched tests on 1.44.2 too)
-
 **Built:** coverage's two reads go through `_read_fields`: `schema=`, `truncate_ragged_lines=True`, and on polars 2.x
 `extra_columns="ignore", missing_columns="insert"` (`coverage._RAGGED`), so fields past a format's columns are dropped
 and missing ones null on both versions, at the parser's speed. A file of no rows (a header or comments alone) is a facet
 of no intervals on both. **Left:** the cut and padded rows are not counted (RM291); `atlas.read_bed` fails on a `track`
 line (RM292); `loaders.text.lines` and `eigenstrat.read_snp` refuse a line holding `\x1f`, alike on both versions.
-
 ## RM290 — An unclosed file in the VCF loader
 Severity: low · Status: shipped 2026-11-17 (merge aac313d)
 
@@ -84,7 +158,6 @@ asserts the handle and the warnings directly.
 
 ## RM288 — polars-bio 0.37 and polars 2.x
 Severity: medium · Status: shipped 2026-11-16 (merge 0adf89c; full suite 2706 passed on polars 2.1.0, 2705 on 1.44.2)
-
 polars-bio 0.37.0 (2026-11-07) allows polars `>=1.40,<2.2`, which removed the reason the lock stayed on polars 1.44.2.
 Built with no question put to the person (CLAUDE.md §10, 2026-11-16: a choice with only pros is not a decision).
 
@@ -100,9 +173,7 @@ unclosed file, on both versions).
 
 ## RM276 — A durable per-person store
 Severity: medium · Status: shipped 2026-11-05 (the lead kept a migrated VCF facet's null `method_steps` and `gl_source`, told apart by the manifest's record and `loaded()`'s warning, docs/SCHEMA.md "Store migration"; was: in progress, decided by the person in the Part 2 interview, 2026-10-23; `Store` and `write_vcf_zarr` shipped 2026-10-23, merge 6830fb7; `call_HQ` in the Zarr export 2026-10-24, merge fbcb3a9; `variant_CIPOS`, `variant_CIEND` and `variant_CN` in the Zarr export 2026-10-26, an interval holding -1 or -2, the spec's integer sentinels, written missing and counted; 2026-10-26, `migrate_store`: a store of an older schema version rewritten to this one by a step per bump since 0.0.14 (`just_vcf.store_migration`), written beside, checked and swapped, what it cannot carry named as filled unknown, docs/SCHEMA.md "Store migration", merge 401cbf0. Nothing buildable left. For the lead: whether `method_steps` and `gl_source` null on a migrated VCF facet (not read) should get its own value instead of sharing null with "not a VCF" / "no likelihoods", which only the manifest and `loaded()`'s warnings tell apart now) · Owner: lead
-
 The person chose both (E13): a directory per person holding parquet per facet, the links frame and a manifest, read lazily; and a VCF Zarr export (its spec has no gVCF blocks, so blocks stay parquet-only). Facets accumulate; nothing is overwritten (invariant 5).
-
 **Built:** `Store` (docs/SCHEMA.md, "The durable store"): parquet per facet, links per facet, a
 manifest, a lock, lazy reads into `Loaded` and `Person`; and `write_vcf_zarr`, one facet's calls as
 VCF Zarr 0.4, blocks counted and left in the store. **Left:** a migration between schema versions (a
@@ -116,7 +187,6 @@ closed.
 *Corrected 2026-10-26:* the migration is built: `migrate_store(path)` rewrites an older store by the
 steps in `just_vcf.store_migration` and reports what it filled unknown (docs/SCHEMA.md, "Store
 migration").
-
 ## RM277 — Concordance between facets
 Severity: medium · Status: shipped 2026-10-23 (merge 2446c53; F21 and F22 followed the same day, merge c6da26c; was: open, decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
 
@@ -124,9 +194,7 @@ The person chose graded where possible (E2): GL/GP compared where both facets ca
 
 ## RM273 — A person (subject) in the schema
 Severity: high · Status: shipped 2026-10-23 (subject and Person, merge 93745c2; RM274's `same_person` as the default check, merge 6dd3591; was: in progress, subject and Person shipped 2026-10-23, the default check RM274's `same_person`) · Owner: lead
-
 The person chose "Both: supplied, checked" (E1): the caller supplies a subject id when loading; nothing is inferred and facets are never regrouped by the library. The library checks the claim with relatedness (RM274) and warns on a mismatch. Most of the extended shape sits on this: RM275, RM276, RM277, RM280.
-
 ## RM285 — The format registry as a spec
 Severity: low · Status: shipped 2026-10-23 (merge d0edd91; was: built 2026-10-23, docs/FORMAT_REGISTRY.md generated by scripts/format_registry.py, to move here on merge) · Owner: lead
 
@@ -134,9 +202,7 @@ The person chose this repo (E14): the declared formats and the broken shapes (F1
 
 ## RM272 — CLI
 Severity: high · Status: shipped 2026-10-23 (merge 5b8700f; was: open, decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
-
 Typer, registered in `[project.scripts]`, loading `.env` with python-dotenv (CLAUDE.md §4): `just-vcf sniff`, `load` (a summary of the facets), `convert` (to VCF/gVCF via `write_vcf`, optionally through `resolve_ref`, `normalize`, `liftover`, `mint_vrs_ids`) and `check`. Output is counts and aggregates only, never rows: the CLI is a privacy boundary like E12.
-
 ## RM275 — The facet graph as a links frame
 Severity: medium · Status: shipped 2026-10-23 (merge c503f57, schema 0.0.13; was: open, decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
 
@@ -144,9 +210,7 @@ The person chose a small links frame (E4): (from, to, relation, provenance), so 
 
 ## RM283 — An aggregate-only query helper
 Severity: medium · Status: shipped 2026-10-23 (merge 95d8b61; was: built on a builder branch 2026-10-23, `just_vcf.query`, waiting for the lead's merge; decided by the person in the Part 2 interview, 2026-10-23) · Owner: lead
-
 The person chose a helper beside `load` (E12): an API that answers counts, shares and presence questions and never returns rows, for agents and apps; `load` stays for code that may read rows.
-
 ## RM268 — Cache eviction
 Severity: medium · Status: shipped 2026-10-22: the cache index, the stale-version sweep, `clear_cache`; no size cap · Owner: lead
 
@@ -158,24 +222,19 @@ Nothing ever removes anything from `JUST_VCF_CACHE_DIR`. It holds two kinds of e
 - `frames/<facet_id>-<SCHEMA_VERSION>/`: the calls and blocks parquet spill from `load`, and since
   RM270 the calls spill of a `rejoin_split` facet, under the derived `facet_id`. Nothing in the cache
   ties that id to its parent, so an eviction that keys on a source file does not see it.
-
 Because the version is part of each key, every bump of `REWRITE_VERSION` or `SCHEMA_VERSION` orphans
 every earlier entry, and nothing collects them. Measured 2026-10-03: after the 2026-09-30 dogfooding
 runs, the cache under `data/interim/cache` had reached 32 GB in 36 `vcf/` entries. Most of it was
 orphans: the two largest were plain `input.vcf` copies of 14.5 GB and 7.4 GB, from before the rewrite
 switched to BGZF `input.vcf.gz`. The user deleted it by hand.
-
 Constraints on a fix:
-
 - A copy has to outlive the lazy frames that read it, so evicting the entry a live `Loaded` points at
   breaks a later `collect`. Orphans by version are always safe to remove; current entries need an age
   or size policy.
 - The copies are whole private genomes. Deleting a source under `/data/genomes` leaves its copy in the
   cache, so eviction is also how a removed genome actually goes away.
-
 Options, not decided: sweep stale-version entries on each load; an explicit `clear_cache()` in the
 API (and in the CLI once it exists); a size cap with least-recently-used eviction.
-
 
 **Shipped 2026-10-22** (the lead's outline, 2026-10-22). Rules in docs/SCHEMA.md ("The cache under the
 lazy frames"); code in `just_vcf/cache.py`.
@@ -234,7 +293,6 @@ older install still runs. The sweep now keeps an older entry used within `JUST_V
 
 ## RM270 — Pre-split multi-allelic input
 Severity: high · Status: shipped 2026-10-19: B, the flags (schema 0.0.4), and D, `rejoin_split`; C not built, the person chose D (desk #45) · Owner: lead
-
 Motivating report: S2 (just-dna-lite, 2026-10-18). Many VCFs arrive already split one row per ALT, in
 the `bcftools norm -m-` convention, and their headers do not say so. In a split row the `0` of a
 genotype can stand for "another ALT", not REF: a `1/2` at `A>G,T` becomes `1/0` at `A>G` and `0/1` at
@@ -254,7 +312,6 @@ by default, keeping GT slots, and `.` with `--multi-overlaps .` (1.17+); its `--
 any sample is `1/2`. vt `decompose`, Glow and vcflib `vcfbreakmulti` write `.`, and vt and Glow add INFO
 `OLD_MULTIALLELIC`. The VCF spec says nothing about split records. `bcftools norm -m+` re-joins slot by
 slot (`1/0` + `0/1` gives `1/2`). Rows written with `.` already load as half-calls and are safe.
-
 **Detection**, three signals per `pos` within a contig, reported separately and never folded into one
 flag: a **marker** (INFO `OLD_MULTIALLELIC`, or a value of the `--old-rec-tag` shape
 `CHROM|POS|REF|ALT|IDX`); the **slot pattern** (two or more non-reference rows, each GT slot non-zero in
@@ -266,7 +323,6 @@ signal fired. Only the DRAGEN file had positions with two records (10), none mat
 real split file is not measured (no bcftools here); a synthetic split VCF is caught at both its sites.
 The two unsplit DeepVariant gVCFs gave no signal either: no two call rows share a position once their
 reference blocks go to `blocks`, which never take part.
-
 **What the frame says about a `0` it cannot place.** No option changes `gt`, the row grain, or
 `source_gt` where it is kept (null on VCF 4.4+, P4). Not decided:
 
@@ -276,7 +332,6 @@ reference blocks go to `blocks`, which never take part.
 | B. A + flags | `facets.split_marker` (Kleene) and a nullable row column `split_signal` naming the signal | minor | values stay wrong, but every flagged row can be found |
 | C. B + slot-aware withhold | in a flagged group, a `0` becomes null in `gt_alleles` only in a slot where another row of the group is non-zero; a slot zero in every row keeps its REF | values read today change (pre-1.0, changelog says so) | a false positive loses a true REF copy, never states a false one; amends Decision 2: `gt` and `gt_alleles` agree except where withheld, and a null means uncalled or withheld |
 | D. Re-join as a derived facet | each flagged group merged into one site slot by slot, as `bcftools -m+` does (`relation = normalized`, charter 5) | minor | the most work; GT only, since bcftools subsets PL/AD to REF + one ALT; phasing across slots may be lost |
-
 `gl`, `gp` and `ad` on a flagged row stay as written: they compare REF with one ALT and inherit the
 ambiguity, and the row flag is what tells a reader so. The lead recommended B and C now and D inside
 RM6 (desk #45). **Decided 2026-10-19**, the person: "4 if it can be implemented w/o bam, else 3". It
@@ -286,7 +341,6 @@ C is not built.
 
 **RM6's own split output** must not write this convention: it writes `.` for the other ALT, as vt,
 Glow, vcflib and `bcftools --multi-overlaps .` do.
-
 Legality: detection, a warning and a new nullable field are additive (minor). Nulling `gt_alleles` for
 detected rows changes the meaning of values already emitted.
 
@@ -294,11 +348,9 @@ RM6 carries point 3: its own split output writes `.` for the other ALT.
 
 ## RM8 — Output frame schema
 Severity: high · Status: signed off 2026-09-30 as schema v0.0.1 · Owner: user decides, agent drafts
-
 Before any per-format loader is written, draft a proposal for the one frame every loader emits, and get
 the user's sign-off. The charter (docs/CHARTER.md) is still an uncommitted draft, so the schema cannot
 be derived from it alone.
-
 The proposal must settle:
 - **Columns and dtypes** of the minimal shape (many formats in, one frame out), and which of them the
   extended shape (facets per assembly, caller, phasing) adds.
@@ -316,14 +368,12 @@ The proposal must settle:
   identity.
 - **Multi-caller files:** PGP merges carry the caller in INFO/SF, not per sample column
   (docs/PGP_HMS.md).
-
 Inputs: the "Contract gaps" list at the end of docs/FORMATS.md, RM2, docs/POLARS_BIO_PENDING_FIXES.md
 (P1: undeclared INFO/FORMAT keys are dropped), and the charter draft's invariants.
 
 Signed off 2026-09-30 as docs/SCHEMA.md, schema v0.0.1. The user's words: "lets keep schema as it is
 now and switch to building - we'll find out if some pieces are missing in progress". Gaps found while
 building the loaders are fixed in SCHEMA.md as they come up, each with a version bump.
-
 
 ## RM7 — PGP-HMS sample leecher
 Severity: medium · Status: shipped 2026-09-28 · Owner: Claude

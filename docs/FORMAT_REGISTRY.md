@@ -2363,7 +2363,7 @@ A zip archive whose member is stored with compression method 9 (Deflate64), whic
 
 **`sniff` says:** `unreadable`, reason naming Deflate64 (method 9)
 
-**What just-vcf does** (open): `sniff` answers `unreadable` with the member's name and the reason `zip compression Deflate64 (method 9) is not supported`; `load` refuses anything `sniff` did not detect. Reading it needs a Deflate64 inflater, which is a dependency decision not yet taken.
+**What just-vcf does** (refused): `sniff` answers `unreadable` with the member's name and the reason `zip compression Deflate64 (method 9) is not supported`; `load` refuses anything `sniff` did not detect. Reading it would need a Deflate64 inflater, a new dependency; the person's desk question on it ended on its default (2026-11-21), so such a zip stays refused and is unpacked by hand.
 
 Code and tests: sniff.py `_ZIP_METHODS`, `test_unsupported_zip_method_is_unreadable_and_named`.
 

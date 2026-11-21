@@ -8,7 +8,7 @@ usable for one person's facets, and say what they rest on.
 
 | # | Layer | Estimate | Rests on |
 |---|---|---|---|
-| 1 | Reading facets in | 90% | 32 of 39 formats load (plus SV/CNV, PSL); the seven left are decisions (#83 Deflate64, #93 Oxford .gen), chip manifests (Geno 2.0, headerless Final Report), no positions (Promethease) or not facets (CGI summary, deCODEme info) |
+| 1 | Reading facets in | 90% | 32 of 39 formats load (plus SV/CNV, PSL); the seven left are a decision (#93 Oxford .gen), Deflate64 zips refused by decision (#83), chip manifests (Geno 2.0, headerless Final Report), no positions (Promethease) or not facets (CGI summary, deCODEme info) |
 | 2 | Provenance per facet | 90% | caller and version, vendor, callset type, chip, content filter, ploidy lines, subject, derivation inputs, reference, aligner, the method chain (`method_steps`), coverage facets |
 | 3 | Identity (comparing facets) | 92% | REF, VRS, assembly inference incl. GRCh36/CHM13, scaffold aliases (F19: a PGP GRCh38 VCF reads 100%); `_fix` patches need a patch store |
 | 4 | A person | 90% | subject; Person with links and relatedness as its default check; a supplied GA4GH pedigree checked against measured bands (agrees/disagrees/cannot_tell, never corrected); exome variant-only sites read as unknown; the durable store; somalier waits on desk #88 |
@@ -22,8 +22,6 @@ usable for one person's facets, and say what they rest on.
 Each names its layer, the decision, the options, the lead's recommendation, and what the work does
 meanwhile. The desk carries the ones filed there.
 
-- **Layer 1, desk #83:** how to open Deflate64 zips (an optional extra, an external program, or refuse).
-  Meanwhile they are refused with an error that says why.
 - **Layer 1, F17:** Living DNA indel REF needs the Sirius chip's site alleles, and no manifest is public
   or on disk. Needs a source the person may have, or stays withheld.
 - **Layer 3, desk #89:** mint SVs as VRS 2 CopyNumber/Adjacency objects, or keep withholding (RM282).
@@ -198,3 +196,5 @@ Desk questions whose term ended unanswered; each default is now the decision.
 - **Layer 4, desk #73** (2026-11-21): Privé's ancestry files stay local, their tests opt-in.
 - **Layer 5/7, desk #80** (2026-11-21): `normalize` keeps the record id in its duplicate test, so two rows that
   differ only in id both stay, counted in a warning.
+- **Layer 1, desk #83** (2026-11-21): Deflate64 zips stay refused, with an error naming the method; the person
+  unpacks such a zip by hand. No new dependency.

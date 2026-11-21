@@ -334,8 +334,7 @@ PGP-wide counts of VCFs by producer:
   PGP covers this well (hu832966, hu1B2689, huE18D82).
 - **CNV/SV facets:** only PGP hu416394 (Canvas + SV) and hu6ABACE (DRAGEN cnv). Nothing private.
 
-Open questions for the person:
-1. Who are ksuhaster's five libraries?
-2. What is felis library 14?
-3. Which library fed felis `vcfs/`?
-4. Where are newton_n1 and the newton liftovers?
+Settled by default (desk #72, its term ended 2026-11-21 with no answer): all four stay unknown. ksuhaster's five
+libraries, felis library 14, the library behind felis `vcfs/`, and newton_n1 and the newton liftovers are not
+known, so no file in these folders is paired with another as one person's. Same-person tests use felis library 12's
+own chain, newton's three DeepVariant versions, anton and sergey. An answer from the person reopens it.

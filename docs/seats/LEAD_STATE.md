@@ -9,6 +9,6 @@ just-vcf reads 23andMe-style array exports, other genotype tables and VCF/gVCF i
 
 **Next**
 1. ⏳ Release 0.1.0 — the person.
-2. 🚧 Pool the disagreement rates per method (RM279) — lead, waits on desk #101, #72, #102.
+2. 🚧 Pool the disagreement rates per method (RM279) — lead, waits on desk #101, #102.
 3. 🚧 Last rules for imputed data (RM287) — lead, waits on desk #212, #213, #214.
 4. ⏳ The remaining v4 insertion/deletion rows (RM281) — lead, looked at again 2026-12-07.

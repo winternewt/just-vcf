@@ -16,14 +16,16 @@ there); the lock is on 0.10.0. Bump note for 0.12: `tests/test_reference.py`, `t
 `test_unstated_ref.py` and `test_vrs.py` pass on it (105 passed, 5 skipped), but its collection aliases are
 one-to-one and refuse a re-point (`OSError: alias conflict`), so `ReferenceStore.add_fasta(…,
 assembly_label=X)` for a second collection of X raises there; on the lock it silently moves the label off
-the first collection (synthetic two-FASTA probe, 2026-11-20; told the lead).
+the first collection (synthetic two-FASTA probe, 2026-11-20). The lead closed it in `ed7edfa`: `add_fasta`
+refuses a label another collection holds with a `ReferenceMismatchError`, on 0.10 and 0.12 alike, so the
+bump has nothing left from this.
 
 ## Verdicts at a glance
 
 | Item | Verdict | File at |
 |---|---|---|
-| G1 VRS ids differ from vrs-python on deletions, repeat insertions and reference alleles | normalization never returns a `ReferenceLengthExpression`; the Python API digests literal states only | databio/gtars |
-| G2 `add_sequence` into an Encoded store reads back wrong bases (2026-10-26) | a record's ASCII bytes are kept as if already bit-packed; fixed for two bases and more in 0.11.0 (`03656182`); a one-base sequence still reads back `C` on 0.12.0 through Python `add_sequence`, whose Rust-only escape `ingest_sequence` Python lacks | databio/gtars (the one-base case) |
+| G1 VRS ids differ from vrs-python on deletions, repeat insertions and reference alleles | normalization never returns a `ReferenceLengthExpression`; the Python API digests literal states only | not filed: desk #77 closed on its default (2026-11-21); databio/gtars if that changes |
+| G2 `add_sequence` into an Encoded store reads back wrong bases (2026-10-26) | a record's ASCII bytes are kept as if already bit-packed; fixed for two bases and more in 0.11.0 (`03656182`); a one-base sequence still reads back `C` on 0.12.0 through Python `add_sequence`, whose Rust-only escape `ingest_sequence` Python lacks | not filed: rode with G1 on desk #77, closed on its default (2026-11-21) |
 
 ## G1 — VRS ids differ from vrs-python on deletions, repeat insertions and reference alleles
 
@@ -37,7 +39,8 @@ SNVs and substitutions agree.
 Mitigation: just-vcf writes the VRS state and the canonical JSON itself (`src/just_vcf/vrs.py`) and uses
 gtars only for rolling and `sha512t24u`; its ids equal vrs-python's on the lead's 19,000 alleles.
 RM271 in `docs/ROADMAP.md` records it, and `docs/LANDSCAPE.md`'s gtars row is corrected. Once gtars
-has the state, `_justify` and the JSON writer shrink to calls. Not filed.
+has the state, `_justify` and the JSON writer shrink to calls. Not filed: desk #77 closed unanswered on
+2026-11-21, so its default, not filed, is the decision.
 
 *Upstream (2026-10-22).* Not reported (gtars' tracker searched live for "ReferenceLengthExpression" and
 "vrs-python": nothing). Reproduced with a synthetic 32-base sequence and its own `SQ.` digest
@@ -96,4 +99,4 @@ gtars' tracker (searched live: "single base", "add_sequence", "ingest_sequence",
 mitigation needed here: `src/` never calls `add_sequence`. **File at databio/gtars:** a one-base record
 from `digest_sequence` added with Python `add_sequence` to an Encoded store reads back wrong; expose
 `ingest_sequence` to Python, or have `add_sequence` pack a record `digest_sequence` made (its bytes are
-always raw). Rides with G1 on desk #77.
+always raw). Rode with G1 on desk #77, which closed unanswered on 2026-11-21: not filed.

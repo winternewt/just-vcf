@@ -8,7 +8,7 @@ usable for one person's facets, and say what they rest on.
 
 | # | Layer | Estimate | Rests on |
 |---|---|---|---|
-| 1 | Reading facets in | 90% | 32 of 39 formats load (plus SV/CNV, PSL); the seven left are a decision (#93 Oxford .gen), Deflate64 zips refused by decision (#83), chip manifests (Geno 2.0, headerless Final Report), no positions (Promethease) or not facets (CGI summary, deCODEme info) |
+| 1 | Reading facets in | 90% | 32 of 39 formats load (plus SV/CNV, PSL); the seven left are Oxford .gen and Deflate64 zips refused by decision (#93, #83), chip manifests (Geno 2.0, headerless Final Report), no positions (Promethease) or not facets (CGI summary, deCODEme info) |
 | 2 | Provenance per facet | 90% | caller and version, vendor, callset type, chip, content filter, ploidy lines, subject, derivation inputs, reference, aligner, the method chain (`method_steps`), coverage facets |
 | 3 | Identity (comparing facets) | 92% | REF, VRS, assembly inference incl. GRCh36/CHM13, scaffold aliases (F19: a PGP GRCh38 VCF reads 100%); `_fix` patches need a patch store |
 | 4 | A person | 90% | subject; Person with links and relatedness as its default check; a supplied GA4GH pedigree checked against measured bands (agrees/disagrees/cannot_tell, never corrected); exome variant-only sites read as unknown; the durable store; somalier is never run here (desk #88) |
@@ -30,10 +30,6 @@ meanwhile. The desk carries the ones filed there.
 - **Layer 3, the lead's call (not now):** lifting onto GRCh38 `_fix`/`_alt` patch scaffolds needs a store
   holding patches (an NCBI or UCSC full analysis set); 40,099 HG002 rows stay `target_contig_unmatched`.
   Deferred: patch scaffolds carry almost no personal-genome calls.
-- **Layer 3, desk #92:** a build the file does not state (CASAVA, SOAPsnp, Big Y, Nirvana): let the caller
-  assert it (`assembly_label=`, basis `asserted`, checked against the reference). Meanwhile those facets get
-  no REF check and no VRS ids.
-- **Layer 1, desk #93:** where an Oxford .gen file's chromosome comes from. Meanwhile refused.
 - **Layer 4, for the person in chat (not filed: the question itself is derived from a genome):** whether
   one alias's two files are one person. Meanwhile that pair is left out of the atlas.
 - **Layer 7, desk #94:** grade a gVCF reference block by the lower of its GQ floor and its likelihoods
@@ -198,3 +194,6 @@ Desk questions whose term ended unanswered; each default is now the decision.
 - **Layer 8, desk #90** (2026-11-22): CisPhasedBlocks stay whole phased stretches; one symbolic allele withholds its
   block (RM284, closed).
 - **Tooling, desk #91** (2026-11-22): no ruff; the tree stays without a linter.
+- **Layer 3, desk #92** (2026-11-22): no `assembly_label=` on `load`; CASAVA, SOAPsnp, Big Y and Nirvana facets,
+  whose files state no build, load with no REF check and no VRS ids.
+- **Layer 1, desk #93** (2026-11-22): Oxford `.gen` files stay refused, with an error that says why.

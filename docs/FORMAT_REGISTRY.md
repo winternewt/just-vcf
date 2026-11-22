@@ -2860,7 +2860,7 @@ Gencove's Oxford `.gen` imputation output ships one member per chromosome and re
 
 **`sniff` says:** `detected`, as `oxford_gen`
 
-**What just-vcf does** (open): Detected, not loaded. Taking the chromosome from a member's name would trust a name, which `sniff` never does; the loader for these formats is not built.
+**What just-vcf does** (refused): Big Y loads, every row on chrY, which the format's own description states. Oxford `.gen` is detected, not loaded: taking the chromosome from a member's name would trust a name, which `sniff` never does, and the person's desk question on where to read it ended on its default (2026-11-22), so `load` refuses it.
 
 Code and tests: formats/other_tables.py `OXFORD_GEN`, `FTDNA_BIGY`.
 

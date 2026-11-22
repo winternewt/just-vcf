@@ -140,8 +140,8 @@ Not loadable yet, each for a reason the file gives:
 - `promethease_tab_genotype` is a report on the sites SNPedia knows: no chromosome, no position, and
   genotypes oriented as SNPedia orients the site, which may be the minus strand.
 - `oxford_gen` (Gencove) states no chromosome in any field defined to hold one: the member name says
-  it, and typed rows repeat it in a column the Oxford format defines as the input's SNP id. A decision
-  for the person (layer 1); until then `load` refuses it.
+  it, and typed rows repeat it in a column the Oxford format defines as the input's SNP id. The person's
+  desk question on it (#93) ended on its default, 2026-11-22: `load` refuses it.
 
 Not facets: `cgi_summary` and `decodeme_info` hold no calls. A CGI summary's coverage fractions and
 called sex are genome-wide figures about the `var` file beside it (provenance of that facet, layer 2),

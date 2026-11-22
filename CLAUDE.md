@@ -689,6 +689,10 @@ same applies when the user corrects a preference: it goes below, in their words,
   loads in parallel 81 s against 57 s, every Krypton worker finishing together, which means the array's
   bandwidth is the limit.
 - `../just-prs/data/input/vcf/newton_winter.vcf` is BGZF despite the `.vcf` name.
+- `~/.cache/just-vcf`, the cache's default, is a symlink to `/data/just-dna-cache/just-vcf` on this machine (2026-11-22,
+  the person: "evict your caches to /data/just-dna-cache/", with `/` 88% full and the cache 26 GB). The link, not
+  `JUST_VCF_CACHE_DIR`, so every process that imports just-vcf follows it, the sibling apps included, and a manifest's
+  absolute path stays valid. Never replace it with a plain directory.
 - Public WGS samples used by the sibling suites are on Zenodo, records 18370498 and 19487816.
 - `data/interim/` holds a greppable mirror of the VCF stack under polars-bio: clones of polars-bio,
   datafusion-bio-formats and the pinned noodles fork, the VCF 4.2/4.3/4.5 spec sources, and JSON dumps

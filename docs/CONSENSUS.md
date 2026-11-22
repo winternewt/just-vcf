@@ -137,9 +137,10 @@ let the band rates be pooled over people and show how far they move from one gen
 
 ## Options left to the person
 
-The checks above ran with every default. Three choices that move the consensus are the person's
-(desk #94–#96), each built as an option whose default is what ran here, so an answer is a one-line
-default change; the rules are in docs/SCHEMA.md.
+The checks above ran with every default. Three choices that move the consensus were put to the person
+(desk #94–#96), each built as an option whose default is what ran here; the rules are in docs/SCHEMA.md.
+#94 and #95 ended on their defaults (2026-11-22), and #96 was withdrawn once the option was built
+(2026-11-16), so every default below is now the decision; the options stay for a caller.
 
 - **#94, how a gVCF reference block speaks** (`block_grade=`): by its likelihoods (the default), by its
   GQ, or by the lower of the two. The checks have not been run under the other two.

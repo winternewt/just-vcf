@@ -2771,8 +2771,8 @@ a local DeepVariant gVCF (aggregates only): on 1.32M hom-ref calls GQ is within 
 their PL gives (clipped at 99, the highest GQ DeepVariant wrote on them) for 96.6%, which is what `gq_on_reference=True`
 assumes. On its 13.6M reference blocks only 26.9% agree, median difference 49: a block's GQ is the
 band's floor (at most 50 there), its PL is not, so a block graded by its likelihoods (median 291) states more than its
-weakest base supports. Which of the two should grade a block is the person's call (desk #94); until
-then a block is graded by its likelihoods, as written.
+weakest base supports. Which of the two should grade a block was put to the person (desk #94); its term
+ended on its default (2026-11-22), so a block is graded by its likelihoods, as written.
 
 **The block rule** (`block_grade=`, `BlockGrade`, on `genotype_evidence`, `genotype_evidence_at` and
 `consensus`) is built for that answer to be a one-line default change. It governs `ref` blocks only;

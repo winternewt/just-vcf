@@ -14,7 +14,7 @@ usable for one person's facets, and say what they rest on.
 | 4 | A person | 90% | subject; Person with links and relatedness as its default check; a supplied GA4GH pedigree checked against measured bands (agrees/disagrees/cannot_tell, never corrected); exome variant-only sites read as unknown; the durable store; somalier is never run here (desk #88) |
 | 5 | Agreement measured | 90% | `concordance` (span-guarded VRS pairing, haploid vs a/a a match with ploidy flagged); the method-error atlas incl. the CGI pairs by VRS id and by each side's confidence band; the consensus posterior (RM280) |
 | 6 | Facet graph and liftover | 90% | links frame, liftover, normalize, rejoin_split |
-| 7 | Graded evidence across sources | 90% | `genotype_evidence` with the PL/GL source and CGI's allele scores (`calls.hq`, so a CGI `var` facet is banded too); the consensus posterior weighs each row by its confidence band's measured rate (held-out SNVs from 10 phred up: 0.85 observed/predicted with the banded var facet, 1.01 with GIAB's easy/difficult partition as regions; docs/CONSENSUS.md); desk #94–#96 built as options; what is left is decisions |
+| 7 | Graded evidence across sources | 90% | `genotype_evidence` with the PL/GL source and CGI's allele scores (`calls.hq`, so a CGI `var` facet is banded too); the consensus posterior weighs each row by its confidence band's measured rate (held-out SNVs from 10 phred up: 0.85 observed/predicted with the banded var facet, 1.01 with GIAB's easy/difficult partition as regions; docs/CONSENSUS.md); desk #94–#96 settled on their defaults (options kept); what is left is decisions (#100–#102) |
 | 8 | Export | 92% | VCF/gVCF with tabix, VCF 4.5 PSL/PSO/PSQ, CisPhasedBlock export naming what withheld it, VCF Zarr |
 
 ## Blockers waiting for the person
@@ -32,16 +32,6 @@ meanwhile. The desk carries the ones filed there.
   Deferred: patch scaffolds carry almost no personal-genome calls.
 - **Layer 4, for the person in chat (not filed: the question itself is derived from a genome):** whether
   one alias's two files are one person. Meanwhile that pair is left out of the atlas.
-- **Layer 7, desk #94:** grade a gVCF reference block by the lower of its GQ floor and its likelihoods
-  (recommended), by its likelihoods (now), or by GQ. All three are built (`block_grade=`, `BlockGrade`);
-  the answer is a one-line default change. Meanwhile likelihoods. Open beside it: whether `gq_on_reference`
-  keeps covering calls only (today `genotype_evidence` grades a GQ-only block by GQ under it, the consensus does not).
-- **Layer 7, desk #95:** use GQ as the confidence of reference calls by default for single-sample callers
-  (96.6% agreement measured). Meanwhile off, with the option built and tested through `consensus`.
-- **Layer 7, desk #96:** a population prior from a public frequency catalogue. The machinery is built
-  (`AlleleFrequencyPrior`: a caller's table, Hardy-Weinberg priors, the prior named per row in
-  `support.prior`); which catalogue, and whether frequencies of exactly 0 or 1 are allowed, are the
-  person's. Meanwhile the flat prior, named on every row.
 - **Layer 5, the lead's calls on RM280 (built as recommended, listed for veto):** a pair's rate split by
   triangulation where three methods were compared, else half; a GP row read as its call; an unmeasured
   method gets the worst measured rate in its class; support counts in a sidecar frame; facets from the same
@@ -197,3 +187,11 @@ Desk questions whose term ended unanswered; each default is now the decision.
 - **Layer 3, desk #92** (2026-11-22): no `assembly_label=` on `load`; CASAVA, SOAPsnp, Big Y and Nirvana facets,
   whose files state no build, load with no REF check and no VRS ids.
 - **Layer 1, desk #93** (2026-11-22): Oxford `.gen` files stay refused, with an error that says why.
+- **Layer 7, desk #94** (2026-11-22): a gVCF reference block is graded by its likelihoods, as written
+  (`block_grade=` keeps GQ and the lower of the two as options). Still the lead's to settle: whether
+  `gq_on_reference` covers calls only (today `genotype_evidence` grades a GQ-only block by GQ under it, the
+  consensus does not).
+- **Layer 7, desk #95** (2026-11-22): GQ is not the confidence of a reference call by default
+  (`gq_on_reference=True` stays an option).
+- **Layer 7, desk #96** (withdrawn 2026-11-16, moot): the population prior is built as an option
+  (`AlleleFrequencyPrior`, the caller's own frequency table); the flat prior stays the default, named on every row.

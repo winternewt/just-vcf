@@ -51,9 +51,9 @@ produced). What reading one back already does, checked 2026-11-03: `callset.impu
   probes at one position; stored contig names on a GRCh38 facet by default.
 
 ## RM274 — Relatedness and families
-**State:** blocked: desk #88, #178 (somalier); a pedigree measured on real relatives also waits for data · **Owner:** lead
+**State:** blocked: desk #178 (somalier's input); a pedigree measured on real relatives also waits for data · **Owner:** lead
 
-Severity: medium · Status: in progress (shipped 2026-10-23: KING-robust relatedness, `same_person` as RM273's default check, the somalier wrapper and GA4GH Pedigree reading, merge 6dd3591; a pedigree checked against measured bands (`expected_kinship`, `check_pedigree`, `people(..., pedigree=...)`) and the Genos exome's offset settled as site selection (`variant_sites_only`), merge f43768e. Left: running somalier for real waits on desk #88 (no docs/TRUST.md row for its binary); the first-degree split by IBS0 (`parent_child`, `full_siblings`, KING's 0.005/0.008, `first_degree` when not told) shipped 2026-10-26, merge 323bf7f; a pedigree measured on real relatives waits for data, since docs/LIVE_SAMPLES.md names no related people, and with it the split's behaviour on real facets, whose error can read a parent and child as siblings)
+Severity: medium · Status: in progress (shipped 2026-10-23: KING-robust relatedness, `same_person` as RM273's default check, the somalier wrapper and GA4GH Pedigree reading, merge 6dd3591; a pedigree checked against measured bands (`expected_kinship`, `check_pedigree`, `people(..., pedigree=...)`) and the Genos exome's offset settled as site selection (`variant_sites_only`), merge f43768e. Left: somalier is never run here: desk #88 ended on its default (2026-11-22), so its binary gets no docs/TRUST.md row and the wrapper ships untested on real files; the first-degree split by IBS0 (`parent_child`, `full_siblings`, KING's 0.005/0.008, `first_degree` when not told) shipped 2026-10-26, merge 323bf7f; a pedigree measured on real relatives waits for data, since docs/LIVE_SAMPLES.md names no related people, and with it the split's behaviour on real facets, whose error can read a parent and child as siblings)
 
 The person chose both (E6): somalier (MIT) as an optional subprocess, skipped cleanly when absent, and just-vcf's own relatedness on the frames (IBS/KING-style over a validated site panel, so arrays work too). Pedigrees as supplied GA4GH Pedigree data. Feeds RM273's check.
 
@@ -262,9 +262,9 @@ Forward/Design alleles (its manifest, HumanOmni2.5-8v1_A, is not on disk); exact
 real data (no PGP-HMS export's chip has its own manifest on disk).
 
 ## RM282 — Structural-variant facets
-**State:** blocked: desk #208, #89 (the decompose is built, 2026-11-05, its calls listed for the person's veto; #208 is the copy-number allele against `<DEL>`/`<DUP>`, default strict; #89 the VRS copy-number ids) · **Owner:** lead
+**State:** blocked: desk #208 (the decompose is built, 2026-11-05, its calls listed for the person's veto; #208 is the copy-number allele against `<DEL>`/`<DUP>`, default strict) · **Owner:** lead
 
-Severity: low · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; loading and the `write_vcf` round trip shipped 2026-10-23, merge 04c5db3, schema 0.0.14; `concordance` compares symbolic SV alleles by type and extent under truvari's matching, 2026-10-26, merged; breakends in `concordance` by truvari's `bnd_match`, one row per adjacency, 2026-10-26, merge 43dd717; a symbolic `<DEL>`/`<DUP>`/`<INV>` meeting the breakends another caller writes for it, truvari's default `decompose`, the lead's judgement, 2026-11-05. Left: whether a copy-number allele (`<CN0>`, `<CN3>`) should meet a `<DEL>` or `<DUP>` as a loss or a gain, the person's call (below); a check against a DELLY or Sniffles file waits for one (none on disk, synthetic tests only); minting VRS 2 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` waits on desk #89, meanwhile `sv_no_vrs_model`)
+Severity: low · Status: in progress (decided by the person in the Part 2 interview, 2026-10-23; loading and the `write_vcf` round trip shipped 2026-10-23, merge 04c5db3, schema 0.0.14; `concordance` compares symbolic SV alleles by type and extent under truvari's matching, 2026-10-26, merged; breakends in `concordance` by truvari's `bnd_match`, one row per adjacency, 2026-10-26, merge 43dd717; a symbolic `<DEL>`/`<DUP>`/`<INV>` meeting the breakends another caller writes for it, truvari's default `decompose`, the lead's judgement, 2026-11-05. Left: whether a copy-number allele (`<CN0>`, `<CN3>`) should meet a `<DEL>` or `<DUP>` as a loss or a gain, the person's call (below); a check against a DELLY or Sniffles file waits for one (none on disk, synthetic tests only); VRS 2 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` are not minted: desk #89 ended on its default (2026-11-22), so a structural variant keeps no VRS id, withheld as `sv_no_vrs_model`)
 
 The person chose load with ids withheld (E11): SV calls load as rows with type and `end_pos`, VRS ids withheld with a reason (VRS 2.x has no SV model; charter: never a non-conforming GA4GH value).
 
@@ -329,23 +329,6 @@ built is the strict reading, type from the ALT's name, reversible by adding a ma
 type and distance only (docs/SCHEMA.md, "Structural variants"); and the question whether VRS 2's
 `CopyNumberCount`/`CopyNumberChange` and `Adjacency` should be minted for CNVs and breakends, which
 the reason's name presumes away.
-
-## RM284 — Phasing as CisPhasedBlock
-**State:** blocked: desk #90 · **Owner:** lead
-
-Severity: low · Status: in progress (`cis_phased_blocks` shipped 2026-10-23, merge 4129dc7; PSL, PSO and PSQ read and written back under VCF 4.5, with withheld blocks naming the allele that withheld them, merge 8b72a46, schema 0.0.15. Nothing buildable is left. Waiting: blocks per window or per run of sequence alleles, so one symbolic allele does not withhold a chromosome's block, on desk #90; a 4.4+ slot-0 block's phase on polars-bio keeping the leading phase indicator (P4 in docs/POLARS_BIO_PENDING_FIXES.md, not filed, the upstream-liaison seat's); the reading of a 4.4+ slot 0 that a PSL names as phased is listed for the person's veto in docs/LAYERS.md, layer 8)
-
-The person chose columns with an export on demand (E5): phase sets stay columns; VRS CisPhasedBlock objects are minted only when asked.
-
-**Built:** `cis_phased_blocks` (docs/SCHEMA.md, "CisPhasedBlock export"). The VCF loader reads PSL,
-PSO and PSQ since 2026-10-23, and `write_vcf` writes them back under VCF 4.5, so PSL sets are tested on
-a loaded facet against vrs-python. Left open: in a VCF 4.4+ file a slot-0 block with an ALT is
-`phase_unknown` until polars-bio keeps the leading phase indicator (P4), unless PSL names that slot's set.
-A withheld block names the first allele that withheld it (`withheld_chrom`, `withheld_pos`,
-`withheld_allele`). On a whole imputed genome
-an implicit set is a chromosome, so one symbolic ALT withholds the haplotype's block (a phased Genes
-for Good upload: 45 of 46 withheld `symbolic`); whether a block per window or per contiguous run of
-sequence alleles is wanted is the person's call.
 
 ## RM286 — T2T-CHM13
 **State:** waits until 2026-12-06 (look again for a public T2T callset of known karyotype carrying FORMAT DP, to calibrate the karyotype thresholds on; the test-store call is made: store-chm13 stays opt-in, 2026-11-06) · **Owner:** lead

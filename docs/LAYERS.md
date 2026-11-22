@@ -11,7 +11,7 @@ usable for one person's facets, and say what they rest on.
 | 1 | Reading facets in | 90% | 32 of 39 formats load (plus SV/CNV, PSL); the seven left are a decision (#93 Oxford .gen), Deflate64 zips refused by decision (#83), chip manifests (Geno 2.0, headerless Final Report), no positions (Promethease) or not facets (CGI summary, deCODEme info) |
 | 2 | Provenance per facet | 90% | caller and version, vendor, callset type, chip, content filter, ploidy lines, subject, derivation inputs, reference, aligner, the method chain (`method_steps`), coverage facets |
 | 3 | Identity (comparing facets) | 92% | REF, VRS, assembly inference incl. GRCh36/CHM13, scaffold aliases (F19: a PGP GRCh38 VCF reads 100%); `_fix` patches need a patch store |
-| 4 | A person | 90% | subject; Person with links and relatedness as its default check; a supplied GA4GH pedigree checked against measured bands (agrees/disagrees/cannot_tell, never corrected); exome variant-only sites read as unknown; the durable store; somalier waits on desk #88 |
+| 4 | A person | 90% | subject; Person with links and relatedness as its default check; a supplied GA4GH pedigree checked against measured bands (agrees/disagrees/cannot_tell, never corrected); exome variant-only sites read as unknown; the durable store; somalier is never run here (desk #88) |
 | 5 | Agreement measured | 90% | `concordance` (span-guarded VRS pairing, haploid vs a/a a match with ploidy flagged); the method-error atlas incl. the CGI pairs by VRS id and by each side's confidence band; the consensus posterior (RM280) |
 | 6 | Facet graph and liftover | 90% | links frame, liftover, normalize, rejoin_split |
 | 7 | Graded evidence across sources | 90% | `genotype_evidence` with the PL/GL source and CGI's allele scores (`calls.hq`, so a CGI `var` facet is banded too); the consensus posterior weighs each row by its confidence band's measured rate (held-out SNVs from 10 phred up: 0.85 observed/predicted with the banded var facet, 1.01 with GIAB's easy/difficult partition as regions; docs/CONSENSUS.md); desk #94–#96 built as options; what is left is decisions |
@@ -24,19 +24,12 @@ meanwhile. The desk carries the ones filed there.
 
 - **Layer 1, F17:** Living DNA indel REF needs the Sirius chip's site alleles, and no manifest is public
   or on disk. Needs a source the person may have, or stays withheld.
-- **Layer 3, desk #89:** mint SVs as VRS 2 CopyNumber/Adjacency objects, or keep withholding (RM282).
-  Meanwhile withheld (`sv_no_vrs_model`).
-- **Layer 8, desk #90:** offer CisPhasedBlocks per window, so one symbolic allele does not withhold a whole
-  chromosome's block (RM284). Meanwhile whole blocks.
 - **Layer 8, a reading to veto:** when a 4.4+ record's first slot carries a PSL name, the loader reads it
   as phased (`phased[0] = true`); VCF 4.5 writes an unphased allele as `.`. The alternative is null, which
   withholds every such block as `phase_unknown`. Built as the first; reversible (SCHEMA Decision 2).
 - **Layer 3, the lead's call (not now):** lifting onto GRCh38 `_fix`/`_alt` patch scaffolds needs a store
   holding patches (an NCBI or UCSC full analysis set); 40,099 HG002 rows stay `target_contig_unmatched`.
   Deferred: patch scaffolds carry almost no personal-genome calls.
-- **Layer 4, desk #88:** the somalier binary has no row in docs/TRUST.md, so the wrapper (`just_vcf.somalier`)
-  has never been run; only the person sets a source's standing. Meanwhile relatedness uses just-vcf's own
-  KING-robust estimate, which is the default check.
 - **Layer 3, desk #92:** a build the file does not state (CASAVA, SOAPsnp, Big Y, Nirvana): let the caller
   assert it (`assembly_label=`, basis `asserted`, checked against the reference). Meanwhile those facets get
   no REF check and no VRS ids.
@@ -182,7 +175,6 @@ meanwhile. The desk carries the ones filed there.
   schema; rejected: `no_call`, which says the source called nothing, where it wrote `0/0`), and is left out of
   the sex-chromosome ALT counts. Variant classes are counted at load, before any REF is read, so such a row still
   counts as an SNV there; no file in hand has one.
-- **Tooling, desk #91:** ruff as a dev dependency (about 200 findings in the tree).
 - **Housekeeping for the person:** a builder left `stash@{0}: a94f-lift-check` (an old copy of `liftover.py`, it
   says safe to drop); dropping stashes is the person's.
 
@@ -198,3 +190,11 @@ Desk questions whose term ended unanswered; each default is now the decision.
   differ only in id both stay, counted in a warning.
 - **Layer 1, desk #83** (2026-11-21): Deflate64 zips stay refused, with an error naming the method; the person
   unpacks such a zip by hand. No new dependency.
+- **Layer 4, desk #88** (2026-11-22): somalier gets no row in docs/TRUST.md, so the wrapper (`just_vcf.somalier`)
+  stays in the library and is never run here; relatedness uses just-vcf's own KING-robust estimate. Desk #178, on
+  what the wrapper hands somalier, stays open for the library's users.
+- **Layer 3, desk #89** (2026-11-22): structural variants keep no VRS id (`sv_no_vrs_model`); no CopyNumber or
+  Adjacency objects are minted (RM282).
+- **Layer 8, desk #90** (2026-11-22): CisPhasedBlocks stay whole phased stretches; one symbolic allele withholds its
+  block (RM284, closed).
+- **Tooling, desk #91** (2026-11-22): no ruff; the tree stays without a linter.

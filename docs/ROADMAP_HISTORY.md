@@ -2,6 +2,21 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM284 — Phasing as CisPhasedBlock
+Severity: low · Status: shipped 2026-10-23, closed 2026-11-22 (`cis_phased_blocks` shipped 2026-10-23, merge 4129dc7; PSL, PSO and PSQ read and written back under VCF 4.5, with withheld blocks naming the allele that withheld them, merge 8b72a46, schema 0.0.15. Closed 2026-11-22: desk #90 ended on its default, so blocks stay whole phased stretches and one symbolic allele withholds its block; still outside the plan: a 4.4+ slot-0 block's phase on polars-bio keeping the leading phase indicator (P4 in docs/POLARS_BIO_PENDING_FIXES.md, not filed, the upstream-liaison seat's); the reading of a 4.4+ slot 0 that a PSL names as phased is listed for the person's veto in docs/LAYERS.md, layer 8)
+
+The person chose columns with an export on demand (E5): phase sets stay columns; VRS CisPhasedBlock objects are minted only when asked.
+
+**Built:** `cis_phased_blocks` (docs/SCHEMA.md, "CisPhasedBlock export"). The VCF loader reads PSL,
+PSO and PSQ since 2026-10-23, and `write_vcf` writes them back under VCF 4.5, so PSL sets are tested on
+a loaded facet against vrs-python. Left open: in a VCF 4.4+ file a slot-0 block with an ALT is
+`phase_unknown` until polars-bio keeps the leading phase indicator (P4), unless PSL names that slot's set.
+A withheld block names the first allele that withheld it (`withheld_chrom`, `withheld_pos`,
+`withheld_allele`). On a whole imputed genome
+an implicit set is a chromosome, so one symbolic ALT withholds the haplotype's block (a phased Genes
+for Good upload: 45 of 46 withheld `symbolic`); whether a block per window or per contiguous run of
+sequence alleles is wanted is the person's call.
+
 ## RM271 — VRS allele ids
 
 Severity: high · Status: shipped 2026-10-22, closed 2026-11-21 (`mint_vrs_ids` and `vrs_withheld` shipped 2026-10-22 for VCF and array rows, merge b41bda5, equal to vrs-python on 19,000 real alleles. The opt-in test in `tests/test_vrs.py` that mints on the real store `JUST_VCF_TEST_REFERENCE_DIR` names and compares every slot with vrs-python (`scripts/vrs_oracle.py`) shipped 2026-10-26, merge 19a9753; measured below, 0 mismatch. Closed 2026-11-21: desk #77's term ended on its default, so the gtars gap G1 is not filed; it stays recorded in docs/GTARS_PENDING_FIXES.md and just-vcf keeps writing the VRS state itself)

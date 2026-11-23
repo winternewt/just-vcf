@@ -43,8 +43,8 @@ meanwhile. The desk carries the ones filed there.
   sit in their most confident band; a band needs 1,000 alleles to be used (`MIN_BAND_ALLELES`). The 60+
   band's 2x overconfidence was measured (docs/CONSENSUS.md): freeBayes 0.9.15 borrowing 0.9.20's bands,
   whose confidence scale differs (0.9.15's GLs floor at -10); CGI and the array were ruled out, the even
-  split is second order. Whether to borrow bands across versions at all is the person's call, three
-  options there; meanwhile borrowed, with a warning naming the facet.
+  split is second order. Bands are borrowed across a caller's versions, with a warning naming the facet:
+  desk #99 ended on that default, 2026-11-22.
 - **Layer 7, which regions weigh an allele (desk #100):** today an allele takes the highest rate among
   every GIAB class holding it, and the classes nest, so the 10-30 phred bands read about 0.6 observed/predicted.
   GIAB's easy/difficult partition (`giab_stratifications(..., classes=["easy", "difficult"])`) brings it to

@@ -255,7 +255,7 @@ people. Since schema 0.0.19 the `var` facet is banded and the pair fits (docs/ME
 
 **What changed in the library.** Nothing in the rule: a facet whose version the atlas lacks still
 borrows its caller's bands. `consensus` now names such facets in a warning, since a borrowed band was
-measured on another facet's confidence scale. Whether to borrow at all is the person's call (below).
+measured on another facet's confidence scale. Whether to borrow at all was put to the person (below, desk #99).
 The warning changed no row, so it left `CONSENSUS_VERSION` at the 2 it was then (later changes have
 moved it since; `consensus.py` holds the current value).
 
@@ -274,6 +274,9 @@ moved it since; `consensus.py` holds the current value).
    holds two versions of the caller and their bands agree within their intervals; otherwise the
    average. It needs two measured versions per caller and a tolerance, and on this check it equals
    option 2.
+
+**Settled 2026-11-22:** desk #99's term ended on its default, option 1: bands are borrowed across a
+caller's versions, with the warning naming every facet that borrowed.
 
 Recommended: 1, and measure each facet's own version wherever the person has a partner facet for it,
 which is the normal use (an atlas with the person's own pairs: in-sample 1.14 overall). The odd/even

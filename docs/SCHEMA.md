@@ -897,7 +897,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
 | `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load (a genotype table's by `resolve_ref`, once its REF is read, RM301), in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele, which names no class it carries or lacks (`class_gate`'s `no_variant_allele`, unknown, audit 18); null = not counted (a genotype table before `resolve_ref` reads its REF, or one whose REF was read on no row). just-vcf's own shape |
-| `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
+| `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Never inferred for a facet whose `callset_type` is `array` (RM303): a chip is mostly SNV probes and its few indel probes are its design, not a cut, and its rows are read per probe. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | the tool and version of the one `phase` step in `method_steps` (`Eagle 2.3.5+htslib-1.4`, `DRAGEN 05.021.408.3.4.11`, `WhatsHap 1.7`). Null when the header records no phasing step, or more than one (with a warning). A caller counts as phasing its own calls only where the header declares FORMAT `PS` in that caller's own words (`method_steps`, below) |
 | `reference` | the reference the header says the rows are against: the base name of `##reference=` (`hg38.fa`, `human_g1k_v37.fasta`; DRAGEN's `…/<dir>/reference.bin` gives `<dir>`), written `<file>` unless every word of it is a known reference's (`source._known_reference`: an assembly word such as `hg38`, `GRCh37`, `hs37d5`, `GCA_000001405`, `chm13`, beside the bundles' descriptors and extensions), since a base name can carry a person's or a lab's name (`ALICESMITH-hg38.fa`); or, with no such line, the one reference the call steps' command lines name (`--reference`, `reference_sequence=`, `--ref-dir`, freeBayes `-f`). Two references leave it null with a warning. A `##reference=` that differs from the caller's command line is kept, with a warning unless a `lift` step is recorded: a lift the header does not name (Picard LiftoverVcf writes no line) shows up this way. Both checks compare the base names as written, before either is written `<file>`, so two different unknown files are two references; their warnings name no file. A label, never identity: `seqcol_digest` is that. just-vcf's own |
@@ -4120,6 +4120,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-23, RM303 part 2: no `content_filter` for an array): no column
+  changes. Rule changed (Decision 5's `content_filter`): the VCF loader infers no filter, from the
+  rows, the header or the name, for a facet whose header states array content (`callset_type =
+  array`); its `variant_classes` are still counted. **Values change**: a chip exported as VCF read
+  `snv_only` from its rows (`basis = rows`) and now has null, with no content-filter warning. A store
+  holding such a facet keeps the old value until it is reloaded; no reader asks an array's filter any
+  more (part 1 reads its rows per probe, and `absence_support` answers an array's silence by its
+  callset type before it reaches the filter).
 
 - **No version change in the frames** (2026-11-23, RM303: an array's row speaks only for its own
   probe's class): no column changes. Rule changed (Decisions 1 and 4): `concordance`, `consensus` and

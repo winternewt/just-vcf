@@ -11,6 +11,18 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- No `content_filter` is inferred for an array (RM303, part 2). The VCF loader read a chip exported as
+  VCF (`##workflow_type=Illumina_GenotypingToVCF`, Open Humans' 23andMe conversion, Genes for Good's
+  genotype calls) by a whole genome's notion: a chip is mostly SNV probes, so its rows showed
+  `snv_only` (`basis = rows`), and `class_gate` then cut its resolved indel probes away. A facet whose
+  header states array content now has its classes counted and no filter from its rows, its header or
+  its name, and no content-filter warning. A genotype table already got none (RM301). The facet
+  guard's reason for a table's null filter names the rule. No version keys a loaded facet, so a store
+  keeps an array's old value until it is reloaded; no reader asks it any more. Minor. Test:
+  `tests/test_content_filter.py::test_no_content_filter_is_inferred_for_an_array` fails on the old code
+  (`snv_only`, `rows`) for the rows, the name and the header; its control without the array line still
+  reads `snv_only`.
+
 - An array's row speaks only for its own probe's class (RM303, part 1), in `concordance`, `consensus`
   and `read_site_genotypes` alike. RM299 to RM302 gated a facet's rows by the classes the whole facet
   carries (`callset.class_gate`), right for a whole-genome caller but not for a chip, which is a set of

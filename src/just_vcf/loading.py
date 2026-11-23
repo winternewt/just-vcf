@@ -928,7 +928,10 @@ def _load_vcf(sniffed: Sniffed, sample: str | None) -> Loaded:
         flagged, marker_rows = vcf.split_groups(spilled, stats["ploidy_max"] or 1)
         part_warnings += vcf.split_warnings(flagged, marker_rows, header)
         # The filter comes first: a facet cut to its indels has a whole genome's floor of its own (RM4).
-        classes, class_warnings = _variant_classes(facet_id, spilled, stated_filters, named_filter)
+        # An array the header states gets none (RM303): a chip is mostly SNV probes, which is no cut.
+        classes, class_warnings = _variant_classes(
+            facet_id, spilled, stated_filters, named_filter, infer_filter=source.callset_type is not CallsetType.ARRAY
+        )
         part_warnings += class_warnings
         if source.callset_type:
             kind = source.callset_type
@@ -1017,13 +1020,21 @@ def _variant_classes(
     calls: pl.LazyFrame,
     stated: list[tuple[ContentFilter, str]],
     named: tuple[ContentFilter, str] | None,
+    *,
+    infer_filter: bool = True,
 ) -> tuple[dict, list[str]]:
     """A facet's `variant_classes`, `content_filter` and `content_filter_basis` from its spilled calls
     (`source_ref`, `alts`), the header's filtering lines and the file name's words, with the warnings.
 
     Every loader that writes REF and ALT fills them the same way: absence reads as reference only for
-    the classes present and not cut away (Decision 4)."""
+    the classes present and not cut away (Decision 4). With `infer_filter` false (a facet whose callset
+    type is an array, RM303) the classes are counted and no filter is inferred: a chip is mostly SNV
+    probes and its few indel probes are its design, so its rows, header and name name no cut, and each
+    of its rows is read for its own probe's class (`callset.reads_per_probe`)."""
     counts = callset.variant_class_counts(calls)
+    if not infer_filter:
+        logger.info("%s: content filter not inferred for an array", facet_id)
+        return {"variant_classes": callset.counted_classes(counts), "content_filter": None, "content_filter_basis": None}, []
     content = callset.infer_content_filter(counts, stated, named)
     logger.info("%s: content filter %s (%s)", facet_id, content.content_filter.value if content.content_filter else "none", content.reason)
     columns = {

@@ -445,3 +445,45 @@ def test_a_genotype_table_counts_no_classes(tmp_path: Path) -> None:
     assert (row["variant_classes"], row["content_filter"], row["content_filter_basis"]) == (None, None, None)
     assert absence_is_reference(row, "snv", force=True) is None
     assert absence_support(row, "snv", force=True).reason is AbsenceReason.ARRAY
+
+
+def chip_vcf(path: Path, meta: tuple[str, ...] = ()) -> Path:
+    """An array's calls written as a VCF: `MIN_FILTER_ALLELES` + 100 SNV rows and one insertion row,
+    so the rows alone show `snv_only` (residue under `MAX_FILTER_RESIDUE`), with `meta` lines."""
+    snvs = [f"1\t{100 + i * 10}\t.\tA\tG\t.\tPASS\t.\tGT\t0/1" for i in range(MIN_FILTER_ALLELES + 100)]
+    insertion = "2\t100\t.\tA\tAT\t.\tPASS\t.\tGT\t0/1"
+    path.write_text("\n".join([*HEADER, *meta, COLUMNS, *snvs, insertion]) + "\n")
+    return path
+
+
+ARRAY_LINE = "##workflow_type=Illumina_GenotypingToVCF"
+"""A header line `source.detect_source` reads as array content (Illumina's array-to-VCF workflow)."""
+
+
+@pytest.mark.parametrize(
+    ("name", "meta"),
+    [
+        ("chip.vcf", ()),  # the rows alone would show snv_only
+        ("chip.snps.vcf", ()),  # and a file name naming the class
+        ("chip.vcf", (f"##bcftools_viewCommand=view -v snps in.vcf.gz{DATE}",)),  # and a header line recording the cut
+    ],
+)
+def test_no_content_filter_is_inferred_for_an_array(tmp_path: Path, name: str, meta: tuple[str, ...]) -> None:
+    """RM303. A chip is mostly SNV probes, so its rows read as a genome cut to its SNVs, a whole genome's
+    notion that does not fit a set of probes: `class_gate` then cut its resolved indel probes away. A
+    facet whose callset type is an array gets no `content_filter` from its rows, its name or its header,
+    and no warning about one; its classes are still counted. The control: the same rows without the
+    array line read `snv_only` from the rows, as before."""
+    loaded = load(chip_vcf(tmp_path / name, (ARRAY_LINE, *meta)))
+    row = loaded.facets.collect().row(0, named=True)
+    assert row["callset_type"] == "array"
+    assert {entry["variant_class"]: entry["alleles"] for entry in row["variant_classes"]} == {"snv": MIN_FILTER_ALLELES + 100, "indel": 1}
+    assert (row["content_filter"], row["content_filter_basis"]) == (None, None)
+    assert class_gate(row, INDEL) is None
+    assert not [w for w in loaded.warnings if "content filter" in w]
+
+    (tmp_path / "control").mkdir()
+    control = load(chip_vcf(tmp_path / "control" / "chip.vcf")).facets.collect().row(0, named=True)
+    assert control["callset_type"] != "array"
+    assert (control["content_filter"], control["content_filter_basis"]) == ("snv_only", "rows")
+    assert class_gate(control, INDEL) is AbsenceReason.CLASS_CUT_BY_FILTER

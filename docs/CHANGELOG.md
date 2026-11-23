@@ -11,6 +11,22 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `consensus` no longer reads a facet's row for an allele of a class that facet carries none of
+  (RM300), the rule `concordance` took in RM299. An array export with no indel row, or a genome cut
+  to its SNVs, wrote an SNV row at the base another facet's insertion is anchored on; the `site`
+  reading took that row's genotype as zero copies of the insertion, a vote against the caller that
+  saw it (two facets, a het insertion and the SNV facet's row: the posterior's top genotype stayed one
+  copy, at about 5 phred where the caller alone gives 25). Where the class is not among the facet's
+  `variant_classes`, or its `content_filter` cut it away (`callset.class_gate`), the facet is now
+  silent on the allele, counted in the warnings as the new silent reason `class_not_carried`. It holds
+  both ways and for any class (an SNV at the anchor of an indel-only facet's row). A facet whose
+  classes were not counted (null, a genotype table) keeps the old reading. `CONSENSUS_VERSION` 6, so a
+  consensus facet made before gets a new `facet_id`; no frame or schema changes. Minor. Tests:
+  `tests/test_consensus.py::test_an_snv_only_facet_row_says_nothing_of_an_insertion_anchored_on_it`,
+  `::test_an_indel_only_facet_row_says_nothing_of_an_snv_at_its_anchor` and
+  `::test_a_class_cut_by_the_content_filter_is_not_read_even_from_a_residue` fail on the old code;
+  `::test_a_facet_that_carries_the_class_is_read_as_before` pins what stays.
+
 - `concordance` no longer reads a facet's row for an allele of a class that facet carries none of
   (RM299). An array export with no indel row, or a genome cut to its SNVs, wrote an SNV row at the base
   another facet's insertion is anchored on; the `site` key read that row's genotype as zero copies of

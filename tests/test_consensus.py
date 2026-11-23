@@ -859,6 +859,105 @@ def test_a_row_over_another_span_says_nothing_about_this_allele(tmp_path: Path, 
     assert any("other_span 1" in line for line in result.warnings)
 
 
+ANCHOR = 1000
+"""On contig 1: the base an insertion is anchored on, where another facet wrote one SNV row."""
+
+
+def insertion(pos: int, gt: str) -> tuple:
+    ref = base("1", pos)
+    return ("1", pos, ref, ref + other(base("1", pos + 1)) * 2, gt, "PASS", {})
+
+
+def deletion(pos: int, gt: str) -> tuple:
+    ref = SEQ["1"][pos - 1 : pos + 2]
+    return ("1", pos, ref, ref[0], gt, "PASS", {})
+
+
+def classes_of(loaded: Loaded) -> set[str]:
+    return {entry["variant_class"] for entry in loaded.facets.collect()["variant_classes"][0]}
+
+
+def at_anchor(result: Consensus, alt: str) -> dict:
+    (row,) = [row for row in rows_of(result) if row["pos"] == ANCHOR and row["alts"] == [alt]]
+    return row
+
+
+def silent_reasons(result: Consensus, loaded: Loaded) -> str:
+    (line,) = [line for line in result.warnings if line.startswith(f"facet {loaded.facets.collect()['facet_id'][0]} silent on")]
+    return line
+
+
+@pytest.mark.parametrize("wgs_first", [True, False])
+def test_an_snv_only_facet_row_says_nothing_of_an_insertion_anchored_on_it(tmp_path: Path, store: ReferenceStore, wgs_first: bool) -> None:
+    """RM300, RM299's rule in the consensus. A facet whose rows carry no indel (an array export, a
+    genome cut to its SNVs) wrote an SNV row at the base another facet's insertion is anchored on. That
+    row says nothing of the insertion: the facet is silent there (`class_not_carried`), never a vote of
+    zero copies against the caller that saw it. The other way round is unchanged: the whole genome
+    carries SNVs, so its insertion row is read for the SNV facet's allele."""
+    ins = insertion(ANCHOR, "0/1")
+    wgs = facet(tmp_path, "x", "X", "1", [ins, snv("1", 1300, "0/1"), deletion(1500, "0/1")], store)
+    array = facet(tmp_path, "y", "Y", "1", [snv("1", ANCHOR, "0/1"), snv("1", 1300, "0/1"), snv("1", 1700, "1/1")], store)
+    assert (classes_of(wgs), classes_of(array)) == ({"snv", "indel"}, {"snv"})
+    result = consensus([wgs, array] if wgs_first else [array, wgs], atlas=TRIANGLE)
+    lone = at_anchor(result, ins[3])
+    assert (lone["s_variant_class"], lone["s_supported"], lone["s_contradicted"], lone["s_silent"]) == ("indel", 1, 0, 1)
+    assert lone["gp"] == pytest.approx(posterior([hard(1, E["X"])]), rel=1e-5)
+    assert lone["s_copies"] == 1
+    assert "class_not_carried 1" in silent_reasons(result, array)
+    # The array's own SNV at the anchor is read against the whole genome's insertion row, as before.
+    own = at_anchor(result, other(base("1", ANCHOR)))
+    assert (own["s_supported"], own["s_contradicted"], own["s_silent"]) == (1, 1, 0)
+    assert own["gp"] == pytest.approx(posterior([hard(1, E["Y"]), hard(0, E["X"])]), rel=1e-5)
+
+
+def test_an_indel_only_facet_row_says_nothing_of_an_snv_at_its_anchor(tmp_path: Path, store: ReferenceStore) -> None:
+    """The mirror: a facet that carries only indels wrote an insertion row at a base where the other
+    facet calls an SNV. It is silent on the SNV; the insertion is read against the SNV facet's row,
+    since that facet carries indels."""
+    ins = insertion(ANCHOR, "0/1")
+    wgs = facet(tmp_path, "x", "X", "1", [snv("1", ANCHOR, "0/1"), insertion(1300, "0/1"), snv("1", 1500, "0/1")], store)
+    indels = facet(tmp_path, "y", "Y", "1", [ins, deletion(1700, "0/1"), insertion(1900, "1/1")], store)
+    assert (classes_of(wgs), classes_of(indels)) == ({"snv", "indel"}, {"indel"})
+    result = consensus([wgs, indels], atlas=TRIANGLE)
+    lone = at_anchor(result, other(base("1", ANCHOR)))
+    assert (lone["s_variant_class"], lone["s_supported"], lone["s_contradicted"], lone["s_silent"]) == ("snv", 1, 0, 1)
+    assert lone["gp"] == pytest.approx(posterior([hard(1, E["X"])]), rel=1e-5)
+    assert "class_not_carried 1" in silent_reasons(result, indels)
+    read = at_anchor(result, ins[3])
+    assert (read["s_supported"], read["s_contradicted"], read["s_silent"]) == (1, 1, 0)
+    assert read["gp"] == pytest.approx(posterior([hard(1, E["Y"]), hard(0, E["X"])]), rel=1e-5)
+
+
+def test_a_class_cut_by_the_content_filter_is_not_read_even_from_a_residue(tmp_path: Path, store: ReferenceStore) -> None:
+    """A genome cut to its SNVs keeps an indel residue, so `indel` is among its `variant_classes`; its
+    `content_filter` alone says its rows speak for no indel (`class_cut_by_filter`)."""
+    ins = insertion(ANCHOR, "0/1")
+    wgs = facet(tmp_path, "x", "X", "1", [ins, snv("1", 1300, "0/1"), deletion(1500, "0/1")], store)
+    cut = facet(tmp_path, "y", "Y", "1", [snv("1", ANCHOR, "0/1"), snv("1", 1300, "0/1"), deletion(1700, "0/1")], store, content_filter="snv_only")
+    assert classes_of(cut) == {"snv", "indel"}
+    result = consensus([wgs, cut], atlas=TRIANGLE)
+    lone = at_anchor(result, ins[3])
+    assert (lone["s_supported"], lone["s_contradicted"], lone["s_silent"]) == (1, 0, 1)
+    assert "class_not_carried 1" in silent_reasons(result, cut)
+
+
+def test_a_facet_that_carries_the_class_is_read_as_before(tmp_path: Path, store: ReferenceStore) -> None:
+    """The control: the other facet carries indels (one elsewhere, no filter), so its SNV row at the
+    anchor is read for the insertion: zero copies, a vote against. And a facet whose classes were not
+    counted (null `variant_classes`) keeps that reading: not counted is unknown, not a class it lacks."""
+    ins = insertion(ANCHOR, "0/1")
+    wgs = facet(tmp_path, "x", "X", "1", [ins, snv("1", 1300, "0/1"), deletion(1500, "0/1")], store)
+    carries = facet(tmp_path, "y", "Y", "1", [snv("1", ANCHOR, "0/1"), snv("1", 1300, "0/1"), deletion(1700, "0/1")], store)
+    uncounted = facet(tmp_path, "z", "Y", "1", [snv("1", ANCHOR, "0/1"), snv("1", 1300, "0/1")], store, variant_classes=None)
+    assert uncounted.facets.collect()["variant_classes"][0] is None
+    for other_facet in (carries, uncounted):
+        result = consensus([wgs, other_facet], atlas=TRIANGLE)
+        read = at_anchor(result, ins[3])
+        assert (read["s_supported"], read["s_contradicted"], read["s_silent"]) == (1, 1, 0)
+        assert read["gp"] == pytest.approx(posterior([hard(1, E["X"]), hard(0, E["Y"])]), rel=1e-5)
+        assert not any("class_not_carried" in line for line in result.warnings)
+
+
 def test_a_vector_becomes_copies_of_the_allele_haploid_and_multiallelic() -> None:
     # Diploid over [R, A, B]: genotypes 0/0, 0/1, 1/1, 0/2, 1/2, 2/2 hold 0, 0, 0, 1, 1, 2 copies of B.
     diploid = [0.05, 0.10, 0.15, 0.20, 0.25, 0.25]

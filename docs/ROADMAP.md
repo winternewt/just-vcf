@@ -141,15 +141,6 @@ Left: a cache spill of the windows keyed by `facet_id` (RM268's pattern), so a B
 quantized output from one depth pass; mosdepth's thresholds file; a person-level layer that pairs a
 coverage facet with callsets.
 
-## RM279 — A method-error atlas
-**State:** unattended: build the single-person PGP-HMS pairs `data/interim/rm279/plan_pgp_methods.json` plans (desks #72, #101 and #102 ended on their defaults, 2026-11-21 and 2026-11-22: felis, ksuhaster and newton are never paired, pooling stays by caller and version with the `var` atlas a separate file, and `carried_pass` reads FILTER only) · **Owner:** lead
-
-Severity: medium · Status: in progress (`method_atlas` and a first atlas over eight pairs shipped 2026-10-23, merge 4047968, docs/METHOD_ATLAS.md; the PGP CGI pairs rebuilt with REF read, minted and met by VRS id, merge 93dd5f0, with complex rows read by the allele's change (F21) and X's haploid calls matched to homozygotes (F22), merge c6da26c; counts per confidence band, merge 86daede, 2026-10-24; CGI `var` pairs banded by `calls.hq`, merge 8334138, 2026-10-24; the six private pairs rebuilt with minting through `scripts/method_atlas.py` (REF read, met by VRS id, banded), 2026-10-26, merged 2026-10-26. PGP-HMS pairs that pool more than one genome built 2026-11-08 (docs/METHOD_ATLAS.md, "More PGP pairs"): a third CGI `var` against freeBayes 0.9.15 person, the last on disk, and 16 people's two CGI sequencing runs, nine of them under one key (2.5.0.33 against 2.5.0.37) with easy-region SNV discordance from 0.13% to 1.84% between people, sent to desk #101. Single-person pairs of other methods (DRAGEN against freeBayes, CGI against DRAGEN, CGI against an Omni2.5 array as VCF) are on disk and planned in `data/interim/rm279/plan_pgp_methods.json`, not built: each adds a method with one genome, not a pooled row. Settled by default: pooling stays by caller and version, the `var` atlas a separate file (desk #101); the private folders are never paired (desk #72); CGI's sample-level VQLOW is not read by `carried_pass` (desk #102). Left: the planned single-person pairs)
-
-The person chose GIAB stratifications as regions (E8): error and discordance rates by caller and region from multi-facet PGP-HMS people (docs/LIVE_SAMPLES.md). Needs RM277.
-
-Measured 2026-10-26, the six private pairs met by VRS id (docs/METHOD_ATLAS.md): every row of the six facets had its REF read and matched, every allele minted but GATK's 18,248 spanning deletions; the same-reads pairs' rates move by at most 0.02 point (F21's `unreadable`, 9 to 49 alleles per class); DeepVariant 1.1.0 spells about 14,000 indels unlike 1.3.0 and 1.8.0, which now meet, so its indel discordance rises from 7.1 to 8.0% and 8.0 to 8.7% and its one-sided indels fall from 8.8 to 6.0% and 9.2 to 6.3%; 1.3.0 against 1.8.0, 3.68 to 3.78% and 0.62 to 0.20%. SNV rates move by at most 0.01 point.
-
 ## RM281 — Chip manifests
 **State:** waits until 2026-12-07: the per-probe table is learned (2026-11-07); left are v4's internal-id I/D rows, which match no Illumina probe and need a probe source of their own · **Owner:** lead
 

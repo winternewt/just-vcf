@@ -412,3 +412,33 @@ hu250634's is in the timing build:
 - **Two CGI runs disagree more in easy regions than CGI does with freeBayes on huF5F075** (0.106%) for
   all nine 2.5.0.33/2.5.0.37 people. One-sided shares, 7 to 22% for SNVs, are lower than CGI
   against freeBayes (24 to 29%).
+
+## The last single-person PGP pairs: DRAGEN, an array, and two that gave no verdict (2026-11-23)
+
+RM279's last plan, `data/interim/rm279/plan_pgp_methods.json`: five pairs of one PGP-HMS person each,
+built with `scripts/method_atlas.py`, alleles met by VRS id. The outputs are
+`data/output/method_atlas_pgp_methods.*`, git-ignored. Columns as above (`carried_pass`, region `all`
+unless named).
+
+| Person | Pair | SNVs both called | Discordance | One-sided | Easy SNV |
+|---|---|---|---|---|---|
+| huE18D82 | DRAGEN 05.021.408 vs freeBayes 0.9.15 (PGP) | 3,283,411 | 0.77% | 23.1% | 0.209% |
+| hu6ABACE | CGA 2.5.0.44 `var` vs DRAGEN 05.011.281 SNV file | 3,319,611 | 0.24% | 14.9% | 0.071% |
+| hu250634 | Omni2.5 array as VCF vs CGA 2.5.0.37 `var` | 648,336 | 2.25% | 80.7% | 2.011% |
+
+- **DRAGEN against CGI agrees best of any cross-caller pair here**, 0.071% in easy regions, below CGI
+  against freeBayes on any of the three people above (0.106% to 0.75%).
+- **freeBayes 0.9.15 against DRAGEN** (0.209% easy) sits between huF5F075's CGI pair and hu1B2689's:
+  the third person to show PGP's freeBayes merge is the noisier side of its pairs.
+- **The array disagrees with CGI on 2.25% of the SNVs both called, and on 2.0% in easy regions**, ten
+  times the whole-genome pairs, so region difficulty does not explain it. Not explained here. The
+  one-sided share is the array's 2.3M sites against a whole genome, as expected.
+- **No indel cell is reported for these pairs.** The DRAGEN facets are an SNV file and an indel file;
+  huE18D82's DRAGEN facet carries no indels, so its indels are all one-sided. The other two cells,
+  hu6ABACE's (4,009 indels called by both, 78.7% discordant) and the array's (15,869, every one
+  discordant), are an artefact: concordance read a facet that carries no indels as holding no copy
+  of an insertion anchored on a base it genotyped. RM299 fixes the reading and rebuilds these cells.
+- **Two pairs gave no verdict, so no rows** (`same_person` answered `None`). hu2B76CC's upload, as
+  loaded, reaches no autosome (17.4M rows over 22.9 Mbp, 27,792 ALT alleles), and the relatedness panel
+  is autosomal. hu6ABACE's DRAGEN indel file has no genotype at the panel's SNV sites, since its
+  silence does not speak for SNVs. Both are the check refusing to guess, as it should.

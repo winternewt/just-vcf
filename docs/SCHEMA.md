@@ -172,7 +172,8 @@ those (merge audit 13, 2026-10-28, found liftover, the writers and `query` readi
   whole-genome facet whose only SNV-shaped rows were spelled against `N` would so read its silence as
   reference for SNVs. No file in hand writes such rows: every copy-number file writes symbolic ALTs
   or none, and its `sv` count is as stated. A recount at `resolve_ref` would change a load-time count
-  in a resolve step, and is not made (`tests/test_unstated_ref.py` pins the count).
+  in a resolve step, and is not made (it counts only a facet load left uncounted, a genotype table,
+  whose rows have no source REF, RM301) (`tests/test_unstated_ref.py` pins the count).
 - `rejoin_split` leaves a split site as written, counted ("a source REF of only N, which states no
   base"), when a row of it spells a sequence ALT against an `N` (2026-11-03, `REJOIN_VERSION` 6;
   before, on a facet whose REF was read, the joined row took `ref_check = not_run`, which every reader
@@ -819,8 +820,20 @@ disagrees is a warning naming both sides; the strongest is kept:
    separators (`.snp.`, `.snps.`, `.snv.`, `.indel.`, `.indels.`, `.sv.`, `.cnv.`). `hard-filtered`
    is quality filtering and names no class. Warnings quote the word, never the name.
 
-A genotype table writes no REF/ALT to count, so its `variant_classes` is null; its absence is
-`unknown` anyway. The other loaders that read a REF and ALT count them as the VCF loader does: the
+A genotype table has no REF, and so no ALT, at load, so its `variant_classes` is null there; its
+absence is `unknown` anyway. `resolve_ref` counts them once it has read REF and derived the ALTs
+(RM301, `RESOLVE_VERSION` 15), the same way into the same field: ALT alleles per class, each classed
+against the REF read for its row, a hom-ref row none. A table and its VCF export of the same calls
+so give the same classes. A row left unread carries no class: a no-call, a row on a contig not read,
+and an `I`/`D` code no manifest resolved (RM281), so a table whose codes were left unread counts no
+indel, and one whose codes were resolved counts an indel for each resolved row that calls the allele
+that is not REF (a hom-ref code row holds no ALT, as its VCF export writes ALT `.`). Where REF was
+read on no row, no ALT is known and the classes stay null, not `[]`. Without the count `class_gate`
+answered `class_not_counted` for a table, so its SNV row at the base another facet's insertion is
+anchored on still read as zero copies of the insertion (RM299, RM300). A table gets no
+`content_filter`: an array's few indels are the chip's probe design, not rows cut down to one class,
+and a rows basis would read most chips `snv_only` and so cut away the indel rows a chip did resolve.
+The other loaders that read a REF and ALT count them as the VCF loader does: the
 PGP key=value table, and CGI's native `var` and `masterVarBeta`, whose unanchored alleles (`""`, a
 deletion's ALT or an insertion point's REF) are indels. Their content filter rests on the rows and
 the file name; neither format has a header line that records a filtering command. Counting `""`
@@ -859,7 +872,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `resolve_inputs` | what else `resolve_ref` read rows with: a 16-hex digest over the chip manifests whose indel probes read an array's `I`/`D` codes and whose SNV allele pairs read a mixed strand's withheld rows (`probes.catalog_digest` of each, so the manifests' bytes and `PROBES_VERSION`, and for a chip read per probe, 23andMe v3 and v4, the orientations its table lists). Null until REF is read, where no manifest read a row (a VCF, an array with no code row and no strand withheld, or none configured), and on an array or consensus facet a store migrated from before 0.0.21 whose REF was read (not recorded). A derived facet keeps its parent's. A consensus has a digest of its parents' REF states instead (each parent's `facet_id`, `ref_seqcol_digest`, `resolve_version` and `resolve_inputs`), always set, since its `resolve_version` is null wherever they differ. With `ref_seqcol_digest` and `resolve_version` it is the facet's REF state (`store.REF_STATE`). just-vcf's own shape |
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
-| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load, in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele; null = not counted (a genotype table, which writes no REF or ALT). just-vcf's own shape |
+| `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load (a genotype table's by `resolve_ref`, once its REF is read, RM301), in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele; null = not counted (a genotype table before `resolve_ref` reads its REF, or one whose REF was read on no row). just-vcf's own shape |
 | `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | the tool and version of the one `phase` step in `method_steps` (`Eagle 2.3.5+htslib-1.4`, `DRAGEN 05.021.408.3.4.11`, `WhatsHap 1.7`). Null when the header records no phasing step, or more than one (with a warning). A caller counts as phasing its own calls only where the header declares FORMAT `PS` in that caller's own words (`method_steps`, below) |
@@ -3244,8 +3257,10 @@ facet's in this order, each row saying which in `key`:
    against a CGI genome read 15,869 such indels, all of them discordant). Its row says no more of the
    allele than its silence would: the allele stays one-sided, `absence = class_not_carried`,
    counted in a warning per class. The same holds both ways and for any class: an SNV against a
-   facet cut to its indels. A facet whose classes were not counted (`variant_classes` null, a genotype
-   table) is unknown, not a facet that lacks the class, and its row is read as before.
+   facet cut to its indels. A facet whose classes were not counted (`variant_classes` null: a genotype
+   table whose REF was not read, or read on no row) is unknown, not a facet that lacks the class, and
+   its row is read as before. A table whose REF `resolve_ref` read has its classes counted (RM301), so
+   the rule reaches a 23andMe-style export as it reaches the same calls written as a VCF.
 
 An allele stated by several rows of one facet (`normalize` keeps rows that differ, charter 8) pairs
 with each, counted in a warning.
@@ -3798,8 +3813,9 @@ row at the base an insertion is anchored on; that row holds REF there whatever t
 genotype would be a `site` vote of zero copies against the caller that saw it, from a class the facet
 never looked at. The facet is silent on the allele instead, as its silence already was, and the same
 holds for any class (an SNV at the anchor of an indel-only facet's row). A facet whose classes were
-not counted (`variant_classes` null, a genotype table) is unknown, not a facet that lacks the class,
-and its row is read as `site` as before.
+not counted (`variant_classes` null: a genotype table whose REF was not read, or read on no row) is
+unknown, not a facet that lacks the class, and its row is read as `site` as before. A table whose REF
+`resolve_ref` read has its classes counted (RM301), and the rule reaches it.
 
 A row whose source REF states no base (`ref_check = unstated`) and which spells a sequence ALT
 states no allele of the consensus (`CONSENSUS_VERSION` 5): `N` → `G` read beside the reference's `T`
@@ -4056,6 +4072,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-23, RM301: a genotype table's classes counted once its REF is read):
+  no column changes. Rule changed (Decision 4): `resolve_ref` fills `facets.variant_classes` for a facet
+  load left it null (a genotype table), from the rows it read, as the VCF loader counts a VCF's; null
+  stays where REF was read on no row, and `content_filter` stays null. **Values change** in `facets`
+  on a resolved genotype table, and with them what `concordance` and `consensus` read of its rows: an
+  SNV-only table's row at another facet's insertion anchor is `class_not_carried` (RM299, RM300).
+  `RESOLVE_VERSION` 15: the rows are as 14 wrote them, but a store tells the facet from one 14 resolved.
 
 - **No version change** (2026-11-18, audit 17: `COVERAGE_VERSION` 2): no column changes. RM289 (rows
   of another width), RM291 (an empty quantized label counted as naming no depth range), RM293 (a double

@@ -95,6 +95,10 @@ _FEW_OVERLAP = (
 )
 _NO_BAND_23 = "The example's row count lies in no 23andMe generation's band (`chip.ChipOutcome.NO_BAND`, a load warning)."
 _NO_SAMPLE = "The layout has no sample column; the file holds one person by construction."
+_TABLE_CLASSES = (
+    "Not counted at load: a genotype table has no REF, so no ALT, until `resolve_ref` reads REF and counts its "
+    "classes from the rows it read (RM301, SCHEMA Decision 4)."
+)
 _NO_LIKELIHOODS = "The format writes no likelihood vector: only the VCF loader reads GL or PL into `gl`, which stays null here."
 
 NULL_REASONS: dict[tuple[str, str], str] = {
@@ -131,7 +135,7 @@ NULL_REASONS: dict[tuple[str, str], str] = {
     **_each(("color_variant_set", "get_evidence_gff", "nirvana_json"), ("content_filter", "content_filter_basis"), _CONTENT_FILTER),
     **_each(("color_variant_set", "get_evidence_gff", "nirvana_json"), ("sorted_name_length_pairs_digest",), "The format carries no contig lengths."),
     **_each(("color_variant_set", "get_evidence_gff", "nirvana_json"), ("chip", "chip_basis"), _NO_CHIP_RULE),
-    ("rsid_table_headerless/appended_export", "variant_classes"): "Not counted: a genotype table writes no REF or ALT (SCHEMA Decision 5).",
+    ("rsid_table_headerless/appended_export", "variant_classes"): _TABLE_CLASSES,
     ("*", "aligner"): "Only a header that records its aligner states one (DRAGEN with `--enable-map-align true`); no example does (SCHEMA Decision 5).",
     ("*", "aligner_version"): "Null with `aligner`: only a recorded aligner has a version.",
     **_each(('23andme_csv', '23andme', 'ancestrydna', 'cgi_master_var', 'cgi_var', 'color_genotypes', 'decodeme', 'ftdna', 'ftdna_space', 'genes_for_good_imputed', 'genes_for_good', 'genos', 'illumina_final_report', 'living_dna', 'plink_23', 'rsid_result_csv', 'rsid_table_headerless', 'rsid_table', 'selfdecode', 'freebayes_varscan2_keyvalue/VarScan2', 'freebayes_varscan2_keyvalue/freeBayes', 'rsid_table_headerless/appended_export'), ("reference",), "Not a VCF: no `##reference=` line or caller reference option to read (SCHEMA Decision 5)."),
@@ -145,9 +149,10 @@ NULL_REASONS: dict[tuple[str, str], str] = {
         "an array export states none."
     )),
     **_each((GT,), ("ploidy_statements", "header_contigs", "vcf_version", "sample_meta"), _NOT_A_VCF),
-    **_each(('23andme', '23andme_csv', 'ancestrydna', 'color_genotypes', 'decodeme', 'ftdna', 'ftdna_space', 'genes_for_good', 'genes_for_good_imputed', 'genos', 'illumina_final_report', 'living_dna', 'plink_23', 'rsid_result_csv', 'rsid_table', 'rsid_table_headerless', 'selfdecode'), ("variant_classes",), "Not counted: a genotype table writes no REF or ALT (SCHEMA Decision 5)."),
+    **_each(('23andme', '23andme_csv', 'ancestrydna', 'color_genotypes', 'decodeme', 'ftdna', 'ftdna_space', 'genes_for_good', 'genes_for_good_imputed', 'genos', 'illumina_final_report', 'living_dna', 'plink_23', 'rsid_result_csv', 'rsid_table', 'rsid_table_headerless', 'selfdecode'), ("variant_classes",), _TABLE_CLASSES),
     **_each((GT,), ("content_filter", "content_filter_basis"), (
-        "Its variant classes are not counted (no REF or ALT), so no class can be the one the rows were cut to."
+        "Its variant classes are not counted at load (no REF or ALT), so no class can be the one the rows were cut "
+        "to; `resolve_ref`, which counts them (RM301), infers no filter for a table either."
     )),
     (GT, "split_marker"): "A genotype table has no INFO field to carry a split marker.",
     (GT, "sorted_name_length_pairs_digest"): "Not a VCF: no `##contig` lines to take names and lengths from.",

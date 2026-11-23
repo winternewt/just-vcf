@@ -225,16 +225,21 @@ def variant_class_expr(ref: pl.Expr, alt: pl.Expr) -> pl.Expr:
     )
 
 
-def variant_class_counts(calls: pl.LazyFrame) -> dict[VariantClass, int]:
+def variant_class_counts(calls: pl.LazyFrame, ref: pl.Expr | None = None) -> dict[VariantClass, int]:
     """ALT alleles per variant class over a `calls` frame (`source_ref`, `alts`), every class listed.
 
     It runs at load, before any REF is read (`ref_check = not_run`), so a sequence ALT spelled against a
     source REF of only `N` (F23, `schema.unstated_sequence_alt`) is counted by its lengths: the rule
-    that no reader takes such an ALT as stated cannot apply here (docs/SCHEMA.md Decision 2)."""
+    that no reader takes such an ALT as stated cannot apply here (docs/SCHEMA.md Decision 2).
+
+    `ref` is the REF each ALT is classed against, `source_ref` by default. A genotype table has neither
+    REF nor ALT at load; `resolve_ref` counts its classes once it has read REF and derived the ALTs,
+    against the `ref` it read (RM301)."""
+    ref = pl.col("source_ref") if ref is None else ref
     counted = (
-        calls.select("source_ref", "alts")
+        calls.select(ref.alias("_ref"), "alts")
         .explode("alts", empty_as_null=False)
-        .select(variant_class_expr(pl.col("source_ref"), pl.col("alts")).alias("variant_class"))
+        .select(variant_class_expr(pl.col("_ref"), pl.col("alts")).alias("variant_class"))
         .drop_nulls()
         .group_by("variant_class")
         .len()
@@ -242,6 +247,11 @@ def variant_class_counts(calls: pl.LazyFrame) -> dict[VariantClass, int]:
     )
     found = dict(zip(counted["variant_class"].to_list(), counted["len"].to_list(), strict=True))
     return {cls: int(found.get(cls.value, 0)) for cls in VariantClass}
+
+
+def counted_classes(counts: dict[VariantClass, int]) -> list[dict[str, object]]:
+    """`facets.variant_classes` from `variant_class_counts`: each class with its alleles, one with none left out."""
+    return [{"variant_class": cls.value, "alleles": n} for cls, n in counts.items() if n]
 
 
 MIN_FILTER_ALLELES = 10_000
@@ -492,7 +502,8 @@ class AbsenceReason(str, Enum):
     genome): a derived facet whose producer withheld what its absence means. A lifted facet does
     (the rows a lift dropped are absent too), and so does a consensus."""
     CLASS_NOT_COUNTED = "class_not_counted"
-    """The facet's `variant_classes` were not counted (a genotype table writes no REF/ALT to count)."""
+    """The facet's `variant_classes` were not counted: a genotype table before `resolve_ref` reads its REF
+    and derives its ALTs, or one whose REF was read on no row (RM301)."""
     CLASS_NOT_CALLED = "class_not_called"
     """The facet wrote no allele of the asked class, so its silence says nothing about that class."""
     CONTENT_FILTER_HELD = "content_filter_held"

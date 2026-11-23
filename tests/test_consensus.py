@@ -35,6 +35,7 @@ from just_vcf.person import Person
 from just_vcf.schema import CALLS, FACETS
 from just_vcf.store import Store, StoreConflictError, migrate_store
 from test_store import SUBJECT
+from test_reference import array_text
 from test_store_migration import _old_store
 
 RNG = random.Random(280)
@@ -956,6 +957,37 @@ def test_a_facet_that_carries_the_class_is_read_as_before(tmp_path: Path, store:
         assert (read["s_supported"], read["s_contradicted"], read["s_silent"]) == (1, 1, 0)
         assert read["gp"] == pytest.approx(posterior([hard(1, E["X"]), hard(0, E["Y"])]), rel=1e-5)
         assert not any("class_not_carried" in line for line in result.warnings)
+
+
+def test_a_genotype_tables_snv_row_says_nothing_of_an_insertion_anchored_on_it(tmp_path: Path) -> None:
+    """RM301, RM300's rule reaching a genotype table. A 23andMe-style export has no REF or ALT at load,
+    so its classes were not counted and its hom-ref SNV row at an insertion's anchor voted zero copies
+    of the insertion. Once `resolve_ref` reads REF its classes are counted (SNVs only), and the table is
+    silent on the insertion (`class_not_carried`)."""
+    fasta = tmp_path / "grch37.fa"
+    fasta.write_text("".join(f">{name}\n{seq}\n" for name, seq in SEQ.items()))
+    grch37 = ReferenceStore.open(tmp_path / "grch37")
+    grch37.add_fasta(fasta, assembly_label="GRCh37")
+    ins = insertion(ANCHOR, "0/1")
+    wgs = facet(tmp_path, "x", "X", "1", [ins, snv("1", 1300, "0/1"), deletion(1500, "0/1")], grch37)
+    rows = [("rs1", "1", ANCHOR, base("1", ANCHOR) * 2), ("rs2", "1", 1300, base("1", 1300) + other(base("1", 1300))), ("rs3", "1", 1700, other(base("1", 1700)) * 2)]
+    path = tmp_path / "genome.txt"
+    path.write_text(array_text(rows))
+    resolved = resolve_ref(load(path), grch37)
+    schema = resolved.facets.collect_schema()
+    labelled = {"assembly_label": "GRCh38", "caller": "Y", "caller_version": "1"}
+    table = Loaded(
+        facets=resolved.facets.with_columns(*[pl.lit(value, dtype=schema[key]).alias(key) for key, value in labelled.items()]),
+        calls=resolved.calls,
+        blocks=resolved.blocks,
+        links=resolved.links,
+    )
+    assert classes_of(table) == {"snv"}
+    result = consensus([wgs, table], atlas=TRIANGLE)
+    lone = at_anchor(result, ins[3])
+    assert (lone["s_variant_class"], lone["s_supported"], lone["s_contradicted"], lone["s_silent"]) == ("indel", 1, 0, 1)
+    assert lone["gp"] == pytest.approx(posterior([hard(1, E["X"])]), rel=1e-5)
+    assert "class_not_carried 1" in silent_reasons(result, table)
 
 
 def test_a_vector_becomes_copies_of_the_allele_haploid_and_multiallelic() -> None:

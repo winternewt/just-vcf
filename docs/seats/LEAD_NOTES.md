@@ -112,6 +112,9 @@ each reset.
    `class_gate` reads `variant_classes == []` as `class_not_called` for every class, and RM301 can give `[]` for a
    resolved table of only hom-ref rows, so its rows go unread everywhere. The lead's call for veto: `[]` reads as
    unknown, like null. One fix builder running.
+   **2026-11-23: audit 18 done; fix merged as 55cb460**: the premise held (a hom-ref-only table resolves to `[]`, and
+   so did a VCF of only `ALT .` rows before RM301); new `AbsenceReason.NO_VARIANT_ALLELE`, read as unknown, not in
+   `CLASS_UNSAID`; CONSENSUS_VERSION 7. Suite 2921 passed, 77 skipped, 8 xfailed on both majors. Audit 19 at 0 of 6.
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

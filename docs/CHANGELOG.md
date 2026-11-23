@@ -11,6 +11,52 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- A GET-Evidence GFF's blocks are read per probe (RM303, part 3), in `concordance` and `consensus`.
+  The GFF loads each `REF` row (a hom-ref site it lists) as a one-base `ref` block beside its `SNP`
+  rows, so its block at another facet's insertion anchor, or at a deletion's first base, read
+  `ref_block`: zero copies, a one-sided disagreement in concordance and a vote against in consensus.
+  Such a block is probe-shaped and speaks for an SNV at its base only. A one-base `ref` block of a facet
+  whose blocks are probe-shaped (`callset.blocks_per_probe`: an array, or a format in the new
+  `callset.PROBE_BLOCK_FORMATS`, `get_evidence_gff`; the GFF's own callset type is null, so the rule is
+  the format's) is now `class_not_carried` for any allele but an SNV, counted in a warning per class in
+  concordance. A caller's blocks are read exactly as before, of any length: the facet-wide gate left
+  unmerged in RM302 (4187b91) withheld a cut gVCF's true reference calls and every block of a gVCF
+  with no variant row. `read_site_genotypes` is unchanged: a panel's sites are SNVs, which the block
+  speaks for. `CONSENSUS_VERSION` 9. Minor. Tests: `tests/test_probe_class.py`, the GFF concordance and
+  consensus cases fail on the old code (`ref_block`, a vote against, for the insertion and the
+  deletion); the gVCF controls and the panel read pass on both.
+
+- No `content_filter` is inferred for an array (RM303, part 2). The VCF loader read a chip exported as
+  VCF (`##workflow_type=Illumina_GenotypingToVCF`, Open Humans' 23andMe conversion, Genes for Good's
+  genotype calls) by a whole genome's notion: a chip is mostly SNV probes, so its rows showed
+  `snv_only` (`basis = rows`), and `class_gate` then cut its resolved indel probes away. A facet whose
+  header states array content now has its classes counted and no filter from its rows, its header or
+  its name, and no content-filter warning. A genotype table already got none (RM301). The facet
+  guard's reason for a table's null filter names the rule. No version keys a loaded facet, so a store
+  keeps an array's old value until it is reloaded; no reader asks it any more. Minor. Test:
+  `tests/test_content_filter.py::test_no_content_filter_is_inferred_for_an_array` fails on the old code
+  (`snv_only`, `rows`) for the rows, the name and the header; its control without the array line still
+  reads `snv_only`.
+
+- An array's row speaks only for its own probe's class (RM303, part 1), in `concordance`, `consensus`
+  and `read_site_genotypes` alike. RM299 to RM302 gated a facet's rows by the classes the whole facet
+  carries (`callset.class_gate`), right for a whole-genome caller but not for a chip, which is a set of
+  probes each for its own allele: a chip with one resolved non-REF indel counts `indel`, so its hom-ref
+  SNV probe row at another facet's insertion anchor read as zero copies again (a mismatch, a vote
+  against); a chip whose `I`/`D` rows are all hom-ref counts no indel, so its deletion probe row was
+  withheld from the very deletion it probes; and a hom-ref insertion probe row (`DD`, a one-base REF
+  twice) read at a panel SNV as zero copies. A facet whose `callset_type` is `array`
+  (`callset.reads_per_probe`) is now read per probe: a row is there for an allele only where the row's
+  own class (`callset.row_class_expr`: `indel` for an `I`/`D` code kept in `source_gt` or an ALT of
+  another length than REF, a hom-ref row over a REF longer than a base being a deletion probe read
+  `II`; otherwise `snv` over a one-base REF) is the allele's, and rows of other classes alone leave the
+  allele `class_not_carried`. A row whose class cannot be told (REF not read) is read for every
+  class, as before. Whole-genome and other facets keep `class_gate` exactly. The array's concordance
+  warning for such alleles is worded for probes. `CONSENSUS_VERSION` 8, so a consensus facet made
+  before gets a new `facet_id`. No stored frame or schema changes. Minor. Tests:
+  `tests/test_probe_class.py` (the chip cases fail on the old code; the whole-genome controls pass on
+  both).
+
 - `callset.class_gate` no longer reads a facet that wrote no allele of any class as one that lacks
   every class (audit 18). `variant_classes` of `[]` (counted, no class with an allele) answered
   `class_not_called` for every class, which is in `CLASS_UNSAID`, so RM299's to RM302's rule read none

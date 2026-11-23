@@ -761,7 +761,12 @@ it at a panel site, `basis = class_not_carried`, unknown and still a row there, 
 does not reach it either. An indel-only facet's hom-ref insertion row at a panel SNV's position has
 the haplotypes REF and REF, both panel alleles, and read as zero copies of the panel's ALT. A facet
 whose classes were not counted (null), or were counted and hold no allele of any class (`[]`,
-`no_variant_allele`, below), is read as before. `ancestry` counts such sites apart (`SiteDosages.n_class_not_carried`,
+`no_variant_allele`, below), is read as before. An array is read per probe instead (RM303,
+`callset.reads_per_probe`): only its rows that probe an SNV (`callset.row_class_expr`), or whose class
+cannot be told (an export read before `resolve_ref`), are rows at a panel site, whatever classes the
+chip carries, and a site where it wrote rows but none an SNV probe's is `class_not_carried`: a hom-ref
+insertion probe row (`DD`, a one-base REF twice) at a panel SNV's position read as zero copies.
+`ancestry` counts such sites apart (`SiteDosages.n_class_not_carried`,
 `AncestryEstimate.n_sites_class_not_carried`).
 
 `absence_is_reference(facet_row, variant_class, force=False)` is the rule in code, for just-vcf and
@@ -892,7 +897,7 @@ Provenance that is constant across a file lives once in a `facets` frame. Each r
 | `callset_type` | `wgs`, `wes`, `panel`, `array`, `imputed`, or null (RM4, below). A VCF gets `array` or `imputed` where its header says what the content is (Illumina GenotypingToVCF, a 23andMe conversion, Gencove, Minimac, Genes for Good: the `source` detector, RM2); otherwise RM4 infers it from the rows |
 | `absence_means` | Decision 4 |
 | `variant_classes` | `list[struct{variant_class, alleles}]`: the ALT alleles of each class the rows carry, counted at load (a genotype table's by `resolve_ref`, once its REF is read, RM301), in the order `snv`, `mnv`, `indel`, `sv`, a class with none left out. `snv` and `mnv` are sequence ALTs as long as their REF (one base, more); `indel` a sequence ALT of another length (the empty allele `""` included: an unanchored deletion, F12's `-`), whatever its length; `sv` a symbolic ALT or a breakend. `<*>`, `*`, `<CGA_NOCALL>` and ALT `.` are no class, and neither is an ALT of letters outside `ACGTN`, which is no VCF allele (Veritas's `CNV`, F15; counted in a load warning). `[]` = a facet whose rows carry REF and ALT and no variant allele, which names no class it carries or lacks (`class_gate`'s `no_variant_allele`, unknown, audit 18); null = not counted (a genotype table before `resolve_ref` reads its REF, or one whose REF was read on no row). just-vcf's own shape |
-| `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Decision 4 says what it does to absence |
+| `content_filter` | `snv_only`, `indel_only`, `sv_only`: the one class the rows were cut down to, or null when no evidence settles one. Never inferred for a facet whose `callset_type` is `array` (RM303): a chip is mostly SNV probes and its few indel probes are its design, not a cut, and its rows are read per probe. Decision 4 says what it does to absence |
 | `content_filter_basis` | `rows`, `stated` (a header line records the filtering command) or `file_name` (only the name's words say so); null with a null `content_filter` |
 | `phasing_method` | the tool and version of the one `phase` step in `method_steps` (`Eagle 2.3.5+htslib-1.4`, `DRAGEN 05.021.408.3.4.11`, `WhatsHap 1.7`). Null when the header records no phasing step, or more than one (with a warning). A caller counts as phasing its own calls only where the header declares FORMAT `PS` in that caller's own words (`method_steps`, below) |
 | `reference` | the reference the header says the rows are against: the base name of `##reference=` (`hg38.fa`, `human_g1k_v37.fasta`; DRAGEN's `…/<dir>/reference.bin` gives `<dir>`), written `<file>` unless every word of it is a known reference's (`source._known_reference`: an assembly word such as `hg38`, `GRCh37`, `hs37d5`, `GCA_000001405`, `chm13`, beside the bundles' descriptors and extensions), since a base name can carry a person's or a lab's name (`ALICESMITH-hg38.fa`); or, with no such line, the one reference the call steps' command lines name (`--reference`, `reference_sequence=`, `--ref-dir`, freeBayes `-f`). Two references leave it null with a warning. A `##reference=` that differs from the caller's command line is kept, with a warning unless a `lift` step is recorded: a lift the header does not name (Picard LiftoverVcf writes no line) shows up this way. Both checks compare the base names as written, before either is written `<file>`, so two different unknown files are two references; their warnings name no file. A label, never identity: `seqcol_digest` is that. just-vcf's own |
@@ -3283,6 +3288,19 @@ facet's in this order, each row saying which in `key`:
    wrote no allele of any class (`[]`: a table of hom-ref rows, a VCF of `ALT .` rows; `class_gate`'s
    `no_variant_allele`) names no class it lacks either, and its row is read: a hom-ref row where the
    other facet calls a het SNV is a mismatch, not one-sided (audit 18).
+   An array (`callset_type = array`, `callset.reads_per_probe`) is read per probe instead (RM303), and
+   `class_gate` is not asked of its rows: each row probes its own allele, so a row is there for an
+   allele only where the row's own class (`callset.row_class_expr`) is the allele's. The class is
+   `indel` where `source_gt` keeps an `I`/`D` code (a hom-ref insertion probe, `DD`, is spelled as a
+   one-base REF with no ALT, an SNV row's shape) or an ALT's length differs from REF's; a hom-ref row
+   over a REF longer than a base is a deletion probe read `II`; any other row over a one-base REF is
+   an SNV probe. A row whose class cannot be told (REF not read, no code) is there for every allele,
+   as a facet's rows whose classes were not counted are read. Where the chip wrote rows at the
+   position and none of the allele's class, the allele stays one-sided, `absence =
+   class_not_carried`. A chip that carries one resolved non-REF indel no longer has its SNV probe row
+   at an insertion's anchor read as zero copies of the insertion, and a chip whose `I`/`D` rows are
+   all hom-ref has its deletion probe row read for the deletion it probes (zero copies), where the
+   facet-level gate withheld it because the chip counted no indel.
 
 An allele stated by several rows of one facet (`normalize` keeps rows that differ, charter 8) pairs
 with each, counted in a warning.
@@ -3361,6 +3379,20 @@ position (`ref_block`, `no_call_block`), else the facet's rule: `reference` when
 neither declared in its header nor wrote a row on. Never a negative (Decision 4). `absence` is null
 where both facets state the allele. A one-sided allele stays one-sided whatever the absence says:
 reading `reference` or a block as `0/0` would turn graded absence into a call.
+
+**A probe-shaped block speaks for an SNV at its base only** (RM303). A GET-Evidence genome GFF lists
+the hom-ref sites it reports one base each (`REF` rows, loaded as one-base `ref` blocks beside its
+`SNP` rows): each is a reading of that base, as an array's SNV probe is, and says nothing of an
+insertion anchored there, a deletion starting there or an MNV. A one-base `ref` block of a facet whose
+blocks are probe-shaped (`callset.blocks_per_probe`: an array, or a format in
+`callset.PROBE_BLOCK_FORMATS`, `get_evidence_gff` today) is read for an SNV allele as `ref_block` and
+for any other allele as `class_not_carried`, counted in a warning per class. The GFF's callset type is
+null (the format declares no read evidence), so the rule is the format's, not the type's. A caller's
+blocks (a gVCF's, CGI's reference regions) are read for every class as before, whatever their
+length and whatever the facet's classes or filter: a caller that called a base reference looked for
+an insertion there too, and a gVCF cut to one class keeps blocks that are its true reference calls
+for the class cut (a facet-wide block gate was built and rejected for that, and for withholding
+every block of a gVCF with no variant row). A longer block of a probe-shaped facet is read as before.
 
 **`sites`**, one row per allele either facet states, in canonical order (contig rank, `pos`, `ref`,
 `alt`, then each facet's row order):
@@ -3811,7 +3843,7 @@ each with the other parent silent or reading `other_span`. `normalize` both, or 
 |---|---|---|
 | `stated` | a row states the allele | its vector (`genotype_evidence`'s `gl`, under a flat prior, or `gq`) summed by copies; else its genotype, a point mass. A `gp` row is read as its genotype unless `gp_as = likelihood`; an `hq` row (CGI's allele scores, a VCF's FORMAT HQ) has no vector and is read as its genotype, its confidence placing it in a band (`CONSENSUS_VERSION` 3; 4 for a VCF's HQ) |
 | `site` | one row at the position over the same REF span, without the allele (a hom-ref record, another ALT), in a facet that carries the allele's class | zero copies, a point mass: its vector indexes other alleles |
-| `ref_block` | a `ref` block covers the position | by `block_grade` (above, "The block rule"): under the default, the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; graded by its GQ, zero copies at `1 − 10^(−GQ/10)` and the rest spread evenly over the other copies, at the ploidy its likelihoods give, else the site's; lacking what the rule reads, zero copies |
+| `ref_block` | a `ref` block covers the position, unless it is a one-base block of a facet whose blocks are probe-shaped and the allele is not an SNV (`class_not_carried`, silent, `CONSENSUS_VERSION` 9, RM303; concordance's rule above) | by `block_grade` (above, "The block rule"): under the default, the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; graded by its GQ, zero copies at `1 − 10^(−GQ/10)` and the rest spread evenly over the other copies, at the ploidy its likelihoods give, else the site's; lacking what the rule reads, zero copies |
 | `absence` | nothing covers it and `absence_is_reference(facet, class, force=force)` is True on a contig the facet declared or wrote | zero copies |
 
 `gq_on_reference` reaches a row stating the allele, as `genotype_evidence` grades it; it does not
@@ -3839,7 +3871,13 @@ not counted (`variant_classes` null: a genotype table whose REF was not read, or
 unknown, not a facet that lacks the class, and its row is read as `site` as before. A table whose REF
 `resolve_ref` read has its classes counted (RM301), and the rule reaches it. A facet that wrote no
 allele of any class (`[]`, `class_gate`'s `no_variant_allele`: a table of hom-ref rows) names no class
-it lacks, and its row is read as `site`, a vote of zero copies (`CONSENSUS_VERSION` 7, audit 18).
+it lacks, and its row is read as `site`, a vote of zero copies (`CONSENSUS_VERSION` 7, audit 18). An
+array is read per probe instead (`CONSENSUS_VERSION` 8, RM303; concordance's rule above): only its
+rows of the allele's own class (`callset.row_class_expr`), or of a class that cannot be told, are
+there for the allele, whatever classes the chip carries, and rows of other classes alone leave it
+silent, `class_not_carried`. Its SNV probe row at an insertion's anchor no longer votes zero copies
+of the insertion where the chip carries an indel elsewhere, and its hom-ref deletion probe row votes
+zero copies of the deletion it probes where the chip counts no indel.
 
 A row whose source REF states no base (`ref_check = unstated`) and which spells a sequence ALT
 states no allele of the consensus (`CONSENSUS_VERSION` 5): `N` → `G` read beside the reference's `T`
@@ -4096,6 +4134,33 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change in the frames** (2026-11-23, RM303 part 3: a GET-Evidence GFF's blocks read
+  per probe): no column changes. Rule changed (Decision 4's blocks, as `concordance` and `consensus`
+  read them): a one-base `ref` block of a facet whose blocks are probe-shaped
+  (`callset.blocks_per_probe`: an array, `get_evidence_gff`) speaks for an SNV at its base only.
+  **Values change**: such a block at an insertion's anchor or a deletion's first base was `ref_block`,
+  zero copies, a vote against; it is now `class_not_carried`, silent. A caller's blocks, and
+  `read_site_genotypes` (a panel's sites are SNVs), are unchanged. `CONSENSUS_VERSION` 9.
+
+- **No version change** (2026-11-23, RM303 part 2: no `content_filter` for an array): no column
+  changes. Rule changed (Decision 5's `content_filter`): the VCF loader infers no filter, from the
+  rows, the header or the name, for a facet whose header states array content (`callset_type =
+  array`); its `variant_classes` are still counted. **Values change**: a chip exported as VCF read
+  `snv_only` from its rows (`basis = rows`) and now has null, with no content-filter warning. A store
+  holding such a facet keeps the old value until it is reloaded; no reader asks an array's filter any
+  more (part 1 reads its rows per probe, and `absence_support` answers an array's silence by its
+  callset type before it reaches the filter).
+
+- **No version change in the frames** (2026-11-23, RM303: an array's row speaks only for its own
+  probe's class): no column changes. Rule changed (Decisions 1 and 4): `concordance`, `consensus` and
+  `read_site_genotypes` read a facet whose `callset_type` is `array` per probe, not by
+  `callset.class_gate`: a row is there for an allele only where its own class
+  (`callset.row_class_expr`, from REF, the ALTs and an `I`/`D` code in `source_gt`) is the allele's.
+  **Values change**: a chip's SNV probe row at an insertion's anchor is `class_not_carried` even where
+  the chip carries a resolved indel; a chip's hom-ref deletion probe row is read for its deletion
+  where the chip counts no indel; a hom-ref insertion probe row at a panel SNV is
+  `class_not_carried`. `CONSENSUS_VERSION` 8.
 
 - **No version change** (2026-11-23, RM302: the panel-site reading reads no row of a facet that
   carries no SNV): no column changes. Rule changed (Decision 4): `read_site_genotypes`, behind

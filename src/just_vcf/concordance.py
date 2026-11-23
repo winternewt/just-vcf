@@ -20,7 +20,11 @@ and why. Disagreement is kept as rows, never resolved to a winner. The rules are
    Not where that facet carries no allele of this allele's class (none among its `variant_classes`
    where it wrote alleles of another, or the class cut by its `content_filter`): an SNV-only facet's
    row at the base an insertion is anchored on says nothing of the insertion, which stays one-sided
-   (`class_not_carried`, RM299).
+   (`class_not_carried`, RM299). An array's rows are read per probe instead (RM303,
+   `callset.reads_per_probe`): only its rows of the allele's own class (`callset.row_class_expr`), or
+   of a class that cannot be told (REF not read), are there for the allele, whatever classes the whole
+   chip carries, and where it wrote rows at the position but none of that class the allele is
+   `class_not_carried` too.
 3. **Genotypes are compared as copies of the allele**, from `gt_alleles`, unordered (phase is not
    comparable across facets): `match`, `mismatch`, or `uncalled` where a haplotype is null and the
    called ones do not contradict. A haploid call against the same allele's diploid homozygote is a
@@ -35,8 +39,11 @@ and why. Disagreement is kept as rows, never resolved to a winner. The rules are
    renormalized to sum to 1. A likelihood is never compared with a posterior (Decision 3). Anything
    else is `hard`, and `p_same` is null: a hard call has no probability, and none is made up.
 5. **One-sided alleles** say what the silent facet's silence means: `class_not_carried` (its one row
-   there was not read, 2 above), `other_alleles` (rows at the position, none holding the allele), a
-   `ref` or `no_call` block over the position, else the facet's own rule (`absence_is_reference`:
+   there was not read, 2 above, or a one-base `ref` block of a facet whose blocks are probe-shaped,
+   `callset.blocks_per_probe`, covers the position of an allele other than an SNV: a GET-Evidence
+   GFF's listed `REF` site speaks for an SNV at its base only, RM303), `other_alleles` (rows at the
+   position, none holding the allele), a `ref` or `no_call` block over the position (a caller's block
+   of any length is read for every class), else the facet's own rule (`absence_is_reference`:
    `reference`, or `unknown`, never a negative).
 6. **Structural variants meet by type and extent** (RM282), as truvari bench matches them
    (`SvMatching`, its defaults): a symbolic allele (`<DEL>`, `<DUP:TANDEM>`, `<CN0>`) pairs with at
@@ -71,7 +78,16 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
 from just_vcf.breakends import ASSEMBLY_CONTIG, SINGLE_BREAKEND, breakend_parts
-from just_vcf.callset import CLASS_UNSAID, NOT_A_VARIANT, absence_is_reference, class_gate, variant_class_expr
+from just_vcf.callset import (
+    CLASS_UNSAID,
+    NOT_A_VARIANT,
+    absence_is_reference,
+    blocks_per_probe,
+    class_gate,
+    reads_per_probe,
+    row_class_expr,
+    variant_class_expr,
+)
 from just_vcf.intervals import contig_join, covering, nearest_block
 from just_vcf.loaders.vcf import version_tuple
 from just_vcf.loading import Loaded
@@ -145,7 +161,12 @@ class AbsenceReading(str, Enum):
     `site`), but it carries no allele of the allele's class: none among its `variant_classes` where it
     wrote alleles of another, or the class cut by its `content_filter` (`callset.class_gate`). Its row
     says no more of the allele than its silence would (RM299): an SNV-only facet's row at the base an
-    insertion is anchored on."""
+    insertion is anchored on. Of an array (`callset.reads_per_probe`), it wrote rows at the position and
+    none of the allele's class: each row probes its own allele, an SNV probe's row says nothing of an
+    insertion anchored on its base and an indel probe's row nothing of an SNV there (RM303). Or no row
+    is there and a one-base `ref` block of a facet whose blocks are probe-shaped
+    (`callset.blocks_per_probe`, a GET-Evidence GFF's listed site) covers the position of an allele
+    other than an SNV, which would read `ref_block` (RM303)."""
 
 
 class ComparisonBasis(str, Enum):
@@ -800,26 +821,36 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
     else against its blocks and its absence rule."""
     mine = rest.rename({name: f"{side}_{name}" for name in ("gt_alleles", "filters", "gq")}).with_columns(pl.col("pos").alias(f"{side}_pos"))
     wanted = mine.select("chrom", "pos").unique().lazy()
-    rows_there = (
+    per_probe = reads_per_probe(other_facet)
+    other_ref = pl.coalesce("ref", "source_ref")
+    there = (
         other.calls.select(
-            "chrom", "pos", pl.coalesce("ref", "source_ref").str.to_uppercase().alias("_other_ref"), "gt_alleles", "filters", "gq",
+            "chrom", "pos", other_ref.str.to_uppercase().alias("_other_ref"), "gt_alleles", "filters", "gq",
             unstated_sequence_alt().alias("_other_unstated"),
+            (row_class_expr(other_ref, pl.col("alts"), pl.col("source_gt")) if per_probe else pl.lit(None, dtype=pl.String)).alias("_row_class"),
         )  # fmt: skip
         .with_row_index("_other_row")
         .join(wanted, on=["chrom", "pos"], how="semi")
-        .group_by("chrom", "pos")
-        .agg(
-            pl.len().alias("_rows"),
-            pl.col("gt_alleles").first().alias(f"{other_side}_gt_alleles"),
-            pl.col("filters").first().alias(f"{other_side}_filters"),
-            pl.col("gq").first().alias(f"{other_side}_gq"),
-            pl.col("_other_row").first().alias(f"_{other_side}_row"),
-            pl.col("_other_ref").first().alias("_other_ref"),
-            pl.col("_other_unstated").first().alias("_other_unstated"),
-        )
-        .collect()
     )
-    mine = mine.join(rows_there, on=["chrom", "pos"], how="left")
+    first = [
+        pl.len().alias("_rows"),
+        *[pl.col(name).sort_by("_other_row").first().alias(alias) for name, alias in (
+            ("gt_alleles", f"{other_side}_gt_alleles"), ("filters", f"{other_side}_filters"), ("gq", f"{other_side}_gq"),
+            ("_other_row", f"_{other_side}_row"), ("_other_ref", "_other_ref"), ("_other_unstated", "_other_unstated"),
+        )],
+    ]  # fmt: skip
+    if per_probe:
+        # An array's rows are read per probe (RM303): each allele meets the rows at its position, and a
+        # row is there for it only where it probes the allele's class. A row whose class is unknown (its
+        # REF not read, no `I`/`D` code) is there for every allele, as a facet's rows whose classes were
+        # not counted are read: not knowing is not another class.
+        mine = mine.with_row_index("_allele")
+        met = mine.lazy().select("_allele", "chrom", "pos", "variant_class").join(there, on=["chrom", "pos"], how="inner")
+        speaks = (pl.col("_row_class") == pl.col("variant_class")) | pl.col("_row_class").is_null()
+        rows_there, any_rows = pl.collect_all([met.filter(speaks).group_by("_allele").agg(first), met.group_by("_allele").agg(pl.len().alias("_rows_any"))])
+        mine = mine.join(rows_there, on="_allele", how="left").join(any_rows, on="_allele", how="left").drop("_allele")
+    else:
+        mine = mine.join(there.group_by("chrom", "pos").agg(first).collect(), on=["chrom", "pos"], how="left")
     # Read only a row over the same REF span: a longer allele there (a haplotype caller's complex
     # allele) holds no allele of this span, so its genotype says nothing about this allele's copies.
     # Nor a row whose source REF states no base and which spells a sequence ALT (F23): its haplotypes
@@ -831,23 +862,53 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
     # genotype would read as zero copies. Where `class_gate` says its silence speaks for no allele of
     # the class, its rows speak for none either. Classes not counted (null), or counted with no allele
     # of any class (`[]`, `no_variant_allele`), are unknown, and its rows are read as they are.
-    unsaid = [cls.value for cls in VariantClass if class_gate(other_facet, cls) in CLASS_UNSAID]
-    not_carried = readable & pl.col("variant_class").is_in(unsaid)
-    single = readable & ~not_carried
+    # An array's rows are not asked of `class_gate` (RM303): its rows of another class than the allele's
+    # were never met with it, and where it wrote rows at the position but none of the allele's class,
+    # the allele is `class_not_carried` as RM299's are.
+    if per_probe:
+        not_carried = pl.col("_rows").is_null() & pl.col("_rows_any").is_not_null()
+        single = readable
+    else:
+        unsaid = [cls.value for cls in VariantClass if class_gate(other_facet, cls) in CLASS_UNSAID]
+        not_carried = readable & pl.col("variant_class").is_in(unsaid)
+        single = readable & ~not_carried
+    mine = mine.with_columns(not_carried.alias("_not_carried"), single.alias("_single"))
+    not_carried, single = pl.col("_not_carried"), pl.col("_single")
     several = (pl.col("_rows") > 1).fill_null(False)
     n_several = mine.filter(several).height
     if n_several:
         warnings.append(f"{n_several} alleles of facet {side} meet several rows of facet {other_side} at their position and none with the allele; not read against them")
     for cls, count in mine.filter(not_carried).group_by("variant_class").len().sort("variant_class").iter_rows():
         warnings.append(
-            f"{count} {cls} alleles of facet {side} meet one row of facet {other_side} at their position, and facet {other_side} carries no allele "
-            "of that class (variant_classes, content_filter); not read against it (absence class_not_carried)"
+            f"{count} {cls} alleles of facet {side} meet rows of facet {other_side} at their position, each an array probe of another class; "
+            "not read against them (absence class_not_carried)"
+            if per_probe
+            else f"{count} {cls} alleles of facet {side} meet one row of facet {other_side} at their position, and facet {other_side} carries no "
+            "allele of that class (variant_classes, content_filter); not read against it (absence class_not_carried)"
         )
+    if per_probe:
+        # The rows other classes' probes wrote are still there: no block or absence rule reads the position.
+        mine = mine.with_columns(pl.coalesce("_rows", "_rows_any").alias("_rows")).drop("_rows_any")
     mine = mine.with_columns(
         *[pl.when(single).then(pl.col(name)).alias(name) for name in (f"{other_side}_gt_alleles", f"{other_side}_filters", f"{other_side}_gq", f"_{other_side}_row")],
         pl.when(single).then(pl.col("pos")).alias(f"{other_side}_pos"),
     )
     mine = _block_reading(mine, other)
+    # Nor a one-base `ref` block of a facet whose blocks are probe-shaped (RM303, `blocks_per_probe`:
+    # an array, a GET-Evidence GFF's listed `REF` site) for an allele other than an SNV: it says the
+    # base is reference, which is all a probe of that base looked at, and nothing of an insertion
+    # anchored there or a deletion starting there. A caller's block is read as it is.
+    block_unsaid = (
+        pl.lit(blocks_per_probe(other_facet))
+        & (pl.col("_block") == BlockKind.REF.value)
+        & pl.col("_block_one_base")
+        & (pl.col("variant_class") != VariantClass.SNV.value)
+    ).fill_null(False)
+    for cls, count in mine.filter(block_unsaid).group_by("variant_class").len().sort("variant_class").iter_rows():
+        warnings.append(
+            f"{count} {cls} alleles of facet {side} lie in a one-base ref block of facet {other_side}, a listed site that speaks for an SNV at its "
+            "base only; not read against it (absence class_not_carried)"
+        )
     classes = {cls.value: absence_is_reference(other_facet, cls) for cls in VariantClass}
     reference_classes = [name for name, verdict in classes.items() if verdict is True]
     declared = _declared_contigs(other, other_facet)
@@ -855,7 +916,7 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
     if undeclared:
         warnings.append(f"{undeclared} alleles of facet {side} lie on contigs facet {other_side} neither declared nor called; its absence there is unknown")
     absence = (
-        pl.when(not_carried)
+        pl.when(not_carried | block_unsaid)
         .then(pl.lit(AbsenceReading.CLASS_NOT_CARRIED.value))
         .when(pl.col("_rows").is_not_null())
         .then(pl.lit(AbsenceReading.OTHER_ALLELES.value))
@@ -887,14 +948,16 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
 
 
 def _block_reading(mine: pl.DataFrame, other: Loaded) -> pl.DataFrame:
-    """`_block`: the kind of the other facet's block over the position, where no row of it is there.
-    Where several cover it (a lifted facet keeps overlapping blocks), the one `reference_support`
-    answers with (`intervals.nearest_block`)."""
+    """`_block`: the kind of the other facet's block over the position, where no row of it is there, and
+    `_block_one_base`: whether that block covers one base. Where several cover it (a lifted facet keeps
+    overlapping blocks), the one `reference_support` answers with (`intervals.nearest_block`)."""
     probe = mine.with_row_index("_probe")
     silent = probe.filter(pl.col("_rows").is_null()).select("_probe", "chrom", pl.col("pos").cast(pl.Int64).alias("_at"))
     blocks = other.blocks.select("chrom", pl.col("pos").cast(pl.Int64).alias("_start"), pl.col("end_pos").cast(pl.Int64).alias("_end"), pl.col("kind").cast(pl.String))
     hits = covering(silent.lazy(), blocks, silent["chrom"].unique().to_list(), at="_at", start="_start", end="_end")
-    chosen = nearest_block(hits, "_probe", start="_start", end="_end").select("_probe", pl.col("kind").alias("_block"))
+    chosen = nearest_block(hits, "_probe", start="_start", end="_end").select(
+        "_probe", pl.col("kind").alias("_block"), (pl.col("_start") == pl.col("_end")).alias("_block_one_base")
+    )
     return probe.join(chosen, on="_probe", how="left", maintain_order="left").drop("_probe")
 
 

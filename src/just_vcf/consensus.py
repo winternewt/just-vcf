@@ -15,8 +15,11 @@ are in docs/SCHEMA.md ("A consensus posterior"); in short:
    genotype); one row at the position over the same REF span without it (zero copies, `site`), unless
    the facet carries no allele of the allele's class (none among its `variant_classes` where it wrote
    alleles of another, or the class cut by its `content_filter`): then that row says nothing
-   (`class_not_carried`, RM300); a
-   `ref` block over it (zero copies, graded by the block's likelihoods where it has them); its silence
+   (`class_not_carried`, RM300). An array's rows are read per probe instead (RM303): only its rows of
+   the allele's own class are read for it, and rows of other classes alone leave it silent
+   (`class_not_carried`); a `ref` block over it (zero copies, graded by the block's likelihoods where
+   it has them), but a one-base block of a facet whose blocks are probe-shaped (a GET-Evidence GFF's
+   listed site) only for an SNV, silent (`class_not_carried`) for any other allele (RM303); its silence
    where `absence_is_reference` says it reads as reference; otherwise nothing.
 3. **An error rate turns a statement into a likelihood.** A statement whose row's own confidence
    falls in a band the atlas measured for its method gets that band's rate `e_b`, the measured share
@@ -46,7 +49,16 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from just_vcf.atlas import ALL, ALL_BANDS, CI_Z, CONFIDENCE_BANDS, NO_CONFIDENCE, RegionSet, confidence_band
-from just_vcf.callset import CLASS_UNSAID, NOT_A_VARIANT, absence_is_reference, class_gate, variant_class_expr
+from just_vcf.callset import (
+    CLASS_UNSAID,
+    NOT_A_VARIANT,
+    absence_is_reference,
+    blocks_per_probe,
+    class_gate,
+    reads_per_probe,
+    row_class_expr,
+    variant_class_expr,
+)
 from just_vcf.concordance import _covered, _declared_contigs
 from just_vcf.evidence import BlockGrade, GradeBasis, _calls_evidence, _ref_block_grade
 from just_vcf.intervals import covering, nearest_block
@@ -87,7 +99,7 @@ __all__ = [
     "method_error_rates",
 ]
 
-CONSENSUS_VERSION = 7
+CONSENSUS_VERSION = 9
 """Part of the consensus `facet_id` and its links' `step_version`: bumped whenever the rule changes
 what it emits (3: a CGI row graded by its allele scores, `hq`, speaks with its confidence band; 4: so
 does a VCF row graded by its FORMAT HQ, which the loader now reads into `hq`; 5: a row whose source
@@ -95,7 +107,9 @@ REF states no base, `ref_check = unstated`, states no sequence ALT, and its geno
 another facet's allele at its position, `ref_unstated`, F23; 6: the one row of a facet that carries
 no allele of an allele's class is not read for its copies, `class_not_carried`, RM300; 7: a facet
 that wrote no allele of any class, `variant_classes` `[]`, is not such a facet, and its rows are read,
-`no_variant_allele`, audit 18)."""
+`no_variant_allele`, audit 18; 8: an array's row is read only for alleles of its own probe's class,
+whatever classes the chip carries, RM303; 9: a one-base `ref` block of a facet whose blocks are
+probe-shaped, a GET-Evidence GFF's listed site, votes for an SNV at its base only, RM303)."""
 
 CALLER = "just-vcf consensus"
 """The consensus facet's `caller`: the rule that made its rows, versioned by `CONSENSUS_VERSION`."""
@@ -681,7 +695,11 @@ silence is not read by a block or the absence rule either. `class_not_carried`: 
 position over the allele's REF would be read for copies (`site`), but the facet carries no allele of
 the allele's class (none among its `variant_classes` where it wrote alleles of another, or the class
 cut by its `content_filter`, `callset.class_gate`), so the row says no more of the allele than its silence would (RM300): an
-SNV-only facet's row at the base an insertion is anchored on."""
+SNV-only facet's row at the base an insertion is anchored on. Of an array (`callset.reads_per_probe`),
+it wrote rows at the position and none of the allele's class (`callset.row_class_expr`): each row
+probes its own allele, whatever classes the chip carries (RM303). Likewise a one-base `ref` block
+over the position of a facet whose blocks are probe-shaped (`callset.blocks_per_probe`: a
+GET-Evidence GFF's listed `REF` site) for any allele but an SNV (RM303)."""
 
 
 def _passes(filters: pl.Expr) -> pl.Expr:
@@ -690,11 +708,14 @@ def _passes(filters: pl.Expr) -> pl.Expr:
 
 def _evidence(piece: Loaded, chrom: str, gq_on_reference: bool) -> pl.DataFrame:
     """The facet's rows on `chrom`, graded as `genotype_evidence` grades them, with what matching needs."""
+    ref = pl.coalesce("ref", "source_ref")
     calls = piece.calls.filter(pl.col("chrom") == chrom).with_row_index("_row").with_columns(
-        pl.coalesce("ref", "source_ref").str.to_uppercase().alias("_ref_key"), pl.col("ref").is_not_null().alias("_ref_read"),
+        ref.str.to_uppercase().alias("_ref_key"), pl.col("ref").is_not_null().alias("_ref_read"),
         unstated_sequence_alt().alias("_unstated"),
+        # The class of the allele the row probes, read only for an array (`_readings`, RM303).
+        row_class_expr(ref, pl.col("alts"), pl.col("source_gt")).alias("_row_class"),
     )
-    keep = ("_row", "_ref_key", "_ref_read", "_unstated", "alts", "gt_alleles", "filters")
+    keep = ("_row", "_ref_key", "_ref_read", "_unstated", "_row_class", "alts", "gt_alleles", "filters")
     return _calls_evidence(calls, gq_on_reference, piece.facets, keep=keep).collect()
 
 
@@ -837,15 +858,29 @@ def _readings(
     )  # fmt: skip
 
     rest = sites.join(hit.select("_site"), on="_site", how="anti")
-    at = evidence.group_by("pos").agg(
+    first = [
         pl.len().alias("_rows"),
-        pl.col("_ref_key").first().alias("_other_ref"),
-        pl.col("end_pos").first().alias("_other_end"),
-        pl.col("gt_alleles").first().alias("_other_gt"),
-        pl.col("filters").first().alias("_other_filters"),
-        pl.col("_unstated").first().alias("_other_unstated"),
-    )
-    rest = rest.join(at, on="pos", how="left")
+        *[pl.col(name).sort_by("_row").first().alias(alias) for name, alias in (
+            ("_ref_key", "_other_ref"), ("end_pos", "_other_end"), ("gt_alleles", "_other_gt"), ("filters", "_other_filters"),
+            ("_unstated", "_other_unstated"),
+        )],
+    ]  # fmt: skip
+    per_probe = reads_per_probe(facet)
+    if per_probe:
+        # An array's rows are read per probe (RM303): each allele meets the rows at its position, and a
+        # row is there for it only where it probes the allele's class. A row whose class is unknown (its
+        # REF not read, no `I`/`D` code) is there for every allele, as a facet's rows whose classes were
+        # not counted are read: not knowing is not another class.
+        met = rest.select("_site", "pos", pl.col("variant_class").cast(pl.String).alias("_class")).join(evidence, on="pos", how="inner")
+        speaks = (pl.col("_row_class") == pl.col("_class")) | pl.col("_row_class").is_null()
+        rest = rest.join(met.filter(speaks).group_by("_site").agg(first), on="_site", how="left")
+        rest = rest.join(met.group_by("_site").agg(pl.len().alias("_rows_any")), on="_site", how="left")
+        # Rows there, none of the allele's class: the chip's other probes, silent on it. The rows are
+        # still there, so no block or absence rule reads the position either.
+        rest = rest.with_columns((pl.col("_rows").is_null() & pl.col("_rows_any").is_not_null()).alias("_probe_other"))
+        rest = rest.with_columns(pl.coalesce("_rows", "_rows_any").alias("_rows")).drop("_rows_any")
+    else:
+        rest = rest.join(evidence.group_by("pos").agg(first), on="pos", how="left").with_columns(pl.lit(False).alias("_probe_other"))
     same_span = (pl.col("_other_ref") == pl.col("_ref_key")) | (
         pl.col("_other_ref").is_null() & (pl.col("variant_class").cast(pl.String) == VariantClass.SNV.value)
         & (pl.col("_other_end").is_null() | (pl.col("_other_end").cast(pl.Int64) == pl.col("pos").cast(pl.Int64)))
@@ -859,9 +894,9 @@ def _readings(
     # the insertion, and would vote zero copies of it. Where `class_gate` says the facet's silence
     # speaks for no allele of the class, its rows speak for none either. Classes not counted (null),
     # or counted with no allele of any class (`[]`, `no_variant_allele`), are unknown, and the row is
-    # read as it is.
-    unsaid = [cls.value for cls in VariantClass if class_gate(facet, cls) in CLASS_UNSAID]
-    not_carried = one & ~unstated & pl.col("variant_class").cast(pl.String).is_in(unsaid)
+    # read as it is. An array is not asked of `class_gate` (RM303): its rows were met by class above.
+    unsaid = [] if per_probe else [cls.value for cls in VariantClass if class_gate(facet, cls) in CLASS_UNSAID]
+    not_carried = pl.col("_probe_other") | (one & ~unstated & pl.col("variant_class").cast(pl.String).is_in(unsaid))
     readable = one & ~unstated & ~not_carried
     rest = rest.with_columns(
         _fully_called("_other_gt").alias("_called"),
@@ -871,9 +906,9 @@ def _readings(
     )
     site_reading = rest.filter(pl.col("_rows").is_not_null()).select(
         "_site",
-        pl.when(pl.col("_rows") > 1).then(pl.lit("several_rows")).when(~one).then(pl.lit("other_span"))
+        pl.when(not_carried).then(pl.lit("class_not_carried"))
+        .when(pl.col("_rows") > 1).then(pl.lit("several_rows")).when(~one).then(pl.lit("other_span"))
         .when(unstated).then(pl.lit("ref_unstated"))
-        .when(not_carried).then(pl.lit("class_not_carried"))
         .when(~pl.col("_pass")).then(pl.lit("filtered"))
         .when(pl.col("_called")).then(pl.lit("site"))
         .otherwise(pl.lit("no_call")).alias("_reading"),
@@ -899,14 +934,25 @@ def _readings(
     )  # fmt: skip
     hits = covering(probe.select("_site", "_at").with_columns(pl.lit(chrom).alias("chrom")).lazy(), blocks, [chrom], at="_at", start="_bstart", end="_bend")
     hits = hits.with_columns(pl.col("_gl").list.eval(pl.element().cast(pl.String)).list.join(",").alias("_gl_text"))
-    chosen = nearest_block(hits, "_site", start="_bstart", end="_bend", kind="_kind", then=("_gq", "_gl_text")).select("_site", "_kind", "_gl", "_gq")
+    chosen = nearest_block(hits, "_site", start="_bstart", end="_bend", kind="_kind", then=("_gq", "_gl_text")).select(
+        "_site", "_kind", "_gl", "_gq", (pl.col("_bstart") == pl.col("_bend")).alias("_one_base")
+    )
     probe = probe.join(chosen, on="_site", how="left", maintain_order="left")
     reads_reference = [cls for cls in _SMALL if absence_is_reference(facet, cls, force=force) is True] if chrom in declared else []
     gl = pl.col("_gl")
     usable = (gl.list.len().is_between(2, 3) & gl.list.eval(pl.element().is_finite() | (pl.element() == float("-inf"))).list.all() & gl.list.max().is_finite()).fill_null(False)
     weights = gl.list.eval(((pl.element() - pl.element().max()) * _LN10).exp())
     total = weights.list.sum()
-    is_ref = (pl.col("_kind") == "ref").fill_null(False)
+    # A one-base `ref` block of a facet whose blocks are probe-shaped (RM303, `blocks_per_probe`: an
+    # array, a GET-Evidence GFF's listed `REF` site) speaks for an SNV at its base only: for any other
+    # allele it is silent (`class_not_carried`), never a vote of zero copies. A caller's block votes.
+    probe_block = (
+        pl.lit(blocks_per_probe(facet))
+        & (pl.col("_kind") == "ref")
+        & pl.col("_one_base")
+        & (pl.col("variant_class").cast(pl.String) != VariantClass.SNV.value)
+    ).fill_null(False)
+    is_ref = (pl.col("_kind") == "ref").fill_null(False) & ~probe_block
     # The block rule (`BlockGrade`), as `genotype_evidence` applies it; `gq_on_reference` speaks for
     # calls only here, so a block is graded by GQ only under the rule that says so.
     rule = _ref_block_grade(gl, pl.col("_gq"), usable, gq_on_reference=False, block_grade=block_grade)
@@ -916,6 +962,7 @@ def _readings(
         "_site",
         pl.when(pl.col("_covered")).then(pl.lit("covered"))
         .when(is_ref).then(pl.lit("ref_block"))
+        .when(probe_block).then(pl.lit("class_not_carried"))
         .when(pl.col("_kind").is_not_null()).then(pl.lit("no_call_block"))
         .when(pl.col("variant_class").cast(pl.String).is_in(reads_reference)).then(pl.lit("absence"))
         .otherwise(pl.lit("unknown")).alias("_reading"),

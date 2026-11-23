@@ -152,7 +152,8 @@ NULL_REASONS: dict[tuple[str, str], str] = {
     **_each(('23andme', '23andme_csv', 'ancestrydna', 'color_genotypes', 'decodeme', 'ftdna', 'ftdna_space', 'genes_for_good', 'genes_for_good_imputed', 'genos', 'illumina_final_report', 'living_dna', 'plink_23', 'rsid_result_csv', 'rsid_table', 'rsid_table_headerless', 'selfdecode'), ("variant_classes",), _TABLE_CLASSES),
     **_each((GT,), ("content_filter", "content_filter_basis"), (
         "Its variant classes are not counted at load (no REF or ALT), so no class can be the one the rows were cut "
-        "to; `resolve_ref`, which counts them (RM301), infers no filter for a table either."
+        "to; `resolve_ref`, which counts them (RM301), infers no filter for a table either, and no loader infers one "
+        "for a facet whose callset type is an array (RM303: a chip's few indel probes are its design, not a cut)."
     )),
     (GT, "split_marker"): "A genotype table has no INFO field to carry a split marker.",
     (GT, "sorted_name_length_pairs_digest"): "Not a VCF: no `##contig` lines to take names and lengths from.",

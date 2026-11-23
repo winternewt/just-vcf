@@ -32,7 +32,12 @@ Per panel site, in this order:
    zero copies of the panel's ALT from a class the facet never looked at. A facet whose classes were
    not counted (`variant_classes` null), or were counted and hold no allele of any class (`[]`, every
    row hom-ref: `no_variant_allele`, audit 18), is unknown, not a facet without SNVs, and its rows are
-   read.
+   read. An array is read per probe instead (RM303, `callset.reads_per_probe`): only its rows whose
+   own class is SNV (`callset.row_class_expr`) are rows at the site, whatever classes the chip carries,
+   and a site where it wrote rows but none of them an SNV probe's is **class_not_carried**. A chip's
+   hom-ref insertion probe row (`DD`, a one-base REF twice) at a panel SNV's position would otherwise
+   read as zero copies of the panel's ALT. A row whose class cannot be told (an export read before
+   `resolve_ref`, its letters without REF) is read as written.
 2. **No row.** What that means is the facet's `absence_means`: `weak_reference` (a whole-genome callset
    without blocks) reads it as homozygous for the panel's reference allele, count 0; `blocks` (a
    gVCF) does so only inside a `ref` block; `reference` (CGI's VCF, whose producer called what it
@@ -42,7 +47,10 @@ Per panel site, in this order:
    SNVs, a panel's sites (`callset.absence_is_reference(facet, "snv", force=True)`): a facet that wrote
    no SNV, or a genome cut to its indels (`content_filter = indel_only`), leaves it unknown. `force`
    is passed because a panel read has always read an SNV-only half's silence through its filter's
-   hold; a class the filter cut is not lifted by it.
+   hold; a class the filter cut is not lifted by it. A one-base `ref` block of a facet whose blocks
+   are probe-shaped (`callset.blocks_per_probe`, a GET-Evidence GFF's listed `REF` site) speaks for an
+   SNV at its base, and a panel's sites are SNVs, so it is read here as any block (RM303 withholds it
+   only from other classes, in `concordance` and `consensus`).
 
 The panel's first allele is taken as the reference allele; a panel whose first allele is not the
 assembly's REF would turn every absence into the wrong genotype. Panel loaders state where their
@@ -54,7 +62,7 @@ from enum import Enum
 
 import polars as pl
 
-from just_vcf.callset import CLASS_UNSAID, absence_is_reference, class_gate
+from just_vcf.callset import CLASS_UNSAID, absence_is_reference, class_gate, reads_per_probe, row_class_expr
 from just_vcf.loading import Loaded
 from just_vcf.schema import CONTIG_ALIASES, AbsenceMeans, BlockKind, VariantClass, unstated_sequence_alt
 
@@ -83,7 +91,8 @@ class SiteBasis(str, Enum):
     CLASS_NOT_CARRIED = "class_not_carried"
     """Rows at the site, but the facet carries no SNV (`Facet.snv_not_carried`): its rows say no more of
     a panel SNV than its silence would (RM302), so unknown. Still rows at the position, so the facet's
-    silence is not read there either."""
+    silence is not read there either. Of an array (`Facet.per_probe`), none of its rows there probes an
+    SNV (RM303)."""
 
 
 @dataclass(frozen=True)
@@ -100,7 +109,10 @@ class Facet:
     """`class_gate(facet, "snv") in CLASS_UNSAID`: the facet carries no SNV (none among its
     `variant_classes`, or its `content_filter` cut SNVs away), so its rows are not read at a panel site
     (`SiteBasis.CLASS_NOT_CARRIED`). False where its classes were not counted or hold no allele of any
-    class (`no_variant_allele`)."""
+    class (`no_variant_allele`), and for an array, whose rows are read per probe (`per_probe`)."""
+    per_probe: bool = False
+    """`callset.reads_per_probe(facet)`: an array, whose rows are read only where they probe an SNV
+    (`callset.row_class_expr`, RM303), not by `snv_not_carried`."""
 
 
 _ABSENCE_COLUMNS = ("facet_id", "assembly_label", "absence_means", "callset_type", "variant_classes", "content_filter")
@@ -115,7 +127,8 @@ def facets_of(loaded: Loaded) -> list[Facet]:
             row["assembly_label"],
             None if row["absence_means"] is None else str(row["absence_means"]),
             absence_is_reference(row, VariantClass.SNV, force=True) is True,
-            class_gate(row, VariantClass.SNV) in CLASS_UNSAID,
+            not reads_per_probe(row) and class_gate(row, VariantClass.SNV) in CLASS_UNSAID,
+            reads_per_probe(row),
         )
         for row in rows
     ]
@@ -156,9 +169,13 @@ def read_site_genotypes(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> pl
     """
     sites = sites.with_row_index("_site")
     keys = sites.lazy().select("_site", "chrom", "pos", "ref_allele", "effect_allele")
+    # An array's row is at the site only where it probes an SNV, or its class is unknown (REF not read:
+    # read as written) (RM303); any other facet's row is.
+    probed = row_class_expr(pl.coalesce("ref", "source_ref"), pl.col("alts"), pl.col("source_gt"))
+    own = (probed == VariantClass.SNV.value).fill_null(True) if facet.per_probe else pl.lit(True)
     rows = (
         loaded.calls.filter(pl.col("facet_id") == facet.facet_id)
-        .select("chrom", "pos", "gt_alleles", "split_signal", _unstated=unstated_sequence_alt())
+        .select("chrom", "pos", "gt_alleles", "split_signal", _unstated=unstated_sequence_alt(), _own=own)
         .join(keys.select("chrom", "pos").unique(), on=["chrom", "pos"], how="semi")
         .with_row_index("_row")
     )
@@ -168,26 +185,29 @@ def read_site_genotypes(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> pl
     )
     allele = pl.col("_allele")
     per_row = (
-        pairs.select("_site", "_row", "_ploidy", "_split", "_unstated", "ref_allele", "effect_allele", pl.col("gt_alleles").alias("_allele"))
+        pairs.select("_site", "_row", "_ploidy", "_split", "_unstated", "_own", "ref_allele", "effect_allele", pl.col("gt_alleles").alias("_allele"))
         .explode("_allele", empty_as_null=True)
         .group_by("_site", "_row")
         .agg(
             pl.col("_ploidy").first(),
             pl.col("_split").first(),
             pl.col("_unstated").first(),
+            pl.col("_own").first(),
             _in_pair=((allele == pl.col("ref_allele")) | (allele == pl.col("effect_allele"))).fill_null(False).sum(),
             _effect=(allele == pl.col("effect_allele")).fill_null(False).sum(),
         )
-        .with_columns(_usable=(~pl.col("_split")) & (~pl.col("_unstated")) & (pl.col("_ploidy") == 2) & (pl.col("_in_pair") == 2))
+        .with_columns(_usable=pl.col("_own") & (~pl.col("_split")) & (~pl.col("_unstated")) & (pl.col("_ploidy") == 2) & (pl.col("_in_pair") == 2))
     )
     per_site = per_row.group_by("_site").agg(
         _n_usable=pl.col("_usable").sum(),
+        _n_own=pl.col("_own").sum(),
         _all_unstated=pl.col("_unstated").all(),
         _count=pl.col("_effect").filter(pl.col("_usable")).first(),
     )
     reference = _absent_as_reference(loaded, facet, sites)
-    # A facet that carries no SNV: its rows at a panel site say nothing of the panel's SNV (RM302).
-    carried = pl.lit(not facet.snv_not_carried)
+    # A facet that carries no SNV: its rows at a panel site say nothing of the panel's SNV (RM302). Nor
+    # do an array's rows that probe another class (RM303).
+    carried = pl.lit(not facet.snv_not_carried) & (pl.col("_n_own") > 0)
     return (
         sites.lazy()
         .select("_site")

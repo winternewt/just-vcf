@@ -22,7 +22,9 @@ not about who their people are.
   does not reach it; so is every row of a facet that carries no SNV (no SNV among its
   `variant_classes` where it wrote alleles of another class, or its `content_filter` cut SNVs away,
   `callset.class_gate`; a facet that wrote no allele of any class names none it lacks), whose hom-ref
-  insertion row at a panel site would otherwise read as zero copies: `class_not_carried`, RM302;
+  insertion row at a panel site would otherwise read as zero copies: `class_not_carried`, RM302; an
+  array is read per probe instead, each row only where it probes an SNV, so a chip's hom-ref insertion
+  probe row (`DD`) at a panel site is `class_not_carried` too, whatever classes the chip carries, RM303;
   an absent site is homozygous reference only where the facet's `absence_means` says so
   (`weak_reference`, inside a `ref` block for `blocks`, outside every block for `reference`). An
   array's silence stays unknown.

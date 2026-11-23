@@ -2,6 +2,22 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM299 — A facet that carries no indels reads no copies of one
+Severity: medium · Status: shipped, found 2026-11-23 by RM279's last pairs. Merge ec9925b; the RM279 pairs rebuilt the same day: the array pair's 15,869 indels read as called by both are one-sided, the DRAGEN SNV file's 4,009 are 1,318 both files wrote (docs/METHOD_ATLAS.md). Closed 2026-11-23. Left: consensus's parallel reading (RM300), a genotype table's classes (RM301), site_genotypes' (RM302).)
+
+`concordance` reads the other facet's row at an allele's position when the row's REF is the allele's
+(`single` in `_other_side`), and `_holds` then reads a haplotype equal to REF as holding no copy. That
+is right for a whole-genome caller, which would have written the insertion in that row had it seen one.
+It is wrong for a facet that carries no indels at all: an array export with no indel probes, or a
+whole genome cut to its SNVs (`content_filter` `snv_only`). Its SNV row at the base an insertion is
+anchored on says nothing of the insertion, yet the allele is counted as called by both and discordant.
+On RM279's CGI `var` against an Omni2.5 array exported as VCF, all 15,869 indel alleles read so were
+discordant, and none could have matched: the array file holds no indel row. CGI against a DRAGEN SNV
+file read 4,009 such alleles, 78.7% discordant. Where the facet's absence says nothing of a class
+(`absence_is_reference`: the class not in `variant_classes`, or cut by `content_filter`), its row
+should say nothing of that class either: the allele stays one-sided, as it already is where that facet
+has no row, and the reading is counted with its reason. Then the RM279 pairs' indel cells are rebuilt.
+
 ## RM279 — A method-error atlas
 Severity: medium · Status: shipped (`method_atlas` and a first atlas over eight pairs shipped 2026-10-23, merge 4047968, docs/METHOD_ATLAS.md; the PGP CGI pairs rebuilt with REF read, minted and met by VRS id, merge 93dd5f0, with complex rows read by the allele's change (F21) and X's haploid calls matched to homozygotes (F22), merge c6da26c; counts per confidence band, merge 86daede, 2026-10-24; CGI `var` pairs banded by `calls.hq`, merge 8334138, 2026-10-24; the six private pairs rebuilt with minting through `scripts/method_atlas.py` (REF read, met by VRS id, banded), 2026-10-26, merged 2026-10-26. PGP-HMS pairs that pool more than one genome built 2026-11-08 (docs/METHOD_ATLAS.md, "More PGP pairs"): a third CGI `var` against freeBayes 0.9.15 person, the last on disk, and 16 people's two CGI sequencing runs, nine of them under one key (2.5.0.33 against 2.5.0.37) with easy-region SNV discordance from 0.13% to 1.84% between people, sent to desk #101. Single-person pairs of other methods (DRAGEN against freeBayes, CGI against DRAGEN, CGI against an Omni2.5 array as VCF) are on disk and planned in `data/interim/rm279/plan_pgp_methods.json`, not built: each adds a method with one genome, not a pooled row. Settled by default: pooling stays by caller and version, the `var` atlas a separate file (desk #101); the private folders are never paired (desk #72); CGI's sample-level VQLOW is not read by `carried_pass` (desk #102). The last single-person PGP pairs built 2026-11-23, three with rows, docs/METHOD_ATLAS.md, their indel cells left to RM299. Closed 2026-11-23: every planned pair built)
 

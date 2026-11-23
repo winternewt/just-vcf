@@ -437,11 +437,14 @@ unless named).
 - **The array disagrees with CGI on 2.25% of the SNVs both called, and on 2.0% in easy regions**, ten
   times the whole-genome pairs, so region difficulty does not explain it. Not explained here. The
   one-sided share is the array's 2.3M sites against a whole genome, as expected.
-- **No indel cell is reported for these pairs.** The DRAGEN facets are an SNV file and an indel file;
-  huE18D82's DRAGEN facet carries no indels, so its indels are all one-sided. The other two cells,
-  hu6ABACE's (4,009 indels called by both, 78.7% discordant) and the array's (15,869, every one
-  discordant), are an artefact: concordance read a facet that carries no indels as holding no copy
-  of an insertion anchored on a base it genotyped. RM299 fixes the reading and rebuilds these cells.
+- **Indels, rebuilt after RM299 (same day).** The DRAGEN facets are an SNV file and an indel file.
+  huE18D82's DRAGEN facet carries no indels, so its indels are all one-sided, and so are all of the
+  array's against CGI: the array file holds no indel row. The first build read a facet that carries no
+  indels as holding no copy of an insertion anchored on a base it genotyped, and counted 15,869 of the
+  array pair's indels as called by both and every one discordant, and 4,009 of hu6ABACE's at 78.7%.
+  Rebuilt, the array pair has none, and hu6ABACE has 1,318 indels both files wrote, 35.1% discordant:
+  the SNV file's few indel rows (about 4,900) against CGI's, too few and too odd a sample to stand for
+  DRAGEN's indel calling.
 - **Two pairs gave no verdict, so no rows** (`same_person` answered `None`). hu2B76CC's upload, as
   loaded, reaches no autosome (17.4M rows over 22.9 Mbp, 27,792 ALT alleles), and the relatedness panel
   is autosomal. hu6ABACE's DRAGEN indel file has no genotype at the panel's SNV sites, since its

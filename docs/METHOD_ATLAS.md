@@ -36,7 +36,11 @@ spell indels and complex alleles differently.
 Scope `carried_pass`: alleles at least one side's genotype carries, every stating row PASS or
 unfiltered. Discordant is `mismatch` over the alleles both sides called (`match + mismatch`); a
 haploid call against the same allele's diploid homozygote is a match, its ploidy counted apart in
-`ploidy_differs` (F22). One-sided is over all carried alleles. The 95% Wilson intervals are within
+`ploidy_differs` (F22). One-sided is over all carried alleles. Since RM299 (2026-11-23) an allele of a
+class one side carries none of (an indel against an array export or a genome cut to its SNVs) is
+one-sided, never called by both (docs/SCHEMA.md, `class_not_carried`). The tables here were built
+before it and not rebuilt: their pairs are callers writing both SNVs and indels, where the rule reads
+nothing differently, but no facet's `variant_classes` was re-checked for it. The 95% Wilson intervals are within
 ±0.1 percentage point for every `all` and `easy` cell of the private pairs and are in the full table.
 The private pairs' rates below are the 2026-10-26 rebuild (REF read, alleles met by VRS id, F21 and
 F22). Their pairs have no allele whose two genotypes differ in ploidy (`ploidy_differs` is 0 in every

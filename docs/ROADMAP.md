@@ -7,7 +7,7 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM304 — `query` reads no row of a facet for a class it carries none of
-**State:** unattended: a test first that shows the row read on the current code, then RM302's and RM303's rules · **Owner:** lead
+**State:** building: an opus builder in its worktree, 2026-11-23, a test first that shows the row read on the current code · **Owner:** lead
 
 Severity: low · Status: open, found 2026-11-23 by RM302's builder, not yet shown failing.
 

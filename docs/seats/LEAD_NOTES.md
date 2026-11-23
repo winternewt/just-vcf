@@ -115,6 +115,8 @@ each reset.
    **2026-11-23: audit 18 done; fix merged as 55cb460**: the premise held (a hom-ref-only table resolves to `[]`, and
    so did a VCF of only `ALT .` rows before RM301); new `AbsenceReason.NO_VARIANT_ALLELE`, read as unknown, not in
    `CLASS_UNSAID`; CONSENSUS_VERSION 7. Suite 2921 passed, 77 skipped, 8 xfailed on both majors. Audit 19 at 0 of 6.
+   RM303 (an array's row by its own probe's class; no content_filter for an array; a GFF's one-base blocks) merged
+   as 7ce6b7f, merge 1 of 6 toward audit 19 (CONSENSUS_VERSION 9; suite 2935 passed on both majors).
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

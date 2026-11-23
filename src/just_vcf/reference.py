@@ -48,7 +48,7 @@ import polars as pl
 from gtars.refget import RefgetStore
 
 from just_vcf.assembly import RowsInference, infer_assembly_from_rows, sample_snv_rows
-from just_vcf import cache
+from just_vcf import cache, callset
 from just_vcf.contig_names import scaffold_names
 from just_vcf.loading import SPILL_ROW_GROUP, Loaded, cache_dir, canonical_batches
 from just_vcf.probes import (
@@ -72,7 +72,7 @@ from just_vcf.strand import COMPLEMENT, StrandResult, check_strand, withheld_rea
 
 logger = logging.getLogger(__name__)
 
-RESOLVE_VERSION = 14
+RESOLVE_VERSION = 15
 """Part of the spill key: bumped whenever the rule changes what `resolve_ref` writes (10: an insertion
 point's anchor base, and REF over a Genos row's stated span; 11: a point whose every called haplotype is
 the empty allele is left unread, not anchored as a hom-ref call at the base before it; 12: the row sample
@@ -80,7 +80,9 @@ the build inference and the strand check score leaves out rows not over one base
 among them, so a facet's inferred label and `strand_check`, and the rows a mixed strand withholds, can
 change; the strand is not in the spill key; 13: a source REF made only of `N` over bases the reference
 reads is `ref_check = unstated`, not `mismatch`, F23; 14: 23andMe v3 and v4 read their `I`/`D` codes per
-probe, by the orientation table learned from whole genomes, a `flipped` probe's codes swapped, RM281)."""
+probe, by the orientation table learned from whole genomes, a `flipped` probe's codes swapped, RM281; 15: a
+facet whose `variant_classes` load left null, a genotype table, has them counted from the rows read, RM301:
+the rows are as 14 wrote them, but the facet is not, and a store tells the two apart by this version)."""
 
 RESOLVE_LAYOUT = 1
 """How a resolve spill's files hold the rows, a key in its manifest and in its generation's key: 1 is the
@@ -418,6 +420,12 @@ def resolve_ref(
     `facets.resolve_version` the `RESOLVE_VERSION` that read it, and `facets.resolve_inputs` a digest of the
     chip manifests it read an array's `I`/`D` codes or a mixed strand's allele pairs with (null where it
     read none).
+    A facet whose `variant_classes` load could not count (a genotype table, which has no REF and so no
+    ALT until now) gets them counted from the rows read, as the VCF loader counts a VCF's: ALT alleles per
+    class, so the table and its VCF export of the same calls give the same classes. A row left unread
+    carries none, and where no row was read they stay null (RM301). Its `content_filter` stays null: an
+    array's few indels are the chip's design, not rows cut to one class. A facet load counted keeps its
+    count.
     The input `Loaded` is not changed. Rows that could not be read keep `ref` null (and `ref_check`
     `not_run`), each reason counted once in the warnings.
 
@@ -485,6 +493,13 @@ def resolve_ref(
         if inferred is not None
         else []
     )
+    calls = pl.scan_parquet(parts) if parts else empty(CALLS)
+    # A facet load could not count (a genotype table: no REF, so no ALT) has its classes counted now.
+    counted = (
+        [pl.lit(pl.Series("variant_classes", [_read_classes(calls)], dtype=FACETS["variant_classes"])).alias("variant_classes")]
+        if facet["variant_classes"] is None
+        else []
+    )
     return Loaded(
         facets=loaded.facets.with_columns(
             pl.lit(plan.digest).alias("ref_seqcol_digest"),
@@ -497,13 +512,27 @@ def resolve_ref(
             .cast(FACETS["strand_check"])
             .alias("strand_check"),
             *labelled,
+            *counted,
         ),
-        calls=pl.scan_parquet(parts) if parts else empty(CALLS),
+        calls=calls,
         blocks=loaded.blocks,
         links=loaded.links,
         warnings=loaded.warnings + tuple(warnings),
         schema_version=loaded.schema_version,
     )
+
+
+def _read_classes(calls: pl.LazyFrame) -> list[dict[str, object]] | None:
+    """`facets.variant_classes` of a facet load left uncounted, from its rows as `resolve_ref` read them
+    (RM301): ALT alleles per class, as the VCF loader counts a VCF's (`callset.variant_class_counts`), each
+    ALT classed against its row's `source_ref` where it has one, as load would, else the REF read for it. A
+    row whose ALTs are unknown (a no-call, an `I`/`D` code no manifest resolved, a contig not read, a row a
+    mixed strand withheld) carries no class, and a hom-ref row none. Null
+    where no row's ALTs are known, which `[]` would misstate as rows that carry REF and ALT and no
+    variant allele."""
+    if not calls.select(pl.col("alts").is_not_null().any()).collect().item():
+        return None
+    return callset.counted_classes(callset.variant_class_counts(calls, ref=pl.coalesce("source_ref", "ref")))
 
 
 def _fit(

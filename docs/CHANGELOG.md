@@ -11,6 +11,26 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `resolve_ref` counts a genotype table's `variant_classes` once it has read REF (RM301). A 23andMe-style
+  export has no REF and so no ALT at load, and kept `variant_classes` null after `resolve_ref`, so
+  `callset.class_gate` answered `class_not_counted` and RM299's and RM300's rule could not reach it: its
+  hom-ref SNV row at the base another facet's insertion is anchored on still read as zero copies of the
+  insertion in `concordance` (a mismatch) and in `consensus` (a vote against). The same calls exported
+  as VCF were counted at load and handled. The classes are now counted from the rows `resolve_ref` read,
+  as the VCF loader counts a VCF's (ALT alleles per class, a hom-ref row none), so a table and its VCF
+  export give the same classes. A row left unread carries none: an `I`/`D` code no manifest resolved
+  counts no indel, one resolved counts an indel where it calls the allele that is not REF. Where REF was
+  read on no row the classes stay null. A table gets no `content_filter`: an array's few indels are its
+  probe design, not a cut. A VCF's count is still the one load made. `RESOLVE_VERSION` 15, so a store
+  holding a table resolved before refuses the new one as another REF state, and every resolve spill is
+  read once more (the rows are the same). No frame or schema changes. Minor. Tests:
+  `tests/test_reference.py::test_a_tables_variant_classes_are_counted_once_its_ref_is_read`,
+  `tests/test_probes.py::test_resolved_codes_count_as_indels_and_unread_ones_do_not`,
+  `tests/test_concordance.py::test_a_genotype_tables_snv_row_says_nothing_of_an_insertion_anchored_on_it`
+  and `tests/test_consensus.py::test_a_genotype_tables_snv_row_says_nothing_of_an_insertion_anchored_on_it`
+  fail on the old code; `tests/test_reference.py::test_a_table_whose_alleles_were_read_on_no_row_keeps_its_classes_null`
+  pins what stays null.
+
 - `consensus` no longer reads a facet's row for an allele of a class that facet carries none of
   (RM300), the rule `concordance` took in RM299. An array export with no indel row, or a genome cut
   to its SNVs, wrote an SNV row at the base another facet's insertion is anchored on; the `site`

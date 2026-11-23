@@ -10,7 +10,7 @@ import polars as pl
 import pytest
 from gtars.refget import StorageMode, digest_sequence
 
-from just_vcf import ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, normalize, reference_dir, resolve_ref
+from just_vcf import ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, normalize, reference_dir, resolve_ref, write_vcf
 from just_vcf.loading import Loaded
 from just_vcf.reference import Contig, _span
 from just_vcf.schema import CALLS, FACETS, StrandCheck
@@ -522,6 +522,55 @@ def test_array_resolution_keeps_canonical_order(tmp_path: Path, grch37_store: Re
     path.write_text(array_text([("rs1", "1", 200, y + y), ("rs2", "1", 200, x + x)]))
     _, calls = frames(resolve_ref(load(path), grch37_store))
     assert [row[0] for row in calls["alts"].to_list()] == [x, y]
+
+
+def classes_of(loaded: Loaded) -> dict[str, int] | None:
+    """`facets.variant_classes` as `{class: alleles}`, or None where they were not counted."""
+    counted = loaded.facets.collect()["variant_classes"][0]
+    return None if counted is None else {entry["variant_class"]: entry["alleles"] for entry in counted}
+
+
+def test_a_tables_variant_classes_are_counted_once_its_ref_is_read(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """RM301. A genotype table has no REF or ALT at load, so its classes are not counted there; once
+    `resolve_ref` has read REF and derived the ALTs, they are counted as the VCF loader counts a VCF's:
+    ALT alleles per class, a hom-ref row none. The table and its VCF export of the same calls give the
+    same classes. A row left unread (a no-call, an I/D code with no manifest) carries no class."""
+    r = {p: base("1", p) for p in (10, 20, 30, 40, 50, 60, 70)}
+    two = [x for x in "ACGT" if x != r[40]][:2]
+    rows = [
+        ("rs1", "1", 10, r[10] * 2),  # hom-ref: no ALT
+        ("rs2", "1", 20, other(r[20]) + r[20]),  # het
+        ("rs3", "1", 30, other(r[30]) * 2),  # hom-alt
+        ("rs4", "1", 40, two[0] + two[1]),  # two ALTs at one site
+        ("rs5", "1", 50, r[50] + "-"),  # half-call of REF
+        ("rs6", "1", 60, "--"),  # no-call: left unread
+        ("i7", "1", 70, "DI"),  # an I/D code and no manifest: left unread
+        ("rs8", "X", 5, other(base("X", 5))),  # hemizygous ALT
+    ]
+    path = tmp_path / "genome.txt"
+    path.write_text(array_text(rows))
+    loaded = load(path)
+    assert classes_of(loaded) is None, "not counted at load: no REF, so no ALT"
+    resolved = resolve_ref(loaded, grch37_store)
+
+    # Expected from the fixture: each row of bases holds the bases it calls other than the reference's.
+    reference = {(chrom, pos): base(chrom, pos) for _, chrom, pos, _ in rows}
+    alleles = sum(len(set(gt) - {reference[(chrom, pos)], "-"}) for _, chrom, pos, gt in rows if set(gt) <= set("ACGT-"))
+    assert classes_of(resolved) == {"snv": alleles}
+
+    exported = write_vcf(resolved, tmp_path / "export.vcf", resolved_only=True, compress=False)
+    assert exported.rows_written == len(rows) - 2, "the two unread rows are not written"
+    assert classes_of(load(exported.path)) == classes_of(resolved)
+
+
+def test_a_table_whose_alleles_were_read_on_no_row_keeps_its_classes_null(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """Where REF was read on no row, no ALT is known: the classes stay null (not counted), never `[]`,
+    which would say the rows carry REF and ALT and no variant allele."""
+    path = tmp_path / "genome.txt"
+    path.write_text(array_text([("rs1", "1", 10, "--"), ("i2", "1", 20, "II")]))
+    resolved = resolve_ref(load(path), grch37_store)
+    assert resolved.calls.collect()["alts"].null_count() == 2
+    assert classes_of(resolved) is None
 
 
 # F9: an array that states no build has it inferred from its own rows against each collection.

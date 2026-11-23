@@ -16,6 +16,7 @@ import pytest
 from just_vcf import ReferenceMismatchError, ReferenceStore, load, mint_vrs_ids, normalize, resolve_ref, sniff
 from just_vcf.concordance import SITES, SUMMARY, Agreement, concordance, summarize
 from just_vcf.loading import Loaded
+from test_reference import array_text
 
 RNG = random.Random(277)
 REPEAT_AT = 501
@@ -291,8 +292,8 @@ def test_a_class_cut_by_the_content_filter_is_not_read_even_from_a_residue(tmp_p
 def test_a_facet_that_carries_the_class_is_read_as_before(tmp_path: Path, store: ReferenceStore) -> None:
     """The control: the other facet carries indels (one elsewhere, no filter), so its SNV row at the
     anchor is read for the insertion: zero copies, a mismatch. And a facet whose classes were not
-    counted (null `variant_classes`, a genotype table) keeps that reading: not counted is unknown, not
-    a class it lacks, and its rows still say what they say."""
+    counted (null `variant_classes`, a genotype table whose REF was read on no row) keeps that reading:
+    not counted is unknown, not a class it lacks, and its rows still say what they say."""
     insertion = _insertion(ANCHOR, "0/1")
     wgs = _whole_genome(tmp_path, store, insertion)
     carries = facet(tmp_path, "carries", [snv("2", ANCHOR, "0/0", alt=other(base("2", ANCHOR))), snv("2", 300, "0/1"), _deletion(900, "0/1")], store)
@@ -304,6 +305,39 @@ def test_a_facet_that_carries_the_class_is_read_as_before(tmp_path: Path, store:
     uncounted = Loaded(facets=snvs.facets.with_columns(pl.lit(None, dtype=classes).alias("variant_classes")), calls=snvs.calls, blocks=snvs.blocks)
     read = _one_sided_side(concordance(wgs, uncounted).sites.collect(), insertion[3])
     assert (read["key"], read["agreement"], read["absence"], read["b_copies"]) == ("site", "mismatch", "other_alleles", 0)
+
+
+@pytest.fixture
+def grch37(tmp_path: Path) -> ReferenceStore:
+    """The same sequence under an asserted GRCh37 label, which an array export's REF is read against."""
+    s = ReferenceStore.open(tmp_path / "grch37")
+    s.add_fasta(write_fasta(tmp_path / "grch37.fa", SEQ), assembly_label="GRCh37")
+    return s
+
+
+def test_a_genotype_tables_snv_row_says_nothing_of_an_insertion_anchored_on_it(tmp_path: Path, grch37: ReferenceStore) -> None:
+    """RM301, RM299's rule reaching a genotype table. A 23andMe-style export has no REF or ALT at load,
+    so its classes were not counted and its hom-ref SNV row at the base an insertion is anchored on read
+    as zero copies of the insertion. Once `resolve_ref` reads REF its classes are counted (SNVs only),
+    and that row says nothing of the insertion (`class_not_carried`), as the same export written as a
+    VCF already did."""
+    insertion = _insertion(ANCHOR, "0/1")
+    wgs = _whole_genome(tmp_path, grch37, insertion)
+    rows = [
+        ("rs1", "2", ANCHOR, base("2", ANCHOR) * 2),  # hom-ref at the insertion's anchor
+        ("rs2", "2", 300, base("2", 300) + other(base("2", 300))),
+        ("rs3", "2", 700, other(base("2", 700)) * 2),
+    ]
+    path = tmp_path / "genome.txt"
+    path.write_text(array_text(rows))
+    table = resolve_ref(load(path), grch37)
+    assert {entry["variant_class"] for entry in table.facets.collect()["variant_classes"][0]} == {"snv"}
+    result = concordance(wgs, table)
+    lone = _one_sided_side(result.sites.collect(), insertion[3])
+    assert (lone["variant_class"], lone["key"], lone["agreement"], lone["absence"], lone["a_copies"], lone["b_copies"]) == (
+        "indel", None, "only_a", "class_not_carried", 1, None,
+    )  # fmt: skip
+    assert any("carries no allele of that class" in line and "indel" in line for line in result.warnings)
 
 
 def _complex_row(pos: int, siblings: list[str], gt: str, **extra: str) -> Record:

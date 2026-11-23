@@ -1027,7 +1027,7 @@ def _variant_classes(
     content = callset.infer_content_filter(counts, stated, named)
     logger.info("%s: content filter %s (%s)", facet_id, content.content_filter.value if content.content_filter else "none", content.reason)
     columns = {
-        "variant_classes": [{"variant_class": cls.value, "alleles": n} for cls, n in counts.items() if n],
+        "variant_classes": callset.counted_classes(counts),
         "content_filter": content.content_filter.value if content.content_filter else None,
         "content_filter_basis": content.basis.value if content.basis else None,
     }

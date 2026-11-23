@@ -309,6 +309,34 @@ def test_codes_stay_unread_without_a_manifest(tmp_path: Path, grch37_store: Refe
     )
 
 
+def _classes(loaded) -> dict[str, int] | None:
+    counted = loaded.facets.collect()["variant_classes"][0]
+    return None if counted is None else {entry["variant_class"]: entry["alleles"] for entry in counted}
+
+
+def test_resolved_codes_count_as_indels_and_unread_ones_do_not(tmp_path: Path, grch37_store: ReferenceStore, manifests: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """RM301. An I/D row resolved against a manifest's indel probe holds an indel ALT where it calls the
+    allele that is not REF, and counts in `variant_classes` as an indel (a hom-ref one holds no ALT, as
+    its VCF export writes ALT `.`). The same rows with no manifest are left unread, and an unread row
+    carries no class: the facet then counts only its SNV."""
+    snv_ref = CONTIG[9]
+    snv_alt = next(b for b in "ACGT" if b != snv_ref)
+    rows = [
+        ("rs100", "1", 501, "DI"),  # het deletion: one indel ALT
+        ("rs200", "1", 1001, "DD"),  # hom-ref at the insertion site: no ALT
+        ("rs1", "1", 10, snv_ref + snv_alt),  # het SNV
+    ]
+    resolved = resolve_ref(load(coded_export(tmp_path, rows)), grch37_store)
+    calls = resolved.calls.collect()
+    assert calls["ref"].null_count() == 0, "every row read"
+    assert _classes(resolved) == {"snv": 1, "indel": 1}
+
+    monkeypatch.setenv("JUST_VCF_MANIFESTS_DIR", "")
+    unread = resolve_ref(load(coded_export(tmp_path, rows)), grch37_store)
+    assert unread.calls.collect()["ref"].null_count() == 2
+    assert _classes(unread) == {"snv": 1}
+
+
 def test_a_manifest_on_another_build_reads_no_codes(tmp_path: Path, grch37_store: ReferenceStore, monkeypatch: pytest.MonkeyPatch) -> None:
     directory = tmp_path / "manifests36"
     write_manifest(directory, [probe_row("rs100", "[I/D]", "1", 501, "PLUS", deletion(500, 3)[1], build="36")])

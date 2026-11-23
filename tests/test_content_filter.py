@@ -8,12 +8,14 @@ import pytest
 
 from just_vcf import AbsenceMeans, AbsenceReason, CallsetType, ContentFilter, ContentFilterBasis, VariantClass, absence_is_reference, absence_support, load
 from just_vcf.callset import (
+    CLASS_UNSAID,
     MAX_FILTER_RESIDUE,
     MIN_FILTER_ALLELES,
     MIN_UNFILTERED_RESIDUE,
     MIN_WGS_INDEL_SITES,
     MIN_WGS_SITES,
     READS_REFERENCE,
+    class_gate,
     infer_content_filter,
     named_content_filter,
     rows_content_filter,
@@ -241,10 +243,24 @@ WGS_SNP_HALF = facet("weak_reference", [("snv", 4_000_000), ("indel", 12)], "snv
         # Classes not counted: nothing to go on.
         (facet("weak_reference", None), "snv", True, None),
         ({"absence_means": "weak_reference"}, "snv", True, None),
+        # Counted and no allele of any class: nothing to go on either (audit 18).
+        (facet("weak_reference", []), "snv", True, None),
+        (facet("reference", []), "snv", False, None),
     ],
 )
 def test_absence_is_reference_is_true_or_unknown(row: dict, asked: str, force: bool, expected: bool | None) -> None:
     assert absence_is_reference(row, asked, force=force) is expected
+
+
+def test_a_facet_that_wrote_no_variant_allele_is_not_one_that_lacks_the_class() -> None:
+    """Audit 18. `variant_classes` of `[]` (or every class at zero) names no class the facet carries, so
+    no class is in `CLASS_UNSAID` and its rows are read; RM299's case, alleles of one class and none of
+    another, still gates the other."""
+    for written in ([], [("snv", 0), ("indel", 0)]):
+        assert {class_gate(facet("unknown", written), cls) for cls in VariantClass} == {AbsenceReason.NO_VARIANT_ALLELE}
+    snvs = facet("unknown", [("snv", 10)])
+    assert class_gate(snvs, "snv") is None
+    assert {cls for cls in VariantClass if class_gate(snvs, cls) in CLASS_UNSAID} == {MNV, INDEL, SV}
 
 
 def test_absence_is_reference_refuses_an_unknown_class() -> None:
@@ -289,6 +305,14 @@ def typed(absence: str, callset_type: str | None) -> dict:
         ({**typed("unknown", CallsetType.WGS), "absence_means": AbsenceMeans.WEAK_REFERENCE}, "snv", False, AbsenceReason.WHOLE_GENOME_SILENCE),
         (facet("weak_reference", None), "snv", True, AbsenceReason.CLASS_NOT_COUNTED),
         ({"absence_means": "weak_reference"}, "snv", True, AbsenceReason.CLASS_NOT_COUNTED),
+        # Counted and no allele of any class (audit 18): unknown for every class, never read as
+        # reference, and apart from `class_not_called`, which names a class the facet lacks.
+        (facet("weak_reference", []), "snv", True, AbsenceReason.NO_VARIANT_ALLELE),
+        (facet("weak_reference", []), "indel", False, AbsenceReason.NO_VARIANT_ALLELE),
+        (facet("reference", [("snv", 0), ("indel", 0)]), "snv", True, AbsenceReason.NO_VARIANT_ALLELE),
+        # A cut still names the class it cut first; the kept class is unknown.
+        (facet("weak_reference", [], "snv_only"), "indel", True, AbsenceReason.CLASS_CUT_BY_FILTER),
+        (facet("weak_reference", [], "snv_only"), "snv", True, AbsenceReason.NO_VARIANT_ALLELE),
     ],
 )
 def test_absence_support_gives_the_gate_that_decided(row: dict, asked: str, force: bool, reason: AbsenceReason) -> None:

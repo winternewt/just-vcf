@@ -573,6 +573,25 @@ def test_a_table_whose_alleles_were_read_on_no_row_keeps_its_classes_null(tmp_pa
     assert classes_of(resolved) is None
 
 
+def homref_table(path: Path) -> Path:
+    """A 23andMe-style table whose every row is homozygous (or hemizygous) for the synthetic reference's base."""
+    rows = [("rs1", "1", 10, base("1", 10) * 2), ("rs2", "1", 20, base("1", 20) * 2), ("rs3", "X", 5, base("X", 5))]
+    path.write_text(array_text(rows))
+    return path
+
+
+def test_a_table_of_only_hom_ref_rows_counts_classes_and_finds_none(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """Audit 18's premise. Every row of the table is hom-ref, so once `resolve_ref` reads REF each row's
+    ALTs are known and empty, not null: the classes are counted and hold no class, `[]`. That list says
+    nothing of which classes the table carries (`callset.class_gate` answers `no_variant_allele`, not
+    `class_not_called`), so its rows are still read for every class."""
+    resolved = resolve_ref(load(homref_table(tmp_path / "genome.txt")), grch37_store)
+    assert resolved.calls.collect()["alts"].to_list() == [[], [], []]
+    (row,) = resolved.facets.collect().select("variant_classes", "content_filter").to_dicts()
+    assert row["variant_classes"] == [] and row["content_filter"] is None
+    assert classes_of(resolved) == {}
+
+
 # F9: an array that states no build has it inferred from its own rows against each collection.
 
 BARE = "# rsid\tchromosome\tposition\tgenotype\n"

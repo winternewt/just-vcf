@@ -504,8 +504,14 @@ class AbsenceReason(str, Enum):
     CLASS_NOT_COUNTED = "class_not_counted"
     """The facet's `variant_classes` were not counted: a genotype table before `resolve_ref` reads its REF
     and derives its ALTs, or one whose REF was read on no row (RM301)."""
+    NO_VARIANT_ALLELE = "no_variant_allele"
+    """The facet's `variant_classes` were counted and hold no allele of any class (`[]`): every row it
+    wrote states REF and no variant allele (a table of hom-ref rows, a VCF of `ALT .` rows). Such a list
+    says nothing of which classes the facet carries, so this is unknown like `class_not_counted`, not
+    a class it lacks, and its rows are read (audit 18)."""
     CLASS_NOT_CALLED = "class_not_called"
-    """The facet wrote no allele of the asked class, so its silence says nothing about that class."""
+    """The facet wrote no allele of the asked class, but alleles of another, so its silence says nothing
+    about that class."""
     CONTENT_FILTER_HELD = "content_filter_held"
     """A whole genome cut to the asked class: held back unless `force=True`."""
     CLASS_CUT_BY_FILTER = "class_cut_by_filter"
@@ -538,19 +544,23 @@ class AbsenceSupport(BaseModel):
 
 CLASS_UNSAID = frozenset({AbsenceReason.CLASS_CUT_BY_FILTER, AbsenceReason.CLASS_NOT_CALLED})
 """The `class_gate` answers under which a facet carries no allele of the class: neither its silence nor
-its rows say anything of that class."""
+its rows say anything of that class. `no_variant_allele` is not among them: a facet that wrote no
+allele of any class says nothing of which it carries."""
 
 
 def class_gate(facet: Mapping[str, object], variant_class: VariantClass | str) -> AbsenceReason | None:
     """`absence_support`'s gates on the facet's classes, which ask what its rows carry, not what its
     silence means, so they hold whatever its `absence_means`: `class_not_counted` (`variant_classes`
-    null), `class_cut_by_filter` (its `content_filter` cut the class away) and `class_not_called` (it
-    wrote no allele of the class), in that order; None where it carries the class.
+    null), `class_cut_by_filter` (its `content_filter` cut the class away), `no_variant_allele` (it
+    wrote no allele of any class) and `class_not_called` (it wrote alleles, none of the class), in that
+    order; None where it carries the class.
 
-    Under the last two (`CLASS_UNSAID`) a row of the facet says nothing of an allele of the class
-    either: an SNV row at the base an insertion is anchored on, in a facet that carries no indel, was
-    never a statement about the insertion (RM299, `concordance`). `class_not_counted` is unknown, not
-    a class the facet lacks."""
+    Under `class_cut_by_filter` and `class_not_called` (`CLASS_UNSAID`) a row of the facet says nothing
+    of an allele of the class either: an SNV row at the base an insertion is anchored on, in a facet
+    that carries no indel, was never a statement about the insertion (RM299, `concordance`).
+    `class_not_counted` and `no_variant_allele` are unknown, not a class the facet lacks: a facet whose
+    every row is hom-ref (a genotype table once `resolve_ref` read it, RM301) counts `[]`, and that
+    names no class it carries any more than a null does, so its rows are read (audit 18)."""
     asked = VariantClass(variant_class)
     counted = facet.get("variant_classes")
     if not isinstance(counted, list):
@@ -559,7 +569,10 @@ def class_gate(facet: Mapping[str, object], variant_class: VariantClass | str) -
     # A class the filter cut is named so before the class count: the cut is why the facet wrote none.
     if content_filter is not None and CONTENT_FILTER_KEEPS[ContentFilter(content_filter)] is not asked:
         return AbsenceReason.CLASS_CUT_BY_FILTER
-    if asked.value not in {entry["variant_class"] for entry in counted if entry["alleles"]}:
+    carried = {entry["variant_class"] for entry in counted if entry["alleles"]}
+    if not carried:
+        return AbsenceReason.NO_VARIANT_ALLELE
+    if asked.value not in carried:
         return AbsenceReason.CLASS_NOT_CALLED
     return None
 
@@ -608,7 +621,8 @@ def absence_is_reference(facet: Mapping[str, object], variant_class: VariantClas
       says). A gVCF's absence is decided per position by its `blocks` frame, which this facet-level
       answer cannot see: `None`.
     - `variant_class` is among the facet's `variant_classes`. A callset that wrote no SVs says
-      nothing about SVs, and a facet whose classes were not counted says nothing at all.
+      nothing about SVs, and a facet whose classes were not counted, or were counted and hold no
+      allele of any class, says nothing at all.
     - the facet has no `content_filter`. A whole genome cut to one class (the `.snp.` half of a split
       delivery) still reads as `wgs`, but its absences say nothing about the classes cut away, and the
       cut is a reason to hold back for the kept class too. `force=True` lifts that hold for the kept

@@ -340,6 +340,24 @@ def test_a_genotype_tables_snv_row_says_nothing_of_an_insertion_anchored_on_it(t
     assert any("carries no allele of that class" in line and "indel" in line for line in result.warnings)
 
 
+def test_a_facet_that_wrote_no_variant_allele_has_its_rows_read(tmp_path: Path, grch37: ReferenceStore) -> None:
+    """Audit 18. A 23andMe-style table whose every row is hom-ref counts no class once `resolve_ref` reads
+    REF (`variant_classes` is `[]`). That says nothing of which classes it carries, so its hom-ref row
+    where the whole genome calls a het SNV is read: zero copies, a mismatch, never one-sided."""
+    wgs = _whole_genome(tmp_path, grch37, snv("2", ANCHOR, "0/1"))
+    rows = [("rs1", "2", ANCHOR, base("2", ANCHOR) * 2), ("rs2", "2", 700, base("2", 700) * 2)]
+    path = tmp_path / "genome.txt"
+    path.write_text(array_text(rows))
+    table = resolve_ref(load(path), grch37)
+    assert table.facets.collect()["variant_classes"].to_list() == [[]]
+    result = concordance(wgs, table)
+    read = _one_sided_side(result.sites.collect(), other(base("2", ANCHOR)))
+    assert (read["variant_class"], read["key"], read["agreement"], read["absence"], read["a_copies"], read["b_copies"]) == (
+        "snv", "site", "mismatch", "other_alleles", 1, 0,
+    )  # fmt: skip
+    assert not any("carries no allele of that class" in line for line in result.warnings)
+
+
 def _complex_row(pos: int, siblings: list[str], gt: str, **extra: str) -> Record:
     """A haplotype caller's multi-allelic row over five bases at `pos`, with `siblings` as its ALTs."""
     return ("1", pos, base("1", pos, 5), ",".join(siblings), gt, extra)

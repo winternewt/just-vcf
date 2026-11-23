@@ -990,6 +990,34 @@ def test_a_genotype_tables_snv_row_says_nothing_of_an_insertion_anchored_on_it(t
     assert "class_not_carried 1" in silent_reasons(result, table)
 
 
+def test_a_facet_that_wrote_no_variant_allele_has_its_rows_read(tmp_path: Path) -> None:
+    """Audit 18. A 23andMe-style table whose every row is hom-ref counts no class once `resolve_ref` reads
+    REF (`variant_classes` is `[]`). That says nothing of which classes it carries, so its hom-ref row
+    where the whole genome calls a het SNV votes zero copies against it, never silent."""
+    fasta = tmp_path / "grch37.fa"
+    fasta.write_text("".join(f">{name}\n{seq}\n" for name, seq in SEQ.items()))
+    grch37 = ReferenceStore.open(tmp_path / "grch37")
+    grch37.add_fasta(fasta, assembly_label="GRCh37")
+    wgs = facet(tmp_path, "x", "X", "1", [snv("1", ANCHOR, "0/1"), snv("1", 1300, "0/1"), deletion(1500, "0/1")], grch37)
+    path = tmp_path / "genome.txt"
+    path.write_text(array_text([("rs1", "1", ANCHOR, base("1", ANCHOR) * 2), ("rs2", "1", 1700, base("1", 1700) * 2)]))
+    resolved = resolve_ref(load(path), grch37)
+    schema = resolved.facets.collect_schema()
+    labelled = {"assembly_label": "GRCh38", "caller": "Y", "caller_version": "1"}
+    table = Loaded(
+        facets=resolved.facets.with_columns(*[pl.lit(value, dtype=schema[key]).alias(key) for key, value in labelled.items()]),
+        calls=resolved.calls,
+        blocks=resolved.blocks,
+        links=resolved.links,
+    )
+    assert classes_of(table) == set()
+    result = consensus([wgs, table], atlas=TRIANGLE)
+    read = at_anchor(result, other(base("1", ANCHOR)))
+    assert (read["s_variant_class"], read["s_supported"], read["s_contradicted"], read["s_silent"]) == ("snv", 1, 1, 0)
+    assert read["gp"] == pytest.approx(posterior([hard(1, E["X"]), hard(0, E["Y"])]), rel=1e-5)
+    assert not any("class_not_carried" in line for line in result.warnings)
+
+
 def test_a_vector_becomes_copies_of_the_allele_haploid_and_multiallelic() -> None:
     # Diploid over [R, A, B]: genotypes 0/0, 0/1, 1/1, 0/2, 1/2, 2/2 hold 0, 0, 0, 1, 1, 2 copies of B.
     diploid = [0.05, 0.10, 0.15, 0.20, 0.25, 0.25]

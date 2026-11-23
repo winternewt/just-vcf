@@ -6,6 +6,24 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM299 — A facet that carries no indels reads no copies of one
+**State:** building: an opus builder in its worktree, 2026-11-23 · **Owner:** lead
+
+Severity: medium · Status: open, found 2026-11-23 by RM279's last pairs.
+
+`concordance` reads the other facet's row at an allele's position when the row's REF is the allele's
+(`single` in `_other_side`), and `_holds` then reads a haplotype equal to REF as holding no copy. That
+is right for a whole-genome caller, which would have written the insertion in that row had it seen one.
+It is wrong for a facet that carries no indels at all: an array export with no indel probes, or a
+whole genome cut to its SNVs (`content_filter` `snv_only`). Its SNV row at the base an insertion is
+anchored on says nothing of the insertion, yet the allele is counted as called by both and discordant.
+On RM279's CGI `var` against an Omni2.5 array exported as VCF, all 15,869 indel alleles read so were
+discordant, and none could have matched: the array file holds no indel row. CGI against a DRAGEN SNV
+file read 4,009 such alleles, 78.7% discordant. Where the facet's absence says nothing of a class
+(`absence_is_reference`: the class not in `variant_classes`, or cut by `content_filter`), its row
+should say nothing of that class either: the allele stays one-sided, as it already is where that facet
+has no row, and the reading is counted with its reason. Then the RM279 pairs' indel cells are rebuilt.
+
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
 

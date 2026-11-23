@@ -25,7 +25,7 @@ in `concordance`, `consensus` and `site_genotypes` alike, and no `content_filter
 facet whose callset type is an array.
 
 ## RM302 — Ancestry and relatedness read no row of a facet for a class it carries none of
-**State:** unattended: a test first that shows the defect on the current code, then RM299's rule · **Owner:** lead
+**State:** building: an opus builder in its worktree, 2026-11-23, a test first that shows the defect on the current code · **Owner:** lead
 
 Severity: low · Status: open, found 2026-11-23 by RM300's builder, not yet shown failing.
 

@@ -7,7 +7,7 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM300 — Consensus reads no row of a facet for a class it carries none of
-**State:** unattended: build after RM299's rule, `callset.class_gate`, a test first that shows the defect on the current code · **Owner:** lead
+**State:** building: an opus builder in its worktree, 2026-11-23, a test first that shows the defect on the current code · **Owner:** lead
 
 Severity: medium · Status: open, found 2026-11-23 by RM299's builder, not yet shown failing.
 

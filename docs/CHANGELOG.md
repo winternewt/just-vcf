@@ -11,6 +11,23 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `read_site_genotypes`, the panel-site reading behind `relatedness` and `ancestry`, no longer reads a
+  row of a facet that carries no SNV (RM302), the rule `concordance` and `consensus` took in RM299 and
+  RM300. Only its absence reading asked the class gate: an indel-only facet's hom-ref insertion row at a
+  panel SNV's position has the haplotypes REF and REF, both panel alleles, and read as zero copies of
+  the panel's ALT, `observed`; a genome cut to its indels read the SNVs of its residue. Where
+  `callset.class_gate(facet, "snv")` says the facet carries no SNV (none among its `variant_classes`, or
+  its `content_filter` cut SNVs away), a site with its rows is now unknown, `basis = class_not_carried`
+  (a new `SiteBasis` member), and still a row there, so the absence rule does not reach it. A facet
+  whose classes were not counted (null) is read as before. `ancestry` counts such sites as
+  `SiteDosages.n_class_not_carried` and `AncestryEstimate.n_sites_class_not_carried` (optional, default
+  null). No stored frame, schema or version changes: neither result is keyed by a version. Minor.
+  Tests: `tests/test_site_genotypes.py::test_an_indel_only_facet_row_says_nothing_of_a_panel_snv` and
+  `::test_a_class_cut_by_the_content_filter_is_not_read_even_from_a_residue` fail on the old code;
+  `::test_a_facet_that_carries_snvs_or_was_not_counted_is_read_as_before` pins what stays.
+  `tests/test_relatedness.py::test_a_genome_cut_to_its_indels_says_nothing_at_an_snv_site` reads no site
+  of its `indel_only` facet now, where it read that facet's non-reference SNV rows before.
+
 - `resolve_ref` counts a genotype table's `variant_classes` once it has read REF (RM301). A 23andMe-style
   export has no REF and so no ALT at load, and kept `variant_classes` null after `resolve_ref`, so
   `callset.class_gate` answered `class_not_counted` and RM299's and RM300's rule could not reach it: its

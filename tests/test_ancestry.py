@@ -45,6 +45,8 @@ from just_vcf.reference import resolve_ref  # noqa: E402
 from just_vcf.schema import BLOCKS, conform  # noqa: E402
 from test_unstated_ref import SITE_RECORDS, site_panel, store, with_facet  # noqa: E402, F401 (store is a fixture)
 from test_unstated_ref import vcf as unstated_vcf  # noqa: E402
+from test_site_genotypes import HOM_REF_INSERTION, INDELS, PANEL  # noqa: E402
+from test_site_genotypes import vcf as site_vcf  # noqa: E402
 
 SEED = 20261022
 POPULATIONS = {"AFR": "Yoruba", "EAS": "Han", "EUR": "French"}
@@ -179,6 +181,7 @@ def test_each_population_is_placed_from_a_full_vcf(panel, tmp_path: Path, group:
     assert result.proportion_method == "pca_nnls"
     assert (result.n_sites_panel, result.n_sites_observed, result.n_sites_used) == (sites.height, sites.height, sites.height)
     assert result.n_sites_absent_as_reference == 0 and result.n_sites_unusable == 0 and result.n_sites_ref_unstated == 0
+    assert result.n_sites_class_not_carried == 0
     assert result.coverage == 1.0 and result.panel_assembly == result.facet_assembly == "GRCh37"
     assert result.group_to_continental == {g: g for g in POPULATIONS}
     # Three contigs are fewer blocks than a jackknife is reported on: withheld with a reason, never 0.
@@ -321,6 +324,17 @@ def test_site_dosages_count_rows_spelled_against_an_unstated_ref_apart(tmp_path:
     # 300, 400, 500 unstated; 600 stated 1/1; 700 a <DEL>, no panel allele; 800 the stated row beside an unstated one; 900 absent.
     assert got.dosage.tolist() == [M, M, M, 2, M, 1, 0]
     assert (got.n_observed, got.n_absent_as_reference, got.n_unusable, got.n_ref_unstated) == (2, 1, 1, 3)
+    assert got.n_class_not_carried == 0
+
+
+def test_site_dosages_count_rows_of_a_facet_that_carries_no_snv_apart(tmp_path: Path) -> None:
+    """RM302 (`tests/test_site_genotypes.py` has the reading): an indel-only whole genome's hom-ref
+    insertion row at a panel SNV reads no dosage, counted as `n_class_not_carried`, apart from
+    `n_unusable`; its silence at the other site says nothing of SNVs, so neither enters `n_used`."""
+    loaded = with_absence(site_vcf(tmp_path / "indels.vcf", [HOM_REF_INSERTION, *INDELS]), "weak_reference")
+    got = site_dosages(loaded, facet_of(loaded), PANEL)
+    assert got.dosage.tolist() == [M, M]
+    assert (got.n_observed, got.n_absent_as_reference, got.n_unusable, got.n_ref_unstated, got.n_class_not_carried, got.n_used) == (0, 0, 0, 0, 1, 0)
 
 
 def test_site_rules_blocks_read_absence_inside_reference_blocks_only(tmp_path: Path) -> None:

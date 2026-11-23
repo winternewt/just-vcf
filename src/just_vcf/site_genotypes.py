@@ -22,7 +22,15 @@ Per panel site, in this order:
    the site **unusable**: unknown, never 0. A no-call is the source saying it looked and could not
    tell. Where every row at the site is one spelled against an unstated REF, the site is
    **ref_unstated** instead: unknown too, and still rows at the position, so step 2 does not apply.
-   Before `resolve_ref` a row's `ref_check` is `not_run` and it is read as written.
+   Before `resolve_ref` a row's `ref_check` is `not_run` and it is read as written. Where the facet
+   carries no SNV at all (`callset.class_gate(facet, "snv")` in `CLASS_UNSAID`: no SNV among its
+   `variant_classes`, or its `content_filter` cut SNVs away, even where a residue is left), its rows
+   say no more of a panel SNV than its silence would, and a site with rows is **class_not_carried**:
+   unknown, and still rows at the position, so step 2 does not apply (RM302, the rule `concordance`
+   and `consensus` read rows by, RM299 and RM300). An indel-only facet's hom-ref insertion row at a
+   panel SNV's position has haplotypes REF and REF, both panel alleles, and would otherwise read as
+   zero copies of the panel's ALT from a class the facet never looked at. A facet whose classes were
+   not counted (`variant_classes` null) is unknown, not a facet without SNVs, and its rows are read.
 2. **No row.** What that means is the facet's `absence_means`: `weak_reference` (a whole-genome callset
    without blocks) reads it as homozygous for the panel's reference allele, count 0; `blocks` (a
    gVCF) does so only inside a `ref` block; `reference` (CGI's VCF, whose producer called what it
@@ -44,7 +52,7 @@ from enum import Enum
 
 import polars as pl
 
-from just_vcf.callset import absence_is_reference
+from just_vcf.callset import CLASS_UNSAID, absence_is_reference, class_gate
 from just_vcf.loading import Loaded
 from just_vcf.schema import CONTIG_ALIASES, AbsenceMeans, BlockKind, VariantClass, unstated_sequence_alt
 
@@ -70,6 +78,10 @@ class SiteBasis(str, Enum):
     silence is not read there."""
     ABSENT = "absent"
     """No row, and the facet's silence says nothing: unknown."""
+    CLASS_NOT_CARRIED = "class_not_carried"
+    """Rows at the site, but the facet carries no SNV (`Facet.snv_not_carried`): its rows say no more of
+    a panel SNV than its silence would (RM302), so unknown. Still rows at the position, so the facet's
+    silence is not read there either."""
 
 
 @dataclass(frozen=True)
@@ -82,6 +94,10 @@ class Facet:
     silent_snv_is_reference: bool
     """`absence_is_reference(facet, "snv", force=True) is True`: the facet's silence speaks for SNVs, so
     `weak_reference` and `reference` may read an absent panel site as reference (module docstring)."""
+    snv_not_carried: bool
+    """`class_gate(facet, "snv") in CLASS_UNSAID`: the facet carries no SNV (none among its
+    `variant_classes`, or its `content_filter` cut SNVs away), so its rows are not read at a panel site
+    (`SiteBasis.CLASS_NOT_CARRIED`). False where its classes were not counted."""
 
 
 _ABSENCE_COLUMNS = ("facet_id", "assembly_label", "absence_means", "callset_type", "variant_classes", "content_filter")
@@ -96,6 +112,7 @@ def facets_of(loaded: Loaded) -> list[Facet]:
             row["assembly_label"],
             None if row["absence_means"] is None else str(row["absence_means"]),
             absence_is_reference(row, VariantClass.SNV, force=True) is True,
+            class_gate(row, VariantClass.SNV) in CLASS_UNSAID,
         )
         for row in rows
     ]
@@ -166,6 +183,8 @@ def read_site_genotypes(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> pl
         _count=pl.col("_effect").filter(pl.col("_usable")).first(),
     )
     reference = _absent_as_reference(loaded, facet, sites)
+    # A facet that carries no SNV: its rows at a panel site say nothing of the panel's SNV (RM302).
+    carried = pl.lit(not facet.snv_not_carried)
     return (
         sites.lazy()
         .select("_site")
@@ -173,15 +192,17 @@ def read_site_genotypes(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> pl
         .join(reference, on="_site", how="left")
         .select(
             pl.col("_site").alias("site"),
-            pl.when(pl.col("_n_usable") == 1)
+            pl.when((pl.col("_n_usable") == 1) & carried)
             .then(pl.col("_count").cast(pl.UInt8))
             .when(pl.col("_n_usable").is_null() & pl.col("_reference").fill_null(False))
             .then(pl.lit(0, dtype=pl.UInt8))
             .alias("count"),
-            pl.when(pl.col("_n_usable") == 1)
-            .then(pl.lit(SiteBasis.OBSERVED.value))
-            .when((pl.col("_n_usable") == 0) & pl.col("_all_unstated"))
+            pl.when((pl.col("_n_usable") == 0) & pl.col("_all_unstated"))
             .then(pl.lit(SiteBasis.REF_UNSTATED.value))
+            .when(pl.col("_n_usable").is_not_null() & ~carried)
+            .then(pl.lit(SiteBasis.CLASS_NOT_CARRIED.value))
+            .when(pl.col("_n_usable") == 1)
+            .then(pl.lit(SiteBasis.OBSERVED.value))
             .when(pl.col("_n_usable").is_not_null())
             .then(pl.lit(SiteBasis.UNUSABLE.value))
             .when(pl.col("_reference").fill_null(False))

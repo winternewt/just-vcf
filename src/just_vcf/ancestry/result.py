@@ -208,6 +208,10 @@ class AncestryEstimate(BaseModel):
     """Sites the source wrote only rows for whose REF states no base (`ref_check = unstated`, a
     copy-number caller's `N`) and whose ALT is a sequence allele spelled against it: unknown, never
     read as a genotype and never as an absence."""
+    n_sites_class_not_carried: int | None = None
+    """Sites the source wrote rows at, from a facet that carries no SNV (none among its
+    `variant_classes`, or its `content_filter` cut SNVs away): its rows say no more of a panel SNV than
+    its silence would (RM302), so unknown, never read as a genotype and never as an absence."""
     coverage: float | None = None
     """`n_sites_used / n_sites_panel`."""
 

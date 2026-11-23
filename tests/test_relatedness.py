@@ -287,7 +287,9 @@ def test_an_array_absence_is_not_reference(family, tmp_path: Path) -> None:
 def test_a_genome_cut_to_its_indels_says_nothing_at_an_snv_site(family, tmp_path: Path) -> None:
     """A whole genome cut to one class (RM4): an indel-only half's silence at a panel's SNV sites is
     unknown (`absence_is_reference` says the class was cut), while an SNV-only half's still reads as
-    reference, as it did before the indel half could read `wgs`."""
+    reference, as it did before the indel half could read `wgs`. The facet here keeps its SNV rows
+    under the `indel_only` label, and since RM302 they say nothing either: the filter says its rows
+    speak for no SNV (`class_gate`), so no site is read, where before its non-reference rows were."""
     panel, _, people = family
     vcf = wgs(write_vcf(tmp_path / "a.vcf", panel, people["a"]))
 
@@ -299,9 +301,9 @@ def test_a_genome_cut_to_its_indels_says_nothing_at_an_snv_site(family, tmp_path
         )
         return Loaded(facets=facets, calls=vcf.calls, blocks=vcf.blocks)
 
-    carried = sum(pair != (0, 0) for pair in people["a"])
     assert relatedness(cut("snv_only"), vcf, panel).n_sites == N_SITES
-    assert relatedness(cut("indel_only"), vcf, panel).n_sites == carried < N_SITES
+    indel_only = relatedness(cut("indel_only"), vcf, panel)
+    assert (indel_only.n_sites, indel_only.reason) == (0, TOO_FEW_SITES)
 
 
 def test_a_facet_known_only_where_it_carries_the_alt_is_not_banded(family, tmp_path: Path) -> None:

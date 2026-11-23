@@ -27,6 +27,8 @@ class SiteDosages:
     n_unusable: int
     n_ref_unstated: int
     """Sites whose every row spells a sequence ALT against a source REF that states no base (F23)."""
+    n_class_not_carried: int
+    """Sites with rows of a facet that carries no SNV, whose rows are not read (RM302)."""
 
     @property
     def n_used(self) -> int:
@@ -44,4 +46,5 @@ def site_dosages(loaded: Loaded, facet: Facet, sites: pl.DataFrame) -> SiteDosag
         n_absent_as_reference=int((basis == SiteBasis.ABSENT_AS_REFERENCE.value).sum()),
         n_unusable=int((basis == SiteBasis.UNUSABLE.value).sum()),
         n_ref_unstated=int((basis == SiteBasis.REF_UNSTATED.value).sum()),
+        n_class_not_carried=int((basis == SiteBasis.CLASS_NOT_CARRIED.value).sum()),
     )

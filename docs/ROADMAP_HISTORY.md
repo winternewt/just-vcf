@@ -2,6 +2,18 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM304 — `query` reads no row of a facet for a class it carries none of
+Severity: low · Status: shipped, found 2026-11-23 by RM302's builder. Merge 357e5a1: a row of a non-array facet whose SNVs `class_gate` says it does not carry, or an array's row of another probe class, answers `class_not_carried` with `carried` None (new `PresenceBasis` member); rows that state the allele and `ref` blocks are read as before. Left, noted, not filed: an indel-only facet's leftover SNV row that states the asked SNV still answers `stated`, as concordance reads it, where RM302's panel read withholds it. Closed 2026-11-23.
+
+`just_vcf.query` answers `carried=False` for an SNV from a row at its position (`SITE_GENOTYPED`)
+without asking the class rules: an indel-only facet's hom-ref insertion row there, or a chip's `DD`
+insertion probe (a one-base REF with no ALT), answers as if it had genotyped the SNV. The rule: a
+non-array facet's row answers unknown where `class_gate(facet, "snv")` is in `CLASS_UNSAID`; an
+array's row answers only for its own probe's class (`callset.reads_per_probe`, `row_class_expr`).
+The block read needs no change, as RM303's builder found: `_presence` answers `carried=False` from a
+`ref` block for an SNV only, which a one-base GFF block speaks for, and a caller's gVCF block stays
+read as RM303 settled.
+
 ## RM303 — An array's row speaks only for its own probe's class
 Severity: low · Status: shipped, found 2026-11-23 by RM301's builder. Merge 7ce6b7f: an array's row (`callset_type` array) is read only for alleles of its own probe's class (`row_class_expr`: an I/D code or a length change is indel, a hom-ref row over a one-base REF an SNV probe, a row whose REF was not read is read for every class), in concordance, consensus and `site_genotypes`, so a hom-ref deletion probe now counts against a deletion; no `content_filter` is inferred for an array; a GET-Evidence GFF's one-base `ref` blocks speak only for an SNV at their base (`PROBE_BLOCK_FORMATS`), a caller's gVCF blocks read as before. CONSENSUS_VERSION 9. Closed 2026-11-23.
 

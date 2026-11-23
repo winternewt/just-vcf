@@ -6,6 +6,19 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM302 — Ancestry and relatedness read no row of a facet for a class it carries none of
+**State:** unattended: a test first that shows the defect on the current code, then RM299's rule · **Owner:** lead
+
+Severity: low · Status: open, found 2026-11-23 by RM300's builder, not yet shown failing.
+
+`site_genotypes` (step 1, which ancestry and relatedness share) reads any row at a panel SNV's
+position whose two haplotypes are among the panel's two alleles. An indel-only facet's hom-ref indel
+row there has haplotypes REF and REF, and would be read as zero copies of the panel's ALT; only the
+absence reading (step 2) asks `class_gate` today. Narrow: it needs an indel-only file with `0/0` rows
+at panel sites. The `ref` block readings in concordance and consensus are not class-gated either; a
+filtered gVCF should leave a gap where the cut row was, so that is likely moot, and the test says so
+either way.
+
 ## RM300 — Consensus reads no row of a facet for a class it carries none of
 **State:** building: an opus builder in its worktree, 2026-11-23, a test first that shows the defect on the current code · **Owner:** lead
 

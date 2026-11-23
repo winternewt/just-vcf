@@ -12,7 +12,9 @@ are in docs/SCHEMA.md ("A consensus posterior"); in short:
    ALT)`, and its vector is over the copies of that ALT (0, 1, 2 diploid; 0, 1 haploid), which is VCF
    genotype order over `[REF, ALT]`. A multi-allelic site gives one row per ALT, each a marginal.
 2. **What each facet says** about an allele: a row stating it (its vector where it has one, else its
-   genotype); one row at the position over the same REF span without it (zero copies, `site`); a
+   genotype); one row at the position over the same REF span without it (zero copies, `site`), unless
+   the facet carries no allele of the allele's class (none among its `variant_classes`, or the class
+   cut by its `content_filter`): then that row says nothing (`class_not_carried`, RM300); a
    `ref` block over it (zero copies, graded by the block's likelihoods where it has them); its silence
    where `absence_is_reference` says it reads as reference; otherwise nothing.
 3. **An error rate turns a statement into a likelihood.** A statement whose row's own confidence
@@ -43,7 +45,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from just_vcf.atlas import ALL, ALL_BANDS, CI_Z, CONFIDENCE_BANDS, NO_CONFIDENCE, RegionSet, confidence_band
-from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
+from just_vcf.callset import CLASS_UNSAID, NOT_A_VARIANT, absence_is_reference, class_gate, variant_class_expr
 from just_vcf.concordance import _covered, _declared_contigs
 from just_vcf.evidence import BlockGrade, GradeBasis, _calls_evidence, _ref_block_grade
 from just_vcf.intervals import covering, nearest_block
@@ -84,12 +86,13 @@ __all__ = [
     "method_error_rates",
 ]
 
-CONSENSUS_VERSION = 5
+CONSENSUS_VERSION = 6
 """Part of the consensus `facet_id` and its links' `step_version`: bumped whenever the rule changes
 what it emits (3: a CGI row graded by its allele scores, `hq`, speaks with its confidence band; 4: so
 does a VCF row graded by its FORMAT HQ, which the loader now reads into `hq`; 5: a row whose source
 REF states no base, `ref_check = unstated`, states no sequence ALT, and its genotype is not read for
-another facet's allele at its position, `ref_unstated`, F23)."""
+another facet's allele at its position, `ref_unstated`, F23; 6: the one row of a facet that carries
+no allele of an allele's class is not read for its copies, `class_not_carried`, RM300)."""
 
 CALLER = "just-vcf consensus"
 """The consensus facet's `caller`: the rule that made its rows, versioned by `CONSENSUS_VERSION`."""
@@ -665,11 +668,17 @@ def _assembly(rows: list[dict], warnings: list[str]) -> tuple[str | None, str | 
 # Readings
 
 
-_SILENT = ("filtered", "no_call", "covered", "several_rows", "other_span", "ref_unstated", "no_call_block", "unknown", "ploidy_differs")
+_SILENT = (
+    "filtered", "no_call", "covered", "several_rows", "other_span", "ref_unstated", "class_not_carried", "no_call_block", "unknown", "ploidy_differs",
+)  # fmt: skip
 """Why a facet said nothing about an allele (the counts in the warnings). `ref_unstated`: its one row at
 the position has a source REF that states no base and spells a sequence ALT (F23), so its genotype was
 spelled against that `N` and says nothing of this allele's copies; the row is still there, so its
-silence is not read by a block or the absence rule either."""
+silence is not read by a block or the absence rule either. `class_not_carried`: its one row at the
+position over the allele's REF would be read for copies (`site`), but the facet carries no allele of
+the allele's class (none among its `variant_classes`, or the class cut by its `content_filter`,
+`callset.class_gate`), so the row says no more of the allele than its silence would (RM300): an
+SNV-only facet's row at the base an insertion is anchored on."""
 
 
 def _passes(filters: pl.Expr) -> pl.Expr:
@@ -842,7 +851,14 @@ def _readings(
     # The one row there spells its sequence ALTs against an `N` (F23): `N` → `G`, `0/0`, read over `T`
     # would be zero copies of `T` → `C` from a base the source never named. Silent, never `site`.
     unstated = one & pl.col("_other_unstated").fill_null(False)
-    readable = one & ~unstated
+    # Nor the one row of a facet that carries no allele of this allele's class (RM300, concordance's
+    # RM299): an SNV-only facet's row at the base an insertion is anchored on holds REF there whatever
+    # the insertion, and would vote zero copies of it. Where `class_gate` says the facet's silence
+    # speaks for no allele of the class, its rows speak for none either. Classes not counted (null)
+    # are unknown, and the row is read as it is.
+    unsaid = [cls.value for cls in VariantClass if class_gate(facet, cls) in CLASS_UNSAID]
+    not_carried = one & ~unstated & pl.col("variant_class").cast(pl.String).is_in(unsaid)
+    readable = one & ~unstated & ~not_carried
     rest = rest.with_columns(
         _fully_called("_other_gt").alias("_called"),
         _copies_of("_other_gt", "alt").alias("_count"),
@@ -853,6 +869,7 @@ def _readings(
         "_site",
         pl.when(pl.col("_rows") > 1).then(pl.lit("several_rows")).when(~one).then(pl.lit("other_span"))
         .when(unstated).then(pl.lit("ref_unstated"))
+        .when(not_carried).then(pl.lit("class_not_carried"))
         .when(~pl.col("_pass")).then(pl.lit("filtered"))
         .when(pl.col("_called")).then(pl.lit("site"))
         .otherwise(pl.lit("no_call")).alias("_reading"),

@@ -3773,7 +3773,7 @@ each with the other parent silent or reading `other_span`. `normalize` both, or 
 | Reading | When | Its distribution over copies `q` |
 |---|---|---|
 | `stated` | a row states the allele | its vector (`genotype_evidence`'s `gl`, under a flat prior, or `gq`) summed by copies; else its genotype, a point mass. A `gp` row is read as its genotype unless `gp_as = likelihood`; an `hq` row (CGI's allele scores, a VCF's FORMAT HQ) has no vector and is read as its genotype, its confidence placing it in a band (`CONSENSUS_VERSION` 3; 4 for a VCF's HQ) |
-| `site` | one row at the position over the same REF span, without the allele (a hom-ref record, another ALT) | zero copies, a point mass: its vector indexes other alleles |
+| `site` | one row at the position over the same REF span, without the allele (a hom-ref record, another ALT), in a facet that carries the allele's class | zero copies, a point mass: its vector indexes other alleles |
 | `ref_block` | a `ref` block covers the position | by `block_grade` (above, "The block rule"): under the default, the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; graded by its GQ, zero copies at `1 − 10^(−GQ/10)` and the rest spread evenly over the other copies, at the ploidy its likelihoods give, else the site's; lacking what the rule reads, zero copies |
 | `absence` | nothing covers it and `absence_is_reference(facet, class, force=force)` is True on a contig the facet declared or wrote | zero copies |
 
@@ -3785,9 +3785,21 @@ Silent otherwise, each kind counted in the warnings per facet: `filtered` (`pass
 failed a filter), `no_call` (no haplotype called and no vector), `covered` (inside another record's
 span, a deletion), `several_rows` and `other_span` (concordance's rule: such a row holds no allele of
 this span), `ref_unstated` (the one row there has a source REF that states no base and spells a
-sequence ALT, Decision 2: its genotype was spelled against the `N`), `no_call_block`, `unknown`
-(silence that says nothing: an array, a content filter, a class the facet did not call),
-`ploidy_differs` (below).
+sequence ALT, Decision 2: its genotype was spelled against the `N`), `class_not_carried` (below),
+`no_call_block`, `unknown` (silence that says nothing: an array, a content filter, a class the facet
+did not call), `ploidy_differs` (below).
+
+**A row of a facet that carries no allele of the allele's class says nothing of it**
+(`class_not_carried`, `CONSENSUS_VERSION` 6, RM300; concordance's rule since RM299): the class is not
+among its `variant_classes`, or its `content_filter` cut it away, even where a residue of the class is
+left (`callset.class_gate`'s `class_not_called` and `class_cut_by_filter`, the gates `absence_support`
+reads its silence by). An array export with no indel row, or a genome cut to its SNVs, wrote an SNV
+row at the base an insertion is anchored on; that row holds REF there whatever the insertion, so its
+genotype would be a `site` vote of zero copies against the caller that saw it, from a class the facet
+never looked at. The facet is silent on the allele instead, as its silence already was, and the same
+holds for any class (an SNV at the anchor of an indel-only facet's row). A facet whose classes were
+not counted (`variant_classes` null, a genotype table) is unknown, not a facet that lacks the class,
+and its row is read as `site` as before.
 
 A row whose source REF states no base (`ref_check = unstated`) and which spells a sequence ALT
 states no allele of the consensus (`CONSENSUS_VERSION` 5): `N` → `G` read beside the reference's `T`

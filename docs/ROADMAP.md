@@ -19,17 +19,6 @@ at panel sites. The `ref` block readings in concordance and consensus are not cl
 filtered gVCF should leave a gap where the cut row was, so that is likely moot, and the test says so
 either way.
 
-## RM300 — Consensus reads no row of a facet for a class it carries none of
-**State:** building: an opus builder in its worktree, 2026-11-23, a test first that shows the defect on the current code · **Owner:** lead
-
-Severity: medium · Status: open, found 2026-11-23 by RM299's builder, not yet shown failing.
-
-`consensus` has its own reading of a facet's one row at an allele's position over the same REF
-(docstring point 2: "zero copies, `site`"), parallel to the one RM299 fixed in `concordance`. It very
-likely reads an array's or an SNV-only file's row at the base an insertion is anchored on as evidence
-of no copy, which a consensus would then weigh against the caller that saw the insertion. Where
-`class_gate` says the facet carries no allele of the class, its row says nothing of that class.
-
 ## RM301 — A genotype table's variant classes are counted once its REF is read
 **State:** unattended: build after RM299, a test first · **Owner:** lead
 

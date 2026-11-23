@@ -7,14 +7,18 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM304 — `query` reads no row of a facet for a class it carries none of
-**State:** unattended: a test first that shows each read on the current code, then RM299's rule · **Owner:** lead
+**State:** unattended: a test first that shows the row read on the current code, then RM302's and RM303's rules · **Owner:** lead
 
 Severity: low · Status: open, found 2026-11-23 by RM302's builder, not yet shown failing.
 
-`just_vcf.query` answers `carried=False` for an SNV from an indel-only facet's hom-ref insertion row at
-its position (`SITE_GENOTYPED`), and from an indel-only gVCF's block over it (`REF_BLOCK`); neither
-asks `class_gate`. The row is RM302's rule: where the facet carries no allele of the class, its row
-answers unknown. The block waits for RM303's reading of blocks, and follows it.
+`just_vcf.query` answers `carried=False` for an SNV from a row at its position (`SITE_GENOTYPED`)
+without asking the class rules: an indel-only facet's hom-ref insertion row there, or a chip's `DD`
+insertion probe (a one-base REF with no ALT), answers as if it had genotyped the SNV. The rule: a
+non-array facet's row answers unknown where `class_gate(facet, "snv")` is in `CLASS_UNSAID`; an
+array's row answers only for its own probe's class (`callset.reads_per_probe`, `row_class_expr`).
+The block read needs no change, as RM303's builder found: `_presence` answers `carried=False` from a
+`ref` block for an SNV only, which a one-base GFF block speaks for, and a caller's gVCF block stays
+read as RM303 settled.
 
 ## RM303 — An array's row speaks only for its own probe's class
 **State:** building: an opus builder in its worktree, 2026-11-23, a test first for each case below · **Owner:** lead

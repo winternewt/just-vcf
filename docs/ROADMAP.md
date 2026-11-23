@@ -6,6 +6,16 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM304 — `query` reads no row of a facet for a class it carries none of
+**State:** unattended: a test first that shows each read on the current code, then RM299's rule · **Owner:** lead
+
+Severity: low · Status: open, found 2026-11-23 by RM302's builder, not yet shown failing.
+
+`just_vcf.query` answers `carried=False` for an SNV from an indel-only facet's hom-ref insertion row at
+its position (`SITE_GENOTYPED`), and from an indel-only gVCF's block over it (`REF_BLOCK`); neither
+asks `class_gate`. The row is RM302's rule: where the facet carries no allele of the class, its row
+answers unknown. The block waits for RM303's reading of blocks, and follows it.
+
 ## RM303 — An array's row speaks only for its own probe's class
 **State:** unattended: a test first for each case below, on the current code · **Owner:** lead
 
@@ -23,6 +33,14 @@ silences a resolved indel probe row. The rule: an array facet's row is read only
 row's own class (an SNV probe for SNVs at its position, an `I`/`D` probe for indels over its span),
 in `concordance`, `consensus` and `site_genotypes` alike, and no `content_filter` is inferred for a
 facet whose callset type is an array.
+
+Blocks too. A GET-Evidence GFF turns each `REF` row into a one-base `ref` block beside `SNP` rows, so
+its block at an insertion's anchor is read as zero copies of the insertion (`ref_block`), in
+concordance, consensus and `site_genotypes`. Such a block is probe-shaped and speaks only for SNVs at
+its base. A facet-wide gate was built and left unmerged (`rm302` branch, 4187b91): it also withheld a
+gVCF's caller-written blocks when the file was cut to one class, which are true reference calls for
+the cut class as well, and every block of a gVCF with no variant row. Read the GFF's blocks by their
+probe's class, and leave a caller's blocks as they are read now.
 
 ## RM302 — Ancestry and relatedness read no row of a facet for a class it carries none of
 **State:** building: an opus builder in its worktree, 2026-11-23, a test first that shows the defect on the current code · **Owner:** lead

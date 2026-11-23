@@ -102,6 +102,12 @@ each reset.
    U+FEFF (history, left). RM297 (coverage detection past a BOM) merged as ee8cb8a, merge 1 of 6 toward audit 18; RM298 (a VCF, an rsid
    column line and a chain file past a BOM; `REWRITE_VERSION` 20) as 26ee0c9, merge 2 of 6. RM298's commit 00a5641
    also carries a literal U+FEFF in its message (left).
+   2026-11-23: RM299 (concordance reads no row of a facet for a class it carries none of) merged as ec9925b, merge 3
+   of 6; RM300 (the same in consensus, CONSENSUS_VERSION 6) as 70748f1, merge 4; RM301 (a genotype table's classes
+   counted in resolve_ref, RESOLVE_VERSION 15) as 8aa3a42, merge 5; RM302 part 1 (site_genotypes) as f14ce8e, merge 6;
+   its block part 4187b91 left unmerged on branch rm302 (it withheld a cut gVCF's true reference blocks; the GFF case
+   went to RM303). Suite 2909 passed, 77 skipped, 8 xfailed on both majors. **Audit 18 started 2026-11-23** over
+   571daec..018f0ca, the repo-prep copy, Grok and Sol via Cursor.
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

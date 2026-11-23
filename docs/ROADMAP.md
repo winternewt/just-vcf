@@ -6,6 +6,24 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM303 — An array's row speaks only for its own probe's class
+**State:** unattended: a test first for each case below, on the current code · **Owner:** lead
+
+Severity: low · Status: open, found 2026-11-23 by RM301's builder.
+
+RM299 to RM301 gate a facet's row by the classes the whole facet carries. For a whole-genome caller
+that is the right unit: a caller that wrote an SNV row at a base would have written an insertion
+anchored there too, had it seen one. An array is a set of probes, each for its own allele, and the
+facet-level gate misses three cases. A chip with even one resolved non-REF indel counts `indel`, so
+its SNV probe rows at insertion anchors read as zero copies again. A chip whose resolved `I`/`D` rows
+are all hom-ref counts no indel, so a deletion probe that looked and saw none says nothing of the
+deletion. And the VCF loader infers a `content_filter` from an array export's rows (a chip is mostly
+SNVs, so it reads `snv_only`), a whole genome's notion that an array does not fit: `class_gate` then
+silences a resolved indel probe row. The rule: an array facet's row is read only for alleles of the
+row's own class (an SNV probe for SNVs at its position, an `I`/`D` probe for indels over its span),
+in `concordance`, `consensus` and `site_genotypes` alike, and no `content_filter` is inferred for a
+facet whose callset type is an array.
+
 ## RM302 — Ancestry and relatedness read no row of a facet for a class it carries none of
 **State:** unattended: a test first that shows the defect on the current code, then RM299's rule · **Owner:** lead
 

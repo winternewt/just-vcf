@@ -443,7 +443,7 @@ measured.
 
 **What changed in the library.** Nothing: no default moved, `CONSENSUS_VERSION` stays.
 
-**For the person.**
+**For the person** (desk #102 ended on its default, option 1 below: FILTER only, 2026-11-22).
 
 1. **Leave the band rule as is (recommended).** The band's fitted rate is its average error, and
    where both facets speak the genotype the array supports wins.

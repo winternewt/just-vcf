@@ -3665,7 +3665,10 @@ copy of it (its `gt_alleles` contain the ALT, an uncalled haplotype beside it in
 row states and no genotype carries (a DeepVariant `RefCall` `0/0`, a split row's `0` for its ALT,
 `./.` on both sides) says nothing about either method's error and is left out of every count. Scope
 `carried` counts all of them; `carried_pass` keeps those whose every stating row passed its filters
-(FILTER `PASS`, or none written; a silent side has no row and passes).
+(FILTER `PASS`, or none written; a silent side has no row and passes). A sample-level filter
+(`sample_filters`, FORMAT `FT`, where CGI writes `VQLOW`) is not read here: a confidence band's rate already
+weighs such calls, and leaving them out would hide a method's weakest calls from its measurement (desk #102,
+ended on this default 2026-11-22).
 
 **The two sides are put in method order** (caller, then caller version, unknown first) and `only_a`
 and `only_b` follow them, so a pair counts the same whichever facet comes first and pairs of the same

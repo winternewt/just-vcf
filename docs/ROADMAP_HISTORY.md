@@ -2,6 +2,11 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM280 — A consensus posterior
+Severity: low · Status: shipped 2026-10-23, closed 2026-11-23 (`consensus` and `method_error_rates` shipped 2026-10-23, merge c1b0e1f, docs/SCHEMA.md "A consensus posterior", checked on PGP-HMS in docs/CONSENSUS.md; rates by the facet's own confidence band, merge 86daede, 2026-10-24, with the 60+ band traced to borrowed bands (9bf578e) and CGI `var` rows banded by `calls.hq` (8334138); desk #94–#96 built as options with every default unchanged, merge 960b6c6 (`BlockGrade`, GQ on reference, `AlleleFrequencyPrior`). Closed 2026-11-23: every question put to the person ended on its default: #94 blocks graded by their likelihoods, #95 GQ off for reference calls, #96 withdrawn 2026-11-16 (the prior an option), #99 bands borrowed across caller versions with a warning, #100 every GIAB class with the highest rate winning (the easy/difficult partition an argument), #101 pooling by caller and version, #102 FILTER only. The lead's calls listed for veto in docs/LAYERS.md stay listed there)
+
+The person chose after the atlas (E7): a per-site posterior across one person's facets as a derived facet, with RM279's rates as priors; never before them.
+
 ## RM284 — Phasing as CisPhasedBlock
 Severity: low · Status: shipped 2026-10-23, closed 2026-11-22 (`cis_phased_blocks` shipped 2026-10-23, merge 4129dc7; PSL, PSO and PSQ read and written back under VCF 4.5, with withheld blocks naming the allele that withheld them, merge 8b72a46, schema 0.0.15. Closed 2026-11-22: desk #90 ended on its default, so blocks stay whole phased stretches and one symbolic allele withholds its block; still outside the plan: a 4.4+ slot-0 block's phase on polars-bio keeping the leading phase indicator (P4 in docs/POLARS_BIO_PENDING_FIXES.md, not filed, the upstream-liaison seat's); the reading of a 4.4+ slot 0 that a PSL names as phased is listed for the person's veto in docs/LAYERS.md, layer 8)
 

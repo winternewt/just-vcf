@@ -14,7 +14,7 @@ usable for one person's facets, and say what they rest on.
 | 4 | A person | 90% | subject; Person with links and relatedness as its default check; a supplied GA4GH pedigree checked against measured bands (agrees/disagrees/cannot_tell, never corrected); exome variant-only sites read as unknown; the durable store; somalier is never run here (desk #88) |
 | 5 | Agreement measured | 90% | `concordance` (span-guarded VRS pairing, haploid vs a/a a match with ploidy flagged); the method-error atlas incl. the CGI pairs by VRS id and by each side's confidence band; the consensus posterior (RM280) |
 | 6 | Facet graph and liftover | 90% | links frame, liftover, normalize, rejoin_split |
-| 7 | Graded evidence across sources | 90% | `genotype_evidence` with the PL/GL source and CGI's allele scores (`calls.hq`, so a CGI `var` facet is banded too); the consensus posterior weighs each row by its confidence band's measured rate (held-out SNVs from 10 phred up: 0.85 observed/predicted with the banded var facet, 1.01 with GIAB's easy/difficult partition as regions; docs/CONSENSUS.md); desk #94–#96 settled on their defaults (options kept); what is left is decisions (#100–#102) |
+| 7 | Graded evidence across sources | 90% | `genotype_evidence` with the PL/GL source and CGI's allele scores (`calls.hq`, so a CGI `var` facet is banded too); the consensus posterior weighs each row by its confidence band's measured rate (held-out SNVs from 10 phred up: 0.85 observed/predicted with the banded var facet, 1.01 with GIAB's easy/difficult partition as regions; docs/CONSENSUS.md); desk #94–#96 and #99–#102 settled on their defaults (options kept) |
 | 8 | Export | 92% | VCF/gVCF with tabix, VCF 4.5 PSL/PSO/PSQ, CisPhasedBlock export naming what withheld it, VCF Zarr |
 
 ## Blockers waiting for the person
@@ -45,19 +45,6 @@ meanwhile. The desk carries the ones filed there.
   whose confidence scale differs (0.9.15's GLs floor at -10); CGI and the array were ruled out, the even
   split is second order. Bands are borrowed across a caller's versions, with a warning naming the facet:
   desk #99 ended on that default, 2026-11-22.
-- **Layer 7, which regions weigh an allele (desk #100):** today an allele takes the highest rate among
-  every GIAB class holding it, and the classes nest, so the 10-30 phred bands read about 0.6 observed/predicted.
-  GIAB's easy/difficult partition (`giab_stratifications(..., classes=["easy", "difficult"])`) brings it to
-  0.86-1.01. The rule is written in SCHEMA, so changing the default is the person's. Meanwhile all classes.
-- **Layer 5/7, one caller version's bands differ between people (desk #101):** freeBayes 0.9.15's
-  bands run about 2x higher for huAF3C63 than for hu1B2689, and the atlas keys a pair by caller and version only,
-  so a rebuilt var pair and the vcfBeta pair of one person collide and would count that person twice if pooled.
-  Extends desk #99. Meanwhile the var atlas stays a separate file (`data/output/method_atlas_cgi_var.parquet`).
-- **Layer 5/7, CGI's sample-level VQLOW (desk #102):** `carried_pass` reads FILTER only; CGI puts its
-  low-quality mark in `sample_filters`. Measured 2026-10-25 on both public `var` pairs: every CGI SNV row at
-  10-20 phred is a VQLOW hom-ALT call (12,888 and 19,711 rows), and the VQLOW hets sit at 20-40 (18,051 and
-  26,333), so reading it removes CGI's whole 10-20 band and about 31k and 46k SNVs, and moves every CGI rate.
-  Meanwhile FILTER only, as documented.
 - **Layer 7, CGI's lowest band against freeBayes's top band (measured, no decision):** the 11-13% (52% on
   huAF3C63) disagreement there is genotype selection: CGI's 10-20 band is its VQLOW hom-ALT calls, freeBayes's
   60-100 band mostly its het calls (78% and 97%), so the cell is mostly "CGI hom-ALT, freeBayes het" (638 of 643
@@ -195,3 +182,10 @@ Desk questions whose term ended unanswered; each default is now the decision.
   (`gq_on_reference=True` stays an option).
 - **Layer 7, desk #96** (withdrawn 2026-11-16, moot): the population prior is built as an option
   (`AlleleFrequencyPrior`, the caller's own frequency table); the flat prior stays the default, named on every row.
+- **Layer 7, desk #100** (2026-11-22): an allele takes the highest rate among every GIAB class holding it; the
+  10-30 phred bands read about 0.6 observed/predicted. The easy/difficult partition stays an argument
+  (`giab_stratifications(..., classes=["easy", "difficult"])`, 0.86-1.01).
+- **Layer 5/7, desk #101** (2026-11-22): the atlas pools by caller and version; the CGI `var` atlas stays a
+  separate file (`data/output/method_atlas_cgi_var.parquet`), unpooled.
+- **Layer 5/7, desk #102** (2026-11-22): `carried_pass` reads FILTER only; CGI's sample-level VQLOW counts as
+  passed, written in docs/SCHEMA.md.

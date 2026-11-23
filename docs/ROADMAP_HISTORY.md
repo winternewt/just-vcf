@@ -3,7 +3,7 @@ Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their ratio
 deleted; it is relocated.
 
 ## RM300 — Consensus reads no row of a facet for a class it carries none of
-Severity: medium · Status: shipped, found 2026-11-23 by RM299's builder, not yet shown failing. Merge 70748f1: shown failing first (the array's row read as a contradiction moved a het insertion's posterior from 25 to 5 phred); such a row is now silent, `class_not_carried`, and CONSENSUS_VERSION is 6. Closed 2026-11-23.)
+Severity: medium · Status: shipped, found 2026-11-23 by RM299's builder. Merge 70748f1: shown failing first (the array's row read as a contradiction moved a het insertion's posterior from 25 to 5 phred); such a row is now silent, `class_not_carried`, and CONSENSUS_VERSION is 6. Closed 2026-11-23.
 
 `consensus` has its own reading of a facet's one row at an allele's position over the same REF
 (docstring point 2: "zero copies, `site`"), parallel to the one RM299 fixed in `concordance`. It very
@@ -12,7 +12,7 @@ of no copy, which a consensus would then weigh against the caller that saw the i
 `class_gate` says the facet carries no allele of the class, its row says nothing of that class.
 
 ## RM299 — A facet that carries no indels reads no copies of one
-Severity: medium · Status: shipped, found 2026-11-23 by RM279's last pairs. Merge ec9925b; the RM279 pairs rebuilt the same day: the array pair's 15,869 indels read as called by both are one-sided, the DRAGEN SNV file's 4,009 are 1,318 both files wrote (docs/METHOD_ATLAS.md). Closed 2026-11-23. Left: consensus's parallel reading (RM300), a genotype table's classes (RM301), site_genotypes' (RM302).)
+Severity: medium · Status: shipped, found 2026-11-23 by RM279's last pairs. Merge ec9925b; the RM279 pairs rebuilt the same day: the array pair's 15,869 indels read as called by both are one-sided, the DRAGEN SNV file's 4,009 are 1,318 both files wrote (docs/METHOD_ATLAS.md). Closed 2026-11-23. Left: consensus's parallel reading (RM300), a genotype table's classes (RM301), site_genotypes' (RM302).
 
 `concordance` reads the other facet's row at an allele's position when the row's REF is the allele's
 (`single` in `_other_side`), and `_holds` then reads a haplotype equal to REF as holding no copy. That

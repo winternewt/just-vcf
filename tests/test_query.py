@@ -9,7 +9,7 @@ import polars as pl
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from just_vcf import load, mint_vrs_ids, resolve_ref
+from just_vcf import FACETS, load, mint_vrs_ids, resolve_ref
 from just_vcf.formats import get_spec
 from just_vcf.loading import Loaded
 from just_vcf.query import (
@@ -388,3 +388,76 @@ def test_query_reads_a_file_itself_and_shows_no_rows_in_its_repr(path: Path) -> 
     q = query(path)
     assert SAMPLE not in repr(q) and DIRECTORY not in repr(q)
     assert q.facet_ids == tuple(load(path).facets.collect()["facet_id"].to_list())
+
+
+# --- a row speaks only for a class its facet carries (RM304) ----------------------------------------
+
+HOM_REF_INSERTION = "1\t100\t.\tA\tAT\t.\tPASS\t.\tGT\t0/0"
+"""A hom-ref insertion row at 1:100: REF `A` twice, which read as the site genotyped without `A` → `G`."""
+INDELS = ["1\t300\t.\tC\tCT\t.\tPASS\t.\tGT\t0/1", "1\t500\t.\tGTT\tG\t.\tPASS\t.\tGT\t1/1"]
+SNV_ELSEWHERE = "1\t700\t.\tA\tG\t.\tPASS\t.\tGT\t0/1"
+
+
+def _facet(tmp_path: Path, name: str, records: list[str]) -> Loaded:
+    path = tmp_path / name
+    path.write_text(vcf_text(records))
+    return load(path)
+
+
+def _with(loaded: Loaded, **values: object) -> Loaded:
+    facets = loaded.facets.with_columns(*[pl.lit(value).cast(FACETS[name]).alias(name) for name, value in values.items()])
+    return Loaded(facets=facets, calls=loaded.calls, blocks=loaded.blocks)
+
+
+def _classes(loaded: Loaded) -> set[str] | None:
+    counted = loaded.facets.collect()["variant_classes"][0]
+    return None if counted is None else {entry["variant_class"] for entry in counted if entry["alleles"]}
+
+
+def test_an_indel_only_facets_row_says_nothing_of_an_snv_at_its_position(tmp_path: Path) -> None:
+    """RM304. A facet that carries no SNV (`callset.class_gate(facet, "snv")` in `CLASS_UNSAID`) has a
+    hom-ref insertion row at 1:100. Its REF is the asked SNV's and it states no `G`, so it answered
+    `site_genotyped`, `carried=False`; but the facet never looked at SNVs there. Unknown,
+    `class_not_carried`: by its name (`.indel.`, `class_cut_by_filter`) and by its classes alone
+    (`class_not_called`), and read as a whole genome too."""
+    cut = _facet(tmp_path, "x.indel.vcf", [HOM_REF_INSERTION, *INDELS])
+    assert cut.facets.collect()["content_filter"][0] == "indel_only"
+    unnamed = _facet(tmp_path, "calls.vcf", [HOM_REF_INSERTION, *INDELS])
+    assert unnamed.facets.collect()["content_filter"][0] is None and _classes(unnamed) == {"indel"}
+    genome = _with(unnamed, callset_type="wgs", absence_means="weak_reference")
+    for loaded in (cut, unnamed, genome):
+        (answer,) = query(loaded).carries(chrom="1", pos=100, ref="A", alt="G")
+        assert (answer.carried, answer.basis, answer.rows) == (None, PresenceBasis.CLASS_NOT_CARRIED, 1)
+        # The insertion the row states is still answered from it.
+        (stated,) = query(loaded).carries(chrom="1", pos=100, ref="A", alt="AT")
+        assert (stated.carried, stated.basis) == (False, PresenceBasis.STATED)
+
+
+def test_a_facet_that_carries_snvs_or_was_not_counted_reads_the_row_as_before(tmp_path: Path) -> None:
+    """The control: a facet that carries SNVs (one elsewhere) answers from its hom-ref insertion row at
+    1:100 as before, `site_genotyped`, `carried=False`; so does one whose classes were not counted (null)
+    or were counted with no allele of any class (`[]`): unknown is not a class the facet lacks."""
+    mixed = _facet(tmp_path, "mixed.vcf", [HOM_REF_INSERTION, *INDELS, SNV_ELSEWHERE])
+    assert _classes(mixed) == {"snv", "indel"}
+    unnamed = _facet(tmp_path, "calls.vcf", [HOM_REF_INSERTION, *INDELS])
+    uncounted = _with(unnamed, variant_classes=None)
+    empty = _with(unnamed, variant_classes=[])
+    assert _classes(uncounted) is None and _classes(empty) == set()
+    for loaded in (mixed, uncounted, empty):
+        (answer,) = query(loaded).carries(chrom="1", pos=100, ref="A", alt="G")
+        assert (answer.carried, answer.basis, answer.rows) == (False, PresenceBasis.SITE_GENOTYPED, 1)
+
+
+def test_a_callers_ref_block_answers_for_an_snv_whatever_the_cut(tmp_path: Path) -> None:
+    """The control for the block read, which RM304 leaves as it is (RM303): a gVCF's `ref` block is its
+    caller's reference call over the interval, for the class it cut too, so a gVCF named for its indels
+    still answers `carried=False` for an SNV inside one; an indel there stays unknown."""
+    records = ["1\t1000\t.\tA\t<*>\t.\t.\tEND=1100\tGT:GQ\t0/0:30", *[f"{r}:40" for r in INDELS]]
+    path = tmp_path / "x.indel.g.vcf"
+    path.write_text(vcf_text([r.replace("\tGT\t", "\tGT:GQ\t") for r in records], fmt=("GT", "GQ"), info=("END",)))
+    loaded = load(path)
+    assert loaded.facets.collect()["content_filter"][0] == "indel_only"
+    (snv,) = query(loaded).carries(chrom="1", pos=1050, ref="A", alt="G")
+    assert (snv.carried, snv.basis, snv.gq) == (False, PresenceBasis.REF_BLOCK, 30)
+    (indel,) = query(loaded).carries(chrom="1", pos=1050, ref="A", alt="AT")
+    assert (indel.carried, indel.basis) == (None, PresenceBasis.REF_BLOCK)

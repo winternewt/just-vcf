@@ -1,4 +1,5 @@
-"""An array's row speaks only for its own probe's class (RM303): concordance, consensus and panel reads.
+"""An array's row speaks only for its own probe's class (RM303, RM304): concordance, consensus, panel
+reads and `query`.
 
 A whole-genome caller's rows are gated by the classes the whole facet carries (`callset.class_gate`,
 RM299 to RM302). An array is a set of probes, each for its own allele, so an array facet's row is read
@@ -18,6 +19,7 @@ from just_vcf import ReferenceStore, load, resolve_ref
 from just_vcf.concordance import concordance
 from just_vcf.consensus import consensus
 from just_vcf.loading import Loaded
+from just_vcf.query import PresenceBasis, query
 from just_vcf.site_genotypes import facet_of, panel_sites, read_site_genotypes
 from test_consensus import E, TRIANGLE, hard, posterior, rows_of
 from test_probes import CONTIG, INSERTED, coded_export, grch37_store, manifests  # noqa: F401 (fixtures)
@@ -237,6 +239,53 @@ def test_a_genomes_hom_ref_insertion_row_is_read_at_a_panel_snv_as_before(tmp_pa
     wgs = genome(tmp_path, grch37_store, "wgs", [(INSERTION_AT, INSERTION_REF, INSERTION_ALT, "0/0"), snv(ANCHOR, "0/1")])
     read = read_site_genotypes(wgs, facet_of(wgs), _panel(INSERTION_AT, ANCHOR))
     assert read.select("count", "basis").rows() == [(0, "observed"), (1, "observed")]
+
+
+# --- 1. an array facet's row: `query` (RM304) -------------------------------------------------------
+
+
+def _carries(loaded: Loaded, pos: int, ref: str, alt: str) -> tuple[bool | None, PresenceBasis, int]:
+    (answer,) = query(loaded).carries(chrom="1", pos=pos, ref=ref, alt=alt)
+    return answer.carried, answer.basis, answer.rows
+
+
+def test_query_reads_a_chips_insertion_probe_row_for_no_snv(tmp_path: Path, grch37_store: ReferenceStore, manifests: Path) -> None:
+    """A hom-ref insertion probe row (`DD`, a one-base REF and no ALT) at a base answered an SNV there
+    `site_genotyped`, `carried=False`: the chip never probed an SNV at that base. It is unknown,
+    `class_not_carried`, still a row there so no block or absence rule reads the position; so is the
+    deletion probe's row (`II`) for an SNV at its first base. An SNV probe's row says nothing of an
+    insertion anchored on its base either."""
+    array = chip(
+        tmp_path, grch37_store,
+        [("rs100", "1", DELETION_AT, "II"), ("rs200", "1", INSERTION_AT, "DD"), ("rs1", "1", ANCHOR, snv_gt(ANCHOR, 1)), ("rs2", "1", 1700, snv_gt(1700, 0))],
+    )  # fmt: skip
+    assert _carries(array, INSERTION_AT, INSERTION_REF, other(INSERTION_REF)) == (None, PresenceBasis.CLASS_NOT_CARRIED, 1)
+    assert _carries(array, DELETION_AT, DELETION_REF[0], other(DELETION_REF[0])) == (None, PresenceBasis.CLASS_NOT_CARRIED, 1)
+    ins = insertion_at_anchor("0/1")
+    assert _carries(array, ANCHOR, ins[1], ins[2]) == (None, PresenceBasis.CLASS_NOT_CARRIED, 1)
+
+
+def test_query_reads_a_chips_snv_probe_row_and_an_unread_row_as_before(tmp_path: Path, grch37_store: ReferenceStore, manifests: Path) -> None:
+    """The control: the chip's hom-ref SNV probe row answers `site_genotyped`, `carried=False`, its het
+    one `stated`, as before, though the chip carries an indel. Before `resolve_ref` an SNV probe row's
+    class cannot be told (no REF, no code): it is read as before, `alleles_unresolved`."""
+    rows = [("rs100", "1", DELETION_AT, "DI"), ("rs1", "1", ANCHOR, snv_gt(ANCHOR, 1)), ("rs2", "1", 1700, snv_gt(1700, 0))]
+    array = chip(tmp_path, grch37_store, rows)
+    assert classes_of(array) == {"snv", "indel"}
+    assert _carries(array, 1700, CONTIG[1699], other(CONTIG[1699])) == (False, PresenceBasis.SITE_GENOTYPED, 1)
+    assert _carries(array, ANCHOR, CONTIG[ANCHOR - 1], other(CONTIG[ANCHOR - 1])) == (True, PresenceBasis.STATED, 1)
+    directory = tmp_path / "unread"
+    directory.mkdir()
+    unread = load(coded_export(directory, rows))
+    assert unread.facets.collect()["callset_type"][0] == "array"
+    assert _carries(unread, 1700, CONTIG[1699], other(CONTIG[1699])) == (None, PresenceBasis.ALLELES_UNRESOLVED, 1)
+
+
+def test_query_reads_a_genomes_hom_ref_insertion_row_for_an_snv_as_before(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """The control: a facet that is not an array and carries SNVs answers an SNV at its hom-ref insertion
+    row's base from the row, `site_genotyped`, `carried=False` (the facet-level gate)."""
+    wgs = genome(tmp_path, grch37_store, "wgs", [(INSERTION_AT, INSERTION_REF, INSERTION_ALT, "0/0"), snv(ANCHOR, "0/1")])
+    assert _carries(wgs, INSERTION_AT, INSERTION_REF, other(INSERTION_REF)) == (False, PresenceBasis.SITE_GENOTYPED, 1)
 
 
 # --- 3. GET-Evidence GFF blocks: one-base `ref` blocks read per probe --------------------------------

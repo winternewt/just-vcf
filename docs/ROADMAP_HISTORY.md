@@ -2,6 +2,17 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM302 — Ancestry and relatedness read no row of a facet for a class it carries none of
+Severity: low · Status: shipped, found 2026-11-23 by RM300's builder. Merge f14ce8e of 28e119c: `site_genotypes` reads no row of a facet whose SNVs `class_gate` says it does not carry (`SiteBasis.CLASS_NOT_CARRIED`, counted by ancestry). The block part, 4187b91 on branch rm302, was left unmerged: a facet-wide gate on blocks also withholds a cut gVCF's caller-written blocks, which are true reference calls for the cut class, and every block of a gVCF with no variant row; the GET-Evidence GFF's one-base blocks it was right for go to RM303. Closed 2026-11-23.
+
+`site_genotypes` (step 1, which ancestry and relatedness share) reads any row at a panel SNV's
+position whose two haplotypes are among the panel's two alleles. An indel-only facet's hom-ref indel
+row there has haplotypes REF and REF, and would be read as zero copies of the panel's ALT; only the
+absence reading (step 2) asks `class_gate` today. Narrow: it needs an indel-only file with `0/0` rows
+at panel sites. The `ref` block readings in concordance and consensus are not class-gated either; a
+filtered gVCF should leave a gap where the cut row was, so that is likely moot, and the test says so
+either way.
+
 ## RM301 — A genotype table's variant classes are counted once its REF is read
 Severity: low · Status: shipped, found 2026-11-23 by RM299's builder. Merge 8aa3a42: `resolve_ref` counts a table's classes with the VCF loader's counter, null where no row's ALT is known; RESOLVE_VERSION 15, so a store holding a table resolved by 14 refuses the re-resolved facet as another REF state. Closed 2026-11-23. Left: an array's row read by its own probe's class (RM303).
 

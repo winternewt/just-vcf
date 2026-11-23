@@ -17,7 +17,9 @@ are in docs/SCHEMA.md ("A consensus posterior"); in short:
    alleles of another, or the class cut by its `content_filter`): then that row says nothing
    (`class_not_carried`, RM300). An array's rows are read per probe instead (RM303): only its rows of
    the allele's own class are read for it, and rows of other classes alone leave it silent
-   (`class_not_carried`); a `ref` block over it (zero copies, graded by the block's likelihoods where it has them); its silence
+   (`class_not_carried`); a `ref` block over it (zero copies, graded by the block's likelihoods where
+   it has them), but a one-base block of a facet whose blocks are probe-shaped (a GET-Evidence GFF's
+   listed site) only for an SNV, silent (`class_not_carried`) for any other allele (RM303); its silence
    where `absence_is_reference` says it reads as reference; otherwise nothing.
 3. **An error rate turns a statement into a likelihood.** A statement whose row's own confidence
    falls in a band the atlas measured for its method gets that band's rate `e_b`, the measured share
@@ -47,7 +49,16 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from just_vcf.atlas import ALL, ALL_BANDS, CI_Z, CONFIDENCE_BANDS, NO_CONFIDENCE, RegionSet, confidence_band
-from just_vcf.callset import CLASS_UNSAID, NOT_A_VARIANT, absence_is_reference, class_gate, reads_per_probe, row_class_expr, variant_class_expr
+from just_vcf.callset import (
+    CLASS_UNSAID,
+    NOT_A_VARIANT,
+    absence_is_reference,
+    blocks_per_probe,
+    class_gate,
+    reads_per_probe,
+    row_class_expr,
+    variant_class_expr,
+)
 from just_vcf.concordance import _covered, _declared_contigs
 from just_vcf.evidence import BlockGrade, GradeBasis, _calls_evidence, _ref_block_grade
 from just_vcf.intervals import covering, nearest_block
@@ -88,7 +99,7 @@ __all__ = [
     "method_error_rates",
 ]
 
-CONSENSUS_VERSION = 8
+CONSENSUS_VERSION = 9
 """Part of the consensus `facet_id` and its links' `step_version`: bumped whenever the rule changes
 what it emits (3: a CGI row graded by its allele scores, `hq`, speaks with its confidence band; 4: so
 does a VCF row graded by its FORMAT HQ, which the loader now reads into `hq`; 5: a row whose source
@@ -97,7 +108,8 @@ another facet's allele at its position, `ref_unstated`, F23; 6: the one row of a
 no allele of an allele's class is not read for its copies, `class_not_carried`, RM300; 7: a facet
 that wrote no allele of any class, `variant_classes` `[]`, is not such a facet, and its rows are read,
 `no_variant_allele`, audit 18; 8: an array's row is read only for alleles of its own probe's class,
-whatever classes the chip carries, RM303)."""
+whatever classes the chip carries, RM303; 9: a one-base `ref` block of a facet whose blocks are
+probe-shaped, a GET-Evidence GFF's listed site, votes for an SNV at its base only, RM303)."""
 
 CALLER = "just-vcf consensus"
 """The consensus facet's `caller`: the rule that made its rows, versioned by `CONSENSUS_VERSION`."""
@@ -685,7 +697,9 @@ the allele's class (none among its `variant_classes` where it wrote alleles of a
 cut by its `content_filter`, `callset.class_gate`), so the row says no more of the allele than its silence would (RM300): an
 SNV-only facet's row at the base an insertion is anchored on. Of an array (`callset.reads_per_probe`),
 it wrote rows at the position and none of the allele's class (`callset.row_class_expr`): each row
-probes its own allele, whatever classes the chip carries (RM303)."""
+probes its own allele, whatever classes the chip carries (RM303). Likewise a one-base `ref` block
+over the position of a facet whose blocks are probe-shaped (`callset.blocks_per_probe`: a
+GET-Evidence GFF's listed `REF` site) for any allele but an SNV (RM303)."""
 
 
 def _passes(filters: pl.Expr) -> pl.Expr:
@@ -920,14 +934,25 @@ def _readings(
     )  # fmt: skip
     hits = covering(probe.select("_site", "_at").with_columns(pl.lit(chrom).alias("chrom")).lazy(), blocks, [chrom], at="_at", start="_bstart", end="_bend")
     hits = hits.with_columns(pl.col("_gl").list.eval(pl.element().cast(pl.String)).list.join(",").alias("_gl_text"))
-    chosen = nearest_block(hits, "_site", start="_bstart", end="_bend", kind="_kind", then=("_gq", "_gl_text")).select("_site", "_kind", "_gl", "_gq")
+    chosen = nearest_block(hits, "_site", start="_bstart", end="_bend", kind="_kind", then=("_gq", "_gl_text")).select(
+        "_site", "_kind", "_gl", "_gq", (pl.col("_bstart") == pl.col("_bend")).alias("_one_base")
+    )
     probe = probe.join(chosen, on="_site", how="left", maintain_order="left")
     reads_reference = [cls for cls in _SMALL if absence_is_reference(facet, cls, force=force) is True] if chrom in declared else []
     gl = pl.col("_gl")
     usable = (gl.list.len().is_between(2, 3) & gl.list.eval(pl.element().is_finite() | (pl.element() == float("-inf"))).list.all() & gl.list.max().is_finite()).fill_null(False)
     weights = gl.list.eval(((pl.element() - pl.element().max()) * _LN10).exp())
     total = weights.list.sum()
-    is_ref = (pl.col("_kind") == "ref").fill_null(False)
+    # A one-base `ref` block of a facet whose blocks are probe-shaped (RM303, `blocks_per_probe`: an
+    # array, a GET-Evidence GFF's listed `REF` site) speaks for an SNV at its base only: for any other
+    # allele it is silent (`class_not_carried`), never a vote of zero copies. A caller's block votes.
+    probe_block = (
+        pl.lit(blocks_per_probe(facet))
+        & (pl.col("_kind") == "ref")
+        & pl.col("_one_base")
+        & (pl.col("variant_class").cast(pl.String) != VariantClass.SNV.value)
+    ).fill_null(False)
+    is_ref = (pl.col("_kind") == "ref").fill_null(False) & ~probe_block
     # The block rule (`BlockGrade`), as `genotype_evidence` applies it; `gq_on_reference` speaks for
     # calls only here, so a block is graded by GQ only under the rule that says so.
     rule = _ref_block_grade(gl, pl.col("_gq"), usable, gq_on_reference=False, block_grade=block_grade)
@@ -937,6 +962,7 @@ def _readings(
         "_site",
         pl.when(pl.col("_covered")).then(pl.lit("covered"))
         .when(is_ref).then(pl.lit("ref_block"))
+        .when(probe_block).then(pl.lit("class_not_carried"))
         .when(pl.col("_kind").is_not_null()).then(pl.lit("no_call_block"))
         .when(pl.col("variant_class").cast(pl.String).is_in(reads_reference)).then(pl.lit("absence"))
         .otherwise(pl.lit("unknown")).alias("_reading"),

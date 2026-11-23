@@ -39,8 +39,11 @@ and why. Disagreement is kept as rows, never resolved to a winner. The rules are
    renormalized to sum to 1. A likelihood is never compared with a posterior (Decision 3). Anything
    else is `hard`, and `p_same` is null: a hard call has no probability, and none is made up.
 5. **One-sided alleles** say what the silent facet's silence means: `class_not_carried` (its one row
-   there was not read, 2 above), `other_alleles` (rows at the position, none holding the allele), a
-   `ref` or `no_call` block over the position, else the facet's own rule (`absence_is_reference`:
+   there was not read, 2 above, or a one-base `ref` block of a facet whose blocks are probe-shaped,
+   `callset.blocks_per_probe`, covers the position of an allele other than an SNV: a GET-Evidence
+   GFF's listed `REF` site speaks for an SNV at its base only, RM303), `other_alleles` (rows at the
+   position, none holding the allele), a `ref` or `no_call` block over the position (a caller's block
+   of any length is read for every class), else the facet's own rule (`absence_is_reference`:
    `reference`, or `unknown`, never a negative).
 6. **Structural variants meet by type and extent** (RM282), as truvari bench matches them
    (`SvMatching`, its defaults): a symbolic allele (`<DEL>`, `<DUP:TANDEM>`, `<CN0>`) pairs with at
@@ -75,7 +78,16 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
 from just_vcf.breakends import ASSEMBLY_CONTIG, SINGLE_BREAKEND, breakend_parts
-from just_vcf.callset import CLASS_UNSAID, NOT_A_VARIANT, absence_is_reference, class_gate, reads_per_probe, row_class_expr, variant_class_expr
+from just_vcf.callset import (
+    CLASS_UNSAID,
+    NOT_A_VARIANT,
+    absence_is_reference,
+    blocks_per_probe,
+    class_gate,
+    reads_per_probe,
+    row_class_expr,
+    variant_class_expr,
+)
 from just_vcf.intervals import contig_join, covering, nearest_block
 from just_vcf.loaders.vcf import version_tuple
 from just_vcf.loading import Loaded
@@ -151,7 +163,10 @@ class AbsenceReading(str, Enum):
     says no more of the allele than its silence would (RM299): an SNV-only facet's row at the base an
     insertion is anchored on. Of an array (`callset.reads_per_probe`), it wrote rows at the position and
     none of the allele's class: each row probes its own allele, an SNV probe's row says nothing of an
-    insertion anchored on its base and an indel probe's row nothing of an SNV there (RM303)."""
+    insertion anchored on its base and an indel probe's row nothing of an SNV there (RM303). Or no row
+    is there and a one-base `ref` block of a facet whose blocks are probe-shaped
+    (`callset.blocks_per_probe`, a GET-Evidence GFF's listed site) covers the position of an allele
+    other than an SNV, which would read `ref_block` (RM303)."""
 
 
 class ComparisonBasis(str, Enum):
@@ -879,6 +894,21 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
         pl.when(single).then(pl.col("pos")).alias(f"{other_side}_pos"),
     )
     mine = _block_reading(mine, other)
+    # Nor a one-base `ref` block of a facet whose blocks are probe-shaped (RM303, `blocks_per_probe`:
+    # an array, a GET-Evidence GFF's listed `REF` site) for an allele other than an SNV: it says the
+    # base is reference, which is all a probe of that base looked at, and nothing of an insertion
+    # anchored there or a deletion starting there. A caller's block is read as it is.
+    block_unsaid = (
+        pl.lit(blocks_per_probe(other_facet))
+        & (pl.col("_block") == BlockKind.REF.value)
+        & pl.col("_block_one_base")
+        & (pl.col("variant_class") != VariantClass.SNV.value)
+    ).fill_null(False)
+    for cls, count in mine.filter(block_unsaid).group_by("variant_class").len().sort("variant_class").iter_rows():
+        warnings.append(
+            f"{count} {cls} alleles of facet {side} lie in a one-base ref block of facet {other_side}, a listed site that speaks for an SNV at its "
+            "base only; not read against it (absence class_not_carried)"
+        )
     classes = {cls.value: absence_is_reference(other_facet, cls) for cls in VariantClass}
     reference_classes = [name for name, verdict in classes.items() if verdict is True]
     declared = _declared_contigs(other, other_facet)
@@ -886,7 +916,7 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
     if undeclared:
         warnings.append(f"{undeclared} alleles of facet {side} lie on contigs facet {other_side} neither declared nor called; its absence there is unknown")
     absence = (
-        pl.when(not_carried)
+        pl.when(not_carried | block_unsaid)
         .then(pl.lit(AbsenceReading.CLASS_NOT_CARRIED.value))
         .when(pl.col("_rows").is_not_null())
         .then(pl.lit(AbsenceReading.OTHER_ALLELES.value))
@@ -918,14 +948,16 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
 
 
 def _block_reading(mine: pl.DataFrame, other: Loaded) -> pl.DataFrame:
-    """`_block`: the kind of the other facet's block over the position, where no row of it is there.
-    Where several cover it (a lifted facet keeps overlapping blocks), the one `reference_support`
-    answers with (`intervals.nearest_block`)."""
+    """`_block`: the kind of the other facet's block over the position, where no row of it is there, and
+    `_block_one_base`: whether that block covers one base. Where several cover it (a lifted facet keeps
+    overlapping blocks), the one `reference_support` answers with (`intervals.nearest_block`)."""
     probe = mine.with_row_index("_probe")
     silent = probe.filter(pl.col("_rows").is_null()).select("_probe", "chrom", pl.col("pos").cast(pl.Int64).alias("_at"))
     blocks = other.blocks.select("chrom", pl.col("pos").cast(pl.Int64).alias("_start"), pl.col("end_pos").cast(pl.Int64).alias("_end"), pl.col("kind").cast(pl.String))
     hits = covering(silent.lazy(), blocks, silent["chrom"].unique().to_list(), at="_at", start="_start", end="_end")
-    chosen = nearest_block(hits, "_probe", start="_start", end="_end").select("_probe", pl.col("kind").alias("_block"))
+    chosen = nearest_block(hits, "_probe", start="_start", end="_end").select(
+        "_probe", pl.col("kind").alias("_block"), (pl.col("_start") == pl.col("_end")).alias("_block_one_base")
+    )
     return probe.join(chosen, on="_probe", how="left", maintain_order="left").drop("_probe")
 
 

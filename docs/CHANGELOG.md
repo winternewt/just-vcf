@@ -11,6 +11,21 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- A GET-Evidence GFF's blocks are read per probe (RM303, part 3), in `concordance` and `consensus`.
+  The GFF loads each `REF` row (a hom-ref site it lists) as a one-base `ref` block beside its `SNP`
+  rows, so its block at another facet's insertion anchor, or at a deletion's first base, read
+  `ref_block`: zero copies, a one-sided disagreement in concordance and a vote against in consensus.
+  Such a block is probe-shaped and speaks for an SNV at its base only. A one-base `ref` block of a facet
+  whose blocks are probe-shaped (`callset.blocks_per_probe`: an array, or a format in the new
+  `callset.PROBE_BLOCK_FORMATS`, `get_evidence_gff`; the GFF's own callset type is null, so the rule is
+  the format's) is now `class_not_carried` for any allele but an SNV, counted in a warning per class in
+  concordance. A caller's blocks are read exactly as before, of any length: the facet-wide gate left
+  unmerged in RM302 (4187b91) withheld a cut gVCF's true reference calls and every block of a gVCF
+  with no variant row. `read_site_genotypes` is unchanged: a panel's sites are SNVs, which the block
+  speaks for. `CONSENSUS_VERSION` 9. Minor. Tests: `tests/test_probe_class.py`, the GFF concordance and
+  consensus cases fail on the old code (`ref_block`, a vote against, for the insertion and the
+  deletion); the gVCF controls and the panel read pass on both.
+
 - No `content_filter` is inferred for an array (RM303, part 2). The VCF loader read a chip exported as
   VCF (`##workflow_type=Illumina_GenotypingToVCF`, Open Humans' 23andMe conversion, Genes for Good's
   genotype calls) by a whole genome's notion: a chip is mostly SNV probes, so its rows showed

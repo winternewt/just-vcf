@@ -589,6 +589,22 @@ def reads_per_probe(facet: Mapping[str, object]) -> bool:
     return stated is not None and CallsetType(stated) is CallsetType.ARRAY
 
 
+PROBE_BLOCK_FORMATS: frozenset[str] = frozenset({"get_evidence_gff"})
+"""Formats whose `ref` blocks are hom-ref sites listed one by one, each a probe's reading of its base,
+not a caller's reference interval (RM303): GET-Evidence's genome GFF, whose `REF` rows load as one-base
+blocks beside its `SNP` rows. A caller's blocks (a gVCF's, CGI's reference regions) are not among them:
+the caller looked at every class there, and a block of a gVCF cut to one class is still its reference
+call for the class cut."""
+
+
+def blocks_per_probe(facet: Mapping[str, object]) -> bool:
+    """Whether a one-base `ref` block of the facet is read per probe (RM303): an array
+    (`reads_per_probe`), or a format in `PROBE_BLOCK_FORMATS`. Such a block speaks for an SNV at its base
+    and says nothing of an insertion anchored there, a deletion starting there or an MNV; a longer block
+    of it, and every block of any other facet, is read as it is."""
+    return reads_per_probe(facet) or facet.get("format_id") in PROBE_BLOCK_FORMATS
+
+
 _ID_CODE = r"[ID]"
 """An array's indel genotype letters (`reference.CODES`) in `source_gt`, which keeps them once
 `resolve_ref` spells the row's alleles as sequences."""

@@ -3380,6 +3380,20 @@ neither declared in its header nor wrote a row on. Never a negative (Decision 4)
 where both facets state the allele. A one-sided allele stays one-sided whatever the absence says:
 reading `reference` or a block as `0/0` would turn graded absence into a call.
 
+**A probe-shaped block speaks for an SNV at its base only** (RM303). A GET-Evidence genome GFF lists
+the hom-ref sites it reports one base each (`REF` rows, loaded as one-base `ref` blocks beside its
+`SNP` rows): each is a reading of that base, as an array's SNV probe is, and says nothing of an
+insertion anchored there, a deletion starting there or an MNV. A one-base `ref` block of a facet whose
+blocks are probe-shaped (`callset.blocks_per_probe`: an array, or a format in
+`callset.PROBE_BLOCK_FORMATS`, `get_evidence_gff` today) is read for an SNV allele as `ref_block` and
+for any other allele as `class_not_carried`, counted in a warning per class. The GFF's callset type is
+null (the format declares no read evidence), so the rule is the format's, not the type's. A caller's
+blocks (a gVCF's, CGI's reference regions) are read for every class as before, whatever their
+length and whatever the facet's classes or filter: a caller that called a base reference looked for
+an insertion there too, and a gVCF cut to one class keeps blocks that are its true reference calls
+for the class cut (a facet-wide block gate was built and rejected for that, and for withholding
+every block of a gVCF with no variant row). A longer block of a probe-shaped facet is read as before.
+
 **`sites`**, one row per allele either facet states, in canonical order (contig rank, `pos`, `ref`,
 `alt`, then each facet's row order):
 
@@ -3829,7 +3843,7 @@ each with the other parent silent or reading `other_span`. `normalize` both, or 
 |---|---|---|
 | `stated` | a row states the allele | its vector (`genotype_evidence`'s `gl`, under a flat prior, or `gq`) summed by copies; else its genotype, a point mass. A `gp` row is read as its genotype unless `gp_as = likelihood`; an `hq` row (CGI's allele scores, a VCF's FORMAT HQ) has no vector and is read as its genotype, its confidence placing it in a band (`CONSENSUS_VERSION` 3; 4 for a VCF's HQ) |
 | `site` | one row at the position over the same REF span, without the allele (a hom-ref record, another ALT), in a facet that carries the allele's class | zero copies, a point mass: its vector indexes other alleles |
-| `ref_block` | a `ref` block covers the position | by `block_grade` (above, "The block rule"): under the default, the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; graded by its GQ, zero copies at `1 − 10^(−GQ/10)` and the rest spread evenly over the other copies, at the ploidy its likelihoods give, else the site's; lacking what the rule reads, zero copies |
+| `ref_block` | a `ref` block covers the position, unless it is a one-base block of a facet whose blocks are probe-shaped and the allele is not an SNV (`class_not_carried`, silent, `CONSENSUS_VERSION` 9, RM303; concordance's rule above) | by `block_grade` (above, "The block rule"): under the default, the block's likelihoods over `[REF, <*>]`, `<*>` read as this ALT; graded by its GQ, zero copies at `1 − 10^(−GQ/10)` and the rest spread evenly over the other copies, at the ploidy its likelihoods give, else the site's; lacking what the rule reads, zero copies |
 | `absence` | nothing covers it and `absence_is_reference(facet, class, force=force)` is True on a contig the facet declared or wrote | zero copies |
 
 `gq_on_reference` reaches a row stating the allele, as `genotype_evidence` grades it; it does not
@@ -4120,6 +4134,14 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change in the frames** (2026-11-23, RM303 part 3: a GET-Evidence GFF's blocks read
+  per probe): no column changes. Rule changed (Decision 4's blocks, as `concordance` and `consensus`
+  read them): a one-base `ref` block of a facet whose blocks are probe-shaped
+  (`callset.blocks_per_probe`: an array, `get_evidence_gff`) speaks for an SNV at its base only.
+  **Values change**: such a block at an insertion's anchor or a deletion's first base was `ref_block`,
+  zero copies, a vote against; it is now `class_not_carried`, silent. A caller's blocks, and
+  `read_site_genotypes` (a panel's sites are SNVs), are unchanged. `CONSENSUS_VERSION` 9.
 
 - **No version change** (2026-11-23, RM303 part 2: no `content_filter` for an array): no column
   changes. Rule changed (Decision 5's `content_filter`): the VCF loader infers no filter, from the

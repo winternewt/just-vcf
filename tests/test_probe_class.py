@@ -237,3 +237,120 @@ def test_a_genomes_hom_ref_insertion_row_is_read_at_a_panel_snv_as_before(tmp_pa
     wgs = genome(tmp_path, grch37_store, "wgs", [(INSERTION_AT, INSERTION_REF, INSERTION_ALT, "0/0"), snv(ANCHOR, "0/1")])
     read = read_site_genotypes(wgs, facet_of(wgs), _panel(INSERTION_AT, ANCHOR))
     assert read.select("count", "basis").rows() == [(0, "observed"), (1, "observed")]
+
+
+# --- 3. GET-Evidence GFF blocks: one-base `ref` blocks read per probe --------------------------------
+
+
+BLOCK_AT = 2000
+"""A base the GFF lists as `REF` (a one-base `ref` block), where the genome calls an insertion anchored on
+it, a deletion starting at it, or an SNV at it."""
+
+
+def gff(tmp_path: Path, store: ReferenceStore, blocks: list[int], snvs: list[tuple[int, int]]) -> Loaded:
+    """A GET-Evidence genome GFF on GRCh37: a `REF` row (a one-base `ref` block) at each of `blocks`, an
+    `SNP` row stating REF at each `(pos, copies)` of `snvs`. Its callset type is not an array (null: the
+    format declares no read evidence)."""
+    rows = [f"chr1\tCGI\tREF\t{pos}\t{pos}\t.\t+\t.\t." for pos in blocks]
+    for pos, copies in snvs:
+        ref = CONTIG[pos - 1]
+        alleles = "/".join([ref] * (2 - copies) + [other(ref)] * copies) if copies < 2 else other(ref)
+        rows.append(f"chr1\tCGI\tSNP\t{pos}\t{pos}\t.\t+\t.\talleles {alleles};ref_allele {ref}")
+    rows.sort(key=lambda line: int(line.split("\t")[3]))
+    path = tmp_path / "genome.gff"
+    path.write_text("##genome-build b37\n" + "\n".join(rows) + "\n")
+    resolved = resolve_ref(load(path), store)
+    facet = resolved.facets.collect().row(0, named=True)
+    assert (facet["format_id"], facet["callset_type"], facet["absence_means"]) == ("get_evidence_gff", None, "blocks")
+    assert resolved.blocks.collect().select("pos", "end_pos", "kind").rows() == [(pos, pos, "ref") for pos in blocks]
+    return resolved
+
+
+def gvcf(tmp_path: Path, store: ReferenceStore, blocks: list[int], snvs: list[tuple[int, int]]) -> Loaded:
+    """A caller's gVCF over the same sites: a one-base `<*>` reference block at each of `blocks`."""
+    meta = ["##fileformat=VCFv4.3", *(f"##contig=<ID={c},length={len(s)}>" for c, s in SEQ.items())]
+    meta += ['##INFO=<ID=END,Number=1,Type=Integer,Description="End">', '##ALT=<ID=*,Description="Any other allele">']
+    meta.append('##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">')
+    header = "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "S1"])
+    body = [(pos, f"1\t{pos}\t.\t{CONTIG[pos - 1]}\t<*>\t.\tPASS\tEND={pos}\tGT\t0/0") for pos in blocks]
+    gts = {0: "0/0", 1: "0/1", 2: "1/1"}
+    body += [(pos, f"1\t{pos}\t.\t{CONTIG[pos - 1]}\t{other(CONTIG[pos - 1])}\t.\tPASS\t.\tGT\t{gts[copies]}") for pos, copies in snvs]
+    path = tmp_path / "caller.g.vcf"
+    path.write_text("\n".join([*meta, header, *(line for _, line in sorted(body))]) + "\n")
+    resolved = resolve_ref(load(path), store)
+    assert resolved.facets.collect()["absence_means"][0] == "blocks"
+    return resolved
+
+
+def block_genome(tmp_path: Path, store: ReferenceStore) -> tuple[Loaded, dict[str, tuple[int, str, str, str]]]:
+    """A whole genome with an insertion anchored at BLOCK_AT, a deletion starting at BLOCK_AT + 10 and an
+    SNV at BLOCK_AT + 20, each het, the bases they start at listed by the GFF as `REF`."""
+    ins_ref, del_ref = CONTIG[BLOCK_AT - 1], CONTIG[BLOCK_AT + 9 : BLOCK_AT + 12]
+    alleles = {
+        "insertion": (BLOCK_AT, ins_ref, ins_ref + other(CONTIG[BLOCK_AT]) * 2, "0/1"),
+        "deletion": (BLOCK_AT + 10, del_ref, del_ref[0], "0/1"),
+        "snv": snv(BLOCK_AT + 20, "0/1"),
+    }
+    return genome(tmp_path, store, "wgs", [*alleles.values(), snv(1700, "0/1")]), alleles
+
+
+def test_a_gff_one_base_ref_block_says_nothing_of_an_indel(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """RM303, the blocks. A GET-Evidence GFF lists hom-ref sites one base each (`REF` rows, one-base `ref`
+    blocks): probe-shaped, each speaking for an SNV at its base. Its block at an insertion's anchor, or at
+    a deletion's first base, read `ref_block`, zero copies; it says nothing of either (`class_not_carried`).
+    Its block at an SNV is read as before."""
+    wgs, alleles = block_genome(tmp_path, grch37_store)
+    listed = gff(tmp_path, grch37_store, [BLOCK_AT, BLOCK_AT + 10, BLOCK_AT + 20], [(1700, 1)])
+    result = concordance(wgs, listed)
+    sites = result.sites.collect()
+    for kind in ("insertion", "deletion"):
+        pos, _, alt, _ = alleles[kind]
+        lone = one(sites, pos, alt)
+        assert (lone["key"], lone["agreement"], lone["absence"], lone["b_copies"]) == (None, "only_a", "class_not_carried", None), kind
+    pos, _, alt, _ = alleles["snv"]
+    read = one(sites, pos, alt)
+    assert (read["agreement"], read["absence"]) == ("only_a", "ref_block")
+    assert any("indel alleles of facet a lie in a one-base ref block of facet b" in line for line in result.warnings), result.warnings
+
+
+def test_a_callers_one_base_ref_block_is_read_for_an_indel_as_before(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """The control: a caller's gVCF block over the same bases is the caller's reference call, which
+    speaks for an insertion anchored there too: `ref_block`, as before, even one base long."""
+    wgs, alleles = block_genome(tmp_path, grch37_store)
+    caller = gvcf(tmp_path, grch37_store, [BLOCK_AT, BLOCK_AT + 10, BLOCK_AT + 20], [(1700, 1)])
+    sites = concordance(wgs, caller).sites.collect()
+    for kind in ("insertion", "deletion", "snv"):
+        pos, _, alt, _ = alleles[kind]
+        assert one(sites, pos, alt)["absence"] == "ref_block", kind
+
+
+def test_the_consensus_reads_a_gff_one_base_block_only_for_an_snv(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """RM303 in the consensus: the GFF's one-base block at an insertion's anchor is silent on it
+    (`class_not_carried`), never a vote of zero copies; at an SNV it still votes. A caller's gVCF block
+    there votes zero copies of the insertion, as before."""
+    wgs, alleles = block_genome(tmp_path, grch37_store)
+    wgs = labelled(wgs, "X")
+    listed = labelled(gff(tmp_path, grch37_store, [BLOCK_AT, BLOCK_AT + 10, BLOCK_AT + 20], [(1700, 1)]), "Y")
+    result = consensus([wgs, listed], atlas=TRIANGLE)
+    for kind in ("insertion", "deletion"):
+        pos, _, alt, _ = alleles[kind]
+        lone = at(result, pos, alt)
+        assert (lone["s_supported"], lone["s_contradicted"], lone["s_silent"]) == (1, 0, 1), kind
+        assert lone["gp"] == pytest.approx(posterior([hard(1, E["X"])]), rel=1e-5), kind
+    assert "class_not_carried 2" in silent_reasons(result, listed)
+    pos, _, alt, _ = alleles["snv"]
+    assert at(result, pos, alt)["s_contradicted"] == 1
+
+    caller = labelled(gvcf(tmp_path, grch37_store, [BLOCK_AT, BLOCK_AT + 10, BLOCK_AT + 20], [(1700, 1)]), "Y")
+    result = consensus([wgs, caller], atlas=TRIANGLE)
+    for kind in ("insertion", "deletion", "snv"):
+        pos, _, alt, _ = alleles[kind]
+        assert (at(result, pos, alt)["s_contradicted"], at(result, pos, alt)["s_silent"]) == (1, 0), kind
+
+
+def test_a_gff_one_base_block_at_a_panel_snv_is_read_as_before(tmp_path: Path, grch37_store: ReferenceStore) -> None:
+    """A panel's sites are SNVs, which a GFF's one-base block speaks for: the panel read is unchanged,
+    homozygous reference inside the block, unknown outside every block."""
+    listed = gff(tmp_path, grch37_store, [BLOCK_AT], [(1700, 1)])
+    read = read_site_genotypes(listed, facet_of(listed), _panel(1700, BLOCK_AT, BLOCK_AT + 5))
+    assert read.select("count", "basis").rows() == [(1, "observed"), (0, "absent_as_reference"), (None, "absent")]

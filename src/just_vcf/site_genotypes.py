@@ -47,7 +47,10 @@ Per panel site, in this order:
    SNVs, a panel's sites (`callset.absence_is_reference(facet, "snv", force=True)`): a facet that wrote
    no SNV, or a genome cut to its indels (`content_filter = indel_only`), leaves it unknown. `force`
    is passed because a panel read has always read an SNV-only half's silence through its filter's
-   hold; a class the filter cut is not lifted by it.
+   hold; a class the filter cut is not lifted by it. A one-base `ref` block of a facet whose blocks
+   are probe-shaped (`callset.blocks_per_probe`, a GET-Evidence GFF's listed `REF` site) speaks for an
+   SNV at its base, and a panel's sites are SNVs, so it is read here as any block (RM303 withholds it
+   only from other classes, in `concordance` and `consensus`).
 
 The panel's first allele is taken as the reference allele; a panel whose first allele is not the
 assembly's REF would turn every absence into the wrong genotype. Panel loaders state where their

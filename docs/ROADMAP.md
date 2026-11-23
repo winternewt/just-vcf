@@ -37,17 +37,6 @@ at panel sites. The `ref` block readings in concordance and consensus are not cl
 filtered gVCF should leave a gap where the cut row was, so that is likely moot, and the test says so
 either way.
 
-## RM301 — A genotype table's variant classes are counted once its REF is read
-**State:** building: an opus builder in its worktree, 2026-11-23, a test first · **Owner:** lead
-
-Severity: low · Status: open, found 2026-11-23 by RM299's builder.
-
-A 23andMe-style text export keeps `variant_classes` null even after `resolve_ref`, so RM299's rule
-cannot tell whether it carries indels, and its SNV rows still read as zero copies of an insertion
-anchored on them (the same array exported as VCF had its classes counted, and is fixed). Count the
-classes for a genotype table once its alleles are known, as the VCF loader counts them; where they
-cannot be known, they stay null.
-
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
 

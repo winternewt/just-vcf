@@ -2,6 +2,15 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM301 — A genotype table's variant classes are counted once its REF is read
+Severity: low · Status: shipped, found 2026-11-23 by RM299's builder. Merge 8aa3a42: `resolve_ref` counts a table's classes with the VCF loader's counter, null where no row's ALT is known; RESOLVE_VERSION 15, so a store holding a table resolved by 14 refuses the re-resolved facet as another REF state. Closed 2026-11-23. Left: an array's row read by its own probe's class (RM303).
+
+A 23andMe-style text export keeps `variant_classes` null even after `resolve_ref`, so RM299's rule
+cannot tell whether it carries indels, and its SNV rows still read as zero copies of an insertion
+anchored on them (the same array exported as VCF had its classes counted, and is fixed). Count the
+classes for a genotype table once its alleles are known, as the VCF loader counts them; where they
+cannot be known, they stay null.
+
 ## RM300 — Consensus reads no row of a facet for a class it carries none of
 Severity: medium · Status: shipped, found 2026-11-23 by RM299's builder. Merge 70748f1: shown failing first (the array's row read as a contradiction moved a het insertion's posterior from 25 to 5 phred); such a row is now silent, `class_not_carried`, and CONSENSUS_VERSION is 6. Closed 2026-11-23.
 

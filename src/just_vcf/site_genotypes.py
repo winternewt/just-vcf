@@ -30,7 +30,9 @@ Per panel site, in this order:
    and `consensus` read rows by, RM299 and RM300). An indel-only facet's hom-ref insertion row at a
    panel SNV's position has haplotypes REF and REF, both panel alleles, and would otherwise read as
    zero copies of the panel's ALT from a class the facet never looked at. A facet whose classes were
-   not counted (`variant_classes` null) is unknown, not a facet without SNVs, and its rows are read.
+   not counted (`variant_classes` null), or were counted and hold no allele of any class (`[]`, every
+   row hom-ref: `no_variant_allele`, audit 18), is unknown, not a facet without SNVs, and its rows are
+   read.
 2. **No row.** What that means is the facet's `absence_means`: `weak_reference` (a whole-genome callset
    without blocks) reads it as homozygous for the panel's reference allele, count 0; `blocks` (a
    gVCF) does so only inside a `ref` block; `reference` (CGI's VCF, whose producer called what it
@@ -97,7 +99,8 @@ class Facet:
     snv_not_carried: bool
     """`class_gate(facet, "snv") in CLASS_UNSAID`: the facet carries no SNV (none among its
     `variant_classes`, or its `content_filter` cut SNVs away), so its rows are not read at a panel site
-    (`SiteBasis.CLASS_NOT_CARRIED`). False where its classes were not counted."""
+    (`SiteBasis.CLASS_NOT_CARRIED`). False where its classes were not counted or hold no allele of any
+    class (`no_variant_allele`)."""
 
 
 _ABSENCE_COLUMNS = ("facet_id", "assembly_label", "absence_means", "callset_type", "variant_classes", "content_filter")

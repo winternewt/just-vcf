@@ -10,9 +10,10 @@ from pathlib import Path
 
 import polars as pl
 
-from just_vcf import FACETS, Loaded, load
+from just_vcf import FACETS, Loaded, ReferenceStore, load, resolve_ref
 from just_vcf.assembly import ASSEMBLY_LENGTHS
 from just_vcf.site_genotypes import SiteBasis, facet_of, panel_sites, read_site_genotypes
+from test_reference import SEQ, base, homref_table, other, write_fasta
 
 PANEL = panel_sites(pl.DataFrame({"chrom": ["1", "1"], "pos": [100, 800], "ref_allele": ["A", "A"], "effect_allele": ["G", "G"]}))
 """Site 0 at 1:100, where the facets below write a row; site 1 at 1:800, where none does."""
@@ -87,3 +88,18 @@ def test_a_facet_that_carries_snvs_or_was_not_counted_is_read_as_before(tmp_path
     uncounted = with_columns(vcf(tmp_path / "indels.vcf", [HOM_REF_INSERTION, *INDELS]), variant_classes=None)
     assert classes(uncounted) is None
     assert read(uncounted) == [(0, SiteBasis.OBSERVED.value), (None, SiteBasis.ABSENT.value)]
+
+
+def test_a_facet_that_wrote_no_variant_allele_has_its_rows_read(tmp_path: Path) -> None:
+    """Audit 18. A 23andMe-style table whose every row is hom-ref counts no class once `resolve_ref` reads
+    REF (`variant_classes` is `[]`). That list says nothing of which classes the table carries, so its
+    hom-ref row at a panel SNV is read, zero copies of the panel's ALT, `observed`: it is not a facet
+    that carries no SNV. Its silence at the other site is an array's, unknown, as before."""
+    store = ReferenceStore.open(tmp_path / "grch37")
+    store.add_fasta(write_fasta(tmp_path / "grch37.fa", SEQ), assembly_label="GRCh37")
+    table = resolve_ref(load(homref_table(tmp_path / "genome.txt")), store)
+    assert classes(table) == set()
+    ref = {pos: base("1", pos) for pos in (10, 30)}
+    panel = panel_sites(pl.DataFrame({"chrom": ["1", "1"], "pos": [10, 30], "ref_allele": [ref[10], ref[30]], "effect_allele": [other(ref[10]), other(ref[30])]}))
+    got = read_site_genotypes(table, facet_of(table), panel)
+    assert list(zip(got["count"].to_list(), got["basis"].to_list(), strict=True)) == [(0, SiteBasis.OBSERVED.value), (None, SiteBasis.ABSENT.value)]

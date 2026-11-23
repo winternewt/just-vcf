@@ -11,6 +11,28 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `callset.class_gate` no longer reads a facet that wrote no allele of any class as one that lacks
+  every class (audit 18). `variant_classes` of `[]` (counted, no class with an allele) answered
+  `class_not_called` for every class, which is in `CLASS_UNSAID`, so RM299's to RM302's rule read none
+  of the facet's rows. RM301 makes that list for a 23andMe-style table whose every read row is
+  hom-ref (its ALTs are known and empty), and a VCF of `ALT .` rows had it already: against a panel
+  site its hom-ref row read `class_not_carried` instead of zero copies, `observed`; in `concordance` a
+  whole genome's het SNV there was one-sided instead of a mismatch; in `consensus` the table was
+  silent instead of voting against it. Such a list names no class the facet carries or lacks, so the
+  gate now answers the new `AbsenceReason` `no_variant_allele`, unknown, not in `CLASS_UNSAID`, and
+  the rows are read as before RM299. It is a reason of its own, not `class_not_counted`, because the
+  classes were counted: `reference_support` writes the reason out, and "not counted" would send a
+  reader to `resolve_ref` for a facet it already resolved. A whole genome's silence with `[]` stays
+  unknown, never reference. A facet that wrote alleles of one class and none of another still gates
+  the other. `CONSENSUS_VERSION` 7, so a consensus facet made before gets a new `facet_id`;
+  `REFERENCE_SUPPORT_REASON` gains the member. No stored frame or schema changes. Minor. Tests:
+  `tests/test_site_genotypes.py::test_a_facet_that_wrote_no_variant_allele_has_its_rows_read`,
+  `tests/test_concordance.py::test_a_facet_that_wrote_no_variant_allele_has_its_rows_read` and
+  `tests/test_consensus.py::test_a_facet_that_wrote_no_variant_allele_has_its_rows_read` fail on the
+  old code, as do the `no_variant_allele` cases of `tests/test_content_filter.py`;
+  `tests/test_reference.py::test_a_table_of_only_hom_ref_rows_counts_classes_and_finds_none` pins the
+  premise (`[]`, not null).
+
 - `read_site_genotypes`, the panel-site reading behind `relatedness` and `ancestry`, no longer reads a
   row of a facet that carries no SNV (RM302), the rule `concordance` and `consensus` took in RM299 and
   RM300. Only its absence reading asked the class gate: an indel-only facet's hom-ref insertion row at a

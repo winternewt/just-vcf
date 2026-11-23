@@ -20,7 +20,8 @@ not about who their people are.
   REF) with a sequence ALT, whose letters were spelled against the `N` (`N` → `G`, `1/1`, names no
   base beside `G`): the site is unknown, `ref_unstated`, and still a row there, so the absence rule
   does not reach it; so is every row of a facet that carries no SNV (no SNV among its
-  `variant_classes`, or its `content_filter` cut SNVs away, `callset.class_gate`), whose hom-ref
+  `variant_classes` where it wrote alleles of another class, or its `content_filter` cut SNVs away,
+  `callset.class_gate`; a facet that wrote no allele of any class names none it lacks), whose hom-ref
   insertion row at a panel site would otherwise read as zero copies: `class_not_carried`, RM302;
   an absent site is homozygous reference only where the facet's `absence_means` says so
   (`weak_reference`, inside a `ref` block for `blocks`, outside every block for `reference`). An

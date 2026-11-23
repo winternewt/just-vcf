@@ -17,9 +17,10 @@ and why. Disagreement is kept as rows, never resolved to a winner. The rules are
    `(chrom, pos, REF, ALT)` as written. An allele neither meets is paired with the other facet's one
    row at that position, if it wrote exactly one (an array's hom-ref row, a DeepVariant `RefCall`, the
    other ALT of a site): that row's genotype says how many copies of this allele it holds (key `site`).
-   Not where that facet carries no allele of this allele's class (none among its `variant_classes`,
-   or the class cut by its `content_filter`): an SNV-only facet's row at the base an insertion is
-   anchored on says nothing of the insertion, which stays one-sided (`class_not_carried`, RM299).
+   Not where that facet carries no allele of this allele's class (none among its `variant_classes`
+   where it wrote alleles of another, or the class cut by its `content_filter`): an SNV-only facet's
+   row at the base an insertion is anchored on says nothing of the insertion, which stays one-sided
+   (`class_not_carried`, RM299).
 3. **Genotypes are compared as copies of the allele**, from `gt_alleles`, unordered (phase is not
    comparable across facets): `match`, `mismatch`, or `uncalled` where a haplotype is null and the
    called ones do not contradict. A haploid call against the same allele's diploid homozygote is a
@@ -141,9 +142,10 @@ class AbsenceReading(str, Enum):
     the facet never had the contig)."""
     CLASS_NOT_CARRIED = "class_not_carried"
     """It wrote one row at the position over the allele's REF, which would be read for copies (key
-    `site`), but it carries no allele of the allele's class: none among its `variant_classes`, or the
-    class cut by its `content_filter` (`callset.class_gate`). Its row says no more of the allele than its
-    silence would (RM299): an SNV-only facet's row at the base an insertion is anchored on."""
+    `site`), but it carries no allele of the allele's class: none among its `variant_classes` where it
+    wrote alleles of another, or the class cut by its `content_filter` (`callset.class_gate`). Its row
+    says no more of the allele than its silence would (RM299): an SNV-only facet's row at the base an
+    insertion is anchored on."""
 
 
 class ComparisonBasis(str, Enum):
@@ -827,8 +829,8 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
     # Nor a row of a facet that carries no allele of this allele's class (RM299): an SNV-only facet's
     # row at the base an insertion is anchored on holds REF there whatever the insertion, so its
     # genotype would read as zero copies. Where `class_gate` says its silence speaks for no allele of
-    # the class, its rows speak for none either. Classes not counted (null) are unknown, and its rows
-    # are read as they are.
+    # the class, its rows speak for none either. Classes not counted (null), or counted with no allele
+    # of any class (`[]`, `no_variant_allele`), are unknown, and its rows are read as they are.
     unsaid = [cls.value for cls in VariantClass if class_gate(other_facet, cls) in CLASS_UNSAID]
     not_carried = readable & pl.col("variant_class").is_in(unsaid)
     single = readable & ~not_carried

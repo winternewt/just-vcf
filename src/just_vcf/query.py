@@ -35,7 +35,7 @@ from typing import Annotated
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from just_vcf.callset import absence_is_reference, variant_class_expr
+from just_vcf.callset import CLASS_UNSAID, absence_is_reference, class_gate, reads_per_probe, row_class_expr, variant_class_expr
 from just_vcf.loading import Loaded, load
 from just_vcf.schema import (
     CONTIG_RANK,
@@ -271,7 +271,9 @@ class PresenceBasis(str, Enum):
     """Several rows state the allele and their genotypes disagree (charter 8)."""
     SITE_GENOTYPED = "site_genotyped"
     """A row at the same position and REF states other alleles only. A row whose source REF states no
-    base (`ref_check = unstated`) never answers so: the site then reads `overlapping_call`."""
+    base (`ref_check = unstated`) never answers so: the site then reads `overlapping_call`. Nor does a
+    row of a facet that carries no allele of the asked class, or an array's row probing another class:
+    `class_not_carried`."""
     REF_MISMATCH = "ref_mismatch"
     """A row at the position, but the file's REF there contradicts the reference (`ref_check`)."""
     ALLELES_UNRESOLVED = "alleles_unresolved"
@@ -281,6 +283,14 @@ class PresenceBasis(str, Enum):
     """Rows overlap the asked span without starting at it with the same REF (an indel nearby, an MNV), or
     the row at it has a source REF that states no base (`ref_check = unstated`): its ALTs were spelled
     against an `N`, so it states neither the asked allele nor the site's base."""
+    CLASS_NOT_CARRIED = "class_not_carried"
+    """Rows at the position, none stating the allele, and none of them speaks for its class (RM304):
+    the facet carries no allele of the class (`callset.class_gate` in `CLASS_UNSAID`: none among its
+    `variant_classes`, or its `content_filter` cut the class away), or, of an array
+    (`callset.reads_per_probe`), each row there probes another class (`callset.row_class_expr`). An
+    indel-only facet's hom-ref insertion row, or a chip's `DD` insertion probe row, holds REF at the
+    base without having looked at an SNV there. Still rows there, so no block or absence rule reads the
+    position: unknown."""
     REF_BLOCK = "ref_block"
     """A reference block covers the asked span."""
     NO_CALL_BLOCK = "no_call_block"
@@ -294,13 +304,16 @@ class PresenceBasis(str, Enum):
 class Presence(_Answer):
     """Whether one facet carries the asked allele, graded, never the row.
 
-    `carried` is Kleene: `True` (a stated genotype holds it), `False` (evidence of its absence: the
-    site genotyped without it, a reference block, or a silence `absence_is_reference` accepts) or
-    `None` (unknown). `basis` says which. `False` is only ever answered for an SNV: an indel or an MNV
-    the facet does not state may be written there in another representation (shifted, split, merged),
-    so its absence is unknown. Rejected: answering an indel's absence when no call lies within some
-    window of it, since a repeat can shift the same indel further than any fixed window. No position,
-    allele or genotype other than the asked one is returned.
+    `carried` is Kleene: `True` (a stated genotype holds it), `False` (a stated genotype lacks it, or
+    evidence of its absence: the site genotyped without it, a reference block, or a silence
+    `absence_is_reference` accepts) or `None` (unknown). `basis` says which. `False` for an allele no
+    row states is only ever answered for an SNV: an indel or an MNV the facet does not state may be
+    written there in another representation (shifted, split, merged), so its absence is unknown.
+    Rejected: answering an indel's absence when no call lies within some window of it, since a repeat
+    can shift the same indel further than any fixed window. Nor is the site read as genotyped from a
+    row that never looked at the asked class (RM304, `class_not_carried`): a facet that carries no
+    allele of the class, or an array's row that probes another class. No position, allele or genotype
+    other than the asked one is returned.
     """
 
     facet_id: Digest
@@ -633,7 +646,9 @@ class Query:
         if by_position:
             calls_filter = calls_filter | ((pl.col("chrom") == chrom) & (pl.col("pos") <= span_end) & (pl.coalesce("end_pos", "pos") >= pos))
         columns = ["facet_id", "chrom", "pos", "ref", "source_ref", "ref_check", "alts", "vrs_allele_ids", "gt", "gt_alleles", "gq", "dp", "filters", "split_signal", "evidence_basis"]
-        frames = [self._loaded.calls.filter(calls_filter).select(columns)]
+        # The class an array's row probes (RM303), read only for a facet `reads_per_probe` names.
+        row_class = row_class_expr(pl.coalesce("ref", "source_ref"), pl.col("alts"), pl.col("source_gt")).alias("row_class")
+        frames = [self._loaded.calls.filter(calls_filter).select(*columns, row_class)]
         if by_position:
             frames.append(self._loaded.blocks.filter((pl.col("chrom") == chrom) & (pl.col("pos") <= span_end) & (pl.col("end_pos") >= pos)).select("facet_id", "pos", "end_pos", "kind", "gq"))
         collected = pl.collect_all(frames)
@@ -672,8 +687,18 @@ class _Asked:
         return self.pos is not None
 
     @property
+    def variant_class(self) -> VariantClass | None:
+        """The asked allele's class, as `callset.variant_class_expr` spells a sequence ALT's; null when
+        asked by VRS id alone."""
+        if self.ref is None or self.alt is None:
+            return None
+        if len(self.ref) != len(self.alt):
+            return VariantClass.INDEL
+        return VariantClass.SNV if len(self.alt) == 1 else VariantClass.MNV
+
+    @property
     def snv(self) -> bool:
-        return self.ref is not None and self.alt is not None and len(self.ref) == 1 and len(self.alt) == 1
+        return self.variant_class is VariantClass.SNV
 
 
 def _row_ref(row: Mapping) -> str | None:
@@ -746,7 +771,19 @@ def _presence(facet: Mapping, calls: list[dict], blocks: list[dict], asked: _Ask
         )
     if not asked.by_position:
         return Presence(facet_id=facet_id, carried=None, basis=PresenceBasis.NOT_FOUND_BY_ID, absence_means=absence_means)
-    at_site = [row for row in calls if row["chrom"] == asked.chrom and row["pos"] == asked.pos]
+    asked_class = asked.variant_class.value  # type: ignore[union-attr]
+    per_probe = reads_per_probe(facet)
+    if per_probe:
+        # An array is read per probe (RM303, as `concordance` reads it): a row is there for the asked
+        # allele only where it probes the allele's class, or its class cannot be told (REF not read, no
+        # `I`/`D` code). A `DD` insertion probe row is a one-base REF with no ALT, an SNV row's shape, and
+        # never looked at an SNV at its base. Where only rows of other classes reach the span, they are
+        # still rows there: no block or absence rule reads the position.
+        speaking = [row for row in calls if row["row_class"] in (None, asked_class)]
+        if calls and not speaking:
+            return Presence(facet_id=facet_id, carried=None, basis=PresenceBasis.CLASS_NOT_CARRIED, rows=len(calls), absence_means=absence_means)
+        calls = speaking
+    at_site =[row for row in calls if row["chrom"] == asked.chrom and row["pos"] == asked.pos]
     if any(_row_ref(row) is None for row in at_site):
         return Presence(facet_id=facet_id, carried=None, basis=PresenceBasis.ALLELES_UNRESOLVED, rows=len(at_site), absence_means=absence_means)
     if any(row["ref_check"] == RefCheck.MISMATCH.value for row in at_site):
@@ -757,6 +794,10 @@ def _presence(facet: Mapping, calls: list[dict], blocks: list[dict], asked: _Ask
     same_ref = [row for row in at_site if _row_ref(row) == asked.ref and row["ref_check"] != RefCheck.UNSTATED.value]
     if same_ref and len(same_ref) == len(calls):
         # Every row the span reaches is at this site with this REF, and none states the allele.
+        if not per_probe and class_gate(facet, asked_class) in CLASS_UNSAID:
+            # The facet carries no allele of the asked class (RM304, RM299's rule): an indel-only
+            # facet's hom-ref insertion row holds REF at the base without having looked at an SNV there.
+            return Presence(facet_id=facet_id, carried=None, basis=PresenceBasis.CLASS_NOT_CARRIED, rows=len(same_ref), absence_means=absence_means)
         fully_called = all(row["gt"] and all(g is not None for g in row["gt"]) and row["split_signal"] is None for row in same_ref)
         return Presence(
             facet_id=facet_id,

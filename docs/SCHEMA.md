@@ -767,7 +767,15 @@ cannot be told (an export read before `resolve_ref`), are rows at a panel site, 
 chip carries, and a site where it wrote rows but none an SNV probe's is `class_not_carried`: a hom-ref
 insertion probe row (`DD`, a one-base REF twice) at a panel SNV's position read as zero copies.
 `ancestry` counts such sites apart (`SiteDosages.n_class_not_carried`,
-`AncestryEstimate.n_sites_class_not_carried`).
+`AncestryEstimate.n_sites_class_not_carried`). `query`'s `carries` reads a row at the asked position
+by the same rules (RM304): where no row states the asked allele and the rows there would read the site
+as genotyped without it (`site_genotyped`, `carried=False` for an SNV), a facet `class_gate` says
+carries no allele of the asked class, or an array whose rows reaching the span all probe another
+class, answers `basis = class_not_carried`, `carried` unknown, still rows there, so no block or
+absence rule reads the position. A row that states the asked allele is read as it is, as
+`concordance` reads a matched allele. Blocks are read as before: a `ref` block answers only for an
+SNV, which a probe-shaped one-base block speaks for, and a caller's gVCF block cut to one class is
+still its reference call.
 
 `absence_is_reference(facet_row, variant_class, force=False)` is the rule in code, for just-vcf and
 for consumers that restore hom-ref themselves (just-prs, just-dna-lite). A position is absent when no
@@ -4134,6 +4142,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-23, RM304: `query` reads no row for a class it never looked at): no
+  column changes. Rule changed (Decision 4, as `query` reads it): `Query.carries` asks
+  `callset.class_gate` of a facet's row at the asked position, and reads an array's rows per probe
+  (`callset.reads_per_probe`, `callset.row_class_expr`), before answering `site_genotyped`. A new
+  `PresenceBasis` member, `class_not_carried`, carried unknown. **Values change**: an indel-only
+  facet's hom-ref insertion row, or a chip's `DD` insertion probe row, at an SNV's position answered
+  `site_genotyped`, `carried=False`; it now answers `class_not_carried`, unknown. No stored frame or
+  computed result is keyed by a version here.
 
 - **No version change in the frames** (2026-11-23, RM303 part 3: a GET-Evidence GFF's blocks read
   per probe): no column changes. Rule changed (Decision 4's blocks, as `concordance` and `consensus`

@@ -11,6 +11,23 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `query`'s `carries` reads no row for a class the row never looked at (RM304), the rule `concordance`,
+  `consensus` and the panel reads took in RM299 to RM303. Where no row states the asked allele, a row at
+  its position over the same REF read the site as genotyped without it, `site_genotyped`,
+  `carried=False` for an SNV: an indel-only facet's hom-ref insertion row there, or a chip's `DD`
+  insertion probe row (a one-base REF, no ALT), answered as if it had genotyped the SNV. A facet that
+  `callset.class_gate` says carries no allele of the asked class, and an array whose rows reaching the
+  span all probe another class (`callset.reads_per_probe`, `callset.row_class_expr`), now answer
+  `class_not_carried` (a new `PresenceBasis` member), carried unknown, still rows there so no block or
+  absence rule reads the position. A row that states the asked allele is read as before, and so are
+  blocks: a gVCF's `ref` block cut to one class still answers an SNV inside it. Indels were never
+  answered `carried=False` from a row that does not state them, so only their basis can change. The
+  CLI does not ask presence. No version keys the answer. Minor. Tests:
+  `tests/test_query.py::test_an_indel_only_facets_row_says_nothing_of_an_snv_at_its_position` and
+  `tests/test_probe_class.py::test_query_reads_a_chips_insertion_probe_row_for_no_snv` fail on the old
+  code (`site_genotyped`, `carried=False`); the controls (a facet carrying SNVs, null and `[]` classes, a
+  chip's SNV probe rows, an export before `resolve_ref`, a gVCF block) pass on both.
+
 - A GET-Evidence GFF's blocks are read per probe (RM303, part 3), in `concordance` and `consensus`.
   The GFF loads each `REF` row (a hom-ref site it lists) as a one-base `ref` block beside its `SNP`
   rows, so its block at another facet's insertion anchor, or at a deletion's first base, read

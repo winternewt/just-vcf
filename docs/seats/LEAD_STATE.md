@@ -10,6 +10,6 @@ just-vcf reads 23andMe-style array exports, other genotype tables and VCF/gVCF i
 
 **Next**
 1. ⏳ Release 0.1.0 — the person.
-2. 🚧 The same fix for ancestry and relatedness (RM302, building now), then arrays read probe by probe (RM303) — lead, unattended. Plain-text array exports are covered since RM301.
+2. 🚧 Array rows read probe by probe (RM303, building now), then the same rule for `query` (RM304) — lead, unattended.
 3. 🚧 Last rules for imputed data (RM287) — lead, waits on desk #212, #213, #214.
 4. ⏳ The remaining v4 insertion/deletion rows (RM281) — lead, looked at again 2026-12-07.

@@ -17,7 +17,7 @@ asks `class_gate`. The row is RM302's rule: where the facet carries no allele of
 answers unknown. The block waits for RM303's reading of blocks, and follows it.
 
 ## RM303 — An array's row speaks only for its own probe's class
-**State:** unattended: a test first for each case below, on the current code · **Owner:** lead
+**State:** building: an opus builder in its worktree, 2026-11-23, a test first for each case below · **Owner:** lead
 
 Severity: low · Status: open, found 2026-11-23 by RM301's builder.
 

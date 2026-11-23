@@ -20,7 +20,7 @@ filtered gVCF should leave a gap where the cut row was, so that is likely moot, 
 either way.
 
 ## RM301 — A genotype table's variant classes are counted once its REF is read
-**State:** unattended: build after RM299, a test first · **Owner:** lead
+**State:** building: an opus builder in its worktree, 2026-11-23, a test first · **Owner:** lead
 
 Severity: low · Status: open, found 2026-11-23 by RM299's builder.
 

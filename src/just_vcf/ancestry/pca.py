@@ -329,12 +329,13 @@ def infer_ancestry(
         "n_sites_absent_as_reference": counts.n_absent_as_reference,
         "n_sites_unusable": counts.n_unusable,
         "n_sites_ref_unstated": counts.n_ref_unstated,
+        "n_sites_class_not_carried": counts.n_class_not_carried,
         "coverage": coverage,
     }
     logger.info(
-        "%s on %s/%s: %d of %d sites (%d observed, %d absent read as reference, %d unusable, %d with a REF that states no base)",
+        "%s on %s/%s: %d of %d sites (%d observed, %d absent read as reference, %d unusable, %d with a REF that states no base, %d from a facet that carries no SNV)",
         facet.facet_id, panel, model.assembly, counts.n_used, n_panel,
-        counts.n_observed, counts.n_absent_as_reference, counts.n_unusable, counts.n_ref_unstated,
+        counts.n_observed, counts.n_absent_as_reference, counts.n_unusable, counts.n_ref_unstated, counts.n_class_not_carried,
     )
     if counts.n_used == 0 or coverage < coverage_floor:
         return AncestryEstimate(

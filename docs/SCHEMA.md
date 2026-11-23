@@ -753,7 +753,15 @@ reads `wgs` at a floor of its own (Decision 5), since the label says what was se
 says what was kept, and only the filter gates absence. The panel reads
 (`just_vcf.site_genotypes`, and somalier's `--unknown`) take a weak or omitted reference as an SNV's
 only where `absence_is_reference(facet, "snv", force=True)` is True, so an indel-only half's silence at
-an SNV site is unknown.
+an SNV site is unknown. Its rows there say nothing either (RM302, the rule `concordance` and
+`consensus` read rows by, RM299 and RM300): where `callset.class_gate(facet, "snv")` says the facet
+carries no SNV (none among its `variant_classes`, or its `content_filter` cut SNVs away, even where a
+residue is left), `read_site_genotypes` reads no row of it at a panel site, `basis =
+class_not_carried`, unknown and still a row there, so the absence rule does not reach it either. An
+indel-only facet's hom-ref insertion row at a panel SNV's position has the haplotypes REF and REF,
+both panel alleles, and read as zero copies of the panel's ALT. A facet whose classes were not counted
+(null) is read as before. `ancestry` counts such sites apart (`SiteDosages.n_class_not_carried`,
+`AncestryEstimate.n_sites_class_not_carried`).
 
 `absence_is_reference(facet_row, variant_class, force=False)` is the rule in code, for just-vcf and
 for consumers that restore hom-ref themselves (just-prs, just-dna-lite). A position is absent when no
@@ -4072,6 +4080,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-23, RM302: the panel-site reading reads no row of a facet that
+  carries no SNV): no column changes. Rule changed (Decision 4): `read_site_genotypes`, behind
+  `relatedness` and `ancestry`, reads no row of a facet `callset.class_gate` says carries no SNV, at
+  any panel site, `basis = class_not_carried` (a new `SiteBasis` member in that computed frame, none
+  stored), counted by ancestry as `n_sites_class_not_carried` (a new optional field of
+  `AncestryEstimate`, null on an estimate made before). **Values change**: an indel-only facet's
+  hom-ref insertion row at a panel SNV no longer reads as zero copies, and a facet cut to its indels
+  reads no SNV of its residue; such a facet now reads no panel site at all.
 
 - **No version change** (2026-11-23, RM301: a genotype table's classes counted once its REF is read):
   no column changes. Rule changed (Decision 4): `resolve_ref` fills `facets.variant_classes` for a facet

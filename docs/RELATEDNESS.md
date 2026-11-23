@@ -19,7 +19,10 @@ not about who their people are.
   never 0; so is a row whose source REF is only `N` (`ref_check = unstated`, a copy-number caller's
   REF) with a sequence ALT, whose letters were spelled against the `N` (`N` → `G`, `1/1`, names no
   base beside `G`): the site is unknown, `ref_unstated`, and still a row there, so the absence rule
-  does not reach it; an absent site is homozygous reference only where the facet's `absence_means` says so
+  does not reach it; so is every row of a facet that carries no SNV (no SNV among its
+  `variant_classes`, or its `content_filter` cut SNVs away, `callset.class_gate`), whose hom-ref
+  insertion row at a panel site would otherwise read as zero copies: `class_not_carried`, RM302;
+  an absent site is homozygous reference only where the facet's `absence_means` says so
   (`weak_reference`, inside a `ref` block for `blocks`, outside every block for `reference`). An
   array's silence stays unknown.
 - **Kinship.** KING-robust (Manichaikul et al. 2010), the between-family form PLINK 2's `--make-king`

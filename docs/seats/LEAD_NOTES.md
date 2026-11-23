@@ -108,6 +108,10 @@ each reset.
    its block part 4187b91 left unmerged on branch rm302 (it withheld a cut gVCF's true reference blocks; the GFF case
    went to RM303). Suite 2909 passed, 77 skipped, 8 xfailed on both majors. **Audit 18 started 2026-11-23** over
    571daec..018f0ca, the repo-prep copy, Grok and Sol via Cursor.
+   Findings: Grok none; Sol one, confirmed by reading (its premise left to the fix builder's first test):
+   `class_gate` reads `variant_classes == []` as `class_not_called` for every class, and RM301 can give `[]` for a
+   resolved table of only hom-ref rows, so its rows go unread everywhere. The lead's call for veto: `[]` reads as
+   unknown, like null. One fix builder running.
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

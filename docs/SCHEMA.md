@@ -3234,7 +3234,18 @@ facet's in this order, each row saying which in `key`:
    mismatch that is only representation. Several rows there and none with the allele (a split file)
    are not read against, counted in a warning. Nor is a row whose source REF states no base and
    which spells a sequence ALT (Decision 2): its haplotypes were spelled against the `N`. Either way
-   the allele stays one-sided, `absence = other_alleles`.
+   the allele stays one-sided, `absence = other_alleles`. Nor, finally, the one row of a facet that
+   carries no allele of this allele's class (RM299): the class is not among its `variant_classes`, or
+   its `content_filter` cut it away, even where a residue of the class is left
+   (`callset.class_gate`'s `class_not_called` and `class_cut_by_filter`, the gates `absence_support`
+   reads its silence by). An array export with no indel row, or a genome cut to its SNVs, wrote an SNV
+   row at the base an insertion is anchored on; that row holds REF there whatever the insertion, so
+   its genotype would read as zero copies, a mismatch from a class the facet never looked at (an array
+   against a CGI genome read 15,869 such indels, all of them discordant). Its row says no more of the
+   allele than its silence would: the allele stays one-sided, `absence = class_not_carried`,
+   counted in a warning per class. The same holds both ways and for any class: an SNV against a
+   facet cut to its indels. A facet whose classes were not counted (`variant_classes` null, a genotype
+   table) is unknown, not a facet that lacks the class, and its row is read as before.
 
 An allele stated by several rows of one facet (`normalize` keeps rows that differ, charter 8) pairs
 with each, counted in a warning.
@@ -3304,8 +3315,10 @@ comparison reads them: `p_same = p_a(0) p_b(0) + p_a(1) p_b(2)` for a haploid ag
 Rejected: a distance in log space (no probability to read), and comparing the most likely genotypes
 only, which is the hard comparison again.
 
-**One-sided alleles** carry `absence`, what the silent facet says, checked in this order: a row there
-without the allele (`other_alleles`, also on `site` pairings), a `ref` or `no_call` block over the
+**One-sided alleles** carry `absence`, what the silent facet says, checked in this order: one row there
+over the allele's REF that was not read because the facet carries no allele of the class
+(`class_not_carried`, above), a row there without the allele (`other_alleles`, also on `site`
+pairings), a `ref` or `no_call` block over the
 position (`ref_block`, `no_call_block`), else the facet's rule: `reference` when
 `absence_is_reference(facet, variant_class)` is True, `unknown` otherwise and on a contig the facet
 neither declared in its header nor wrote a row on. Never a negative (Decision 4). `absence` is null
@@ -3669,6 +3682,13 @@ row states and no genotype carries (a DeepVariant `RefCall` `0/0`, a split row's
 (`sample_filters`, FORMAT `FT`, where CGI writes `VQLOW`) is not read here: a confidence band's rate already
 weighs such calls, and leaving them out would hide a method's weakest calls from its measurement (desk #102,
 ended on this default 2026-11-22).
+
+**An allele of a class one side carries none of is one-sided, never called by both** (RM299): against
+an array export or a genome cut to its SNVs, an indel only the other side states is `only_a` or
+`only_b` (`absence = class_not_carried` where the SNV side wrote a row at the indel's anchor), even
+where that row's genotype would have read zero copies. In such a pair the class's
+one-sided rate measures what the facet holds, not a method's error, and its discordance has no
+alleles to rest on.
 
 **The two sides are put in method order** (caller, then caller version, unknown first) and `only_a`
 and `only_b` follow them, so a pair counts the same whichever facet comes first and pairs of the same

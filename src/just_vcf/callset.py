@@ -525,6 +525,34 @@ class AbsenceSupport(BaseModel):
         return self.reads_reference is True
 
 
+CLASS_UNSAID = frozenset({AbsenceReason.CLASS_CUT_BY_FILTER, AbsenceReason.CLASS_NOT_CALLED})
+"""The `class_gate` answers under which a facet carries no allele of the class: neither its silence nor
+its rows say anything of that class."""
+
+
+def class_gate(facet: Mapping[str, object], variant_class: VariantClass | str) -> AbsenceReason | None:
+    """`absence_support`'s gates on the facet's classes, which ask what its rows carry, not what its
+    silence means, so they hold whatever its `absence_means`: `class_not_counted` (`variant_classes`
+    null), `class_cut_by_filter` (its `content_filter` cut the class away) and `class_not_called` (it
+    wrote no allele of the class), in that order; None where it carries the class.
+
+    Under the last two (`CLASS_UNSAID`) a row of the facet says nothing of an allele of the class
+    either: an SNV row at the base an insertion is anchored on, in a facet that carries no indel, was
+    never a statement about the insertion (RM299, `concordance`). `class_not_counted` is unknown, not
+    a class the facet lacks."""
+    asked = VariantClass(variant_class)
+    counted = facet.get("variant_classes")
+    if not isinstance(counted, list):
+        return AbsenceReason.CLASS_NOT_COUNTED
+    content_filter = facet.get("content_filter")
+    # A class the filter cut is named so before the class count: the cut is why the facet wrote none.
+    if content_filter is not None and CONTENT_FILTER_KEEPS[ContentFilter(content_filter)] is not asked:
+        return AbsenceReason.CLASS_CUT_BY_FILTER
+    if asked.value not in {entry["variant_class"] for entry in counted if entry["alleles"]}:
+        return AbsenceReason.CLASS_NOT_CALLED
+    return None
+
+
 def absence_support(facet: Mapping[str, object], variant_class: VariantClass | str, *, force: bool = False) -> AbsenceSupport:
     """`absence_is_reference` with its reason: the gates below, in that order, each with its own reason.
 
@@ -543,15 +571,10 @@ def absence_support(facet: Mapping[str, object], variant_class: VariantClass | s
             return AbsenceSupport(reads_reference=None, reason=AbsenceReason.CALLSET_TYPE_UNKNOWN)
         unknown = _UNKNOWN_BY_CALLSET.get(CallsetType(stated).value, AbsenceReason.ABSENCE_NOT_CARRIED)
         return AbsenceSupport(reads_reference=None, reason=unknown)
-    counted = facet.get("variant_classes")
-    if not isinstance(counted, list):
-        return AbsenceSupport(reads_reference=None, reason=AbsenceReason.CLASS_NOT_COUNTED)
+    gate = class_gate(facet, asked)
+    if gate is not None:
+        return AbsenceSupport(reads_reference=None, reason=gate)
     content_filter = facet.get("content_filter")
-    # A class the filter cut is named so before the class count: the cut is why the facet wrote none.
-    if content_filter is not None and CONTENT_FILTER_KEEPS[ContentFilter(content_filter)] is not asked:
-        return AbsenceSupport(reads_reference=None, reason=AbsenceReason.CLASS_CUT_BY_FILTER)
-    if asked.value not in {entry["variant_class"] for entry in counted if entry["alleles"]}:
-        return AbsenceSupport(reads_reference=None, reason=AbsenceReason.CLASS_NOT_CALLED)
     if content_filter is not None:
         if not force:
             return AbsenceSupport(reads_reference=None, reason=AbsenceReason.CONTENT_FILTER_HELD)

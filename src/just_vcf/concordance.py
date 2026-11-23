@@ -17,6 +17,9 @@ and why. Disagreement is kept as rows, never resolved to a winner. The rules are
    `(chrom, pos, REF, ALT)` as written. An allele neither meets is paired with the other facet's one
    row at that position, if it wrote exactly one (an array's hom-ref row, a DeepVariant `RefCall`, the
    other ALT of a site): that row's genotype says how many copies of this allele it holds (key `site`).
+   Not where that facet carries no allele of this allele's class (none among its `variant_classes`,
+   or the class cut by its `content_filter`): an SNV-only facet's row at the base an insertion is
+   anchored on says nothing of the insertion, which stays one-sided (`class_not_carried`, RM299).
 3. **Genotypes are compared as copies of the allele**, from `gt_alleles`, unordered (phase is not
    comparable across facets): `match`, `mismatch`, or `uncalled` where a haplotype is null and the
    called ones do not contradict. A haploid call against the same allele's diploid homozygote is a
@@ -30,9 +33,10 @@ and why. Disagreement is kept as rows, never resolved to a winner. The rules are
    the vector enumerates (`gl_flat_prior`, the prior named); posteriors (`gp`) are used as given,
    renormalized to sum to 1. A likelihood is never compared with a posterior (Decision 3). Anything
    else is `hard`, and `p_same` is null: a hard call has no probability, and none is made up.
-5. **One-sided alleles** say what the silent facet's silence means: a `ref` or `no_call` block over
-   the position, `other_alleles` (rows at the position, none holding the allele), else the facet's
-   own rule (`absence_is_reference`: `reference`, or `unknown`, never a negative).
+5. **One-sided alleles** say what the silent facet's silence means: `class_not_carried` (its one row
+   there was not read, 2 above), `other_alleles` (rows at the position, none holding the allele), a
+   `ref` or `no_call` block over the position, else the facet's own rule (`absence_is_reference`:
+   `reference`, or `unknown`, never a negative).
 6. **Structural variants meet by type and extent** (RM282), as truvari bench matches them
    (`SvMatching`, its defaults): a symbolic allele (`<DEL>`, `<DUP:TANDEM>`, `<CN0>`) pairs with at
    most one of the other facet's, of the same type (the ALT's name before any `:`), whose extent lies
@@ -66,7 +70,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
 from just_vcf.breakends import ASSEMBLY_CONTIG, SINGLE_BREAKEND, breakend_parts
-from just_vcf.callset import NOT_A_VARIANT, absence_is_reference, variant_class_expr
+from just_vcf.callset import CLASS_UNSAID, NOT_A_VARIANT, absence_is_reference, class_gate, variant_class_expr
 from just_vcf.intervals import contig_join, covering, nearest_block
 from just_vcf.loaders.vcf import version_tuple
 from just_vcf.loading import Loaded
@@ -135,6 +139,11 @@ class AbsenceReading(str, Enum):
     UNKNOWN = "unknown"
     """No row and no block, and the facet's absence says nothing (`absence_is_reference` is None, or
     the facet never had the contig)."""
+    CLASS_NOT_CARRIED = "class_not_carried"
+    """It wrote one row at the position over the allele's REF, which would be read for copies (key
+    `site`), but it carries no allele of the allele's class: none among its `variant_classes`, or the
+    class cut by its `content_filter` (`callset.class_gate`). Its row says no more of the allele than its
+    silence would (RM299): an SNV-only facet's row at the base an insertion is anchored on."""
 
 
 class ComparisonBasis(str, Enum):
@@ -814,11 +823,24 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
     # Nor a row whose source REF states no base and which spells a sequence ALT (F23): its haplotypes
     # were spelled against that `N` (`N` → `G`, `1/1`, read over `T` would hold no copy of `T` → `C`),
     # so the allele stays one-sided, the row counted as there (`other_alleles`) and not read.
-    single = ((pl.col("_rows") == 1) & (pl.col("_other_ref") == pl.col("_ref").str.to_uppercase()) & ~pl.col("_other_unstated")).fill_null(False)
+    readable = ((pl.col("_rows") == 1) & (pl.col("_other_ref") == pl.col("_ref").str.to_uppercase()) & ~pl.col("_other_unstated")).fill_null(False)
+    # Nor a row of a facet that carries no allele of this allele's class (RM299): an SNV-only facet's
+    # row at the base an insertion is anchored on holds REF there whatever the insertion, so its
+    # genotype would read as zero copies. Where `class_gate` says its silence speaks for no allele of
+    # the class, its rows speak for none either. Classes not counted (null) are unknown, and its rows
+    # are read as they are.
+    unsaid = [cls.value for cls in VariantClass if class_gate(other_facet, cls) in CLASS_UNSAID]
+    not_carried = readable & pl.col("variant_class").is_in(unsaid)
+    single = readable & ~not_carried
     several = (pl.col("_rows") > 1).fill_null(False)
     n_several = mine.filter(several).height
     if n_several:
         warnings.append(f"{n_several} alleles of facet {side} meet several rows of facet {other_side} at their position and none with the allele; not read against them")
+    for cls, count in mine.filter(not_carried).group_by("variant_class").len().sort("variant_class").iter_rows():
+        warnings.append(
+            f"{count} {cls} alleles of facet {side} meet one row of facet {other_side} at their position, and facet {other_side} carries no allele "
+            "of that class (variant_classes, content_filter); not read against it (absence class_not_carried)"
+        )
     mine = mine.with_columns(
         *[pl.when(single).then(pl.col(name)).alias(name) for name in (f"{other_side}_gt_alleles", f"{other_side}_filters", f"{other_side}_gq", f"_{other_side}_row")],
         pl.when(single).then(pl.col("pos")).alias(f"{other_side}_pos"),
@@ -831,7 +853,9 @@ def _one_sided(rest: pl.DataFrame, other: Loaded, other_facet: Mapping, side: st
     if undeclared:
         warnings.append(f"{undeclared} alleles of facet {side} lie on contigs facet {other_side} neither declared nor called; its absence there is unknown")
     absence = (
-        pl.when(pl.col("_rows").is_not_null())
+        pl.when(not_carried)
+        .then(pl.lit(AbsenceReading.CLASS_NOT_CARRIED.value))
+        .when(pl.col("_rows").is_not_null())
         .then(pl.lit(AbsenceReading.OTHER_ALLELES.value))
         .when(pl.col("_block") == BlockKind.REF.value)
         .then(pl.lit(AbsenceReading.REF_BLOCK.value))

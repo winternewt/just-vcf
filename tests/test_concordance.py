@@ -205,6 +205,107 @@ def test_a_row_over_another_span_is_not_read_for_copies(tmp_path: Path, store: R
     assert (lone["agreement"], lone["key"], lone["absence"], lone["b_copies"], lone["b_gt_alleles"]) == ("only_a", None, "other_alleles", None, None)
 
 
+ANCHOR = 100
+"""On contig 2: the base an insertion is anchored on, where the other facet wrote one SNV row."""
+
+
+def _insertion(pos: int, gt: str) -> Record:
+    ref = base("2", pos)
+    return ("2", pos, ref, ref + other(base("2", pos + 1)) * 2, gt, {})
+
+
+def _deletion(pos: int, gt: str) -> Record:
+    ref = base("2", pos, 3)
+    return ("2", pos, ref, ref[0], gt, {})
+
+
+def _whole_genome(tmp_path: Path, store: ReferenceStore, at_anchor: Record) -> Loaded:
+    """A facet that carries SNVs and indels (both in `variant_classes`), with `at_anchor` at ANCHOR."""
+    return facet(tmp_path, "wgs", [at_anchor, snv("2", 300, "0/1"), _deletion(500, "0/1")], store)
+
+
+def _one_sided_side(sites: pl.DataFrame, alt: str) -> dict:
+    return sites.filter((pl.col("pos") == ANCHOR) & (pl.col("alt") == alt)).row(0, named=True)
+
+
+@pytest.mark.parametrize("wgs_first", [True, False])
+def test_an_snv_only_facet_row_says_nothing_of_an_insertion_anchored_on_it(tmp_path: Path, store: ReferenceStore, wgs_first: bool) -> None:
+    """RM299. A facet whose rows carry no indel (an array export, a genome cut to its SNVs) wrote an SNV
+    row at the base an insertion of the other facet is anchored on. That row says nothing of the
+    insertion: the allele stays one-sided (`class_not_carried`), never a mismatch of zero copies. The
+    other way round is unchanged: the whole genome carries SNVs, so its insertion row is read for the
+    SNV facet's allele. Either facet may be given first."""
+    insertion = _insertion(ANCHOR, "0/1")
+    wgs = _whole_genome(tmp_path, store, insertion)
+    snv_only = facet(tmp_path, "array", [snv("2", ANCHOR, "0/1"), snv("2", 300, "0/1"), snv("2", 700, "1/1")], store)
+    assert {entry["variant_class"] for entry in snv_only.facets.collect()["variant_classes"][0]} == {"snv"}
+    a, b = (wgs, snv_only) if wgs_first else (snv_only, wgs)
+    result = concordance(a, b)
+    sites = result.sites.collect()
+    wgs_side, silent = ("a", "b") if wgs_first else ("b", "a")
+    lone = _one_sided_side(sites, insertion[3])
+    assert (lone["variant_class"], lone["key"], lone["agreement"], lone["absence"], lone["basis"]) == (
+        "indel", None, f"only_{wgs_side}", "class_not_carried", None,
+    )  # fmt: skip
+    assert (lone[f"{wgs_side}_copies"], lone[f"{silent}_copies"], lone[f"{silent}_gt_alleles"], lone[f"{silent}_pos"]) == (1, None, None, None)
+    assert any("carries no allele of that class" in line and "indel" in line for line in result.warnings)
+    # The SNV facet's own allele at the anchor is read against the whole genome's row, as before.
+    own = _one_sided_side(sites, other(base("2", ANCHOR)))
+    assert (own["key"], own["agreement"], own["absence"], own[f"{wgs_side}_copies"]) == ("site", "mismatch", "other_alleles", 0)
+    # No allele of the class the SNV facet lacks is counted as called by both.
+    indels = sites.filter(pl.col("variant_class") == "indel")
+    assert set(indels["agreement"].to_list()) == {f"only_{wgs_side}"}
+
+
+def test_an_indel_only_facet_row_says_nothing_of_an_snv_at_its_anchor(tmp_path: Path, store: ReferenceStore) -> None:
+    """The mirror: a facet that carries only indels wrote an insertion row at a base where the other
+    facet calls an SNV. The SNV stays one-sided; the insertion is read against the SNV facet's row,
+    since that facet carries indels."""
+    wgs = _whole_genome(tmp_path, store, snv("2", ANCHOR, "0/1"))
+    insertion = _insertion(ANCHOR, "0/1")
+    indel_only = facet(tmp_path, "indels", [insertion, _deletion(500, "0/1"), _deletion(900, "1/1")], store)
+    assert {entry["variant_class"] for entry in indel_only.facets.collect()["variant_classes"][0]} == {"indel"}
+    sites = concordance(wgs, indel_only).sites.collect()
+    lone = _one_sided_side(sites, other(base("2", ANCHOR)))
+    assert (lone["variant_class"], lone["key"], lone["agreement"], lone["absence"], lone["a_copies"], lone["b_copies"]) == (
+        "snv", None, "only_a", "class_not_carried", 1, None,
+    )  # fmt: skip
+    read = _one_sided_side(sites, insertion[3])
+    assert (read["key"], read["agreement"], read["absence"], read["a_copies"], read["b_copies"]) == ("site", "mismatch", "other_alleles", 0, 1)
+
+
+def test_a_class_cut_by_the_content_filter_is_not_read_even_from_a_residue(tmp_path: Path, store: ReferenceStore) -> None:
+    """A genome cut to its SNVs (`.snp.` names the cut; the rows are too few to settle it) keeps an
+    indel residue, so `indel` is among its `variant_classes`; the filter alone says its rows speak for
+    no indel, as `absence_is_reference` reads its silence (`class_cut_by_filter`)."""
+    insertion = _insertion(ANCHOR, "0/1")
+    wgs = _whole_genome(tmp_path, store, insertion)
+    cut = facet(tmp_path, "cut.snp", [snv("2", ANCHOR, "0/0", alt=other(base("2", ANCHOR))), snv("2", 300, "0/1"), _deletion(900, "0/1")], store)
+    row = cut.facets.collect().row(0, named=True)
+    assert row["content_filter"] == "snv_only"
+    assert {entry["variant_class"] for entry in row["variant_classes"]} == {"snv", "indel"}
+    lone = _one_sided_side(concordance(wgs, cut).sites.collect(), insertion[3])
+    assert (lone["key"], lone["agreement"], lone["absence"], lone["b_copies"]) == (None, "only_a", "class_not_carried", None)
+
+
+def test_a_facet_that_carries_the_class_is_read_as_before(tmp_path: Path, store: ReferenceStore) -> None:
+    """The control: the other facet carries indels (one elsewhere, no filter), so its SNV row at the
+    anchor is read for the insertion: zero copies, a mismatch. And a facet whose classes were not
+    counted (null `variant_classes`, a genotype table) keeps that reading: not counted is unknown, not
+    a class it lacks, and its rows still say what they say."""
+    insertion = _insertion(ANCHOR, "0/1")
+    wgs = _whole_genome(tmp_path, store, insertion)
+    carries = facet(tmp_path, "carries", [snv("2", ANCHOR, "0/0", alt=other(base("2", ANCHOR))), snv("2", 300, "0/1"), _deletion(900, "0/1")], store)
+    read = _one_sided_side(concordance(wgs, carries).sites.collect(), insertion[3])
+    assert (read["key"], read["agreement"], read["absence"], read["a_copies"], read["b_copies"]) == ("site", "mismatch", "other_alleles", 1, 0)
+
+    snvs = facet(tmp_path, "uncounted", [snv("2", ANCHOR, "0/0", alt=other(base("2", ANCHOR))), snv("2", 300, "0/1")], store)
+    classes = snvs.facets.collect_schema()["variant_classes"]
+    uncounted = Loaded(facets=snvs.facets.with_columns(pl.lit(None, dtype=classes).alias("variant_classes")), calls=snvs.calls, blocks=snvs.blocks)
+    read = _one_sided_side(concordance(wgs, uncounted).sites.collect(), insertion[3])
+    assert (read["key"], read["agreement"], read["absence"], read["b_copies"]) == ("site", "mismatch", "other_alleles", 0)
+
+
 def _complex_row(pos: int, siblings: list[str], gt: str, **extra: str) -> Record:
     """A haplotype caller's multi-allelic row over five bases at `pos`, with `siblings` as its ALTs."""
     return ("1", pos, base("1", pos, 5), ",".join(siblings), gt, extra)

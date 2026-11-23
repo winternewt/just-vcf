@@ -11,6 +11,23 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- `concordance` no longer reads a facet's row for an allele of a class that facet carries none of
+  (RM299). An array export with no indel row, or a genome cut to its SNVs, wrote an SNV row at the base
+  another facet's insertion is anchored on; the `site` key read that row's genotype as zero copies of
+  the insertion, so the allele counted as called by both and discordant (RM279: an array against a CGI
+  genome read 15,869 such indels, all discordant; a DRAGEN SNV file 4,009, 78.7%). Where the class is
+  not among the facet's `variant_classes`, or its `content_filter` cut it away, its row now says no
+  more of the allele than its silence already did: the allele is `only_a`/`only_b` with the new
+  `absence` value `class_not_carried`, counted in a warning per class. It holds both ways and for any
+  class (an SNV against a genome cut to its indels). A facet whose classes were not counted (null, a
+  genotype table) keeps the old reading. The class gates are `callset.class_gate`, which
+  `absence_support` now reads too, unchanged. A consumer matching on `absence`'s categories meets a
+  new one; no stored frame or schema changes, and `method_atlas` counts such alleles one-sided. Minor.
+  Tests: `tests/test_concordance.py::test_an_snv_only_facet_row_says_nothing_of_an_insertion_anchored_on_it`,
+  `::test_an_indel_only_facet_row_says_nothing_of_an_snv_at_its_anchor` and
+  `::test_a_class_cut_by_the_content_filter_is_not_read_even_from_a_residue` fail on the old code;
+  `::test_a_facet_that_carries_the_class_is_read_as_before` pins what stays.
+
 - `ReferenceStore.add_fasta(…, assembly_label=X)` refuses X for a second collection while X is asserted for
   another, with a `ReferenceMismatchError` naming the collection that holds it. On the locked gtars 0.10 the
   label moved off the first collection without a word, so that collection lost its assembly; gtars 0.12

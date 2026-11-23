@@ -11,6 +11,25 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- An array's row speaks only for its own probe's class (RM303, part 1), in `concordance`, `consensus`
+  and `read_site_genotypes` alike. RM299 to RM302 gated a facet's rows by the classes the whole facet
+  carries (`callset.class_gate`), right for a whole-genome caller but not for a chip, which is a set of
+  probes each for its own allele: a chip with one resolved non-REF indel counts `indel`, so its hom-ref
+  SNV probe row at another facet's insertion anchor read as zero copies again (a mismatch, a vote
+  against); a chip whose `I`/`D` rows are all hom-ref counts no indel, so its deletion probe row was
+  withheld from the very deletion it probes; and a hom-ref insertion probe row (`DD`, a one-base REF
+  twice) read at a panel SNV as zero copies. A facet whose `callset_type` is `array`
+  (`callset.reads_per_probe`) is now read per probe: a row is there for an allele only where the row's
+  own class (`callset.row_class_expr`: `indel` for an `I`/`D` code kept in `source_gt` or an ALT of
+  another length than REF, a hom-ref row over a REF longer than a base being a deletion probe read
+  `II`; otherwise `snv` over a one-base REF) is the allele's, and rows of other classes alone leave the
+  allele `class_not_carried`. A row whose class cannot be told (REF not read) is read for every
+  class, as before. Whole-genome and other facets keep `class_gate` exactly. The array's concordance
+  warning for such alleles is worded for probes. `CONSENSUS_VERSION` 8, so a consensus facet made
+  before gets a new `facet_id`. No stored frame or schema changes. Minor. Tests:
+  `tests/test_probe_class.py` (the chip cases fail on the old code; the whole-genome controls pass on
+  both).
+
 - `callset.class_gate` no longer reads a facet that wrote no allele of any class as one that lacks
   every class (audit 18). `variant_classes` of `[]` (counted, no class with an allele) answered
   `class_not_called` for every class, which is in `CLASS_UNSAID`, so RM299's to RM302's rule read none

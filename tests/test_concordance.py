@@ -337,7 +337,8 @@ def test_a_genotype_tables_snv_row_says_nothing_of_an_insertion_anchored_on_it(t
     assert (lone["variant_class"], lone["key"], lone["agreement"], lone["absence"], lone["a_copies"], lone["b_copies"]) == (
         "indel", None, "only_a", "class_not_carried", 1, None,
     )  # fmt: skip
-    assert any("carries no allele of that class" in line and "indel" in line for line in result.warnings)
+    # An array: since RM303 its row is withheld as an SNV probe's, not by the facet's classes.
+    assert any("each an array probe of another class" in line and "indel" in line for line in result.warnings)
 
 
 def test_a_facet_that_wrote_no_variant_allele_has_its_rows_read(tmp_path: Path, grch37: ReferenceStore) -> None:

@@ -577,6 +577,56 @@ def class_gate(facet: Mapping[str, object], variant_class: VariantClass | str) -
     return None
 
 
+def reads_per_probe(facet: Mapping[str, object]) -> bool:
+    """Whether the facet's rows are read per probe (RM303): its `callset_type` is `array`.
+
+    An array is a set of probes, each for its own allele, so a row of it speaks only for alleles of the
+    row's own class (`row_class_expr`), whatever classes the whole facet carries; `class_gate` is not
+    asked of its rows. A whole genome is read by `class_gate`: a caller that wrote an SNV row at a base
+    would have written an insertion anchored there too, had it seen one. `callset_type` may be the enum
+    member or its value."""
+    stated = facet.get("callset_type")
+    return stated is not None and CallsetType(stated) is CallsetType.ARRAY
+
+
+_ID_CODE = r"[ID]"
+"""An array's indel genotype letters (`reference.CODES`) in `source_gt`, which keeps them once
+`resolve_ref` spells the row's alleles as sequences."""
+
+
+def row_class_expr(ref: pl.Expr, alts: pl.Expr, source_gt: pl.Expr) -> pl.Expr:
+    """The `VariantClass` an array row probes, as a string, or null where it cannot be told (RM303).
+
+    An array row probes one allele, so its class is that allele's: `indel` where `source_gt` holds an
+    `I`/`D` code (`resolve_ref` spells such a row against a manifest's indel probe and keeps the codes
+    there, and a hom-ref insertion probe, `DD`, is spelled as a one-base REF with no ALT: an SNV row's
+    shape), or where an ALT's length differs from REF's; otherwise, with an ALT, `snv` over a one-base
+    REF and `mnv` over a longer one. With no ALT (a hom-ref row), `snv` over a one-base REF, `indel`
+    over a longer one: the only hom-ref row an array writes with a REF longer than a base is a deletion
+    probe read `II`, and no array probes an MNV. A VCF export of a hom-ref insertion probe that writes
+    `ALT .` reads as an SNV probe: that withholds the row from an insertion, never reads it for one.
+
+    Null where REF was not read and no code says `indel` (an export before `resolve_ref`, a row it left
+    unread): the readers then read the row for every class, as they read the rows of a facet whose
+    classes were not counted. Not knowing a row's class is not knowing it is another."""
+    ref_len = ref.str.len_bytes()
+    lengths = alts.list.eval(pl.element().str.len_bytes())
+    with_alt = (alts.list.len() > 0).fill_null(False)
+    return (
+        pl.when(source_gt.str.contains(_ID_CODE).fill_null(False))
+        .then(pl.lit(VariantClass.INDEL.value))
+        .when(ref.is_null())
+        .then(pl.lit(None, dtype=pl.String))
+        .when(with_alt & ((lengths.list.min() != ref_len) | (lengths.list.max() != ref_len)))
+        .then(pl.lit(VariantClass.INDEL.value))
+        .when(ref_len == 1)
+        .then(pl.lit(VariantClass.SNV.value))
+        .when(with_alt)
+        .then(pl.lit(VariantClass.MNV.value))
+        .otherwise(pl.lit(VariantClass.INDEL.value))
+    )
+
+
 def absence_support(facet: Mapping[str, object], variant_class: VariantClass | str, *, force: bool = False) -> AbsenceSupport:
     """`absence_is_reference` with its reason: the gates below, in that order, each with its own reason.
 

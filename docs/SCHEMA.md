@@ -761,7 +761,12 @@ it at a panel site, `basis = class_not_carried`, unknown and still a row there, 
 does not reach it either. An indel-only facet's hom-ref insertion row at a panel SNV's position has
 the haplotypes REF and REF, both panel alleles, and read as zero copies of the panel's ALT. A facet
 whose classes were not counted (null), or were counted and hold no allele of any class (`[]`,
-`no_variant_allele`, below), is read as before. `ancestry` counts such sites apart (`SiteDosages.n_class_not_carried`,
+`no_variant_allele`, below), is read as before. An array is read per probe instead (RM303,
+`callset.reads_per_probe`): only its rows that probe an SNV (`callset.row_class_expr`), or whose class
+cannot be told (an export read before `resolve_ref`), are rows at a panel site, whatever classes the
+chip carries, and a site where it wrote rows but none an SNV probe's is `class_not_carried`: a hom-ref
+insertion probe row (`DD`, a one-base REF twice) at a panel SNV's position read as zero copies.
+`ancestry` counts such sites apart (`SiteDosages.n_class_not_carried`,
 `AncestryEstimate.n_sites_class_not_carried`).
 
 `absence_is_reference(facet_row, variant_class, force=False)` is the rule in code, for just-vcf and
@@ -3283,6 +3288,19 @@ facet's in this order, each row saying which in `key`:
    wrote no allele of any class (`[]`: a table of hom-ref rows, a VCF of `ALT .` rows; `class_gate`'s
    `no_variant_allele`) names no class it lacks either, and its row is read: a hom-ref row where the
    other facet calls a het SNV is a mismatch, not one-sided (audit 18).
+   An array (`callset_type = array`, `callset.reads_per_probe`) is read per probe instead (RM303), and
+   `class_gate` is not asked of its rows: each row probes its own allele, so a row is there for an
+   allele only where the row's own class (`callset.row_class_expr`) is the allele's. The class is
+   `indel` where `source_gt` keeps an `I`/`D` code (a hom-ref insertion probe, `DD`, is spelled as a
+   one-base REF with no ALT, an SNV row's shape) or an ALT's length differs from REF's; a hom-ref row
+   over a REF longer than a base is a deletion probe read `II`; any other row over a one-base REF is
+   an SNV probe. A row whose class cannot be told (REF not read, no code) is there for every allele,
+   as a facet's rows whose classes were not counted are read. Where the chip wrote rows at the
+   position and none of the allele's class, the allele stays one-sided, `absence =
+   class_not_carried`. A chip that carries one resolved non-REF indel no longer has its SNV probe row
+   at an insertion's anchor read as zero copies of the insertion, and a chip whose `I`/`D` rows are
+   all hom-ref has its deletion probe row read for the deletion it probes (zero copies), where the
+   facet-level gate withheld it because the chip counted no indel.
 
 An allele stated by several rows of one facet (`normalize` keeps rows that differ, charter 8) pairs
 with each, counted in a warning.
@@ -3839,7 +3857,13 @@ not counted (`variant_classes` null: a genotype table whose REF was not read, or
 unknown, not a facet that lacks the class, and its row is read as `site` as before. A table whose REF
 `resolve_ref` read has its classes counted (RM301), and the rule reaches it. A facet that wrote no
 allele of any class (`[]`, `class_gate`'s `no_variant_allele`: a table of hom-ref rows) names no class
-it lacks, and its row is read as `site`, a vote of zero copies (`CONSENSUS_VERSION` 7, audit 18).
+it lacks, and its row is read as `site`, a vote of zero copies (`CONSENSUS_VERSION` 7, audit 18). An
+array is read per probe instead (`CONSENSUS_VERSION` 8, RM303; concordance's rule above): only its
+rows of the allele's own class (`callset.row_class_expr`), or of a class that cannot be told, are
+there for the allele, whatever classes the chip carries, and rows of other classes alone leave it
+silent, `class_not_carried`. Its SNV probe row at an insertion's anchor no longer votes zero copies
+of the insertion where the chip carries an indel elsewhere, and its hom-ref deletion probe row votes
+zero copies of the deletion it probes where the chip counts no indel.
 
 A row whose source REF states no base (`ref_check = unstated`) and which spells a sequence ALT
 states no allele of the consensus (`CONSENSUS_VERSION` 5): `N` → `G` read beside the reference's `T`
@@ -4096,6 +4120,16 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change in the frames** (2026-11-23, RM303: an array's row speaks only for its own
+  probe's class): no column changes. Rule changed (Decisions 1 and 4): `concordance`, `consensus` and
+  `read_site_genotypes` read a facet whose `callset_type` is `array` per probe, not by
+  `callset.class_gate`: a row is there for an allele only where its own class
+  (`callset.row_class_expr`, from REF, the ALTs and an `I`/`D` code in `source_gt`) is the allele's.
+  **Values change**: a chip's SNV probe row at an insertion's anchor is `class_not_carried` even where
+  the chip carries a resolved indel; a chip's hom-ref deletion probe row is read for its deletion
+  where the chip counts no indel; a hom-ref insertion probe row at a panel SNV is
+  `class_not_carried`. `CONSENSUS_VERSION` 8.
 
 - **No version change** (2026-11-23, RM302: the panel-site reading reads no row of a facet that
   carries no SNV): no column changes. Rule changed (Decision 4): `read_site_genotypes`, behind

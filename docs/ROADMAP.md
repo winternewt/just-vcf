@@ -6,8 +6,30 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM300 — Consensus reads no row of a facet for a class it carries none of
+**State:** unattended: build after RM299's rule, `callset.class_gate`, a test first that shows the defect on the current code · **Owner:** lead
+
+Severity: medium · Status: open, found 2026-11-23 by RM299's builder, not yet shown failing.
+
+`consensus` has its own reading of a facet's one row at an allele's position over the same REF
+(docstring point 2: "zero copies, `site`"), parallel to the one RM299 fixed in `concordance`. It very
+likely reads an array's or an SNV-only file's row at the base an insertion is anchored on as evidence
+of no copy, which a consensus would then weigh against the caller that saw the insertion. Where
+`class_gate` says the facet carries no allele of the class, its row says nothing of that class.
+
+## RM301 — A genotype table's variant classes are counted once its REF is read
+**State:** unattended: build after RM299, a test first · **Owner:** lead
+
+Severity: low · Status: open, found 2026-11-23 by RM299's builder.
+
+A 23andMe-style text export keeps `variant_classes` null even after `resolve_ref`, so RM299's rule
+cannot tell whether it carries indels, and its SNV rows still read as zero copies of an insertion
+anchored on them (the same array exported as VCF had its classes counted, and is fixed). Count the
+classes for a genotype table once its alleles are known, as the VCF loader counts them; where they
+cannot be known, they stay null.
+
 ## RM299 — A facet that carries no indels reads no copies of one
-**State:** building: an opus builder in its worktree, 2026-11-23 · **Owner:** lead
+**State:** building: merged ec9925b, the full suite running; then the RM279 array and DRAGEN SNV pairs rebuilt · **Owner:** lead
 
 Severity: medium · Status: open, found 2026-11-23 by RM279's last pairs.
 

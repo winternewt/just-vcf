@@ -2315,7 +2315,9 @@ just-vcf's, since Phenopackets has no place for an inference). From calls alone 
 `UNKNOWN_KARYOTYPE` are estimated, the last always with a reason: `y_present` is `True` or unknown,
 never `False`, because depth at called sites cannot show a Y absent (a man's GATK genome read below the
 present band, close to the two-X range), so `XX` and `XO` wait for a coverage facet. The PAR bounds and the X-degenerate
-Y come from GIAB's stratifications for GRCh37 and GRCh38, for T2T-CHM13 from GIAB's (PAR, XTR) with
+Y come from GIAB's stratifications for GRCh38; for GRCh37 the PARs are Ensembl's (NCBI's published
+PARs, which the sequence bears out where GIAB's do not) and the X-degenerate Y is GIAB's described Y
+less XTR and ampliconic, between those PARs; for T2T-CHM13 from GIAB's (PAR, XTR) with
 the T2T consortium's X-degenerate class, and for GRCh36 from NCBI36's PARs as Ensembl 54 records them
 with GRCh37's X-degenerate Y lifted through UCSC's hg19ToHg18 chain (docs/PROVENANCE.md); a label
 with none of these (NCBI35, or one a caller wrote) answers unknown (`unsupported_build`). The

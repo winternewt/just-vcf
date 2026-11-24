@@ -1,0 +1,8 @@
+Ensembl GRCh37 archive, release 116 (https://ftp.ensembl.org/pub/grch37/current/), core database dump,
+tables decompressed verbatim:
+https://ftp.ensembl.org/pub/grch37/current/mysql/homo_sapiens_core_116_37/
+  assembly_exception.txt.gz  sha256 f9cd2ab640d2f42f9c8c3a6aa76f8ad67c20dc704f9678aaafdcaebd9fd2320e  (CHECKSUMS: 61491 5)
+  coord_system.txt.gz        sha256 5e7fa395fa3c922a403b23be2aebef9778fcb11c798c723fc1fbb60933ceeea4  (CHECKSUMS: 24947 1)
+  seq_region.txt.gz          sha256 0ed7b6ad9080a36ac4ca9119801d1f919328e1139dfe05caab2eedf023e89b3f  (CHECKSUMS: 45679 513)
+Downloaded 2026-11-24. seq_region_XY.txt holds only the two seq_region rows assembly_exception's PAR rows
+name (27516 X, 27507 Y, coord_system 2 = chromosome GRCh37), verbatim and in file order. See docs/PROVENANCE.md.

@@ -1,5 +1,6 @@
 """Sex-chromosome evidence and the karyotype estimate it supports (RM269)."""
 
+import functools
 import random
 from pathlib import Path
 
@@ -121,28 +122,63 @@ def test_bed_conversion_keeps_the_bases() -> None:
     assert end - start + 1 == 3_050_044 - 2_781_479
 
 
-@pytest.mark.parametrize("build", sorted(GIAB_PREFIX))
+def giab_par_arms(build: str, chrom: str) -> tuple[tuple[int, int], tuple[int, int]]:
+    """PAR1 and PAR2 from the first to the last base of GIAB's PAR intervals on each arm, 1-based closed."""
+    intervals = bed(build, f"chr{chrom}_PAR")
+    middle = 30_000_000
+    par1 = [i for i in intervals if i[0] < middle]
+    par2 = [i for i in intervals if i[0] >= middle]
+    return to_closed(par1[0][0], max(e for _, e in par1)), to_closed(par2[0][0], max(e for _, e in par2))
+
+
+@pytest.mark.parametrize("build", ["GRCh38", "T2T-CHM13"])
 def test_par_bounds_are_the_giab_par_arms(build: str) -> None:
     for chrom in ("X", "Y"):
-        intervals = bed(build, f"chr{chrom}_PAR")
-        middle = 30_000_000
-        par1 = [i for i in intervals if i[0] < middle]
-        par2 = [i for i in intervals if i[0] >= middle]
-        expected = (to_closed(par1[0][0], max(e for _, e in par1)), to_closed(par2[0][0], max(e for _, e in par2)))
-        assert PAR_BOUNDS[build][chrom] == expected
+        assert PAR_BOUNDS[build][chrom] == giab_par_arms(build, chrom)
+
+
+def merged(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Half-open intervals with overlapping and touching ones joined."""
+    out: list[tuple[int, int]] = []
+    for start, end in sorted(intervals):
+        if out and start <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], end))
+        else:
+            out.append((start, end))
+    return out
+
+
+def x_degenerate(build: str) -> tuple[tuple[int, int], ...]:
+    """The rule for GRCh37 and GRCh38: the Y GIAB describes (nonPAR and PAR, gaps left out) less XTR and
+    ampliconic, clipped to lie between `PAR_BOUNDS`' PAR1 and PAR2, 1-based closed."""
+    described = merged(bed(build, "chrY_nonPAR") + bed(build, "chrY_PAR"))
+    rest = subtract(described, bed(build, "chrY_XTR") + bed(build, "chrY_ampliconic"))
+    (_, par1_end), (par2_start, _) = PAR_BOUNDS[build]["Y"]
+    closed = (to_closed(s, e) for s, e in rest)
+    return tuple((max(s, par1_end + 1), min(e, par2_start - 1)) for s, e in closed if s < par2_start and e > par1_end)
 
 
 @pytest.mark.parametrize("build", ["GRCh37", "GRCh38"])
-def test_x_degenerate_y_is_nonpar_minus_xtr_minus_ampliconic(build: str) -> None:
-    derived = subtract(bed(build, "chrY_nonPAR"), bed(build, "chrY_XTR") + bed(build, "chrY_ampliconic"))
-    (_, par1_end), (par2_start, _) = PAR_BOUNDS[build]["Y"]
-    closed = tuple(to_closed(s, e) for s, e in derived)
-    kept = tuple(i for i in closed if i[0] > par1_end and i[1] < par2_start)
+def test_x_degenerate_y_is_described_y_minus_xtr_minus_ampliconic_between_the_pars(build: str) -> None:
+    kept = x_degenerate(build)
     assert X_DEGENERATE_Y[build] == kept
-    # Only GRCh38's single base before PAR1 falls outside the PARs' span.
-    assert len(closed) - len(kept) == (1 if build == "GRCh38" else 0)
+    (_, par1_end), (par2_start, _) = PAR_BOUNDS[build]["Y"]
+    assert all(par1_end < start <= end < par2_start for start, end in kept)
     for start, end in kept:
         assert not any(s < end and start <= e for s, e in (to_closed(*i) for i in bed(build, "chrY_XTR") + bed(build, "chrY_ampliconic")))
+    # GIAB's own nonPAR less XTR and ampliconic, kept between GIAB's PARs: the derivation before RM269's
+    # PAR2 check. GRCh38's PARs are GIAB's, so only the base nonPAR lists before PAR1 differs.
+    giab_only = [to_closed(s, e) for s, e in subtract(bed(build, "chrY_nonPAR"), bed(build, "chrY_XTR") + bed(build, "chrY_ampliconic"))]
+    (_, giab_par1_end), (giab_par2_start, _) = giab_par_arms(build, "Y")
+    giab_kept = [(s, e) for s, e in giab_only if s > giab_par1_end and e < giab_par2_start]
+    bases = sum(e - s + 1 for s, e in kept) - sum(e - s + 1 for s, e in giab_kept)
+    if build == "GRCh38":
+        assert (len(giab_only) - len(giab_kept), tuple(giab_kept)) == (1, kept)
+    else:
+        # GRCh37 gains GIAB's PAR1 tail, Y-only sequence, and loses GIAB's nonPAR inside NCBI's PAR2.
+        assert (kept[0][0], giab_kept[0][0]) == (par1_end + 1, giab_par1_end + 1)
+        assert (kept[-1][1], giab_kept[-1][1]) == (par2_start - 1, giab_par2_start - 1)
+        assert bases == (giab_par1_end - par1_end) - (giab_par2_start - par2_start) == 100_286 - 99_421
 
 
 def t2t_classes(chrom: str) -> dict[str, list[tuple[int, int]]]:
@@ -186,29 +222,51 @@ def test_giabs_t2t_nonpar_less_xtr_is_not_x_degenerate() -> None:
     assert all(any(s <= start and end <= e for s, e in rest) for start, end in classes["HET"] + classes["CEN"])
 
 
-# --- GRCh36 (NCBI36): Ensembl 54's PARs, and GRCh37's X-degenerate Y lifted through UCSC's chain ---
+# --- Ensembl's PARs: GRCh37 (Ensembl's GRCh37 archive) and GRCh36 (NCBI36, Ensembl 54) ------------
+# GRCh36's X-degenerate Y is GRCh37's lifted through UCSC's chain.
 
-ENSEMBL_54 = ASSETS / "ensembl_54_ncbi36"
+ENSEMBL = {"GRCh37": (ASSETS / "ensembl_116_grch37", "GRCh37"), "GRCh36": (ASSETS / "ensembl_54_ncbi36", "NCBI36")}
+"""The assembly label → the carried Ensembl core tables and the coordinate system version they name."""
 HG19_TO_HG18_Y = ASSETS / "ucsc_liftover" / "hg19ToHg18.over.chain.chrY.chain"
 
 
-def ensembl_table(name: str) -> list[list[str]]:
-    return [line.split("\t") for line in (ENSEMBL_54 / name).read_text().splitlines() if line]
+def ensembl_table(directory: Path, name: str) -> list[list[str]]:
+    return [line.split("\t") for line in (directory / name).read_text().splitlines() if line]
 
 
-def test_grch36_par_bounds_are_ensembl_54s_par_exceptions() -> None:
+def ensembl_pars(build: str) -> dict[str, tuple[tuple[int, int], ...]]:
     """Ensembl stores each PAR once, on X, and Y's copy as an `assembly_exception` of type PAR pointing at
-    it. Coordinates are 1-based closed, as `pos` is; the seq_regions are NCBI36 chromosomes."""
-    (ncbi36,) = [row[0] for row in ensembl_table("coord_system.txt") if row[2:4] == ["chromosome", "NCBI36"]]
-    names = {row[0]: row[1] for row in ensembl_table("seq_region_XY.txt") if row[2] == ncbi36}
+    it. Coordinates are 1-based closed, as `pos` is; the seq_regions are the build's chromosomes."""
+    directory, version = ENSEMBL[build]
+    (system,) = [row[0] for row in ensembl_table(directory, "coord_system.txt") if row[2:4] == ["chromosome", version]]
+    names = {row[0]: row[1] for row in ensembl_table(directory, "seq_region_XY.txt") if row[2] == system}
     pars = sorted(
         ((int(y_start), int(y_end)), (int(x_start), int(x_end)))
-        for _, y, y_start, y_end, kind, x, x_start, x_end, _ in ensembl_table("assembly_exception.txt")
+        for _, y, y_start, y_end, kind, x, x_start, x_end, _ in ensembl_table(directory, "assembly_exception.txt")
         if kind == "PAR" and (names.get(y), names.get(x)) == ("Y", "X")
     )
-    assert PAR_BOUNDS["GRCh36"] == {"X": tuple(x for _, x in pars), "Y": tuple(y for y, _ in pars)}
+    return {"X": tuple(x for _, x in pars), "Y": tuple(y for y, _ in pars)}
+
+
+@pytest.mark.parametrize("build", sorted(ENSEMBL))
+def test_par_bounds_are_ensembls_par_exceptions(build: str) -> None:
+    assert PAR_BOUNDS[build] == ensembl_pars(build)
     # Each PAR is one sequence on both chromosomes: the same length on X and Y.
-    assert [e - s for s, e in PAR_BOUNDS["GRCh36"]["X"]] == [e - s for s, e in PAR_BOUNDS["GRCh36"]["Y"]]
+    assert [e - s for s, e in PAR_BOUNDS[build]["X"]] == [e - s for s, e in PAR_BOUNDS[build]["Y"]]
+
+
+def test_giabs_grch37_pars_are_not_ensembls() -> None:
+    """What RM269 checked on the sequence (docs/PROVENANCE.md), as the carried files state it: GIAB's Y
+    PAR1 runs 100,286 bases past NCBI's into Y-only sequence, its Y PAR2 starts 99,421 bases late, its X
+    PARs start one base late, and its PAR2 ends at the last base before the telomere gap, which Ensembl's
+    runs on through. GIAB's Y PARs are not the length of their X counterparts; Ensembl's are."""
+    giab = {chrom: giab_par_arms("GRCh37", chrom) for chrom in ("X", "Y")}
+    ensembl = ensembl_pars("GRCh37")
+    (g1, g2), (e1, e2) = giab["Y"], ensembl["Y"]
+    assert (g1[0] - e1[0], g1[1] - e1[1], g2[0] - e2[0], e2[1] - g2[1]) == (0, 100_286, 99_421, 10_000)
+    (g1, g2), (e1, e2) = giab["X"], ensembl["X"]
+    assert (g1[0] - e1[0], g1[1] - e1[1], g2[0] - e2[0], e2[1] - g2[1]) == (1, 0, 1, 10_000)
+    assert [e - s for s, e in giab["X"]] != [e - s for s, e in giab["Y"]]
 
 
 def lifted_to_grch36(chain_blocks: pl.DataFrame, intervals: tuple[tuple[int, int], ...]) -> tuple[list[tuple[int, int]], int, int]:
@@ -239,11 +297,72 @@ def test_grch36_x_degenerate_y_is_grch37s_lifted_through_hg19_to_hg18() -> None:
     (_, par1_end), (par2_start, _) = PAR_BOUNDS["GRCh36"]["Y"]
     kept = tuple((max(s, par1_end + 1), min(e, par2_start - 1)) for s, e in spans if s < par2_start and e > par1_end)
     assert X_DEGENERATE_Y["GRCh36"] == kept
-    # One interval to every GRCh37 one; only the last crossed into PAR2 (NCBI's, sequence-checked).
+    # One interval to every GRCh37 one, and none crosses a PAR: GRCh37's set lies between NCBI's PARs, and
+    # its first and last bases lift to the bases next to NCBI36's.
     assert len(kept) == len(X_DEGENERATE_Y["GRCh37"])
-    assert [span != k for span, k in zip(spans, kept)] == [False] * (len(kept) - 1) + [True]
+    assert [span != k for span, k in zip(spans, kept)] == [False] * len(kept)
+    assert (kept[0][0], kept[-1][1]) == (par1_end + 1, par2_start - 1)
     assert (elsewhere, unaligned) == (117, 536)  # 117 bases go to hg18's chrX; 536 are in no block
     assert all(a[1] < b[0] for a, b in zip(kept, kept[1:]))
+
+
+# Opt-in: the PARs on the sequence, in the refget store `JUST_VCF_TEST_REFERENCE_DIR` names when it holds
+# GRCh37 (Ensembl's FASTA) and GRCh36 (UCSC's hg18). Public reference sequence; no genome is read.
+
+CHANCE_SHARE = 0.5
+"""Share of bases X and Y hold alike, at the same offset from a boundary, under which a stretch reads
+as unrelated sequence. A PAR is identical at every base; the kilobase past each GRCh37 boundary holds
+26.6% and 33.7% alike, unrelated sequence near a quarter (docs/PROVENANCE.md)."""
+
+
+def same_share(a: str, b: str) -> float:
+    assert len(a) == len(b) and "N" not in a + b
+    return sum(p == q for p, q in zip(a, b)) / len(a)
+
+
+@pytest.fixture(scope="module")
+def xy_store(test_reference_dir: Path) -> tuple[ReferenceStore, dict[str, str]]:
+    store = ReferenceStore.open(test_reference_dir)
+    digests = {label: [d for d in store.collections() if store.assembly_label(d) == label] for label in ("GRCh37", "GRCh36")}
+    if any(len(found) != 1 for found in digests.values()):
+        pytest.skip(f"{test_reference_dir} holds no single GRCh37 and GRCh36 collection")
+    return store, {label: found[0] for label, found in digests.items()}
+
+
+def xy_bases(xy_store: tuple[ReferenceStore, dict[str, str]], label: str, chrom: str, start: int, end: int) -> str:
+    """The 1-based closed stretch, upper case (UCSC's hg18 soft-masks repeats in lower case)."""
+    store, digests = xy_store
+    (contig,) = store.contigs_by_chrom(digests[label])[chrom]
+    return store.fetch(contig, [(start - 1, end)])[0].upper()
+
+
+def test_grch37s_pars_are_where_the_sequence_puts_them(xy_store: tuple[ReferenceStore, dict[str, str]]) -> None:
+    """Ensembl's GRCh37 FASTA writes Y's PARs as N (each PAR is stored once, on X), so X and Y cannot be
+    compared inside them there; UCSC's hg19, whose Y carries them, was compared once (docs/PROVENANCE.md).
+    What the store shows: Ensembl masks exactly `PAR_BOUNDS`; the 100,286 bases GIAB adds to Y's PAR1 are
+    Y sequence no closer to X than chance; and through NCBI36, whose Y carries its PAR2, the Y bases after
+    GRCh37's last X-degenerate interval, the 99,421 GIAB left outside PAR2, are X's PAR2."""
+    bases = functools.partial(xy_bases, xy_store)
+    (x_par1, x_par2), (y_par1, y_par2) = PAR_BOUNDS["GRCh37"]["X"], PAR_BOUNDS["GRCh37"]["Y"]
+    # Ensembl's mask is the PARs, and only them.
+    for start, end in (y_par1, y_par2):
+        assert set(bases("GRCh37", "Y", start, end)) == {"N"}
+    assert "N" not in bases("GRCh37", "Y", y_par1[1] + 1, y_par1[1] + 1) + bases("GRCh37", "Y", y_par2[0] - 1, y_par2[0] - 1)
+    # GIAB's PAR1 tail is Y-only: no closer to X at the same offset than the kilobase before NCBI's PAR2.
+    (_, giab_par1_end), _ = giab_par_arms("GRCh37", "Y")
+    tail = bases("GRCh37", "Y", y_par1[1] + 1, giab_par1_end)
+    assert same_share(tail, bases("GRCh37", "X", x_par1[1] + 1, x_par1[1] + len(tail))) < CHANCE_SHARE
+    assert same_share(bases("GRCh37", "Y", y_par2[0] - 1000, y_par2[0] - 1), bases("GRCh37", "X", x_par2[0] - 1000, x_par2[0] - 1)) < CHANCE_SHARE
+    # PAR2 through NCBI36: GRCh37's last X-degenerate interval is NCBI36's at one shift, base for base, and
+    # NCBI36's Y from the next base on is GRCh37's X PAR2, base for base, for all of NCBI36's PAR2.
+    last37, last36 = X_DEGENERATE_Y["GRCh37"][-1], X_DEGENERATE_Y["GRCh36"][-1]
+    assert (last37[1] + 1, last36[1] + 1) == (y_par2[0], PAR_BOUNDS["GRCh36"]["Y"][1][0])
+    assert bases("GRCh37", "Y", *last37) == bases("GRCh36", "Y", *last36)
+    y36_par2 = PAR_BOUNDS["GRCh36"]["Y"][1]
+    length = y36_par2[1] - y36_par2[0] + 1
+    assert bases("GRCh36", "Y", *y36_par2) == bases("GRCh37", "X", x_par2[0], x_par2[0] + length - 1)
+    _, (giab_par2_start, _) = giab_par_arms("GRCh37", "Y")
+    assert length > giab_par2_start - y_par2[0]  # the stretch GIAB left outside lies within it
 
 
 # --- Synthetic calls ----------------------------------------------------------------------------

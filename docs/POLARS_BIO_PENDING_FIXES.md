@@ -33,6 +33,15 @@ Read marks, the last release read against this ledger:
   holds. The release notes of py-2.0.0-rc.1, rc.2, 2.0.0 and 2.1.0 were read for levers on 2026-11-17
   (below, "Our pieces an upstream release could replace"). There is no 1.45 to 1.49. Changes made on the 2.0
   branch before rc.1 appear only in polars' migration guide, which was not read.
+- **polars: 2.2.0** (2026-11-24; read the same day, the lock stays on 2.1.0). #30430 "Mark Expr.replace with
+  literal as elementwise" (merged 2026-10-29, fixing #30404) makes `replace` and `replace_strict` with a
+  mapping stream: P23 is fixed there (below). The whole suite run on it through an overlay
+  (`uv run --with polars==2.2.0`, opt-in variables empty): 39 failed, 2,902 passed, 78 skipped, 8 xfailed,
+  every failure P24 (below), a polars regression in `tests/test_karyotype.py`; `tests/test_spill_streams.py`'s
+  flip test fails as meant and was left out. `join_where` with an equality is still an inner join with no
+  IEJoin (synthetic probe; #30612 only speeds IEJoin itself). The lock cannot take 2.2.0 yet anyway:
+  polars-bio 0.38.0 requires `polars>=1.40.0,<2.2`, and its main says the same (just-dna-compiler's
+  liaison, 2026-11-24 18:20Z).
 
 Fellow liaisons (the role's outbound step: poll them before a filing): none on this machine stands on
 polars-bio (checked 2026-11-16). just-prs and just-dna-lite lock it and run no seats; the seated
@@ -58,8 +67,8 @@ changes.
 
 | Ours | Theirs, since | What replacing ours costs |
 |---|---|---|
-| `schema.canonical_chrom_expr` (`src/just_vcf/schema.py:413`): `map_batches` + `replace`, because `replace(mapping)` falls back to the in-memory engine (P23) | polars 2.0.0, #29605 "Lower gathering from literal as elementwise": `pl.lit(Series(values)).gather(col.cast(pl.Enum(keys), strict=False).to_physical())`, coalesced with the column. It gives `replace(CONTIG_ALIASES)`'s values, nulls and unknown names included, and has no fallback node. The `Map` dtype (2.0.0-rc.2 #28984, #29296) is a second route; its `map.get(expr)` is unverified | small. It drops a Python callback per batch; `map_batches` already streams. A 2.x-only expression |
-| `loading._spill_files` / `canonical_parts` (`loading.py:545`, `:604`): sink unsorted, then sort one part at a time, because a global sort held 11 GB | polars 2.0.0, #29657 "Add streaming (out-of-core) sort", #29741 on by default at 80 % of RAM, #29734 a 64 GB disk budget; 2.1.0 #30268 and #30297 sort-spill memory fixes | a measured trial first. The sort's key, `replace_strict(CONTIG_RANK)` (`schema.py:433`), is still a fallback node on 2.1.0, so it would move to the gather form above first. `canonical_batches` (`loading.py:579`) also reads the parts one group at a time for `resolve_ref`, `normalize` and liftover. Where polars spills by default is unverified (the large caches belong on `/data`) |
+| `schema.canonical_chrom_expr` (`src/just_vcf/schema.py:413`): `map_batches` + `replace`, because `replace(mapping)` falls back to the in-memory engine (P23) | **polars 2.2.0, #30430: plain `replace(CONTIG_ALIASES)` streams, no fallback node (2026-11-24), the simplest replacement.** Before it, polars 2.0.0, #29605 "Lower gathering from literal as elementwise": `pl.lit(Series(values)).gather(col.cast(pl.Enum(keys), strict=False).to_physical())`, coalesced with the column. It gives `replace(CONTIG_ALIASES)`'s values, nulls and unknown names included, and has no fallback node. The `Map` dtype (2.0.0-rc.2 #28984, #29296) is a second route; its `map.get(expr)` is unverified | small. It drops a Python callback per batch; `map_batches` already streams. A 2.x-only expression |
+| `loading._spill_files` / `canonical_parts` (`loading.py:545`, `:604`): sink unsorted, then sort one part at a time, because a global sort held 11 GB | polars 2.0.0, #29657 "Add streaming (out-of-core) sort", #29741 on by default at 80 % of RAM, #29734 a 64 GB disk budget; 2.1.0 #30268 and #30297 sort-spill memory fixes | a measured trial first. The sort's key, `replace_strict(CONTIG_RANK)` (`schema.py:433`), is a fallback node on 2.1.0 and streams on 2.2.0 (#30430; a sort keyed on it shows no fallback node), so on 2.2.0 it needs no other form. `canonical_batches` (`loading.py:579`) also reads the parts one group at a time for `resolve_ref`, `normalize` and liftover. Where polars spills by default is unverified (the large caches belong on `/data`) |
 
 Read and found nothing for us: `join_where` with an equality is still planned as a filtered cross join
 (#29218 only fuses the filter into the join). No entry makes `replace` or `replace_strict` stream (#29535
@@ -123,7 +132,8 @@ so read `gh api repos/<owner>/<repo>/issues/<n>/comments` for any hit before rel
 | P20 an indexed BAM `depth()` reads the file twice (2026-10-24) | seen on real 30x BAMs, not reproduced on a 12 MB synthetic one | unconfirmed |
 | P21 a scalar INFO/FORMAT value that fails to parse is refused without its key (2026-10-25) | noodles parses scalars inside its iterator and drops the key with the error; dbf wraps it bare, while its list paths name the key | datafusion-bio-formats |
 | P22 an undeclared key's bad value fails the scan though the key is dropped; an unparsable GT fails it too (2026-10-26) | the first: noodles reads an undeclared reserved key by its reserved type, and dbf parses every key before it drops the undeclared ones; the second is dbf's stated choice | datafusion-bio-formats (the first, with P21); the second by design |
-| P23 `replace` with a mapping holds every column of a streaming sink (2026-10-26) | polars, not polars-bio: `replace` and `replace_strict` run as a columnar function the streaming engine does not split; already open as pola-rs/polars #24393 | pola-rs/polars (optional comment on #24393) |
+| P23 `replace` with a mapping holds every column of a streaming sink (2026-10-26) | polars, not polars-bio: `replace` and `replace_strict` run as a columnar function the streaming engine does not split; fixed in polars 2.2.0 (#30430), the lock on 2.1.0 | nothing to file; the #24393 comment is moot |
+| P24 a filter mask built on `concat_list` of a literal and an all-null list panics a grouped `median` (2026-11-24) | polars 2.2.0 regression, not polars-bio; 2.1.0 is fine; the likely change (#30604, a dedicated `concat_list` kernel) is not read | pola-rs/polars |
 
 ## Verdicts by kind (2026-09-30)
 
@@ -157,7 +167,8 @@ another path is named.
 | P19 | block-mode `depth()` emits contig by contig, as per-base mode does (22.6 GB peak on a 27 GB BAM against per-base mode's 13.3 GB) | datafusion-bio-functions | per-base mode (`coverage.py`) |
 | P13 | warn or refuse when `write_vcf`/`sink_vcf` drop an undeclared column; see open pb #474 | polars-bio | nothing until we write VCF through polars-bio |
 | P21 | name the key in every INFO/FORMAT parse error, as the list-valued paths already do | datafusion-bio-formats | the retry without a named key (`loaders/vcf.py:262`, `:609`); a keyless refusal still refuses the file |
-| P23 | `replace` and `replace_strict` streamed batch by batch, as an elementwise map is | pola-rs/polars | `schema.canonical_chrom_expr` maps per batch (`map_batches(..., is_elementwise=True)`, `85dcebd`); `tests/test_spill_streams.py` flips when polars streams it |
+| P23 | `replace` and `replace_strict` streamed batch by batch, as an elementwise map is | pola-rs/polars | `schema.canonical_chrom_expr` maps per batch (`map_batches(..., is_elementwise=True)`, `85dcebd`); `tests/test_spill_streams.py` flips when polars streams it, and does on 2.2.0 |
+| P24 | a grouped `median` over a column filtered by a `concat_list` mask must not panic when the list column is all null | pola-rs/polars | none yet: the lock stays on polars 2.1.0; `karyotype.measure` (`karyotype.py:951`, `sequence_alt`) panics on 2.2.0 |
 | P5 | document the `fmt_` rename, and that one sample gives flat columns while several give a `genotypes` struct | polars-bio (docs) | map columns by the header's own namespace (done) |
 | P11 | document that FILTER `.` reads as `""` | polars-bio (docs) | `""` → null (done, `:455`) |
 | P12 | document that multi-allelic ALT is joined with `\|` | polars-bio (docs) | split on `\|` (done, `:390`) |
@@ -672,6 +683,9 @@ written on 0.36.0 with synthetic VCFs, and the trackers searched again: no dupli
 
 ## P23 — `replace` with a mapping holds every column of a streaming sink
 
+**Fixed upstream in polars 2.2.0** (2026-11-24), by #30430; the lock is on 2.1.0, and the mitigation
+stays while polars 1.x and 2.1 are admitted. The #24393 comment is moot.
+
 Not polars-bio's: polars itself, which polars-bio and just-vcf both build on. Found by the lead seat as
 F26 (`docs/PREVIOUS_ISSUES.md`): a WGS gVCF `load` held 8 GB for 2.6 GB of rows. In a streaming sink,
 polars 1.44 runs `pl.col(x).replace(mapping)` as a `columnar-function` node behind an in-memory engine
@@ -711,6 +725,34 @@ with `replace`. The #24393 comment stays just-vcf's alone.
 is_elementwise=True)` has none (as the lead found on 2026-11-16, CLAUDE.md §5). pola-rs/polars #24393
 is still open, with no maintainer reply and nothing new since 2026-07-02. The comment would now name
 2.1.0.
+
+## P24 — A `concat_list` mask over an all-null list panics a grouped `median` (polars 2.2.0)
+
+Not polars-bio's: polars itself, a regression in 2.2.0 (2026-11-24). Found by this seat running the
+suite on 2.2.0 before any bump: 39 of `tests/test_karyotype.py`'s tests panic in `karyotype.measure`
+(`karyotype.py:1017`, the per-group `agg`) with `PanicException: called Result::unwrap() on an Err
+value: ComputeError("validity mask length must match the number of values")`; all pass on 2.1.0. The
+failing aggregates are the five `dp.filter(...).median()` and `balance` medians; `sum` and `mean` over
+the same filter do not panic. Their masks hold `unread_slot`, built on `sequence_alt =
+pl.concat_list(pl.lit(False), alts.list.eval(...))` (`karyotype.py:951`), and on an array's frame
+`alts` is null in every row.
+
+Reduced, synthetic, four rows: `pl.DataFrame({"g": ["a", "b", "a", "b"], "x": [1, 2, 3, 4], "bl":
+pl.Series([None] * 4, dtype=pl.List(pl.Boolean))}).lazy().group_by("g").agg(pl.col("x").filter(
+pl.concat_list([pl.lit(False), pl.col("bl")]).list.any().fill_null(False)).median()).collect()` panics on
+2.2.0 and gives `None` per group on 2.1.0. `pl.lit(False).list.concat(pl.col("bl"))` panics the same way.
+It does not panic when `bl` holds lists, when the mask is `bl.list.any()` alone, with `sum` or `mean`,
+in a `select` without groups, or with one group. The concatenation itself still reads `[None, None,
+None, None]` on both versions, so the fault is somewhere between the mask's validity and the grouped
+median's gather. 2.2.0's notes list #30604 "Add dedicated kernel for `concat_list`"; that it is the cause
+is a guess from the notes, not read in the source. Not checked on polars main.
+
+Mitigation: none; none needed while the lock is on polars 2.1.0. Moving the lock to 2.2.0 waits on
+this, or on `sequence_alt` built another way (the lead's).
+
+*Upstream (2026-11-24).* Not on polars' tracker (searched live: "validity mask length must match the
+number of values", which finds only closed parquet and streaming cases, "concat_list group_by panic",
+"concat_list validity"). **File at pola-rs/polars:** the four-row repro, 2.1.0 against 2.2.0.
 
 ## Harvested and closed without an entry (2026-09-30)
 

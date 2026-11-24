@@ -124,8 +124,9 @@ from just_vcf.schema import (
 # --- Regions -----------------------------------------------------------------------------------
 # Derived from GIAB genome stratifications v3.6, `XY` group, and for T2T-CHM13's X-degenerate Y from the
 # T2T consortium's sequence classes (docs/PROVENANCE.md), converted from BED (0-based, half-open) to
-# 1-based closed `pos` ranges. GRCh36 (NCBI36, hg18): PARs from Ensembl 54's assembly exceptions, the
-# X-degenerate Y lifted from GRCh37's through UCSC's hg19ToHg18 chain. tests/test_karyotype.py
+# 1-based closed `pos` ranges. GRCh37's PARs are Ensembl's GRCh37 assembly exceptions instead, since
+# GIAB's are not the PAR the sequence shows. GRCh36 (NCBI36, hg18): PARs from Ensembl 54's assembly
+# exceptions, the X-degenerate Y lifted from GRCh37's through UCSC's hg19ToHg18 chain. tests/test_karyotype.py
 # re-derives every set from the files carried in assets/. The derivations are just-vcf's own, not a
 # GIAB, T2T, Ensembl or UCSC product.
 
@@ -135,8 +136,8 @@ PAR_BOUNDS: dict[str, dict[str, tuple[tuple[int, int], tuple[int, int]]]] = {
         "Y": ((1, 2_709_520), (57_443_438, 57_772_954)),
     },
     "GRCh37": {
-        "X": ((60_002, 2_699_520), (154_931_045, 155_260_560)),
-        "Y": ((10_001, 2_749_806), (59_133_471, 59_363_566)),
+        "X": ((60_001, 2_699_520), (154_931_044, 155_270_560)),
+        "Y": ((10_001, 2_649_520), (59_034_050, 59_373_566)),
     },
     "GRCh38": {
         "X": ((10_001, 2_781_479), (155_701_384, 156_030_895)),
@@ -147,8 +148,16 @@ PAR_BOUNDS: dict[str, dict[str, tuple[tuple[int, int], tuple[int, int]]]] = {
         "Y": ((1, 2_458_320), (62_122_810, 62_460_029)),
     },
 }
-"""PAR1 and PAR2 per build and chromosome, 1-based closed: from the first to the last base of GIAB's
-`chr{X,Y}_PAR` intervals on each arm (GIAB leaves assembly gaps out, so its PAR file is fragmented).
+"""PAR1 and PAR2 per build and chromosome, 1-based closed. GRCh38 and T2T-CHM13: from the first to the
+last base of GIAB's `chr{X,Y}_PAR` intervals on each arm (GIAB leaves assembly gaps out, so its PAR file is fragmented).
+
+GRCh37: the two `PAR` rows of Ensembl's GRCh37 `assembly_exception` table (Y 10,001-2,649,520 and
+59,034,050-59,373,566 on X 60,001-2,699,520 and 154,931,044-155,270,560), which are NCBI's published
+PARs, PAR2 running on through the 10 kb telomere gap to each chromosome's end. Not GIAB's: on hg19's
+sequence X and Y are identical at every base of these PARs and of nothing past them, while GIAB's Y
+PAR1 runs 100,286 bases on into Y-only sequence (SRY among it; 26% identical to X, chance) and its
+PAR2 starts 99,421 bases late, leaving sequence identical to X outside the PAR. GIAB's X PAR starts
+are also each one base late (docs/PROVENANCE.md).
 
 GRCh36: GIAB has no NCBI36 set. The bounds are NCBI36's published PARs as Ensembl 54 (the last
 Ensembl release on NCBI36) records them, its `assembly_exception` rows of type `PAR` (Y 1-2,709,520
@@ -158,16 +167,16 @@ each PAR and no closer than chance in the kilobase outside it (docs/PROVENANCE.m
 
 X_DEGENERATE_Y: dict[str, tuple[tuple[int, int], ...]] = {
     "GRCh36": (
-        (2_809_807, 2_978_085), (6_676_755, 7_502_522), (11_214_554, 11_253_954), (11_653_955, 12_208_578),
+        (2_709_521, 2_978_085), (6_676_755, 7_502_522), (11_214_554, 11_253_954), (11_653_955, 12_208_578),
         (12_308_579, 14_605_747), (14_680_008, 16_496_367), (16_526_489, 16_781_069), (17_047_240, 18_077_540),
         (19_491_609, 20_829_067), (20_829_068, 21_877_227), (26_970_971, 27_228_749), (57_228_750, 57_327_044),
         (57_377_045, 57_443_437),
     ),
     "GRCh37": (
-        (2_749_807, 2_918_085), (6_616_755, 7_442_522), (13_104_554, 13_143_954), (13_193_955, 13_748_578),
+        (2_649_521, 2_918_085), (6_616_755, 7_442_522), (13_104_554, 13_143_954), (13_193_955, 13_748_578),
         (13_798_579, 16_096_353), (16_170_614, 17_986_973), (18_017_095, 18_271_675), (18_537_846, 19_568_146),
         (21_032_221, 22_369_679), (22_419_680, 23_467_839), (28_561_583, 28_819_361), (58_819_362, 58_917_656),
-        (58_967_657, 59_133_470),
+        (58_967_657, 59_034_049),
     ),
     "GRCh38": (
         (2_781_480, 3_050_044), (6_748_714, 7_574_481), (10_316_945, 10_544_039), (10_594_040, 10_633_440),
@@ -191,10 +200,14 @@ X_DEGENERATE_Y: dict[str, tuple[tuple[int, int], ...]] = {
 """The X-degenerate male-specific Y, 1-based closed. Sequence here has no close copy on X, so reads that
 land in it come from a Y.
 
-GRCh37 and GRCh38: GIAB's `chrY_nonPAR` minus `chrY_XTR` minus `chrY_ampliconic`, kept between PAR1
-and PAR2 (GRCh38's `chrY_nonPAR` also lists the single base before PAR1, which is dropped). On those
-builds the rest of the male-specific Y (heterochromatin, centromere) is an assembly gap, which GIAB's
-nonPAR leaves out.
+GRCh37 and GRCh38: the Y GIAB describes (`chrY_nonPAR` with `chrY_PAR`, which leave the assembly gaps
+out) minus `chrY_XTR` minus `chrY_ampliconic`, clipped to lie between `PAR_BOUNDS`' PAR1 and PAR2. On
+GRCh38, whose PARs are GIAB's, that is GIAB's nonPAR less XTR and ampliconic, less the single base
+nonPAR lists before PAR1. On GRCh37, whose PARs are Ensembl's, it adds the 100,286 bases GIAB counts as
+PAR1 and the sequence shows Y-only (2,649,521-2,749,806, holding SRY; through UCSC's hg19ToHg38 they
+are the first 100,286 bases of GRCh38's first interval) and cuts the 99,421 bases of GIAB's nonPAR that
+lie in PAR2 (59,034,050-59,133,470, X and Y identical), 9,895,461 bases in all. On those builds the rest
+of the male-specific Y (heterochromatin, centromere) is an assembly gap, which GIAB leaves out.
 
 T2T-CHM13: the T2T consortium's `X-DEG` sequence class (`chm13v2.0_chrXY_sequence_class_v1.bed`, on
 the complete Y of HG002), less GIAB's `chrY_XTR` and `chrY_PAR`. The class file's second X-DEG interval
@@ -205,19 +218,21 @@ centromere and the satellites, so the GRCh37/38 derivation does not carry over.
 GRCh36: the GRCh37 set lifted through UCSC's `hg19ToHg18.over.chain.gz`. Each GRCh37 interval is cut
 by the chain's ungapped blocks, pieces that land off chrY are dropped (117 bases of one interval go to
 hg18's chrX), and the interval becomes the span from its first to its last base on chrY (each lies
-on one chain, plus strand, in order; 653 bases of the 9.89 Mb set do not align to chrY), kept
-between the GRCh36 PARs. That clips the last interval at PAR2, where hg18's X and Y are identical:
-the 66 kb of GRCh37's 58,967,657-59,133,470 that lie before NCBI's PAR2 stay, the 99 kb inside go. Two
-intervals now abut (19,491,609-20,829,067 and 20,829,068-21,877,227): the 50 kb GRCh37 gap between
-them is not in NCBI36. Lifting the set back through UCSC's hg18ToHg19 lands every aligned base inside
-the GRCh37 set."""
+on one chain, plus strand, in order; 653 bases of the 9.90 Mb set do not align to chrY), kept
+between the GRCh36 PARs, which clips nothing: GRCh37's set now ends where NCBI's PAR2 starts, and that
+base lifts to the base before NCBI36's, and it starts where PAR1 ends on both. Two intervals abut
+(19,491,609-20,829,067 and 20,829,068-21,877,227): the 50 kb GRCh37 gap between them is not in NCBI36.
+Lifting the set back through UCSC's hg18ToHg19 lands every aligned base inside the GRCh37 set."""
 
 REGION_SET: dict[str, str] = {
     "GRCh36": (
         "NCBI36 PARs as Ensembl 54 records them, and GIAB genome stratifications v3.6 XY (GRCh37) lifted "
         "through UCSC hg19ToHg18 (X-degenerate Y), derived by just-vcf"
     ),
-    "GRCh37": "GIAB genome stratifications v3.6 XY, derived by just-vcf",
+    "GRCh37": (
+        "GRCh37 PARs as Ensembl's GRCh37 archive records them, and GIAB genome stratifications v3.6 XY "
+        "(X-degenerate Y), derived by just-vcf"
+    ),
     "GRCh38": "GIAB genome stratifications v3.6 XY, derived by just-vcf",
     "T2T-CHM13": (
         "GIAB genome stratifications v3.6 XY (PAR, XTR) and T2T chm13v2.0 chrXY sequence classes v1 "

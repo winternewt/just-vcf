@@ -11,6 +11,23 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- GRCh37's PARs and X-degenerate Y follow the sequence, not GIAB (RM269). `PAR_BOUNDS["GRCh37"]` are now
+  Ensembl's GRCh37 `PAR` assembly exceptions (carried in `assets/ensembl_116_grch37/`): Y 10,001-2,649,520
+  and 59,034,050-59,373,566 on X 60,001-2,699,520 and 154,931,044-155,270,560, NCBI's published PARs, PAR2
+  running through the telomere gap. GIAB's were wrong on the sequence (UCSC's hg19, whose Y carries the
+  PARs): its Y PAR1 ran 100,286 bases into Y-only sequence (SRY among it, 26% alike with X, chance), its
+  PAR2 started 99,421 bases late on sequence identical to X, and its X PARs each started a base late.
+  `X_DEGENERATE_Y["GRCh37"]` is GIAB's described Y less XTR and ampliconic between those PARs: its first
+  interval now starts at 2,649,521, its last ends at 59,034,049 (9,895,461 bases, from 9,894,596), and
+  `X_DEGENERATE_Y["GRCh36"]`, lifted from it, starts at 2,709,521 (9,894,855 bases, from 9,794,569).
+  `region_set` for GRCh37 names Ensembl. So on GRCh37 a call in Y 2,649,521-2,749,806 groups as non-PAR Y
+  and counts toward the X-degenerate Y, one in Y 59,034,050-59,133,470 groups as PAR and no longer counts,
+  and X 60,001 and 154,931,044 group as PAR; on GRCh36 the X-degenerate Y gains 100 kb. Y depth ratios,
+  call ratios and coverage medians over the X-degenerate Y shift slightly. Minor: an estimate's input
+  changes, no field or value set does, and no threshold moved. Tests:
+  `tests/test_karyotype.py::test_par_bounds_are_ensembls_par_exceptions`, the X-degenerate and GRCh36
+  lift derivations, and the opt-in `test_grch37s_pars_are_where_the_sequence_puts_them`
+  (`JUST_VCF_TEST_REFERENCE_DIR` with GRCh37 and GRCh36) fail on the old constants.
 - `query`'s `carries` reads no row for a class the row never looked at (RM304), the rule `concordance`,
   `consensus` and the panel reads took in RM299 to RM303. Where no row states the asked allele, a row at
   its position over the same REF read the site as genotyped without it, `site_genotyped`,

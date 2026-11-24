@@ -120,6 +120,8 @@ each reset.
    RM304 (query's row read by the class rules) as 357e5a1, merge 2 of 6 (suite 2941 passed on both majors).
    RM269's GRCh37 PAR check (PARs now Ensembl's, borne out on hg19's sequence; the X-degenerate Y between them) as
    f97e51d, merge 3 of 6 (suite 2942 passed, 78 skipped on both majors). RM269 closed: desk #135 ended on its default.
+   **Push pending (2026-11-24 ~20:30 UTC):** origin (GitHub over ssh) timed out from 20:15 UTC; main carries the
+   liaison's 2ae50b1 and d3d74a0 (polars 2.2.0 read, P24) unpushed. Push main as soon as origin answers.
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

@@ -1,4 +1,4 @@
-**just-vcf: where it stands** (updated 2026-11-23)
+**just-vcf: where it stands** (updated 2026-11-24)
 
 just-vcf reads 23andMe-style array exports, other genotype tables and VCF/gVCF into one set of tables, and writes VCF from them. Version 0.1.0 is ready; releasing it is the person's call. Most open plan items wait on answers on the person's desk.
 
@@ -12,3 +12,4 @@ just-vcf reads 23andMe-style array exports, other genotype tables and VCF/gVCF i
 1. ⏳ Release 0.1.0 — the person.
 2. 🚧 Last rules for imputed data (RM287) — lead, waits on desk #212, #213, #214.
 3. ⏳ The remaining v4 insertion/deletion rows (RM281) — lead, looked at again 2026-12-07.
+4. 🔨 Sex-chromosome estimate: check where GRCh37's second pseudoautosomal region starts, on the reference itself (RM269) — lead, building. Desk #135 closed on its default: a variant file alone still names XY and XXY.

@@ -752,7 +752,8 @@ this, or on `sequence_alt` built another way (the lead's).
 
 *Upstream (2026-11-24).* Not on polars' tracker (searched live: "validity mask length must match the
 number of values", which finds only closed parquet and streaming cases, "concat_list group_by panic",
-"concat_list validity"). **File at pola-rs/polars:** the four-row repro, 2.1.0 against 2.2.0.
+"concat_list validity"). **File at pola-rs/polars:** the four-row repro, 2.1.0 against 2.2.0. Asked on
+desk #419 (2026-11-24); not filed until the person answers.
 
 ## Harvested and closed without an entry (2026-09-30)
 

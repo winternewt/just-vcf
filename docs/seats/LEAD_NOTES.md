@@ -118,6 +118,8 @@ each reset.
    RM303 (an array's row by its own probe's class; no content_filter for an array; a GFF's one-base blocks) merged
    as 7ce6b7f, merge 1 of 6 toward audit 19 (CONSENSUS_VERSION 9; suite 2935 passed on both majors).
    RM304 (query's row read by the class rules) as 357e5a1, merge 2 of 6 (suite 2941 passed on both majors).
+   RM269's GRCh37 PAR check (PARs now Ensembl's, borne out on hg19's sequence; the X-degenerate Y between them) as
+   f97e51d, merge 3 of 6 (suite 2942 passed, 78 skipped on both majors). RM269 closed: desk #135 ended on its default.
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

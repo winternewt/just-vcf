@@ -129,6 +129,8 @@ each reset.
    jackknife timed on aadr_ho: 43.9 s against 0.6 s, profiled to `project_restricted` rebuilding the kept sites'
    matrix per replicate; RM306 with a builder (branch rm306), its panel built under data/interim/rm306/ for the
    re-measure (the profiling scripts in the session's scratchpad).
+   RM306 merged eb0144b, merge 5 of 6 toward audit 19: 1.2 s at one BLAS thread on aadr_ho (64 s before); 9-14 s at
+   default threads under load 31, RM307 (time it quiet, at night). RM308 spent (allocated after RM307 was hand-written).
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

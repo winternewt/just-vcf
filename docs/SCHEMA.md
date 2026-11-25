@@ -4110,7 +4110,10 @@ the PCA path reports a **weighted delete-one-block jackknife** (the lead's call)
   sites): 4.8 s for 22 replicates per target against a 0.15 s projection, beside a placement whose load
   takes 41 s on `aadr_ho` (docs/ANCESTRY_PANELS.md), so it stays on. On the real `aadr_ho` (2026-11-25,
   hu6ABACE, 22 blocks) it took 43.9 s against a 0.6 s placement without it, nine times the synthetic
-  figure; why is RM306, and the default is looked at again once that is known.
+  figure: each replicate rebuilt the kept sites' matrix. Since RM306 (merge eb0144b) it takes 1.2 s at
+  one BLAS thread (64 s before), so it stays on. At the default threads on a machine at load 31 of 16
+  cores it took 9 to 14 s, mostly FRAPOSA's small Procrustes SVDs waiting on contended BLAS threads; RM307
+  times it on a quiet machine.
 - The replicates measure how much a placement rests on one chromosome's sites. They do not measure how
   well the panel's groups stand for the person's ancestry, nor the panel's own sampling of people.
 

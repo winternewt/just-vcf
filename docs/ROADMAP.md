@@ -6,34 +6,20 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
-## RM306 — The PCA jackknife's cost on a real panel
-**State:** building (a builder: each replicate from per-chromosome sums, not the kept sites' matrix) · **Owner:** lead
+- ✖ **RM308** — reserved and released without an item being written. The id is spent rather than free: ids are never reused, so a later reference to RM308 can only mean this.
 
-Severity: low · Status: open, 2026-11-25. Timed by the opt-in build test in `tests/test_ancestry_aadr.py`
-(RM5): on `aadr_ho`, hu6ABACE's placement takes 0.6 s without the jackknife and 43.9 s with it (22
-blocks), where a synthetic panel of the same shape took 4.8 s (docs/SCHEMA.md "The PCA path's
-uncertainty", 2026-11-06). The jackknife is on by default because it was cheap beside a load.
+## RM307 — The jackknife at the default BLAS threads
+**State:** unattended (time it on a quiet machine, at night) · **Owner:** lead
 
-Left: find where the 43 s go (a replicate re-reading the facet's frame, the panel's factors recomputed
-per block, or the real panel's shape) with a profile of one call; fix what is the library's; then read
-the default again: on, if it is back near the synthetic figure; otherwise its cost is a fork for the
-person (uncertainty on every estimate, against a placement several times slower).
-
-*Profiled 2026-11-25* (cProfile, one placement, 38 s): 28 s inside `project_restricted`, 2.6 s in
-`svd_online`'s builtin `sum` over the residual's 177,000 rows (FRAPOSA's line). Each replicate copies
-`U[keep]` (177,000 x 80, from a Fortran-ordered array), forms its Gram matrix and rotates it, then
-`svd_online` multiplies it again, though OADP needs only `U1^T b` and the residual's norm from it. One
-BLAS thread: 64 s, so it is compute, not contention. The fix: `U^T U`, `U^T w` and `|w|^2` once, each
-replicate subtracting its chromosome's share, O(block) instead of O(all sites).
-
-*Built 2026-11-25* (branch `rm306`, for the lead's merge): `pca.restricted_sums` takes `U^T U`, `U^T w`
-and `|w|^2` once per placement; `project_restricted` subtracts the left-out chromosome's share and hands
-OADP the target's coordinates and `|b|^2` (`_projection.svd_online_from_projection`, sharing FRAPOSA's
-update proper with `svd_online` through `_augment`; the builtin `sum` is `np.sum`). Each replicate equals
-the old algebra to about 1e-13 on the synthetic panels. On a synthetic panel of `aadr_ho`'s shape at one
-BLAS thread the jackknife went from 29-32 s to 1.0-1.1 s. Left for the lead: re-time the opt-in
-`aadr_ho` build test, update the real-panel figure in docs/SCHEMA.md "On by default", and read the
-default again.
+Severity: low · Status: open, 2026-11-25. After RM306 the `aadr_ho` jackknife takes 1.2 s at one BLAS
+thread but 9 to 14 s at the default threads, measured on a machine at load 31 of 16 cores. A profile of
+the threaded run (RM306's builder, synthetic panel) puts most of it in `ref_aug_procrustes`'s small SVDs
+(40 x 40, 80 x 80), each tens of milliseconds, which is contended BLAS threads, not work:
+`procrustes_diffdim` stops after about six iterations. Left: time it with
+`tests/test_ancestry_aadr.py`'s opt-in build test on a quiet machine. Near one thread's figure: closed,
+nothing to build. Still slow: capping BLAS threads around the replicates needs threadpoolctl in the
+`[ancestry]` extra or an environment variable set before numpy loads, a dependency question for the
+person with both costs named.
 
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
@@ -1111,9 +1097,9 @@ indel half now included, though they were measured on unsplit genomes. A genotyp
 not counted.
 
 ## RM5 — Population inference
-**State:** after RM306 (the jackknife timed on `aadr_ho`, 43.9 s; its cost is RM306); desks #154 and #155 ended 2026-11-25 on their defaults (AADR's names kept as written, Xinjiang stays Eastern Asia); desk #73's term ended 2026-11-21 on its default, so Privé's files stay local and their tests opt-in; a worldwide reference-PCA panel waits for data; `aadr_ho`'s overlapping regions are closed as the panel's geography, shown per estimate (the lead's call, 2026-11-07) · **Owner:** lead
+**State:** after RM307 (the jackknife timed on `aadr_ho`: 1.2 s at one BLAS thread since RM306, the default threads RM307); desks #154 and #155 ended 2026-11-25 on their defaults (AADR's names kept as written, Xinjiang stays Eastern Asia); desk #73's term ended 2026-11-21 on its default, so Privé's files stay local and their tests opt-in; a worldwide reference-PCA panel waits for data; `aadr_ho`'s overlapping regions are closed as the panel's geography, shown per estimate (the lead's call, 2026-11-07) · **Owner:** lead
 
-Severity: medium · Status: in progress (PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped 2026-10-22 as `just_vcf.ancestry`, merge 4c6c9c1; panels in docs/ANCESTRY_PANELS.md. The AADR Human Origins builder (`build_aadr_panel`, from just-prs `aadr.py`, `eigenstrat.py`) shipped 2026-10-26 merged 2026-10-26: the first real reference-PCA panel, `aadr_ho` (2,556 present-day West Eurasians, 184,833 sites, built in under a minute from the Krypton files; hu6ABACE placed in Europe, population GBR). Rule 5 keeps AADR's numbered sub-groups (the person's decision) since 2026-10-26, merge 6eed88a: 2,567 individuals, 184,882 sites. `consensus` takes one panel's methods as one witness since 2026-11-03: the mean inside a witness, a product only across panels the caller declares disjoint (docs/SCHEMA.md "Combining ancestry estimates"; disjointness declared, never inferred, is the lead's call for veto). The PCA path reports a leave-one-chromosome-out jackknife since 2026-11-06 (docs/SCHEMA.md "The PCA path's uncertainty"). The jackknife timed on `aadr_ho` 2026-11-25: 43.9 s against 0.6 s without it, nine times the synthetic figure (RM306). Left: `aadr_ho`'s regions overlap along clines (Eastern Asia 0/32 in leave-one-out, the first Central Asian sample placed in Europe); `test_ancestry_panels.py`'s own-sample check now accepts a sample on its region's border with one other (the person's option 1, 2026-10-26, merge 6eed88a), and still fails a label-shuffled copy. Waiting for data: a 1000 Genomes or HGDP reference-PCA panel (a just-prs `1000g`/`hgdp_1kg` build), none on this machine. Waiting on the person: desk #73, whether Privé's files may be a fixture)
+Severity: medium · Status: in progress (PCA projection, neighbour vote, centroid proportions, consensus and Privé's 21-group proportions shipped 2026-10-22 as `just_vcf.ancestry`, merge 4c6c9c1; panels in docs/ANCESTRY_PANELS.md. The AADR Human Origins builder (`build_aadr_panel`, from just-prs `aadr.py`, `eigenstrat.py`) shipped 2026-10-26 merged 2026-10-26: the first real reference-PCA panel, `aadr_ho` (2,556 present-day West Eurasians, 184,833 sites, built in under a minute from the Krypton files; hu6ABACE placed in Europe, population GBR). Rule 5 keeps AADR's numbered sub-groups (the person's decision) since 2026-10-26, merge 6eed88a: 2,567 individuals, 184,882 sites. `consensus` takes one panel's methods as one witness since 2026-11-03: the mean inside a witness, a product only across panels the caller declares disjoint (docs/SCHEMA.md "Combining ancestry estimates"; disjointness declared, never inferred, is the lead's call for veto). The PCA path reports a leave-one-chromosome-out jackknife since 2026-11-06 (docs/SCHEMA.md "The PCA path's uncertainty"). The jackknife timed on `aadr_ho` 2026-11-25: 43.9 s against 0.6 s without it, nine times the synthetic figure, 1.2 s at one BLAS thread since RM306 (merge eb0144b). Left: `aadr_ho`'s regions overlap along clines (Eastern Asia 0/32 in leave-one-out, the first Central Asian sample placed in Europe); `test_ancestry_panels.py`'s own-sample check now accepts a sample on its region's border with one other (the person's option 1, 2026-10-26, merge 6eed88a), and still fails a label-shuffled copy. Waiting for data: a 1000 Genomes or HGDP reference-PCA panel (a just-prs `1000g`/`hgdp_1kg` build), none on this machine. Waiting on the person: desk #73, whether Privé's files may be a fixture)
 
 Port the just-prs `ancestry/` package (PCA projection, KNN, proportions, consensus) behind the
 `[ancestry]` extra, without the `PRSCatalog` wrappers or the Hugging Face pull.
@@ -1122,7 +1108,7 @@ Left: `infer_ancestry` has run on one real panel, `aadr_ho` (built 2026-10-26 by
 docs/ANCESTRY_PANELS.md), which covers West Eurasia only, by geographic regions that overlap where the
 populations form a cline; no 1000 Genomes or HGDP panel is on this machine (a just-prs
 `1000g`/`hgdp_1kg` build fetched by hand would be the first worldwide one); the PCA path's jackknife
-takes 43.9 s on `aadr_ho` (RM306); a facet on another assembly waits for RM6's liftover.
+takes 1.2 s on `aadr_ho` at one BLAS thread since RM306, the default threads RM307; a facet on another assembly waits for RM6's liftover.
 *Closed 2026-11-07, the lead's call for veto:* `aadr_ho`'s overlapping regions build nothing. They are the panel's geography: its regions are drawn by coordinates over a cline, and Eastern Asia's 32 samples (Xibo, Uyghur, Kyrgyz, at the box's eastern edge) sit beside Central Asia's 166. What a caller needs is shown on every estimate: the vote's `probabilities` and `margin`, and since 2026-11-06 the jackknife's `vote_stability`, so a sample on a border reads as one. Rejected: merging or redrawing the regions in the builder (the region is AADR's coordinates through the box, a redrawn one would be the library's invention), and weighting the vote by region size (it would move votes toward small regions on no evidence). A worldwide panel (1000 Genomes or HGDP) is what would place East Asians, and none is on this machine.
 *Built 2026-11-06:* the PCA path's uncertainty, the lead's method: a leave-one-chromosome-out
 jackknife (a site bootstrap does not reach OADP as it reaches Privé's sums). Each shared autosome left

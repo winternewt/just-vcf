@@ -2,6 +2,38 @@
 Shipped roadmap items, moved here from [ROADMAP.md](ROADMAP.md) with their rationale. Nothing is
 deleted; it is relocated.
 
+## RM306 — The PCA jackknife's cost on a real panel
+**State:** done 2026-11-25 (merge eb0144b) · **Owner:** lead
+
+Severity: low · Status: shipped 2026-11-25 (merge eb0144b). Opened 2026-11-25. Timed by the opt-in build test in `tests/test_ancestry_aadr.py`
+(RM5): on `aadr_ho`, hu6ABACE's placement takes 0.6 s without the jackknife and 43.9 s with it (22
+blocks), where a synthetic panel of the same shape took 4.8 s (docs/SCHEMA.md "The PCA path's
+uncertainty", 2026-11-06). The jackknife is on by default because it was cheap beside a load.
+
+Left: find where the 43 s go (a replicate re-reading the facet's frame, the panel's factors recomputed
+per block, or the real panel's shape) with a profile of one call; fix what is the library's; then read
+the default again: on, if it is back near the synthetic figure; otherwise its cost is a fork for the
+person (uncertainty on every estimate, against a placement several times slower).
+
+*Profiled 2026-11-25* (cProfile, one placement, 38 s): 28 s inside `project_restricted`, 2.6 s in
+`svd_online`'s builtin `sum` over the residual's 177,000 rows (FRAPOSA's line). Each replicate copies
+`U[keep]` (177,000 x 80, from a Fortran-ordered array), forms its Gram matrix and rotates it, then
+`svd_online` multiplies it again, though OADP needs only `U1^T b` and the residual's norm from it. One
+BLAS thread: 64 s, so it is compute, not contention. The fix: `U^T U`, `U^T w` and `|w|^2` once, each
+replicate subtracting its chromosome's share, O(block) instead of O(all sites).
+
+*Built 2026-11-25* (branch `rm306`, for the lead's merge): `pca.restricted_sums` takes `U^T U`, `U^T w`
+and `|w|^2` once per placement; `project_restricted` subtracts the left-out chromosome's share and hands
+OADP the target's coordinates and `|b|^2` (`_projection.svd_online_from_projection`, sharing FRAPOSA's
+update proper with `svd_online` through `_augment`; the builtin `sum` is `np.sum`). Each replicate equals
+the old algebra to about 1e-13 on the synthetic panels. On a synthetic panel of `aadr_ho`'s shape at one
+BLAS thread the jackknife went from 29-32 s to 1.0-1.1 s. Left for the lead: re-time the opt-in
+`aadr_ho` build test, update the real-panel figure in docs/SCHEMA.md "On by default", and read the
+default again.
+
+
+*Closed 2026-11-25:* re-timed on the real `aadr_ho` (hu6ABACE): 1.2 s at one BLAS thread against 64 s before; 9 to 14 s at the default threads on a machine at load 31, which is RM307. The default stays on.
+
 ## RM305 — The store notices every changed reading of a held facet
 Severity: medium · Status: shipped, 2026-11-25 (desk #149's term ended on its default, 2026-11-25: a held facet is never rewritten, a re-add that reads differently is refused and goes into a new store, and the check is extended so every kind of changed reading is noticed, not only REF's) Closed 2026-11-25: shipped as merge c082a2a, with 24c730a for the RM303 store note. A re-add of a held facet is a no-op only when its four frames' rows equal the held files' (digests computed in the one process, never stored; `source_path` left out as a label); any other difference is refused with `StoreConflictError`, REF state first for its own message. Steps that keep the facet_id: the loaders, `resolve_ref`, `mint_vrs_ids`, `state_imputed_from`; a derived facet whose parent changed under a kept id is caught the same way. The lead's call for veto: a step's recorded input names (`derivation_inputs[].name`) are compared, so a lift redone with a renamed chain file is refused, since a panel's name can be its only identifier. Suite 2948 passed, 78 skipped, 8 xfailed on both polars majors
 

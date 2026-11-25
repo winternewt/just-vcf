@@ -7,7 +7,7 @@ Active items only, newest decisions first. Shipped items move to
 ## Items
 
 ## RM306 — The PCA jackknife's cost on a real panel
-**State:** unattended (profile it on `aadr_ho`; the lead, since only the real panel shows it) · **Owner:** lead
+**State:** building (a builder: each replicate from per-chromosome sums, not the kept sites' matrix) · **Owner:** lead
 
 Severity: low · Status: open, 2026-11-25. Timed by the opt-in build test in `tests/test_ancestry_aadr.py`
 (RM5): on `aadr_ho`, hu6ABACE's placement takes 0.6 s without the jackknife and 43.9 s with it (22
@@ -18,6 +18,13 @@ Left: find where the 43 s go (a replicate re-reading the facet's frame, the pane
 per block, or the real panel's shape) with a profile of one call; fix what is the library's; then read
 the default again: on, if it is back near the synthetic figure; otherwise its cost is a fork for the
 person (uncertainty on every estimate, against a placement several times slower).
+
+*Profiled 2026-11-25* (cProfile, one placement, 38 s): 28 s inside `project_restricted`, 2.6 s in
+`svd_online`'s builtin `sum` over the residual's 177,000 rows (FRAPOSA's line). Each replicate copies
+`U[keep]` (177,000 x 80, from a Fortran-ordered array), forms its Gram matrix and rotates it, then
+`svd_online` multiplies it again, though OADP needs only `U1^T b` and the residual's norm from it. One
+BLAS thread: 64 s, so it is compute, not contention. The fix: `U^T U`, `U^T w` and `|w|^2` once, each
+replicate subtracting its chromosome's share, O(block) instead of O(all sites).
 
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead

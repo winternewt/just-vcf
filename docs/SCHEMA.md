@@ -586,8 +586,9 @@ the ALTs. Its warning says `gt` cannot hold the index (255) though the row has t
 past the ALTs (`0/301`, `300/301` over 300 ALTs) is counted as that alone, so each genotype still
 falls under one reason at most. Not done: widening `gt` to `u16`, which would hold
 the index; that retypes a column every consumer reads, which §8 of CLAUDE.md makes a major change (a
-retype, like a rename), allowed before 1.0 when the changelog says so. It is the person's call, and
-the warning stands until it is made.
+retype, like a rename), allowed before 1.0 when the changelog says so. Put to the person as desk
+#147, whose term ended on its default, 2026-11-25: `gt` stays `u8` with the warning, to be widened
+together with any other breaking schema change so readers absorb one break, not two.
 
 ## Decision 3: graded evidence (charter 7)
 

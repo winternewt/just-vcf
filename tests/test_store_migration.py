@@ -234,8 +234,15 @@ def test_a_store_of_each_older_version_migrates_to_this_one(tmp_path: Path, vers
         assert got[name].equals(expected[name]), name
     assert not list(root.glob(".migrating-*")) and not list(root.glob(".previous-*")), "the old files go once verified"
     assert store.manifest.migrations == (report,)
+    assert store.add(store.loaded()).present == store.facet_ids, "the migrated store takes adds again"
     held = sources[0].facets.collect()["facet_id"].item()
-    assert store.add(sources[0]).present == (held,), "the migrated store takes adds again"
+    if any(held in filled.facet_ids for filled in report.filled_unknown):
+        # RM305: the migration left values unknown that a load today writes, so the source loaded again
+        # reads otherwise than the held rows, and goes into a new store.
+        with pytest.raises(StoreConflictError, match=f"held with other rows: {held}"):
+            store.add(sources[0])
+    else:
+        assert store.add(sources[0]).present == (held,)
 
     again = migrate_store(root)
     assert again.steps == () and again.from_version == SCHEMA_VERSION, "a current store is left as it is"

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import polars as pl
@@ -35,7 +36,7 @@ from just_vcf.ancestry._projection import (
     ref_aug_procrustes,
     standardize,
     svd_eigcov,
-    svd_online,
+    svd_online_from_projection,
 )
 from just_vcf.ancestry.consensus import continental_of
 from just_vcf.ancestry.result import AncestryEstimate
@@ -379,7 +380,26 @@ def jackknife_blocks(chroms: np.ndarray, used: np.ndarray) -> list[tuple[str, in
     return [(chrom, int(np.count_nonzero(used & (chroms == chrom)))) for chrom in present]
 
 
-def project_restricted(pca: ReferencePCA, w: np.ndarray, keep: np.ndarray) -> np.ndarray:
+class RestrictedSums(NamedTuple):
+    """The sums over every panel site that a replicate takes its left-out sites' share from
+    (`restricted_sums`): `gram = U^T U` (`dim_online` x `dim_online`), `cross = U^T w` and
+    `norm_sq = |w|^2`, for the panel's loadings `U` and one standardised target `w`."""
+
+    gram: np.ndarray
+    cross: np.ndarray
+    norm_sq: float
+
+
+def restricted_sums(pca: ReferencePCA, w: np.ndarray) -> RestrictedSums:
+    """`RestrictedSums` of the standardised target `w` on `pca`: one pass over the panel's sites, shared
+    by every replicate of a jackknife."""
+    target = w.reshape(-1)
+    return RestrictedSums(gram=pca.U.T @ pca.U, cross=pca.U.T @ target, norm_sq=float(target @ target))
+
+
+def project_restricted(
+    pca: ReferencePCA, w: np.ndarray, keep: np.ndarray, sums: RestrictedSums | None = None
+) -> np.ndarray:
     """OADP projection of a standardised target `w` (sites x 1) using only the sites `keep`, in the
     full panel's PC frame.
 
@@ -389,10 +409,17 @@ def project_restricted(pca: ReferencePCA, w: np.ndarray, keep: np.ndarray) -> np
       standardised reference matrix, not the matrix, so the kept sites' SVD is that of
       `U[keep] diag(s) V^T`: the eigendecomposition `Q diag(s')^2 Q^T` of the small
       `diag(s) U[keep]^T U[keep] diag(s)` gives the singular values `s'`, loadings
-      `U[keep] diag(s) Q / s'` (orthonormal again) and sample eigenvectors `V Q`. Handing OADP
+      `L = U[keep] diag(s) Q / s'` (orthonormal again) and sample eigenvectors `V Q`. Handing OADP
       `U[keep]` with the full `s` instead would shrink every replicate toward the origin: `U[keep]`'s
       columns are no longer of unit norm while `s` is still on the full sites' scale;
     - OADP's online augmentation of that SVD with the target, and its Procrustes fit.
+
+    Neither `U[keep]` nor `L` is formed (RM306). The augmentation reads the target only through its
+    coordinates `L^T w[keep] = diag(1/s') Q^T diag(s) U[keep]^T w[keep]` and `|w[keep]|^2`
+    (`_projection.svd_online_from_projection`), and every kept-site sum is the panel's sum less the
+    left-out sites' share: `U[keep]^T U[keep] = U^T U - U[drop]^T U[drop]`, the same for `U^T w` and
+    `|w|^2`. `sums` holds the panel's sums for this same `w` (`restricted_sums`; computed here when
+    not given), so a replicate costs a pass over its left-out sites, not over the kept ones.
 
     Not recomputed: each site's `mean` and `std` (a per-site quantity, the same on any subset of sites,
     so the caller standardises the target once), and the Procrustes target, which stays the full
@@ -400,12 +427,20 @@ def project_restricted(pca: ReferencePCA, w: np.ndarray, keep: np.ndarray) -> np
     and is voted against the same reference coordinates. The fit has a scale, which takes up the kept
     sites' smaller singular values. With every site kept this is `project_samples`, up to rounding.
     """
-    loadings = pca.U[keep]
+    target = w.reshape(-1)
+    if sums is None:
+        sums = restricted_sums(pca, target)
+    drop = np.flatnonzero(~keep)
+    left_out = pca.U[drop]
+    left_out_target = target[drop]
+    gram = sums.gram - left_out.T @ left_out
+    cross = sums.cross - left_out.T @ left_out_target
+    norm_sq = sums.norm_sq - float(left_out_target @ left_out_target)
     s = np.asarray(pca.s, dtype=np.float64).reshape(-1)
-    s_kept, rotation = svd_eigcov((s[:, None] * (loadings.T @ loadings)) * s[None, :])
+    s_kept, rotation = svd_eigcov((s[:, None] * gram) * s[None, :])
     s_safe = np.where(s_kept == 0, 1.0, s_kept)
-    loadings_kept = loadings @ (s[:, None] * rotation / s_safe[None, :])
-    s_aug, V_aug = svd_online(loadings_kept, s_kept, pca.V @ rotation, w[keep].reshape((-1, 1)))
+    coordinates = (rotation.T @ (s * cross)) / s_safe
+    s_aug, V_aug = svd_online_from_projection(s_kept, pca.V @ rotation, coordinates, norm_sq)
     pcs_aug = V_aug[:, : pca.dim_stu] * s_aug[: pca.dim_stu]
     return ref_aug_procrustes(pca.pcs_ref, pcs_aug)[: pca.dim_ref]
 
@@ -425,7 +460,8 @@ def chromosome_jackknife(
     its full projection and `leader` its full vote among `labels`. The blocks are the autosomes the
     facet and the panel share (`jackknife_blocks`), so linkage inside a chromosome is never taken for
     independent sites. Each replicate leaves one out, every panel site on it, and projects the facet
-    again on the rest (`project_restricted` says what is recomputed); sites off the autosomes (X, a
+    again on the rest (`project_restricted` says what is recomputed, each replicate from the panel's
+    sums less its chromosome's share, `restricted_sums`); sites off the autosomes (X, a
     panel's other contigs) stay in every replicate. From the replicates, in canonical chromosome order:
 
     - `pc_errors`: the standard error of each projected coordinate by the weighted delete-one-block
@@ -455,13 +491,14 @@ def chromosome_jackknife(
         return {"n_jackknife_blocks": len(blocks), "jackknife_reason": "too_few_sites_per_block"}
     w = dosage.astype(np.float64).reshape((-1, 1))
     standardize(w, model.pca.mean, model.pca.std, miss=DEFAULT_MISSING)
+    sums = restricted_sums(model.pca, w)
     groups, centroids = group_centroids(model.pca.pcs_ref, labels)
     full_weights = simplex_lstsq(centroids, pcs)
     replicate_pcs = []
     replicate_weights = []
     same_vote = 0
     for chrom, _ in blocks:
-        replicate = project_restricted(model.pca, w, chroms != chrom)
+        replicate = project_restricted(model.pca, w, chroms != chrom, sums)
         replicate_pcs.append(replicate)
         replicate_weights.append(simplex_lstsq(centroids, replicate))
         same_vote += knn_vote(model.pca.pcs_ref, labels, replicate, model.knn_k)[0] == leader

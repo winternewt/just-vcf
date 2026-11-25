@@ -4099,8 +4099,14 @@ the PCA path reports a **weighted delete-one-block jackknife** (the lead's call)
   degenerate replicate and jackknifing over the rest, which would change the weights of every block
   and report an error the dropped chromosome did not take part in.
 - **On by default**; `infer_ancestry(..., jackknife=False)` skips it (`not_requested`). It costs about
-  one projection per autosome, 22 for a genome, plus a small eigendecomposition and a pass over the
-  kept loadings each. Timed 2026-11-06 on a synthetic panel of `aadr_ho`'s shape (2,565 samples, 184,882
+  one projection per autosome, 22 for a genome. A replicate never forms the kept sites' loadings
+  (RM306): the panel's sums `U^T U`, `U^T w` and `|w|^2` are taken once per placement, each replicate
+  subtracts its chromosome's share (a pass over that chromosome's sites, `dim_online`^2 per site), and
+  the rest is small: an eigendecomposition of `dim_online` x `dim_online`, OADP's update from the
+  target's coordinates and residual norm, and its Procrustes fit over the reference samples. On a
+  synthetic panel of `aadr_ho`'s shape (2,567 samples, 184,882 sites, `dim_online` 80, one BLAS thread;
+  2026-11-25) the 22 replicates took 1.0-1.1 s, against 29-32 s when each formed `U[keep]`.
+  Before RM306, timed 2026-11-06 on a synthetic panel of `aadr_ho`'s shape (2,565 samples, 184,882
   sites): 4.8 s for 22 replicates per target against a 0.15 s projection, beside a placement whose load
   takes 41 s on `aadr_ho` (docs/ANCESTRY_PANELS.md), so it stays on. On the real `aadr_ho` (2026-11-25,
   hu6ABACE, 22 blocks) it took 43.9 s against a 0.6 s placement without it, nine times the synthetic

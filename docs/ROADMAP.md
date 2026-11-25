@@ -26,6 +26,15 @@ person (uncertainty on every estimate, against a placement several times slower)
 BLAS thread: 64 s, so it is compute, not contention. The fix: `U^T U`, `U^T w` and `|w|^2` once, each
 replicate subtracting its chromosome's share, O(block) instead of O(all sites).
 
+*Built 2026-11-25* (branch `rm306`, for the lead's merge): `pca.restricted_sums` takes `U^T U`, `U^T w`
+and `|w|^2` once per placement; `project_restricted` subtracts the left-out chromosome's share and hands
+OADP the target's coordinates and `|b|^2` (`_projection.svd_online_from_projection`, sharing FRAPOSA's
+update proper with `svd_online` through `_augment`; the builtin `sum` is `np.sum`). Each replicate equals
+the old algebra to about 1e-13 on the synthetic panels. On a synthetic panel of `aadr_ho`'s shape at one
+BLAS thread the jackknife went from 29-32 s to 1.0-1.1 s. Left for the lead: re-time the opt-in
+`aadr_ho` build test, update the real-panel figure in docs/SCHEMA.md "On by default", and read the
+default again.
+
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
 

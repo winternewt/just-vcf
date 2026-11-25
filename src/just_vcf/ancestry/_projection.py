@@ -9,8 +9,10 @@ array-first, logging and file I/O removed) from FRAPOSA / fraposa_pgsc:
 
 The full upstream MIT notice ships alongside this module as ``FRAPOSA_LICENSE``. just-prs vendored
 them first (``just_prs/ancestry/_projection.py``, MIT); this copy is that file with this docstring
-rewritten and one change of just-vcf's: ``svd_online`` reads a residual below ``RESIDUAL_TOLERANCE`` as
-none instead of dividing it by its norm (docs/PROVENANCE.md).
+rewritten and just-vcf's changes (docs/PROVENANCE.md): ``svd_online`` reads a residual below
+``RESIDUAL_TOLERANCE`` as none instead of dividing it by its norm, and sums it with ``np.sum``; its update
+proper is ``_augment``, which ``svd_online_from_projection`` (just-vcf's) reaches from ``U1^T b`` and
+``|b|^2`` without U1.
 
 Why vendor instead of depend: ``fraposa-pgsc`` pins ``numpy<2.0`` and ``pandas<2.0``.
 
@@ -27,6 +29,7 @@ __all__ = [
     "standardize",
     "svd_eigcov",
     "svd_online",
+    "svd_online_from_projection",
     "procrustes",
     "procrustes_diffdim",
     "ref_aug_procrustes",
@@ -45,12 +48,13 @@ DEFAULT_MISSING: float = -9.0
 
 RESIDUAL_TOLERANCE: float = float(np.sqrt(np.finfo(np.float64).eps))
 """just-vcf's, not FRAPOSA's: the largest residual `b - U1 U1^T b`, relative to `|b|`, that
-`svd_online` reads as `b` lying in U1's span (about 1.5e-8). With U1's columns orthonormal the residual
-is orthogonal to them, so its only trace in the update is `b_tilde^T b = |residual|`, one entry of the
-small matrix whose SVD is taken: zeroing it moves that matrix by at most this share of `|b|`, below any
-digit a PC coordinate is read to. And it is far above what rounding leaves of a vector in the span
-(about `p` float64 epsilons, 1e-14 at the few dozen sites where the span can be all of R^p), while a
-target over a real panel (sites far more than U1's columns) keeps most of its norm outside the span."""
+`svd_online` and `svd_online_from_projection` read as `b` lying in U1's span (about 1.5e-8). With
+U1's columns orthonormal the residual is orthogonal to them, so its only trace in the update is
+`b_tilde^T b = |residual|`, one entry of the small matrix whose SVD is taken: zeroing it moves that
+matrix by at most this share of `|b|`, below any digit a PC coordinate is read to. And it is far above
+what rounding leaves of a vector in the span (about `p` float64 epsilons, 1e-14 at the few dozen sites
+where the span can be all of R^p), while a target over a real panel (sites far more than U1's columns)
+keeps most of its norm outside the span."""
 
 
 def standardize(
@@ -100,26 +104,71 @@ def svd_eigcov(XTX: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def svd_online(
     U1: np.ndarray, d1: np.ndarray, V1: np.ndarray, b: np.ndarray, l: int | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Rank-1 online SVD update augmenting the reference SVD with one new sample ``b``."""
+    """Rank-1 online SVD update augmenting the reference SVD with one new sample ``b``.
+
+    The update reads ``b`` only through its coordinates ``U1^T b`` and one number, ``b_tilde^T b``
+    with ``b_tilde`` the unit residual off U1's span (``_augment``); here both come from U1 itself.
+    ``svd_online_from_projection`` is the same update from the coordinates and ``|b|^2`` alone.
+    """
+    assert U1.shape[1] == V1.shape[1]
+    p = U1.shape[0]
+    b = b.reshape((p, 1))
+    coordinates = U1.T @ b
+    b_tilde = b - U1 @ coordinates
+    residual = np.sqrt(np.sum(np.square(b_tilde)))
+    # just-vcf (audit 16): a residual of rounding size means b lies in U1's span (always so when U1 has
+    # p <= k orthonormal columns, a chromosome jackknife replicate keeping few sites); the update then
+    # adds no direction, so the residual's entry is zero instead of 0 / 0 or a unit vector of noise.
+    # Otherwise the normalisation is FRAPOSA's, with `np.sum` for its builtin `sum` (RM306).
+    if residual > RESIDUAL_TOLERANCE * np.sqrt(np.sum(np.square(b))):
+        b_tilde = b_tilde / residual
+        tail = float((b_tilde.transpose() @ b)[0, 0])
+    else:
+        tail = 0.0
+    return _augment(d1, V1, coordinates, tail, l)
+
+
+def svd_online_from_projection(
+    d1: np.ndarray, V1: np.ndarray, coordinates: np.ndarray, b_norm_sq: float, l: int | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """``svd_online``'s update from ``b``'s coordinates ``c = U1^T b`` and ``|b|^2``, U1 never formed.
+
+    just-vcf's, not FRAPOSA's (RM306). With U1's columns orthonormal the residual ``b - U1 c`` is
+    orthogonal to them, so ``b_tilde^T b`` is the residual's norm ``r`` and ``r^2 = |b|^2 - |c|^2``.
+    A caller that has ``c`` and ``|b|^2`` from sums it already holds (a jackknife replicate, from the
+    panel's sums less one chromosome's) never touches a row of U1.
+
+    The same tolerance as ``svd_online``: ``r^2 <= (RESIDUAL_TOLERANCE |b|)^2`` reads as ``b`` in
+    U1's span and the residual's entry is zero; a negative ``r^2`` or ``|b|^2`` (rounding) falls under
+    it. The subtraction is safe there because the residual enters the update only as that one entry of
+    the small matrix whose SVD is taken, never as a direction, and that SVD moves continuously with
+    it. Its rounding error is a few float64 epsilons of ``|b|^2`` (and of the sums it came from): far
+    from the tolerance, as every replicate the jackknife runs is (more kept sites than loadings), ``r``
+    keeps every digit a coordinate is read to; near it, ``r`` is uncertain by about
+    ``RESIDUAL_TOLERANCE |b|``, which moves the update no more than the tolerance's own zeroing does.
+    """
+    coordinates = np.asarray(coordinates, dtype=np.float64).reshape((-1, 1))
+    residual_sq = float(b_norm_sq) - float(np.sum(np.square(coordinates)))
+    if residual_sq > RESIDUAL_TOLERANCE**2 * max(float(b_norm_sq), 0.0):
+        tail = float(np.sqrt(residual_sq))
+    else:
+        tail = 0.0
+    return _augment(d1, V1, coordinates, tail, l)
+
+
+def _augment(
+    d1: np.ndarray, V1: np.ndarray, coordinates: np.ndarray, tail: float, l: int | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """FRAPOSA's update proper: the SVD of ``[[diag(d1), U1^T b], [0, b_tilde^T b]]`` rotating
+    ``[[V1^T, 0], [0, 1]]``, with ``coordinates = U1^T b`` and ``tail = b_tilde^T b``."""
     n, k = V1.shape
     if l is None:
         l = k
-    assert U1.shape[1] == k
     assert len(d1) == k
+    assert coordinates.shape == (k, 1)
     assert l <= k
-    p = U1.shape[0]
-    b = b.reshape((p, 1))
-    b_tilde = b - U1 @ (U1.T @ b)
-    # just-vcf (audit 16): a residual of rounding size means b lies in U1's span (always so when U1 has
-    # p <= k orthonormal columns, a chromosome jackknife replicate keeping few sites); the update then
-    # adds no direction, so b_tilde is zero instead of 0 / 0 or a unit vector of noise. Otherwise the
-    # line below is FRAPOSA's, unchanged.
-    if np.sqrt(np.sum(np.square(b_tilde))) > RESIDUAL_TOLERANCE * np.sqrt(np.sum(np.square(b))):
-        b_tilde = b_tilde / np.sqrt(sum(np.square(b_tilde)))
-    else:
-        b_tilde = np.zeros_like(b_tilde)
-    R = np.concatenate((np.diag(d1), U1.transpose() @ b), axis=1)
-    R_tail = np.concatenate((np.zeros((1, k)), b_tilde.transpose() @ b), axis=1)
+    R = np.concatenate((np.diag(d1), coordinates), axis=1)
+    R_tail = np.concatenate((np.zeros((1, k)), np.array([[tail]])), axis=1)
     R = np.concatenate((R, R_tail), axis=0)
     d2, R_Vt = np.linalg.svd(R, full_matrices=False)[1:]
     V_new = np.zeros((k + 1, n + 1))

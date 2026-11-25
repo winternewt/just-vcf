@@ -36,8 +36,18 @@ from just_vcf.ancestry import (  # noqa: E402
     panel_assemblies,
     prive_proportions,
 )
-from just_vcf.ancestry._projection import DEFAULT_MISSING, build_reference_pca, project_samples, standardize, svd_online  # noqa: E402
-from just_vcf.ancestry.pca import PANEL_META_KEYS, jackknife_blocks, panel_paths, project_restricted  # noqa: E402
+from just_vcf.ancestry._projection import (  # noqa: E402
+    DEFAULT_MISSING,
+    RESIDUAL_TOLERANCE,
+    build_reference_pca,
+    project_samples,
+    ref_aug_procrustes,
+    standardize,
+    svd_eigcov,
+    svd_online,
+    svd_online_from_projection,
+)
+from just_vcf.ancestry.pca import PANEL_META_KEYS, jackknife_blocks, panel_paths, project_restricted, restricted_sums  # noqa: E402
 from just_vcf.ancestry.sites import facet_of, panel_sites, site_dosages  # noqa: E402
 from just_vcf.assembly import ASSEMBLY_LENGTHS  # noqa: E402
 from just_vcf.jackknife import weighted_block_jackknife  # noqa: E402
@@ -534,6 +544,100 @@ def test_replicates_are_not_shrunk_toward_the_origin(autosome_panel) -> None:
     for pc in (0, 1):
         estimate, se = weighted_block_jackknife(float(full[pc]), replicates[:, pc].tolist(), sizes)
         assert abs(estimate - full[pc]) <= 3 * se, (pc, estimate, float(full[pc]), se)
+
+
+def _direct_replicate(pca, w: np.ndarray, keep: np.ndarray) -> np.ndarray:
+    """The oracle: a replicate with the kept sites' loadings formed, `U[keep]` and its rotation
+    `L = U[keep] diag(s) Q / s'`, then `svd_online`'s full-matrix residual over every kept site, as
+    `project_restricted` computed it before RM306."""
+    loadings = pca.U[keep]
+    s = np.asarray(pca.s, dtype=np.float64).reshape(-1)
+    s_kept, rotation = svd_eigcov((s[:, None] * (loadings.T @ loadings)) * s[None, :])
+    s_safe = np.where(s_kept == 0, 1.0, s_kept)
+    loadings_kept = loadings @ (s[:, None] * rotation / s_safe[None, :])
+    s_aug, V_aug = svd_online(loadings_kept, s_kept, pca.V @ rotation, w[keep].reshape((-1, 1)))
+    pcs_aug = V_aug[:, : pca.dim_stu] * s_aug[: pca.dim_stu]
+    return ref_aug_procrustes(pca.pcs_ref, pcs_aug)[: pca.dim_ref]
+
+
+REPLICATE_TOLERANCE = 1e-9
+"""Both relative and absolute, on PC coordinates of order 10. The two replicates differ only by
+float64 rounding taken in another order (a sum less a share against a sum over the kept sites), which
+is at most 8e-14 here; 1e-9 leaves room for the Procrustes fit's iterations to amplify it, and is still
+far below any digit a coordinate is read to."""
+
+
+@pytest.mark.parametrize("left_out", ["1", "11", "22"])
+def test_a_replicate_from_the_panels_sums_is_the_direct_computation(autosome_panel, left_out: str) -> None:
+    """RM306: a replicate from the panel's sums less one chromosome's share equals the one that forms the
+    kept sites' loadings, for the largest block, a middle one and the smallest, one set of sums shared."""
+    panel_dir, _, freqs = autosome_panel
+    model = load_pca_panel(panel_dir, "synth22", "GRCh37")
+    w = _standardised(model, person(freqs, "EUR", seed=25).astype(np.float64))
+    chroms = model.sites["chrom"].cast(pl.String).to_numpy()
+    sums = restricted_sums(model.pca, w)
+    keep = chroms != left_out
+    assert np.count_nonzero(keep) > model.pca.dim_online
+    replicate = project_restricted(model.pca, w, keep, sums)
+    direct = _direct_replicate(model.pca, w, keep)
+    assert np.allclose(replicate, direct, rtol=REPLICATE_TOLERANCE, atol=REPLICATE_TOLERANCE), np.abs(replicate - direct).max()
+    assert not np.allclose(replicate, project_restricted(model.pca, w, np.ones(keep.size, dtype=bool), sums))
+
+
+@pytest.mark.parametrize("relative_residual", [0.0, 0.1, 10.0, 1e3])
+def test_a_replicate_with_a_residual_near_the_tolerance(autosome_panel, relative_residual: float) -> None:
+    """A target built to lie in the kept sites' loadings' span but for a residual of `relative_residual`
+    x `RESIDUAL_TOLERANCE` of its norm: zero, below the tolerance, above it, and well above. The sums'
+    residual `|b|^2 - |c|^2` is uncertain by about `RESIDUAL_TOLERANCE |b|` there, which moves the small
+    matrix whose SVD is taken by that share of `|b|`; the replicate agrees with the direct one to the
+    same share of the reference PCs' scale."""
+    panel_dir, _, _ = autosome_panel
+    model = load_pca_panel(panel_dir, "synth22", "GRCh37")
+    pca = model.pca
+    chroms = model.sites["chrom"].cast(pl.String).to_numpy()
+    keep = chroms != "1"
+    loadings = pca.U[keep]
+    s = np.asarray(pca.s, dtype=np.float64)
+    s_kept, rotation = svd_eigcov((s[:, None] * (loadings.T @ loadings)) * s[None, :])
+    orthonormal = loadings @ (s[:, None] * rotation / s_kept[None, :])
+    rng = np.random.default_rng(SEED + 306)
+    in_span = orthonormal @ rng.normal(size=pca.dim_online)
+    off = rng.normal(size=in_span.size)
+    off -= orthonormal @ (orthonormal.T @ off)
+    off -= orthonormal @ (orthonormal.T @ off)
+    kept = in_span + relative_residual * RESIDUAL_TOLERANCE * np.linalg.norm(in_span) * off / np.linalg.norm(off)
+    w = rng.normal(size=(keep.size, 1))
+    w[keep, 0] = kept
+    replicate = project_restricted(pca, w, keep)
+    direct = _direct_replicate(pca, w, keep)
+    scale = float(np.abs(pca.pcs_ref).max())
+    assert np.abs(replicate - direct).max() <= 10 * RESIDUAL_TOLERANCE * scale, np.abs(replicate - direct).max()
+
+
+@pytest.mark.parametrize("relative_residual", [0.0, 0.1, 10.0, 1.0 / RESIDUAL_TOLERANCE])
+def test_online_svd_from_the_projection_is_the_full_update(relative_residual: float) -> None:
+    """`svd_online_from_projection` given `U1^T b` and `|b|^2` is `svd_online` given U1 and `b`: the same
+    augmented scores (compared through their Gram matrix, which no sign choice of the SVD changes), for a
+    residual of zero, below the tolerance, above it, and as large as the target's in-span part. Near the
+    tolerance the two may read the residual differently by about `RESIDUAL_TOLERANCE |b|`."""
+    rng = np.random.default_rng(SEED + 7)
+    p, k, n = 400, 8, 30
+    U1 = np.linalg.qr(rng.normal(size=(p, k)))[0]
+    d1 = np.sort(rng.uniform(5.0, 50.0, k))[::-1]
+    V1 = np.linalg.qr(rng.normal(size=(n, k)))[0]
+    in_span = U1 @ rng.normal(size=k)
+    off = rng.normal(size=p)
+    off -= U1 @ (U1.T @ off)
+    off -= U1 @ (U1.T @ off)
+    b = in_span + relative_residual * RESIDUAL_TOLERANCE * np.linalg.norm(in_span) * off / np.linalg.norm(off)
+    full_d2, full_V2 = svd_online(U1, d1, V1, b)
+    d2, V2 = svd_online_from_projection(d1, V1, U1.T @ b, float(b @ b))
+    scale = max(float(d1.max()), float(np.linalg.norm(b)))
+    share = 1e-9 if relative_residual * RESIDUAL_TOLERANCE >= 1.0 else 10 * RESIDUAL_TOLERANCE
+    scores, full_scores = V2 * d2[:k], full_V2 * full_d2[:k]
+    gram, full_gram = scores @ scores.T, full_scores @ full_scores.T
+    assert np.abs(d2 - full_d2).max() <= share * scale
+    assert np.abs(gram - full_gram).max() <= share * scale**2
 
 
 def test_jackknife_blocks_are_the_autosomes_read_in_canonical_order() -> None:

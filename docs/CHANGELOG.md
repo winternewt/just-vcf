@@ -11,6 +11,20 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- The PCA jackknife's replicates no longer copy the panel's sites matrix (RM306). Each leave-one-chromosome-out
+  replicate formed the kept sites' loadings (`U[keep]`, 177,000 x 80 on `aadr_ho`), their Gram matrix and
+  their rotation, then a residual over every kept site, so one placement's jackknife took 43.9 s on the
+  real panel against 0.6 s without it. A replicate now takes the panel's sums `U^T U`, `U^T w` and `|w|^2`,
+  computed once per placement (`pca.restricted_sums`), less its chromosome's share, and OADP's update
+  reads the target only through its coordinates and the residual's norm, `r^2 = |b|^2 - |c|^2`
+  (`_projection.svd_online_from_projection`, which shares FRAPOSA's update proper with `svd_online`).
+  On a synthetic panel of `aadr_ho`'s shape (2,567 x 184,882, `dim_online` 80, one BLAS thread) the
+  jackknife went from 29-32 s to 1.0-1.1 s; its standard errors agree with the old ones to about 1e-12. No
+  output changes beyond rounding. Tests: `tests/test_ancestry.py`'s
+  `test_a_replicate_from_the_panels_sums_is_the_direct_computation`,
+  `test_a_replicate_with_a_residual_near_the_tolerance` and
+  `test_online_svd_from_the_projection_is_the_full_update`, each against the old algebra kept in the test.
+
 - The store notices every changed reading of a held facet (RM305, desk #149's default). `Store.add` used
   to compare a facet it already held only by its REF state; re-added under the same `facet_id` with
   other rows (a loader fixed, VRS ids minted, `state_imputed_from` stated after the first add, a source

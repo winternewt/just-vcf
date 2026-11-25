@@ -647,10 +647,21 @@ def test_the_real_release_builds_a_panel_that_places_a_public_genome(
     assert result.estimate in build.regions
     fine = infer_ancestry(loaded, tmp_path, "aadr_ho", resolution="population")
     assert fine.estimate in set(model.populations.tolist())
+    # The jackknife's cost on a real panel (RM5): the same placement again without it, and with it.
+    started = time.monotonic()
+    plain = infer_ancestry(loaded, tmp_path, "aadr_ho", jackknife=False)
+    plain_in = time.monotonic() - started
+    started = time.monotonic()
+    again = infer_ancestry(loaded, tmp_path, "aadr_ho")
+    jackknifed_in = time.monotonic() - started
+    assert plain.estimate == again.estimate == result.estimate
+    assert plain.jackknife_reason == "not_requested" and plain.pc_errors is None
+    assert again.n_jackknife_blocks == 22 and again.pc_errors is not None and again.vote_stability is not None
     print(
         f"\naadr_ho: {build.n_selected} of {build.n_individuals} individuals, {build.n_sites} of {build.n_snps} sites "
         f"({build.n_swapped} swapped), LOO {build.panel.loo_accuracy:.3f}, built in {built_in:.0f} s; "
         f"hu6ABACE {result.n_sites_used} used ({result.n_sites_observed} observed, {result.n_sites_absent_as_reference} absent as reference, "
         f"{result.n_sites_unusable} unusable), {result.estimate} (margin {result.margin:.2f}), population {fine.estimate} "
-        f"(margin {fine.margin:.2f}), loaded and placed in {placed_in:.0f} s"
+        f"(margin {fine.margin:.2f}), loaded and placed in {placed_in:.0f} s; placed again in {plain_in:.1f} s without the "
+        f"jackknife, {jackknifed_in:.1f} s with it ({again.n_jackknife_blocks} blocks, vote stability {again.vote_stability:.2f})"
     )

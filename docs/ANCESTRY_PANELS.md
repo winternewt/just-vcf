@@ -82,7 +82,7 @@ shared autosome, whose vote agrees (`vote_stability`). A facet that reads sites 
 `jackknife_reason = too_few_blocks`, and a panel so small that leaving an autosome out keeps no more
 of its sites than `dim_online` gets none either (`too_few_sites_per_block`); `jackknife=False` skips it. The method, what each replicate
 recomputes and the minimum are in docs/SCHEMA.md, "The PCA path's uncertainty". Its tests use
-synthetic panels (`tests/test_ancestry.py`); no run on a real panel is recorded yet.
+synthetic panels (`tests/test_ancestry.py`); on `aadr_ho` it is timed by the opt-in build test (below).
 
 ## AADR Human Origins (`aadr_ho`, GRCh37): built here
 
@@ -144,7 +144,8 @@ under:
 
 `population` is the `.ind` group label as written (172 of them in the default build). A numbered
 sub-group stays a population of its own: nothing in the panel code needs the suffix gone, and AADR
-lists `Kumyk-1` and `Kumyk-2` apart. Two things follow, measured on v66.p1. Several numbered labels
+lists `Kumyk-1` and `Kumyk-2` apart. Kept so on purpose: desk #154 asked whether to strip a number-only
+suffix, and its term ended on this default, 2026-11-25. Two things follow, measured on v66.p1. Several numbered labels
 are the Human Origins genotype of a person whose shotgun genome is under the bare label (`Hazara_1-1`
 and `Hazara_1`, `Italian_North-1` and `Italian_North`), and rule 9 keeps the Human Origins one, so
 11 people moved from the bare label to the numbered one (`Hazara_1` emptied into `Hazara_1-1`; two of
@@ -155,7 +156,8 @@ with Russia split at 60°E into Europe and Siberia, which M49 does not do (`AADR
 `region_of`). Where AADR's samples were collected away from their ancestry's region (the USA, Barbados:
 1000 Genomes' CEU, ASW, ACB) there is no region and they are left out. A region is geography, not
 genetics: Kalmyks, west of the Urals, are in Europe, Iran is in Southern Asia, and the box's slice of China is
-Xinjiang. For a consensus, a region folds onto a continental group through `continental_of` on its
+Xinjiang. It stays Eastern Asia though its 32 people are never placed back in it when left out (they
+land in Central Asia): desk #155 asked whether to refile it, and its term ended on this default, 2026-11-25. For a consensus, a region folds onto a continental group through `continental_of` on its
 name: Europe to EUR, Northern and Sub-Saharan Africa to AFR, Latin America to AMR. The Asian regions,
 Oceania and Siberia fold onto nothing and are dropped, as Middle Eastern groups are: their samples are
 not what 1000 Genomes' EAS or SAS sampled.
@@ -178,6 +180,7 @@ keeps 20 components (just-prs's choice, for fine structure within Europe); `knn_
 | Build | 17 to 24 s and peak RSS 6.1 GiB with the shipped code, the `.geno` read warm; 50 to 54 s on a first, cold read with an earlier cut that held a float copy of the matrix (peak 13.4 GiB) |
 | Leave-one-out | 0.942 by region. Per region: Central Asia 163/166, Europe 1,351/1,394, Northern Africa 103/105, Siberia 195/216, Southern Asia 290/307, Western Asia 317/347, Eastern Asia 0/32 (its Xibo, Uyghur and Kyrgyz samples are voted Central Asian) |
 | hu6ABACE (PGP-HMS, DRAGEN SNV genome, GRCh37) | 184,881 of 184,882 sites used: 85,981 observed, 98,900 absent read as reference, 1 unusable. Region Europe, all 20 neighbours; population GBR, margin 0.55. Load and placement 41 s |
+| Jackknife (2026-11-25, hu6ABACE, nice 19) | 43.9 s for 22 blocks against 0.6 s for the placement without it; vote stability 1.00. Nine times the synthetic panel's 4.8 s (RM306) |
 
 The build before numbered sub-groups were kept (rule 5 then excluded every `-` qualifier) chose 2,556
 individuals and 184,833 sites, leave-one-out 0.944; hu6ABACE was placed the same way.

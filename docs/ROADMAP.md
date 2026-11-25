@@ -6,6 +6,13 @@ Active items only, newest decisions first. Shipped items move to
 
 ## Items
 
+## RM305 — The store notices every changed reading of a held facet
+**State:** building · **Owner:** lead
+
+Severity: medium · Status: open, 2026-11-25 (desk #149's term ended on its default, 2026-11-25: a held facet is never rewritten, a re-add that reads differently is refused and goes into a new store, and the check is extended so every kind of changed reading is noticed, not only REF's)
+
+Today `Store.add` compares a held facet only by `REF_STATE` (the collection REF was read from, `RESOLVE_VERSION`, the manifests). A facet re-read under a fixed loader, with VRS ids minted again, or by any other step that keeps the `facet_id` comes back with other rows under the same id, and the add is a silent no-op: the store keeps the old rows and says nothing. The default asks for that to be noticed and refused like the REF case. Steps that write a new `facet_id` (normalize, liftover, consensus, rejoin) already land as new facets.
+
 ## RM287 — Imputed facets read back
 **State:** blocked: desk #213, #214, #212 (the opt-in run is done; the lead kept six unmet rules as documented failures; #213 ALT for hom-ref chip rows, #214 code 25 written as X, #212 the A/T and C/G strand) · **Owner:** lead
 

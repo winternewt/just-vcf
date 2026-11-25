@@ -154,7 +154,8 @@ What the table says:
   parent link against them `disagrees`. The test fixture shows it: a child's genotypes with one
   haplotype's allele flipped at 8% of sites (IBS0 0.013) read as the parent's full sibling. A facet's
   own error rate is not estimated, so nothing here can tell such a pair from real siblings; `ibs0`
-  beside the band is what to read.
+  beside the band is what to read. Kept so on purpose: desk #146 asked whether to name only
+  `parent_child` until a facet's error rate is estimated, and its term ended on this default, 2026-11-25.
 - Facets on different builds are not compared. Lifting one first (`liftover`) makes them comparable.
 - The jackknife captures the sampling of sites, not the spread of real relationships (two second-degree
   relatives share anywhere from about 0.09 to 0.17), so a band near a floor can be `unknown` for a

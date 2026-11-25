@@ -4202,7 +4202,8 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
   rows, the header or the name, for a facet whose header states array content (`callset_type =
   array`); its `variant_classes` are still counted. **Values change**: a chip exported as VCF read
   `snv_only` from its rows (`basis = rows`) and now has null, with no content-filter warning. A store
-  holding such a facet keeps the old value until it is reloaded; no reader asks an array's filter any
+  holding such a facet keeps the old value, and the facet read again goes into a new store (RM305 refuses
+  it in the old one); no reader asks an array's filter any
   more (part 1 reads its rows per probe, and `absence_support` answers an array's silence by its
   callset type before it reaches the filter).
 

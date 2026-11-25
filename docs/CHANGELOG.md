@@ -11,6 +11,21 @@ store, normalizes, lifts over and mints VRS ids; writes VCF, gVCF and VCF Zarr; 
 (concordance, relatedness, karyotype, a person's files grouped); and ships the `just-vcf` command line,
 which prints counts and aggregates only. Pre-1.0, breaks are allowed; the entries below that break say so.
 
+- The store notices every changed reading of a held facet (RM305, desk #149's default). `Store.add` used
+  to compare a facet it already held only by its REF state; re-added under the same `facet_id` with
+  other rows (a loader fixed, VRS ids minted, `state_imputed_from` stated after the first add, a source
+  loaded again after a migration filled values unknown) it was reported `present` and the store kept the
+  old rows without a word. After the REF-state check, which keeps its own message, the add now compares
+  the facet's four frames as it would write them against the held files, each a row count and an
+  order-free digest of its rows computed in one process and never stored (polars' row hash is not stable
+  across releases), streamed with no in-memory fallback on polars 1.44 or 2.1. `facets.source_path` is
+  left out (`store.COMPARED_WITHOUT`): the same file read from another directory is the same facet. A
+  difference is refused with `StoreConflictError`, naming the facets and the row counts of each frame
+  that differs, never a row or a path; the rows go into a new store. An identical re-add is still a
+  no-op. Breaking for a caller that relied on `present` for a changed facet. Tests:
+  `tests/test_store.py`'s `test_a_re_add_*` (the one-row, blocks, links and minted cases fail on the old
+  code) and `test_the_re_add_comparison_streams`.
+
 - GRCh37's PARs and X-degenerate Y follow the sequence, not GIAB (RM269). `PAR_BOUNDS["GRCh37"]` are now
   Ensembl's GRCh37 `PAR` assembly exceptions (carried in `assets/ensembl_116_grch37/`): Y 10,001-2,649,520
   and 59,034,050-59,373,566 on X 60,001-2,699,520 and 154,931,044-155,270,560, NCBI's published PARs, PAR2

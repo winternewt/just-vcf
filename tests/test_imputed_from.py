@@ -17,7 +17,7 @@ from just_vcf.links import IMPUTED_FROM, LIFTOVER_TO, LINEAGE_RELATIONS, MULTI_P
 from just_vcf.loading import Loaded
 from just_vcf.person import SubjectError, _callset_keys, _pieces
 from just_vcf.schema import FACETS
-from just_vcf.store import Store
+from just_vcf.store import Store, StoreConflictError
 from test_consensus import TRIANGLE, facet, snv
 from test_consensus import store as store  # noqa: F401 - the fixture
 from test_karyotype import XY, callset, callsets, made_from, weighed
@@ -205,10 +205,12 @@ def test_a_store_keeps_the_stated_link_only_from_the_facets_first_add(tmp_path: 
     first.add(stated(imputed, chip))
     relations = {(row["from_facet_id"], row["to_facet_id"], row["relation"]) for row in first.loaded().links.collect().iter_rows(named=True)}
     assert relations == {("c", "i", IMPUTED_FROM)}
-    # Held already, the facet is present and never rewritten: the statement made after is not kept.
+    # Held already, the facet is never rewritten: the statement made after keeps the facet id with other
+    # facet and links rows, so the add is refused (RM305), where it was reported present and dropped.
     late = Store.open(tmp_path / "late", subject="person-a")
     late.add(imputed)
-    assert late.add(stated(imputed, chip)).present == ("i",)
+    with pytest.raises(StoreConflictError, match=r"held with other rows: i \(facets: .*; links: 0 row\(s\) held, 1 given\)"):
+        late.add(stated(imputed, chip))
     assert late.loaded().links.collect().height == 0
 
 

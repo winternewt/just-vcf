@@ -12,10 +12,12 @@ everything in it back, lazily. The layout (docs/SCHEMA.md, "The durable store"):
 The rules, each from the charter or the item:
 
 - **Facets accumulate (charter 5).** A facet's directory is written once, never rewritten or removed.
-  Adding a facet the store already holds, by `facet_id`, is a no-op when its REF state (`REF_STATE`)
-  is the held one's, and refused (`StoreConflictError`) when not: `resolve_ref` keeps the id, so the
-  id alone does not say which rows the store holds. Adding one never touches another
-  facet's files: the links live per facet (the links ending at the facet and at its ancestors, from
+  Adding a facet the store already holds, by `facet_id`, is a no-op when its rows are the held ones,
+  and refused (`StoreConflictError`) when not: `resolve_ref`, `mint_vrs_ids`, `state_imputed_from` and
+  a fixed loader all keep the id, so the id alone does not say which rows the store holds. REF state
+  (`REF_STATE`) is checked first, for its message; then every frame's rows are compared, by digests
+  computed in this process (never stored), but for the columns `COMPARED_WITHOUT` names. Adding one
+  never touches another facet's files: the links live per facet (the links ending at the facet and at its ancestors, from
   the `Loaded` it came with), so no file is shared between facets. The manifest is the store's index,
   rewritten whole (temporary name, then `os.replace`) after each facet.
 - **One person.** The store holds one subject, named when it is created. A facet with no subject or
@@ -95,15 +97,23 @@ class StoreVersionError(StoreError):
 
 
 class StoreConflictError(StoreError):
-    """A facet the store holds, given again with REF in another state: not read where the held one was,
-    or read from another collection, by another `RESOLVE_VERSION` or with other chip manifests. Its
-    files are never rewritten."""
+    """A facet the store holds, given again with other rows: REF in another state (not read where the
+    held one was, or read from another collection, by another `RESOLVE_VERSION` or with other chip
+    manifests), or any other difference in its four frames. Its files are never rewritten."""
 
 
 REF_STATE = ("ref_seqcol_digest", "resolve_version", "resolve_inputs")
 """The facet columns that say how a facet's REF was read: the collection, the rule, and the chip
 manifests the rule read rows with. `resolve_ref` keeps the `facet_id`, so a facet id alone does not tell
 a held facet's rows from those of the same facet resolved otherwise."""
+
+COMPARED_WITHOUT: dict[str, tuple[str, ...]] = {"facets": ("source_path",)}
+"""The columns a re-add of a held facet leaves out of its comparison of rows, per frame. `source_path`
+is the path the source was read from, as the caller gave it: a label, not identity (the `facet_id` is
+the source's bytes), so the same file read from another directory, or by a relative path from another
+working directory, gives the same facet with another `source_path`. No frame holds a time, and no
+other column holds a path; everything else, the file names a step records in `derivation_inputs`
+included, is compared."""
 
 
 class StoredFacet(BaseModel):
@@ -231,9 +241,13 @@ class Store:
         facet with no subject or another subject than the store's (`SubjectError`); one `facet_id`
         twice in `loaded`; a facet the store holds whose REF state (`REF_STATE`: the collection REF was
         read from, the `RESOLVE_VERSION` that read it and the manifests it read rows with, all null
-        before `resolve_ref`) differs from
-        the held one's (`StoreConflictError`). A held facet is never rewritten, so the rows of the same
-        facet resolved otherwise go into another store.
+        before `resolve_ref`) differs from the held one's (`StoreConflictError`, naming both states);
+        and a facet the store holds whose four frames, as the add would write them, differ in any row
+        from the held files (`StoreConflictError`, naming the frames that differ). A held facet is
+        never rewritten, so the rows of the same facet read otherwise (resolved otherwise, re-read by a
+        fixed loader, with VRS ids minted, or by any other step that keeps the `facet_id`) go into
+        another store. A re-add whose rows are the held ones is a no-op (`present`); it reads the held
+        files and the given frames once each, streamed, to tell.
         """
         manifest = self.manifest
         _check_version(manifest.schema_version, loaded.schema_version, "the Loaded")
@@ -261,7 +275,10 @@ class Store:
                 logger.info("store: removing %s, left by an add that did not finish", orphan)
                 shutil.rmtree(self.path / orphan, ignore_errors=True)
             held = {entry.facet_id for entry in manifest.facets}
-            self._check_ref_state(facets.filter(pl.col("facet_id").is_in(sorted(held & set(ids)))))
+            again = sorted(held & set(ids))
+            # REF first: its message names the cause, where the rows' says only which frames differ.
+            self._check_ref_state(facets.filter(pl.col("facet_id").is_in(again)))
+            self._check_rows(loaded, links, again)
             for facet_id in sorted(ids):
                 if facet_id in held:
                     present.append(facet_id)
@@ -326,21 +343,46 @@ class Store:
                 "(resolve_ref keeps its facet_id); add these to a new store, or keep the held rows"
             )
 
+    def _check_rows(self, loaded: Loaded, links: pl.DataFrame, facet_ids: list[str]) -> None:
+        """Refuse `facet_ids`, facets the store holds, where one's four frames as `_write_facet` would
+        write them are not the held files' rows.
+
+        Both sides are digested in one `collect_all`, so in this process and this polars release: each
+        frame's row count and an order-free digest of its rows (`_digest`), streamed, never collected
+        whole. A digest is never stored, since polars' row hash is not stable across releases. The
+        columns `COMPARED_WITHOUT` names are left out. The message names the facets and, per frame that
+        differs, the row counts held and given: never a row, a sample or a path."""
+        if not facet_ids:
+            return
+        plans: list[pl.LazyFrame] = []
+        for facet_id in facet_ids:
+            given = _facet_frames(loaded, facet_id, _links_of(links, facet_id))
+            for name in FRAMES:
+                columns = _compared(name)
+                plans += [_digest(pl.scan_parquet(self.path / _FACETS_DIR / facet_id / f"{name}.parquet"), columns), _digest(given[name], columns)]
+        digests = iter(pl.collect_all(plans))
+        differ = []
+        for facet_id in facet_ids:
+            frames = []
+            for name in FRAMES:
+                held, given = next(digests), next(digests)
+                if not held.equals(given):
+                    frames.append(f"{name}: {held['rows'].item()} row(s) held, {given['rows'].item()} given")
+            if frames:
+                differ.append(f"{facet_id} ({'; '.join(frames)})")
+        if differ:
+            raise StoreConflictError(
+                f"facet(s) held with other rows: {'; '.join(differ)}. A held facet is never rewritten (a loader "
+                "fixed, VRS ids minted or any other step that keeps the facet_id gives other rows under the same "
+                "id); add these to a new store, or keep the held rows"
+            )
+
     def _write_facet(self, loaded: Loaded, facet_id: str, links: pl.DataFrame) -> None:
         """Sink one facet's four frames into a staging directory, sync them, and rename it into place."""
         stage = self.path / f"{_STAGING}{os.getpid()}-{os.urandom(4).hex()}"
         stage.mkdir()
         try:
-            mine = pl.col("facet_id") == facet_id
-            _sink_facet(
-                stage,
-                {
-                    "facets": loaded.facets.filter(mine),
-                    "calls": loaded.calls.filter(mine),
-                    "blocks": loaded.blocks.filter(mine),
-                    "links": links.lazy(),
-                },
-            )
+            _sink_facet(stage, _facet_frames(loaded, facet_id, links))
             target = self.path / _FACETS_DIR / facet_id
             target.parent.mkdir(exist_ok=True)
             os.rename(stage, target)
@@ -365,6 +407,22 @@ def _ref_state(row: dict) -> str:
     version = "an unrecorded RESOLVE_VERSION" if row["resolve_version"] is None else f"RESOLVE_VERSION {row['resolve_version']}"
     inputs = "no resolve_inputs recorded" if row["resolve_inputs"] is None else f"resolve_inputs {row['resolve_inputs']}"
     return f"REF read from {row['ref_seqcol_digest']} by {version} with {inputs}"
+
+
+def _facet_frames(loaded: Loaded, facet_id: str, links: pl.DataFrame) -> dict[str, pl.LazyFrame]:
+    """One facet's four frames as its directory holds them: what an add writes and a re-add compares."""
+    mine = pl.col("facet_id") == facet_id
+    return {
+        "facets": loaded.facets.filter(mine),
+        "calls": loaded.calls.filter(mine),
+        "blocks": loaded.blocks.filter(mine),
+        "links": links.lazy(),
+    }
+
+
+def _compared(name: str) -> list[str]:
+    """The columns of frame `name` a re-add compares: all of them but `COMPARED_WITHOUT`'s."""
+    return [column for column in _SCHEMAS[name].names() if column not in COMPARED_WITHOUT.get(name, ())]
 
 
 def _links_of(links: pl.DataFrame, facet_id: str) -> pl.DataFrame:
@@ -534,14 +592,17 @@ def _verify_migrated(facet_id: str, old: dict[str, pl.LazyFrame], target: Path) 
             raise StoreError(
                 f"migrating facet {facet_id}: its {name} frame has {now['rows'].item()} rows after, {was['rows'].item()} before"
             )
-        if was["digest"].item() != now["digest"].item():
+        if not was.equals(now):
             raise StoreError(f"migrating facet {facet_id}: values of its {name} frame changed")
 
 
 def _digest(frame: pl.LazyFrame, columns: list[str]) -> pl.LazyFrame:
-    """Row count and an order-free digest of `columns` (each row's hash, its top 32 bits summed, so the
-    sum cannot overflow below four billion rows)."""
-    return frame.select(pl.len().alias("rows"), (pl.struct(columns).hash(seed=0) // (1 << 32)).sum().alias("digest"))
+    """Row count and an order-free digest of `columns`: each row's 64-bit hash, its top and its bottom
+    32 bits each summed (so neither sum overflows below four billion rows). One lazy aggregate that
+    polars' streaming engine runs without an in-memory fallback, on polars 1.44 and 2.1 alike. Two
+    digests compare only within one process: polars' row hash is not stable across releases."""
+    row = pl.struct(columns).hash(seed=0)
+    return frame.select(pl.len().alias("rows"), (row // (1 << 32)).sum().alias("digest"), (row % (1 << 32)).sum().alias("digest_low"))
 
 
 def _finish_migration(where: Path) -> StoreMigration | None:

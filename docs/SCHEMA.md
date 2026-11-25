@@ -2076,8 +2076,9 @@ The builder's calls, for the lead's veto: the provenance carries the tool in `st
 ran, the function's name) rather than in a new column, and the panel as a `derivation_inputs` entry
 though it is not a file the library read; and setting `derived_from` on a facet read from a file, which
 `link_disagreements` needs as written, rather than a link with no facet column. A store that already
-holds the imputed facet takes the stated one as present and keeps no link (a held facet is never
-rewritten), so the statement goes in before the facet's first add.
+holds the imputed facet refuses the stated one (`StoreConflictError`: its `facets` and `links` rows
+differ under the same id, RM305) and keeps no link, since a held facet is never rewritten; the
+statement goes in before the facet's first add, or the stated facet into a new store.
 
 **Kin links.** A caller split's facets are linked in every pair, from the lower `facet_id` to the
 higher: the merge they came from is not a facet (Decision 8, option A), so there is no hub to link
@@ -3026,16 +3027,39 @@ a load warning may quote a sample or a file name.
   older store ("Store migration", below), upgrading just-vcf for a later one. A later `store_layout`
   is refused.
 - **Facets accumulate (charter 5).** A facet's directory is written once and never rewritten or
-  removed, except by a migration, which rewrites every facet's files with the same facets and rows;
-  adding a facet the store holds, by `facet_id`, is a no-op that writes nothing, when its REF state is
-  the held one's (`store.REF_STATE`: `ref_seqcol_digest`, `resolve_version` and `resolve_inputs`). One
-  in another state (held as loaded and given resolved, or the reverse, or read by another
-  `RESOLVE_VERSION`, from another collection or with other chip manifests) is refused with `StoreConflictError`, naming the facet and both states, before
-  anything is written: `resolve_ref` keeps the `facet_id`, and a `present` there kept the held rows
-  while the caller thought the new ones stored. A held facet's files are never rewritten, so the other
-  state goes into a new store. Rejected: replacing the held facet (charter 5; a replace is the
-  person's call, not an add's), and comparing the rows (a full read of both on every re-add). The links
-  are kept per facet, so adding one never touches a file another facet owns: each facet keeps the
+  removed, except by a migration, which rewrites every facet's files with the same facets and rows.
+  Adding a facet the store holds, by `facet_id`, is a no-op that writes nothing when its rows are the
+  held ones, and refused with `StoreConflictError` before anything is written when they are not
+  (RM305, desk #149's default). Several steps keep the `facet_id` while changing rows: `resolve_ref`,
+  `mint_vrs_ids`, `state_imputed_from`, and a loader that was fixed (a load's id is the source's bytes,
+  member, format and options, with no loader version); and a step that mints a new id (`normalize`,
+  `liftover`, `rejoin_split`, `consensus`) derives it from its parents' ids, not their rows, so it
+  inherits the same blind spot. A `present` there kept the held rows while the caller thought the new
+  ones stored. Two checks, in order:
+  - *REF state*, first, for its message, which names the cause: `store.REF_STATE`
+    (`ref_seqcol_digest`, `resolve_version` and `resolve_inputs`). One in another state (held as
+    loaded and given resolved, or the reverse, or read by another `RESOLVE_VERSION`, from another
+    collection or with other chip manifests) is refused naming the facet and both states.
+  - *The rows*, every other difference: the facet's four frames as the add would write them against
+    the held files, frame by frame, each side a row count and an order-free digest of every row (each
+    row's 64-bit hash, its two halves summed), computed in one `collect_all` in this process. The
+    refusal names the facets and, per frame that differs, the row counts held and given; never a row,
+    a sample name or a path. Left out of the comparison (`store.COMPARED_WITHOUT`): `facets.source_path`,
+    a label and not identity, which differs when the same file is read from another directory. No frame
+    holds a time. The same rows in another order compare equal (a load writes canonical order, so two
+    orders would be another defect, not a reading this check is for).
+
+  A held facet's files are never rewritten, so the other reading goes into a new store. Rejected:
+  replacing the held facet (charter 5; a replace is the person's call, not an add's); comparing
+  version stamps (`MINT_VERSION`, a loader version), which miss any change nobody bumped a constant
+  for; and storing a digest in the manifest at the first add, which would save the read of the held
+  files but compare across polars releases, whose row hash is not stable, and so refuse a re-add after
+  an upgrade. The cost: a re-add of a held facet reads the held files and the given frames once each,
+  streamed as one lazy aggregate per frame with no in-memory fallback on polars 1.44 or 2.1
+  (`tests/test_store.py`), so a gVCF's rows are never held whole. A facet a migration filled unknown
+  (below) reads otherwise than the same source loaded today, so that load is refused too.
+
+  The links are kept per facet, so adding one never touches a file another facet owns: each facet keeps the
   links of the `Loaded` it came with that end at it or at one of its lineage ancestors, so a facet
   added without its parent still names it. `loaded()` reads them all back once each, in Decision 12's
   order. Rejected: one `links.parquet` for the store, which every add would rewrite.
@@ -3085,7 +3109,8 @@ a step fails it.
 
 A step never invents a value: an added column is null, and where that null (or a value an older loader
 left) reads differently from what a load of the same source gives today, the facets it applies to are
-named, with the reason. Loading the source again is the only way to get those values. Rejected:
+named, with the reason. Loading the source again is the only way to get those values, into a new store:
+the migrated one refuses it beside the facet it holds, as rows that differ (RM305). Rejected:
 deriving `gl_source` from whether a facet's rows have `gl` (it would still guess GL against PL), and
 writing `method_steps = []` for a VCF facet (`[]` says the header was read and recorded no step).
 Rejected too (the lead, 2026-11-05, RM276): a value of their own for a migrated VCF facet's
@@ -4145,6 +4170,15 @@ Q1 (CGI `GC?`), Q2 (array code 25), Q3 (withheld VRS ids), Q4 (sample names), Q5
 
 
 ## Changes since sign-off
+
+- **No version change** (2026-11-25, RM305: the store notices every changed reading of a held facet):
+  no column changes. Rule changed ("The durable store"): `Store.add` compares a held facet's four
+  frames, as it would write them, with the held files (row counts and an order-free row digest per
+  frame, computed in one process, never stored; `facets.source_path` left out), after the REF-state
+  check. **Behaviour changes**: a re-add under a held `facet_id` with other rows (a loader fixed, VRS
+  ids minted, a lineage stated, a source loaded again after a migration filled values unknown) was
+  reported `present` and dropped; it is now refused with `StoreConflictError`, naming the facets and
+  the frames that differ, and goes into a new store. An identical re-add is still a no-op.
 
 - **No version change** (2026-11-23, RM304: `query` reads no row for a class it never looked at): no
   column changes. Rule changed (Decision 4, as `query` reads it): `Query.carries` asks

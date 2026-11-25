@@ -12,7 +12,8 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from just_vcf import ReferenceStore, load, normalize, rejoin_split, resolve_ref
+from just_vcf import ReferenceStore, load, mint_vrs_ids, normalize, rejoin_split, resolve_ref
+from just_vcf import store as store_module
 from just_vcf.links import CALLER_SPLIT, SPLIT_REJOINED, link_disagreements
 from just_vcf.loading import Loaded
 from just_vcf.person import Person, SubjectError
@@ -29,6 +30,7 @@ from test_person import _array_file, _vcf_file
 from test_rejoin import SPLIT
 from test_reference import SEQ, write_fasta
 from test_rejoin import write as write_split
+from test_spill_streams import fallback_nodes
 
 SUBJECT = "person-a"
 
@@ -158,7 +160,8 @@ def test_a_facet_held_in_another_ref_state_is_refused_not_reported_present(tmp_p
     assert store.add(older).added == (facet_id,)
     before, manifest = _files(tmp_path / "store"), store.manifest
     for other in (resolved, loaded):
-        with pytest.raises(StoreConflictError, match=facet_id):
+        # REF is checked before the rows, so the refusal names the cause, not only that rows differ.
+        with pytest.raises(StoreConflictError, match=f"held with REF in another state: {facet_id}"):
             store.add(other)
         assert _files(tmp_path / "store") == before and store.manifest == manifest, "nothing written"
     assert store.add(older).present == (facet_id,)
@@ -172,6 +175,108 @@ def test_a_facet_held_in_another_ref_state_is_refused_not_reported_present(tmp_p
     with pytest.raises(StoreConflictError):
         fresh.add(Loaded(facets=both.facets, calls=both.calls, blocks=both.blocks, links=both.links, schema_version=both.schema_version))
     assert fresh.facet_ids == (facet_id,)
+
+
+def _one_row_changed(frame: pl.LazyFrame, column: str) -> pl.LazyFrame:
+    """`frame` with `column` of its first row changed (a null read as 0, plus one); every other row kept."""
+    first = pl.int_range(pl.len()) == 0
+    return frame.with_columns(pl.when(first).then(pl.col(column).fill_null(0) + 1).otherwise(pl.col(column)).alias(column))
+
+
+def _refused_unwritten(store: Store, loaded: Loaded, facet_id: str, frames: set[str]) -> None:
+    """`loaded` re-adds `facet_id` with other rows: refused, naming the facet and exactly `frames`, and
+    nothing in the store changed."""
+    before, manifest = _files(store.path), store.manifest
+    with pytest.raises(StoreConflictError, match=f"held with other rows: {facet_id}") as refused:
+        store.add(loaded)
+    named = {name for name in FRAMES if f"{name}: " in str(refused.value)}
+    assert named == frames
+    assert "/" not in str(refused.value).split(". A held facet")[0], "no path in the message"
+    assert _files(store.path) == before and store.manifest == manifest, "nothing written"
+
+
+def test_a_re_add_whose_rows_are_the_held_ones_is_a_no_op(tmp_path: Path) -> None:
+    """RM305: the rows are compared, so a re-add of the same content stays a no-op. The same file read
+    from another directory differs only in `source_path`, which the comparison leaves out; the store's
+    own frames read back are the held rows, links included."""
+    store = Store.open(tmp_path / "store", subject=SUBJECT)
+    store.add(_gvcf(tmp_path))
+    store.add(rejoin_split(load(write_split(tmp_path, SPLIT, "split.vcf"), subject=SUBJECT)))
+    before, manifest = _files(tmp_path / "store"), store.manifest
+    (tmp_path / "elsewhere").mkdir()
+    moved = _gvcf(tmp_path / "elsewhere")
+    facet_id = moved.facets.collect()["facet_id"].item()
+    held = store.loaded().facets.filter(pl.col("facet_id") == facet_id).collect()
+    assert moved.facets.collect()["source_path"].item() != held["source_path"].item()
+    assert store.add(moved).present == (facet_id,)
+    assert store.add(store.loaded()).present == store.facet_ids
+    assert _files(tmp_path / "store") == before and store.manifest == manifest
+
+
+def test_a_re_add_with_one_call_row_changed_is_refused(tmp_path: Path) -> None:
+    """RM305: before, a facet re-added under the same `facet_id` with other rows (a loader fixed, any
+    step that keeps the id) was reported `present` and the store kept its old rows without a word."""
+    store = Store.open(tmp_path / "store", subject=SUBJECT)
+    loaded = _gvcf(tmp_path)
+    facet_id = loaded.facets.collect()["facet_id"].item()
+    store.add(loaded)
+    assert loaded.calls.collect().height > 0
+    changed = loaded.model_copy(update={"calls": _one_row_changed(loaded.calls, "qual")})
+    _refused_unwritten(store, changed, facet_id, {"calls"})
+    # A Loaded holding the changed facet and a new one is refused whole.
+    both = Person.of(changed, load(_array_file(tmp_path), subject=SUBJECT), check=None)
+    combined = Loaded(facets=both.facets, calls=both.calls, blocks=both.blocks, links=both.links, schema_version=both.schema_version)
+    _refused_unwritten(store, combined, facet_id, {"calls"})
+    assert store.facet_ids == (facet_id,)
+    dropped = loaded.model_copy(update={"calls": loaded.calls.filter(pl.int_range(pl.len()) > 0)})
+    _refused_unwritten(store, dropped, facet_id, {"calls"})
+
+
+def test_a_re_add_differing_only_in_blocks_is_refused(tmp_path: Path) -> None:
+    store = Store.open(tmp_path / "store", subject=SUBJECT)
+    gvcf = _gvcf(tmp_path)
+    store.add(gvcf)
+    assert gvcf.blocks.collect().height > 0
+    _refused_unwritten(store, gvcf.model_copy(update={"blocks": _one_row_changed(gvcf.blocks, "gq")}), gvcf.facets.collect()["facet_id"].item(), {"blocks"})
+
+
+def test_a_re_add_differing_only_in_links_is_refused(tmp_path: Path) -> None:
+    store = Store.open(tmp_path / "store", subject=SUBJECT)
+    rejoined = rejoin_split(load(write_split(tmp_path, SPLIT, "split.vcf"), subject=SUBJECT))
+    store.add(rejoined)
+    assert rejoined.links.collect().height == 1
+    relinked = rejoined.links.with_columns(pl.col("provenance").struct.with_fields(pl.lit("0").alias("step_version")))
+    _refused_unwritten(store, rejoined.model_copy(update={"links": relinked}), rejoined.facets.collect()["facet_id"].item(), {"links"})
+
+
+def test_a_re_add_after_minting_vrs_ids_is_refused(tmp_path: Path) -> None:
+    """`mint_vrs_ids` keeps the facet (its `facets` frame as given) and fills `calls.vrs_allele_ids`: the
+    store holding the facet resolved but unminted refuses the minted one, which goes into a new store."""
+    _, resolved, reference = _resolved_cgi(tmp_path)
+    minted = mint_vrs_ids(resolved, reference)
+    facet_id = resolved.facets.collect()["facet_id"].item()
+    assert minted.facets.collect().equals(resolved.facets.collect()), "minting keeps the facet and its id"
+    assert minted.calls.collect()["vrs_allele_ids"].list.drop_nulls().list.len().sum() > 0, "ids were minted"
+    store = Store.open(tmp_path / "store", subject=SUBJECT)
+    store.add(resolved)
+    _refused_unwritten(store, minted, facet_id, {"calls"})
+    assert Store.open(tmp_path / "fresh", subject=SUBJECT).add(minted).added == (facet_id,)
+
+
+def test_the_re_add_comparison_streams(tmp_path: Path) -> None:
+    """Both sides of the comparison are one lazy aggregate per frame that polars' streaming engine runs
+    with no node falling back to the in-memory engine, so a gVCF's hundreds of millions of rows are never
+    held whole."""
+    store = Store.open(tmp_path / "store", subject=SUBJECT)
+    loaded = _gvcf(tmp_path)
+    store.add(loaded)
+    facet_id = loaded.facets.collect()["facet_id"].item()
+    given = store_module._facet_frames(loaded, facet_id, store_module._links_of(loaded.links.collect(), facet_id))
+    for name in FRAMES:
+        columns = store_module._compared(name)
+        held = pl.scan_parquet(tmp_path / "store" / "facets" / facet_id / f"{name}.parquet")
+        assert fallback_nodes(store_module._digest(held, columns)) == []
+        assert fallback_nodes(store_module._digest(given[name], columns)) == []
 
 
 def test_adding_a_facet_never_rewrites_another(tmp_path: Path) -> None:

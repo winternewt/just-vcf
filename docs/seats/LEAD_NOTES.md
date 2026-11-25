@@ -125,6 +125,10 @@ each reset.
    2026-11-25: desks #146, #147, #149 ended on their defaults (KING cut-offs kept; `gt` stays u8; a held facet never
    rewritten). RM305 (the store refuses a re-add whose rows differ) as c082a2a, merge 4 of 6 toward audit 19 (suite
    2948 passed, 78 skipped on both majors).
+   Desks #154, #155 ended on their defaults (AADR names as written; Xinjiang stays Eastern Asia), 1134912. The
+   jackknife timed on aadr_ho: 43.9 s against 0.6 s, profiled to `project_restricted` rebuilding the kept sites'
+   matrix per replicate; RM306 with a builder (branch rm306), its panel built under data/interim/rm306/ for the
+   re-measure (the profiling scripts in the session's scratchpad).
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

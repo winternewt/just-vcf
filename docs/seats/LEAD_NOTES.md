@@ -122,6 +122,9 @@ each reset.
    f97e51d, merge 3 of 6 (suite 2942 passed, 78 skipped on both majors). RM269 closed: desk #135 ended on its default.
    2026-11-24: ssh to GitHub stalled from 20:15 UTC (the machine's ssh agent, per agents-kit's lead); main, with the
    liaison's 2ae50b1 and d3d74a0, went out on a retry about 20:40 UTC.
+   2026-11-25: desks #146, #147, #149 ended on their defaults (KING cut-offs kept; `gt` stays u8; a held facet never
+   rewritten). RM305 (the store refuses a re-add whose rows differ) as c082a2a, merge 4 of 6 toward audit 19 (suite
+   2948 passed, 78 skipped on both majors).
 0. **2026-11-18: audit 17's findings** (8910d63..b5e1f94, the repo-prep copy, Sol via Codex, Grok via Cursor). Both
    models found the first four; Sol alone the fifth; all five confirmed by reading: `tab_fields` keeps a leading
    UTF-8 BOM on the first field (`scan_lines`, since RM288); coverage's row count sees a BOM-prefixed `#` line as a

@@ -1,4 +1,4 @@
-**just-vcf: where it stands** (updated 2026-11-24)
+**just-vcf: where it stands** (updated 2026-11-25)
 
 just-vcf reads 23andMe-style array exports, other genotype tables and VCF/gVCF into one set of tables, and writes VCF from them. Version 0.1.0 is ready; releasing it is the person's call. Most open plan items wait on answers on the person's desk.
 
@@ -7,6 +7,7 @@ just-vcf reads 23andMe-style array exports, other genotype tables and VCF/gVCF i
 - ⚠️ **How often two calling methods disagree depends on the person as well as the method.** Nine PGP volunteers were each sequenced twice by Complete Genomics, with the same two pipeline versions. Their disagreement on single-letter variants in easy regions ranges from about 0.1% to 1.8%. One pooled rate per method would hide that spread.
 - ✅ **The error atlas has all its planned pairs.** The last three PGP volunteers are in: DRAGEN agrees with Complete Genomics on 99.93% of single-letter variants in easy regions, while an Illumina array disagrees with the same genome on 2% of them, unexplained so far. A fault that made array and SNV-only files look wrong on every insertion was found on the way and fixed, in the comparison and in the combined call alike.
 - ✅ **The sex-chromosome estimate now uses the right pseudoautosomal regions on GRCh37.** The region file it was built from put both boundaries off by about 100 kb. Checked on the reference sequence itself, where X and Y are identical exactly over the official regions. The Y-only part it measures now includes SRY and no longer includes 99 kb shared with X.
+- ✅ **A person's store no longer keeps stale rows silently.** Re-adding a file it already holds, read differently by a newer library (a fixed loader, new variant ids), is refused and pointed to a new store; an identical re-add is still a no-op.
 - ✅ **Runs on polars 2.** It now uses polars-bio 0.37 and polars 2.1, and it still works with polars 1.44 for projects that haven't moved yet. The full test suite, 2,889 tests, passes on both versions.
 
 **Next**

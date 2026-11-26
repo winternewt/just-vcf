@@ -249,7 +249,7 @@ Sibling repos, read-only unless a task explicitly targets them:
 
 ```bash
 uv sync                      # core
-uv sync --all-extras         # + reference (pysam), liftover (pyliftover), ancestry (numpy)
+uv sync --all-extras         # + ancestry (numpy); reference (pysam) and liftover (pyliftover), unused
 nice -n 19 uv run pytest -vvv   # the suite; -vvv when diagnosing
 ```
 
@@ -302,7 +302,8 @@ workarounds marked "stays while 1.x is admitted".
 - **Dependency tier.** The core may import polars / polars-bio, gtars, refget, pydantic, platformdirs,
   typer and python-dotenv, plus the stdlib. gtars (Rust, BSD-2) mints VRS ids and normalizes alleles;
   refget computes and compares seqcol assembly digests. vrs-python is a test oracle only, never core. Everything else goes behind an extra with a guarded import:
-  `[reference]` = pysam (not on Windows), `[liftover]` = pyliftover, `[ancestry]` = numpy. httpx is a
+  `[ancestry]` = numpy. `[reference]` = pysam (not on Windows) and `[liftover]` = pyliftover are kept
+  though no code imports either any more (desk #160's default, 2026-11-26: the extras stay for 0.1.0). httpx is a
   dev dependency for `scripts/` only and is never imported from `src/`. Adding a hard core dependency
   is a questionnaire (§1), not an edit. duckdb, eliot, huggingface-hub, Dagster and Reflex from the
   sibling repos do not come along.

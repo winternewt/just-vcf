@@ -35,13 +35,12 @@ dependencies = [
 just-vcf = "just_vcf.cli:app"
 
 [project.optional-dependencies]
-# pysam backs the FASTA tier of REF lookup (faidx). It has no Windows wheels, so it
-# carries the platform marker; Windows users who need FASTA lookup should use WSL/Linux.
-# Imported behind a guarded module-level try/except with an install hint.
+# `reference` and `liftover` are kept though no code imports pysam or pyliftover any more (REF is
+# read from gtars' refget store, liftover runs in polars): desk #160's term ended on keeping them,
+# 2026-11-26. pysam has no Windows wheels, hence the marker.
 reference = [
     "pysam>=0.24.0 ; sys_platform != 'win32'",
 ]
-# pyliftover is pure Python and installs everywhere; coordinate liftover only.
 liftover = [
     "pyliftover>=0.4.1",
 ]
